@@ -1,7 +1,6 @@
-# Dormeto Manager
+# Dormeto manager
 
-Management plane of **Dormeto**, which puts idle web workloads to sleep and wakes them just-in-time: configuration,
-perimeter, decisions, API, dashboard (Vue 3 + Vuetify), Cognito, router deployment and CI/CD (Terraform, CodePipeline).
+Management plane of **Dormeto** ("nap" in Esperanto), which puts idle web workloads to sleep and wakes them
+just-in-time: dashboard, onboarding, configuration and deployment of the routers.
 
-- Plan: [docs/PLAN.md](docs/PLAN.md)
-- Data plane: [Dormeto/router](https://github.com/Dormeto/router)
+- Target architecture: [Dormeto/vision · docs/architecture/manager.md](https://github.com/Dormeto/vision/blob/main/docs/architecture/manager.md)
