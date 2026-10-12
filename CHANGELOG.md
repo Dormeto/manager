@@ -5,6 +5,21 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## 0.3.1 — 2026-10-07
+
+Router 0.23.1. Access: apply the access module or the AWS CLI script of this release again in every member account (the
+routers' permissions boundary allows reading the account's Cognito user pool clients, which ELB requires to change a rule
+that authenticates with Amazon Cognito).
+
+- A workload behind a rule that authenticates with Amazon Cognito can be onboarded, napped and woken: upgrade its router
+  to 0.23.1. Until the access module or script is applied again in its account, onboarding there says so.
+- Routers: the upgrade is an icon beside the router's version; upgrade, uninstall, pause and resume explain themselves in
+  a tooltip (uninstall asks first); a count of workloads opens that workload, or the list of those workloads.
+- A notice of an operation just started links to its steps in Operations.
+- Discovery shows only the statuses that have candidates.
+- Organization access says its status with an icon, the counts and event-driven refresh explained in its tooltip; the
+  panel lists only what needs attention.
+
 ## 0.3.0 — 2026-10-06
 
 Router 0.23.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
