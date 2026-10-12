@@ -65,8 +65,14 @@ data "aws_iam_policy_document" "command" {
   }
   statement {
     sid       = "RouterRoles"
-    actions   = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole"]
+    actions   = ["iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole"]
     resources = [local.roles]
+  }
+  statement {
+    # Reads: a role that does not exist yet is authorized without its path (its ARN is unknown).
+    sid       = "RouterRolesRead"
+    actions   = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies"]
+    resources = [local.roles, "${local.arn}:iam::${local.account}:role/dmtr-*"]
   }
   statement {
     sid       = "PassRouterRoles"
