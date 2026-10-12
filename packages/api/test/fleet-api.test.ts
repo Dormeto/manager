@@ -21,11 +21,12 @@ const workloadSummary = (region: string, router: string, id: string, state: stri
 
 function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt-dev'), routerSummary('eu-west-3', 'dmtr-dev', { counts: { ASLEEP: 1 } })], workloads = [
   workloadSummary('eu-west-1', 'dmt-dev', 'a', 'AWAKE'), workloadSummary('eu-west-1', 'dmt-dev', 'b', 'ASLEEP'), workloadSummary('eu-west-3', 'dmtr-dev', 'p', 'ASLEEP', { name: 'Paris' }),
-], invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'list' ? { router: { version: '0.20.1' }, workloads: [{ workloadId: 'x', state: 'AWAKE' }] } : { router: { version: '0.20.1' }, pauses: [], workloads: { total: 1, byState: { AWAKE: 1 }, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }), visible, callTimeoutMs, callDeadlineMs, operations }: {
+], invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'list' ? { router: { version: '0.20.1' }, workloads: [{ workloadId: 'x', state: 'AWAKE' }] } : { router: { version: '0.20.1' }, pauses: [], workloads: { total: 1, byState: { AWAKE: 1 }, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }), visible, callTimeoutMs, callDeadlineMs, operations, candidates }: {
   routers?: Router[]; summaries?: ReturnType<typeof routerSummary>[]; workloads?: ReturnType<typeof workloadSummary>[];
   invoke?: (router: Router, payload: Record<string, unknown>) => Promise<unknown>; visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; callTimeoutMs?: number;
-  callDeadlineMs?: number; operations?: OperationsApi;
+  callDeadlineMs?: number; operations?: OperationsApi; candidates?: Record<string, { idleHours7d: number | null; requests7d: number | null }>;
 } = {}) {
+  const asked: string[] = [];
   const calls: [string, string][] = [];
   let listed = 0;
   const api = createApi({
@@ -41,8 +42,9 @@ function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
     ...(visible ? { visible } : {}), ...(callTimeoutMs ? { callTimeoutMs } : {}), ...(callDeadlineMs ? { callDeadlineMs } : {}), ...(operations ? { operations } : {}),
+    ...(candidates ? { discovery: { store: { getCandidate: async (id: string) => { asked.push(id); return (candidates[id] ?? null) as never; } }, run: async () => {} } as never } : {}),
   });
-  return { api, calls, listed: () => listed };
+  return { api, calls, listed: () => listed, asked };
 }
 const event = (path: string, query: Record<string, string> = {}): ApiEvent => ({
   rawPath: path, queryStringParameters: query, requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: { email: 'ops@example.com', sub: 'u1', 'cognito:groups': '[dmt-viewer]' } } } },
@@ -88,6 +90,15 @@ describe('workloads and routers from the summaries', () => {
     expect(routers.map((r: { name: string; operation?: unknown }) => [r.name, r.operation ?? null])).toEqual([
       ['dmt-dev', null], ['dmtr-dev-eu-west-3', { id: 'op-up', type: 'upgrade-router' }],
     ]);
+  });
+
+  it('gives the workloads of a page their idle hours and requests over 7 days from their discovery candidate, when asked', async () => {
+    const s = setup({ candidates: { 'arn:tg/a': { idleHours7d: 150, requests7d: 12 }, 'arn:tg/b': { idleHours7d: null, requests7d: null } } });
+    const plain = json(await s.api(event('/api/workloads', { limit: '2' }))).workloads;
+    expect([s.asked, 'idleHours7d' in plain[0]]).toEqual([[], false]);
+    const page = json(await s.api(event('/api/workloads', { limit: '2', idle: '1' }))).workloads;
+    expect(page.map((w: Record<string, unknown>) => [w.workloadId, w.idleHours7d ?? 'none', w.requests7d ?? 'none'])).toEqual([['a', 150, 12], ['b', 'none', 'none']]);
+    expect(s.asked).toEqual(['arn:tg/a', 'arn:tg/b']);
   });
 
   it('calls a router that does not report (no summary, or one older than 3 periods), and only that one', async () => {

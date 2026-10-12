@@ -544,7 +544,13 @@ export function createApi({
       if (q.cursor) start = Number(Buffer.from(q.cursor, 'base64url').toString('utf8'));
       else if (q.offset) start = Number(q.offset);
       if (!Number.isInteger(start) || start < 0) throw new HttpError(400, 'bad_request', q.cursor ? 'invalid cursor' : 'invalid offset');
-      const page = matching.slice(start, start + limit);
+      const listed = matching.slice(start, start + limit);
+      // A page's idle hours and requests over 7 days (the Workloads view asks): from each workload's discovery candidate,
+      // one per target group, found by its ARN.
+      const page = q.idle === '1' && q.limit && discovery ? await Promise.all(listed.map(async (w) => {
+        const c = typeof w.targetGroupArn === 'string' ? await discovery.store.getCandidate(w.targetGroupArn).catch(() => null) : null;
+        return c && typeof c.idleHours7d === 'number' ? { ...w, idleHours7d: c.idleHours7d, requests7d: c.requests7d } : w;
+      })) : listed;
       const cursor = start + limit < matching.length ? Buffer.from(String(start + limit)).toString('base64url') : null;
       return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors, ...(q.routers === '1' ? { routers: routerRows() } : {}) });
     }
