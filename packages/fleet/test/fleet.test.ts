@@ -492,6 +492,14 @@ describe('state history (R8)', () => {
     expect(await store.getSavingsSettings()).toEqual({ compute: 20, databases: 30, updatedAt: new Date(NOW).toISOString(), updatedBy: 'admin@example.com' });
   });
 
+  it('reads the discounts consistently: a change is seen at once after it is saved (final review 5)', async () => {
+    const dynamo = fakeDynamo();
+    const sent: Record<string, unknown>[] = [];
+    const store = createFleetStore({ dynamo: { ...dynamo, send: (c: { input: Record<string, unknown> }) => { sent.push(c.input); return dynamo.send(c as never); } } as never, table: 'dmt-dev-manager', now: () => NOW });
+    await store.getSavingsSettings();
+    expect(sent.find((i) => (i.Key as { sk: { S: string } } | undefined)?.sk.S === 'SAVINGS#SETTINGS')).toMatchObject({ ConsistentRead: true });
+  });
+
   it('a period is read in pages up to a cap, with the entry before it', async () => {
     const s = setup();
     for (let i = 0; i < 30; i += 1) await s.ingest(change(i % 2 ? 'ASLEEP' : 'AWAKE', at(T1, i * 60), { cause: 'idle' }));

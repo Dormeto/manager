@@ -23,7 +23,7 @@ const PRICES: Record<string, number> = { ec2: 0.0912, rds: 0.017 };
 const before = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to: 'AWAKE', at: iso(NOW - 10 * 86_400_000) };
 
 type Discounts = { compute: number; databases: number };
-function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false, statesCacheMs = undefined as number | undefined, hidden = false, settings = { compute: 0, databases: 0 } as Discounts } = {}) {
+function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false, statesCacheMs = undefined as number | undefined, hidden = false, settings = { compute: 0, databases: 0 } as Discounts, staleReads = false, slowReads = false } = {}) {
   let t = NOW;
   const read: string[] = [];
   const list = workloads.map((w) => ({ ...w }));
@@ -31,6 +31,7 @@ function setup({ workloads = [workload('a'), workload('b')], fail = false, price
   const discountsSeen: (Discounts | undefined)[] = [];
   let stored = { ...settings, updatedAt: null as string | null, updatedBy: null as string | null };
   let settingsReads = 0;
+  let settingsFail = false;
   const api = createApi({
     routers: ROUTERS, now: () => t, version: '0.7.0', managerAccount: ACCOUNT, ...(statesCacheMs ? { statesCacheMs } : {}), ...(hidden ? { visible: () => false } : {}),
     audit: { write: async (e) => { audits.push({ ...e }); }, list: async () => [] },
@@ -46,8 +47,14 @@ function setup({ workloads = [workload('a'), workload('b')], fail = false, price
         return { entries: (id === 'a' ? entries : []) as never, truncated: false };
       },
       historyBefore: async (_a: string, _r: string, id: string) => (id === 'a' ? before : null) as never,
-      getSavingsSettings: async () => { settingsReads += 1; return { ...stored }; },
-      putSavingsSettings: async (d: Discounts, by: string) => { stored = { ...d, updatedAt: iso(t), updatedBy: by }; },
+      getSavingsSettings: async () => {
+        settingsReads += 1;
+        if (slowReads) await new Promise((r) => setTimeout(r, 5));
+        if (settingsFail) throw new Error('DynamoDB throttled');
+        return { ...stored };
+      },
+      // staleReads: a read right after the write still gives the old item (an eventually consistent read).
+      putSavingsSettings: async (d: Discounts, by: string) => { if (!staleReads) stored = { ...d, updatedAt: iso(t), updatedBy: by }; },
     },
     ...(priced ? { savings: { baseline: { kind: 'always' as const }, hourly: async (_region: string, item: { kind: string }, d?: Discounts) => {
       discountsSeen.push(d);
@@ -60,6 +67,7 @@ function setup({ workloads = [workload('a'), workload('b')], fail = false, price
   return {
     api, read, list, audits, discountsSeen, later: (ms: number) => { t += ms; },
     settingsReads: () => settingsReads, setStored: (d: Discounts) => { stored = { ...d, updatedAt: iso(t), updatedBy: 'other@example.com' }; },
+    failSettings: (on: boolean) => { settingsFail = on; },
   };
 }
 const request = (method: string, path: string, group: string, body?: unknown): ApiEvent => ({
@@ -238,4 +246,49 @@ describe('discounts for commitments (R9.5)', () => {
     expect(s.discountsSeen.length).toBeGreaterThan(0);
     expect(new Set(s.discountsSeen.map((d) => JSON.stringify(d)))).toEqual(new Set([JSON.stringify({ compute: 20, databases: 30 })]));
   });
+
+  // Final review.
+  const fleetBar = async (s: ReturnType<typeof setup>) => json(await s.api(event('/api/workloads/states')));
+
+  it('the bar of all workloads says the discounts its figures were priced with: a change seen elsewhere prices them again (final review 1)', async () => {
+    const s = setup();
+    expect('discounts' in (await fleetBar(s)).costs).toBe(false);
+    s.setStored({ compute: 50, databases: 50 });
+    s.later(61_000);
+    const bar = await fleetBar(s);
+    expect(bar.costs.discounts).toEqual({ compute: 50, databases: 50 });
+    expect(bar.costs.hourly).toBeCloseTo(0.5 * 0.0912 + 0.5 * 0.017, 6);
+    expect(s.read).toEqual(['a', 'b', 'a', 'b']);
+  });
+
+  it('a failed read of the discounts never fails the bars nor the summary: the last ones known, else no costs (final review 2)', async () => {
+    const s = setup();
+    s.failSettings(true);
+    const [a] = await page(s);
+    expect([a!.states7d.totals, 'costs' in a!]).toEqual([{ AWAKE: WEEK - 3_600, ASLEEP: 3_600 }, false]);
+    const bar = await s.api(event('/api/workloads/states'));
+    expect([bar.statusCode, 'costs' in json(bar), json(bar).states7d.totals.ASLEEP]).toEqual([200, false, WEEK + 3_600]);
+    const savings = await s.api(event('/api/savings'));
+    expect([savings.statusCode, json(savings).settings]).toEqual([200, null]);
+    // Once known, kept while the reads fail.
+    const known = setup({ settings: { compute: 20, databases: 30 } });
+    await costsOf(known);
+    known.failSettings(true);
+    known.later(61_000);
+    known.list[0]!.state = 'WAKING';
+    expect((await costsOf(known)).discounts).toEqual({ compute: 20, databases: 30 });
+  });
+
+  it('reads the discounts once for a whole refresh of the bar, the read in progress shared (final review 3)', async () => {
+    const s = setup({ workloads: [workload('a'), workload('b'), workload('c')], slowReads: true });
+    await fleetBar(s);
+    expect(s.settingsReads()).toBe(1);
+  });
+
+  it('answers a change with the discounts written, whatever a read right after says (final review 5)', async () => {
+    const s = setup({ staleReads: true });
+    const res = await s.api(request('PUT', '/api/savings/settings', 'dmt-admin', { compute: 20, databases: 30 }));
+    expect(json(res)).toEqual({ settings: { compute: 20, databases: 30, updatedAt: iso(NOW), updatedBy: 'admin@example.com' } });
+  });
 });
+

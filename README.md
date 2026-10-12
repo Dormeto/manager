@@ -181,8 +181,9 @@ time per target group, router or workload, one per load balancer (lock), three p
   AWS agreement take off the list prices: `compute` (EC2, Fargate) and `databases` (RDS, Aurora), whole percentages
   from 0 to 90, never off Spot (`PUT /api/savings/settings`, audited `savings-discounts`; item `T#default` /
   `SAVINGS#SETTINGS`). An average rate: a nap saves the list price of what goes beyond a commitment and nothing within.
-  The job reads them once per run (a day computed keeps them; the summary records those of its latest day), the API at
-  most once a minute.
+  The job reads them once per run (a day computed keeps them; the summary records those of its latest day); the API's
+  figures at most once a minute (a read in progress shared; a change seen from another function prices the figures it
+  keeps again; while the reads fail, the last ones known, else no costs), and the Savings card with the summary.
 - **Estimates, not bills:** AWS bills are not read (a bill cannot show what a nap did not spend, and comes a day late).
 - **Baseline:** `savings_baseline` = `always` (24/7) or `business-hours` (weekdays 08:00 to 20:00 in `savings_timezone`).
 - **The 7-day bar:** a Workloads row and a workload's header read the workload's last 30 days of history (its time in

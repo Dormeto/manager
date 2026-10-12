@@ -271,7 +271,8 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
 
     // The discounts for commitments (R9.5): 0 and 0 until an administrator sets them.
     async getSavingsSettings(): Promise<SavingsSettings> {
-      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key('SAVINGS#SETTINGS') }));
+      // Consistent: an administrator's change is seen at once (final review 5).
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key('SAVINGS#SETTINGS'), ConsistentRead: true }));
       const d = data<Discounts>(Item);
       return { compute: d?.compute ?? 0, databases: d?.databases ?? 0, updatedAt: Item?.updatedAt?.S ?? null, updatedBy: Item?.updatedBy?.S ?? null };
     },

@@ -215,6 +215,7 @@ const MONTH_HOURS = 730;
 const DISCOUNTS_MS = 60_000;
 const DISCOUNT_MAX = 90;
 const anyDiscount = (d: Discounts) => d.compute > 0 || d.databases > 0;
+const sameDiscounts = (a: Discounts, b: Discounts) => a.compute === b.compute && a.databases === b.databases;
 
 // Seconds per state of the phases within [from, to].
 function totalsWithin(phases: { state: string; from: string; to: string }[], from: string, to: string): Record<string, number> {
@@ -487,14 +488,29 @@ export function createApi({
     items: { item: StoppedItem; hourly: number | null }[]; saved: { usd: number; hours: number; unpricedHours: number };
     discounts?: Discounts;
   };
-  // The discounts for commitments (R9.5), kept a minute; a change made here is seen at once.
+  // The discounts for commitments (R9.5), read at most once a minute (a read in progress shared); a change made here is
+  // seen at once, one made elsewhere within the minute, and then the figures kept, priced with the previous ones, are
+  // priced again (final review 1). While the reads fail, the last ones known; none known, the read fails (no costs).
   let discountsKept: { at: number; value: Discounts } | null = null;
-  async function discountsOf(): Promise<Discounts> {
-    const t = now();
-    if (discountsKept && t - discountsKept.at < DISCOUNTS_MS) return discountsKept.value;
-    const stored = await fleet?.getSavingsSettings?.();
-    discountsKept = { at: t, value: { compute: stored?.compute ?? 0, databases: stored?.databases ?? 0 } };
-    return discountsKept.value;
+  let discountsAsked: Promise<Discounts> | null = null;
+  function discountsOf(): Promise<Discounts> {
+    if (discountsKept && now() - discountsKept.at < DISCOUNTS_MS) return Promise.resolve(discountsKept.value);
+    discountsAsked ??= (async () => {
+      try {
+        const stored = await fleet?.getSavingsSettings?.();
+        const value = { compute: stored?.compute ?? 0, databases: stored?.databases ?? 0 };
+        if (discountsKept && !sameDiscounts(discountsKept.value, value)) statesKept.clear();
+        discountsKept = { at: now(), value };
+        return value;
+      } catch (err) {
+        if (!discountsKept) throw err;
+        discountsKept = { at: now(), value: discountsKept.value };
+        return discountsKept.value;
+      } finally {
+        discountsAsked = null;
+      }
+    })();
+    return discountsAsked;
   }
   type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs };
   const statesKept = new Map<string, { state: unknown; at: number; value: States }>();
@@ -504,6 +520,8 @@ export function createApi({
     { maxAgeMs = STATES_MS, sameState = true } = {}): Promise<{ value: States; at: number } | undefined> {
     if (!fleet?.listHistory || !fleet.historyBefore) return undefined;
     const key = `${account}#${region}#${id}`;
+    // The discounts first: a change seen elsewhere clears the figures kept. Without them, the figures have no costs.
+    const discounts = savings ? await discountsOf().catch(() => null) : null;
     const t = now();
     const kept = statesKept.get(key);
     if (kept && t - kept.at < maxAgeMs && (!sameState || kept.state === summary?.state)) return kept;
@@ -512,8 +530,7 @@ export function createApi({
       const [from, from7] = [new Date(t - COSTS_DAYS * DAY_MS).toISOString(), new Date(t - STATES_DAYS * DAY_MS).toISOString()];
       const { view } = await historyOf(account, region, id, from, to, async () => summary);
       const value: States = { states7d: { from: from7, to, totals: totalsWithin(view.phases, from7, to) } };
-      if (savings) {
-        const discounts = await discountsOf();
+      if (savings && discounts) {
         const hourly = (item: StoppedItem) => savings.hourly(region, item, discounts).catch(() => null);
         const known = view.phases.filter((p) => p.state !== 'UNKNOWN').reduce((n, p) => n + (Date.parse(p.to) - Date.parse(p.from)) / HOUR_MS, 0);
         const asleep = view.phases.filter((p) => p.state === 'ASLEEP').reduce((n, p) => n + baselineHours(p.from, p.to, savings.baseline), 0);
@@ -526,8 +543,10 @@ export function createApi({
           ...(anyDiscount(discounts) ? { discounts } : {}),
         };
       }
-      if (statesKept.size >= STATES_KEPT_MAX) statesKept.clear();
       const entry = { state: summary?.state, at: t, value };
+      // Figures without their costs because the discounts could not be read are not kept.
+      if (savings && !discounts) return entry;
+      if (statesKept.size >= STATES_KEPT_MAX) statesKept.clear();
       statesKept.set(key, entry);
       return entry;
     } catch {
@@ -539,6 +558,8 @@ export function createApi({
   // All the workloads the caller sees (user request: the bar of the Workloads view): their seconds in each state over 7
   // days and their savings added up, from each workload's figures kept statesCacheMs whatever its state.
   async function allStates(seen: Record<string, unknown>[]) {
+    // Read before the figures: those kept are then priced with them (final review 1).
+    const discounts = savings ? await discountsOf().catch(() => null) : null;
     const queue = [...seen];
     const entries: { value: States; at: number }[] = [];
     await Promise.all(Array.from({ length: STATES_CONCURRENCY }, async () => {
@@ -555,18 +576,17 @@ export function createApi({
     const priced = entries.map((e) => e.value.costs).filter((c): c is Costs => Boolean(c));
     const hourlyOf = (c: Costs) => c.items.reduce((n, i) => n + (i.hourly ?? 0), 0);
     const pricedOnes = priced.filter((c) => c.items.some((i) => i.hourly !== null));
-    const discounts = savings ? await discountsOf() : null;
     return {
       workloads: seen.length, computedAt: new Date(computedAt).toISOString(), cacheMinutes: statesCacheMs / 60_000,
       states7d: { from: new Date(computedAt - STATES_DAYS * DAY_MS).toISOString(), to: new Date(computedAt).toISOString(), totals },
-      ...(savings ? {
+      ...(savings && discounts ? {
         costs: {
           baseline: savings.baseline,
           saved: priced.reduce((n, c) => ({ usd: n.usd + c.saved.usd, hours: n.hours + c.saved.hours, unpricedHours: n.unpricedHours + c.saved.unpricedHours }), { usd: 0, hours: 0, unpricedHours: 0 }),
           hourly: pricedOnes.length ? pricedOnes.reduce((n, c) => n + hourlyOf(c), 0) : null,
           monthly: pricedOnes.length ? pricedOnes.reduce((n, c) => n + hourlyOf(c) * MONTH_HOURS * (c.savedShare ?? 0), 0) : null,
           priced: pricedOnes.length,
-          ...(discounts && anyDiscount(discounts) ? { discounts } : {}),
+          ...(anyDiscount(discounts) ? { discounts } : {}),
         },
       } : {}),
     };
@@ -792,7 +812,9 @@ export function createApi({
 
     // The fleet's estimated savings (R9): the daily job's summary, one read.
     if (method === 'GET' && resource === 'savings' && !a) {
-      return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null, settings: (await fleet?.getSavingsSettings?.()) ?? null });
+      // A failed read of the discounts never fails the summary (final review 2).
+      const settings = fleet?.getSavingsSettings ? await fleet.getSavingsSettings().catch(() => null) : null;
+      return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null, settings });
     }
     // The discounts for commitments (R9.5): administrators set them, whole percentages from 0 to 90.
     if (method === 'PUT' && resource === 'savings' && a === 'settings' && !b) {
@@ -807,7 +829,9 @@ export function createApi({
         // Seen at once by this container's figures; others within a minute and their figures' own time.
         discountsKept = { at: now(), value: discounts };
         statesKept.clear();
-        return { result: `compute ${discounts.compute}%, databases ${discounts.databases}%`, response: reply(200, { settings: await fleet.getSavingsSettings!() }) };
+        // Answered with what was written (final review 5), not a read right after it.
+        const settings = { ...discounts, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
+        return { result: `compute ${discounts.compute}%, databases ${discounts.databases}%`, response: reply(200, { settings }) };
       });
     }
 
