@@ -62,7 +62,7 @@ async function mountView(path = '/routers') {
   setActivePinia(pinia);
   useSession().role = 'admin';
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/routers', component: RoutersView }, { path: '/operations', component: { render: () => null } },
-    { path: '/workloads', component: { render: () => null } }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
+    { path: '/workloads', component: { render: () => null } }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers/:name', component: { render: () => null } }] });
   await router.push(path);
   const wrapper = mount(RoutersView, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
   await flushPromises();
@@ -83,10 +83,12 @@ describe('Routers view', () => {
     document.body.innerHTML = '';
   });
 
-  it('opens the details of the router the address names (a link from Workloads)', async () => {
-    const wrapper = await mountView('/routers?router=dmt-dev');
-    expect(calls.some((c) => c.path === '/routers/dmt-dev')).toBe(true);
-    expect(calls.some((c) => c.path === '/routers/dmtr-dev-eu-west-3')).toBe(false);
+  it('links each router to its own view, as Workloads does; no row expands (user request)', async () => {
+    const wrapper = await mountView();
+    const link = rowOf(wrapper, 'dmt-dev').findAll('a').find((a) => a.text() === 'dmt-dev')!;
+    expect(link.attributes('href')).toBe('/routers/dmt-dev');
+    expect(wrapper.find('.v-data-table__td--expanded-row').exists()).toBe(false);
+    expect(wrapper.findAll('thead th').map((th) => th.text())).not.toContain('');
     wrapper.unmount();
   });
 

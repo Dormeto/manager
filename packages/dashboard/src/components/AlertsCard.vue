@@ -14,6 +14,7 @@ const where = (a: AlarmInfo) => (a.kind === 'list' ? 'the manager\'s lists' : `$
 const subtitle = (a: AlarmInfo) => `${a.problems[0]?.text ?? ''} · since ${relative(a.since, props.now)}`;
 const link = (a: AlarmInfo) => {
   if (a.kind === 'workload' && a.router && a.workloadId) return `/workloads/${encodeURIComponent(a.router)}/${encodeURIComponent(a.workloadId)}`;
+  if (a.kind === 'router') return `/routers/${encodeURIComponent(a.name)}`;
   return a.kind === 'list' ? '/routers#ip-lists' : a.kind === 'workload' ? '/workloads' : '/routers';
 };
 const footer = computed(() => {

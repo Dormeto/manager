@@ -41,6 +41,11 @@ describe('AlertsCard', () => {
     expect(item.attributes('href')).toBe('/workloads/dmtr-dev-2-eu-west-3/f1e2');
   });
 
+  it('links a router\'s alert to its view', () => {
+    const item = mountCard(ALERTS).findAll('.v-list-item').find((i) => i.text().startsWith('dmt-dev'))!;
+    expect(item.attributes('href')).toBe('/routers/dmt-dev');
+  });
+
   it('says where alerts are sent, and that a subscription waits for its confirmation', () => {
     expect(mountCard(ALERTS).text()).toContain('Alerts are sent to 2 subscriptions (1 pending confirmation)');
     const none = mountCard({ alarms: [], notifications: { topicArn: 'arn', confirmed: 0, pending: 0 } }).text();

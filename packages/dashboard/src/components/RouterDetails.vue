@@ -6,7 +6,8 @@ import { concurrencyText, listSourceHref, relative, ruleText } from '../format';
 import { useNow } from '../now';
 import type { RouterDetails } from '../types';
 
-const props = defineProps<{ name: string }>();
+// source: who installed the router, so where its configuration is changed.
+const props = defineProps<{ name: string; source?: 'terraform' | 'manager' }>();
 const now = useNow();
 const details = ref<RouterDetails | null>(null);
 const error = ref('');
@@ -52,6 +53,11 @@ const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
       </v-col>
       <v-col cols="12" md="6">
         <div class="text-title-small mb-2">Configuration</div>
+        <p v-if="source === 'manager'" class="text-body-small text-medium-emphasis mb-2">Set by the manager when it installs or upgrades the router: an idle
+          check every 5 minutes, the built-in no-wake rules, no metrics, and the manager's IP lists (<code>ip_lists</code> in the manager's Terraform).
+          Not editable from the dashboard yet.</p>
+        <p v-else-if="source === 'terraform'" class="text-body-small text-medium-emphasis mb-2">Set in this router's Terraform (the router module's
+          <code>check_schedule</code>, <code>no_wake_rules</code>, <code>ip_lists</code> and <code>metrics_enabled</code>): change them there and apply.</p>
         <v-table density="compact">
           <tbody>
             <tr><th class="font-weight-regular text-medium-emphasis">Idle check schedule</th><td>{{ details.configuration.checkSchedule.value ?? '—' }}</td>

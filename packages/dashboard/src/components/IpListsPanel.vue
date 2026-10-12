@@ -26,6 +26,12 @@ const headers = [
 <template>
   <v-alert v-if="error" type="error" variant="tonal" density="compact" class="mt-4" :text="`IP lists: ${error}`" />
   <v-card v-else-if="info?.catalog" id="ip-lists" title="IP lists" class="mt-4">
+    <v-card-text class="text-body-medium pb-2">
+      Lists of addresses that seldom belong to a visitor (scanners, cloud providers, known abusers), the manager's own: every router of the
+      organization reads them. <strong>defer</strong>: a request from a listed address does not wake a workload by itself (in a browser, the
+      waiting page's script still wakes it); <strong>ignore</strong>: it never wakes one. Set them with <code>ip_lists</code> in the manager's
+      Terraform; a router written in Terraform can add lists of its own (its view shows them).
+    </v-card-text>
     <v-data-table v-if="info.lists.length" :headers="headers" :items="info.lists" item-value="name" density="compact" hide-default-footer :items-per-page="-1">
       <template #[`item.name`]="{ item }">
         <a v-if="listSourceHref(item.url)" :href="listSourceHref(item.url) ?? undefined" target="_blank" rel="noopener">{{ item.name }}</a><span v-else>{{ item.name }}</span>

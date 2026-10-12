@@ -160,7 +160,7 @@ const summary = computed(() => {
     <v-btn v-if="session.canOperate && status?.source === 'manager'" :icon="mdiPencilOutline" variant="text" size="small" aria-label="Rename" @click="renameOpen = true" />
     <StateChip v-if="status" :state="status.state" :failure="status.failure" />
     <PauseChip :pauses="pauses" />
-    <span class="text-medium-emphasis">{{ router }}</span>
+    <router-link :to="`/routers/${encodeURIComponent(router)}`" class="text-medium-emphasis">{{ router }}</router-link>
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />

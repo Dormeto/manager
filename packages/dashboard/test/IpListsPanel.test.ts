@@ -31,6 +31,10 @@ describe('IpListsPanel', () => {
     expect(rows[1]).toMatch(/gcp.*900.*1 d ago.*last download failed: HTTP 503/);
     expect(rows[2]).toMatch(/aws.*ignore.*not downloaded yet/);
     expect(wrapper.text()).toContain('Downloaded once for every router by the manager');
+    // What they are and do (user request): the manager's lists, for every router of the organization.
+    expect(wrapper.text()).toMatch(/Lists of addresses .* every router of the organization reads them/);
+    expect(wrapper.text()).toMatch(/defer: a request from a listed address does not wake a workload by itself.*ignore: it never wakes one/);
+    expect(wrapper.text()).toMatch(/ip_lists in the manager's Terraform/);
   });
 
   it('says how to add lists when the catalog is empty, and hides itself without the manager\'s lists', async () => {

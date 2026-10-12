@@ -102,7 +102,7 @@ const weekly = computed(() => [
     <v-col cols="12" md="5">
       <v-card title="Routers">
         <v-list lines="two">
-          <v-list-item v-for="r in routers" :key="r.name" :title="r.name" to="/routers"
+          <v-list-item v-for="r in routers" :key="r.name" :title="r.name" :to="`/routers/${encodeURIComponent(r.name)}`"
             :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${routerStatus(r, now).detail}`">
             <template #append>
               <span class="d-inline-flex align-center ga-1"><PauseChip :pauses="r.pauses" /><v-chip :color="routerStatus(r, now).color" variant="tonal" label>{{ routerStatus(r, now).text }}</v-chip></span>

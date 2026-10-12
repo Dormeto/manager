@@ -51,4 +51,18 @@ describe('Overview', () => {
     failing.alerts = false;
     wrapper.unmount();
   });
+
+  it('links each router to its view (user request)', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+    const wrapper = mount(OverviewView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+    await flushPromises();
+    // The routers list, and the router's alert in the Alerts card.
+    const links = wrapper.findAll('a.v-list-item').filter((a) => a.text().startsWith('dmt-dev')).map((a) => a.attributes('href'));
+    expect(links.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(links)).toEqual(new Set(['/routers/dmt-dev']));
+    wrapper.unmount();
+  });
 });
+
