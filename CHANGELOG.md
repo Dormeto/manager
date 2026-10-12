@@ -7,9 +7,10 @@ CLI script, of the same release).
 
 ## 0.8.0 — 2026-10-09
 
-Router 0.28.0. Access: nothing to apply again in the member accounts (the routers read only what they already
-describe); the manager's module adds `ec2:DescribeSpotPriceHistory` to its API and savings job. Then upgrade the routers
-to 0.28.0: older routers' Spot capacity stays priced on-demand.
+Router 0.28.0. Access: as 0.7.0, which was not published (its Access note and changes below ship in this version): apply
+the access module or the AWS CLI script of this release again in every member account. Router 0.28.0 itself needs
+nothing more (it reads only what it already describes); the manager's module adds `ec2:DescribeSpotPriceHistory` to its
+API and savings job. Then upgrade the routers to 0.28.0: older routers' Spot capacity stays priced on-demand.
 
 - Spot at Spot prices: routers 0.28.0 say what ran on Spot (an instance's Spot lifecycle, a Fargate service's share on
   Fargate Spot from its capacity provider strategy); EC2 Spot is priced from the region's Spot price history (the
@@ -21,8 +22,10 @@ to 0.28.0: older routers' Spot capacity stays priced on-demand.
   their cache.
 - Spot items say so ("2 × t3.medium (Linux, Spot)"); the 7-day bars', the backends' and the History card's estimates
   say when they are after discounts.
+- A Fargate service whose capacity provider strategy mixes Fargate and EC2 capacity counts only its Fargate share
+  (routers 0.27.0 counted its whole desired count): its estimate drops after the upgrade.
 
-## 0.7.0 — 2026-10-08
+## 0.7.0 — 2026-10-08 (not published: in 0.8.0)
 
 Router 0.27.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
 routers' permissions boundary allows `ecs:DescribeTaskDefinition`, the size of a Fargate service; without it a Fargate
