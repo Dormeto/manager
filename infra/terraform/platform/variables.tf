@@ -56,6 +56,12 @@ variable "admin_emails" {
   default     = []
 }
 
+variable "alert_emails" {
+  description = "Addresses of the health alerts (personal: env/dev.local.tfvars, git-ignored)."
+  type        = list(string)
+  default     = []
+}
+
 variable "email_identity" {
   description = "Verified SES identity used by Cognito to send invitations (managed by the website stack)."
   type        = string

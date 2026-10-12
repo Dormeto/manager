@@ -8,6 +8,7 @@ module "manager" {
 
   organization_id = var.organization_id
   admin_emails    = var.admin_emails
+  alert_emails    = var.alert_emails
   domain = {
     dashboard       = var.dashboard_domain
     auth            = var.auth_domain

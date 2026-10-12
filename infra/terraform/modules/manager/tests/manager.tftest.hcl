@@ -176,3 +176,56 @@ run "missing_artifacts_fail_the_plan_with_their_paths" {
   # One failure, naming every missing file; nothing that reads them is planned.
   expect_failures = [terraform_data.artifacts]
 }
+
+# Health alarms (R6a): the watchdog every 5 minutes, one run at a time; the alert topic with an email subscription per
+# address; CloudWatch alarms on the watchdog and on the router events not stored, in and out of ALARM to the topic.
+run "health_alarms" {
+  command = plan
+
+  variables {
+    alert_emails = ["ops@example.com", "oncall@example.com"]
+  }
+  override_resource {
+    target          = aws_sns_topic.alerts
+    override_during = plan
+    values          = { arn = "arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts" }
+  }
+
+  assert {
+    condition     = aws_scheduler_schedule.watchdog.schedule_expression == "rate(5 minutes)" && aws_lambda_function.watchdog.reserved_concurrent_executions == 1
+    error_message = "The watchdog runs every 5 minutes, one run at a time."
+  }
+  assert {
+    condition     = aws_lambda_function.watchdog.handler == "watchdog.handler" && aws_lambda_function.watchdog.filename == "tests/artifacts/lambda/watchdog.zip"
+    error_message = "The watchdog runs the release's bundle."
+  }
+  assert {
+    condition     = aws_lambda_function.watchdog.environment[0].variables.ALERTS_TOPIC == "arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts" && aws_lambda_function.api.environment[0].variables.ALERTS_TOPIC == "arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts"
+    error_message = "The watchdog publishes to the alert topic; the API reads its subscriptions."
+  }
+  assert {
+    condition     = toset([for s in aws_sns_topic_subscription.alert_email : "${s.protocol} ${s.endpoint}"]) == toset(["email ops@example.com", "email oncall@example.com"])
+    error_message = "One email subscription per address of alert_emails."
+  }
+  assert {
+    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed"])
+    error_message = "Alarms on the watchdog's errors and silence, and on the router events not stored."
+  }
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.manager["watchdog-silent"].treat_missing_data == "breaching" && aws_cloudwatch_metric_alarm.manager["watchdog-silent"].comparison_operator == "LessThanThreshold"
+    error_message = "A watchdog never invoked is an alarm (missing data breaching)."
+  }
+  assert {
+    condition     = alltrue([for a in aws_cloudwatch_metric_alarm.manager : a.alarm_actions == toset(["arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts"]) && a.ok_actions == toset(["arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts"])])
+    error_message = "Every alarm goes to the alert topic, in and out of ALARM."
+  }
+}
+
+run "alert_emails_must_be_addresses" {
+  command = plan
+
+  variables {
+    alert_emails = ["not an address"]
+  }
+  expect_failures = [var.alert_emails]
+}

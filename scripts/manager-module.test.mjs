@@ -13,7 +13,11 @@ const moves = (text) => [...text.matchAll(/moved \{\s*from\s*=\s*(\S+)\s+to\s*=\
 const CONDITIONAL = ['aws_ses_identity_policy.cognito', 'aws_route53_record.auth'];
 // Added in the module, with no platform address: the artifacts' check (R5b review), event-driven refresh (R5c).
 const NEW = ['terraform_data.artifacts', 'aws_cloudwatch_event_rule.refresh', 'aws_sqs_queue.refresh_failed', 'aws_sqs_queue.refresh', 'aws_sqs_queue_policy.refresh',
-  'aws_cloudwatch_event_target.refresh', 'aws_lambda_event_source_mapping.refresh'];
+  'aws_cloudwatch_event_target.refresh', 'aws_lambda_event_source_mapping.refresh',
+  // Health alarms (R6a).
+  'aws_sns_topic.alerts', 'aws_sns_topic_policy.alerts', 'aws_sns_topic_subscription.alert_email', 'aws_iam_role.watchdog', 'aws_iam_role_policy.watchdog',
+  'aws_cloudwatch_log_group.watchdog', 'aws_lambda_function.watchdog', 'aws_sqs_queue.watchdog_failures', 'aws_iam_role.watchdog_scheduler',
+  'aws_iam_role_policy.watchdog_scheduler', 'aws_scheduler_schedule.watchdog', 'aws_cloudwatch_metric_alarm.manager'];
 
 test('every resource of the manager module has a moved block from its platform address', () => {
   const inModule = addresses(hcl('modules/manager'));

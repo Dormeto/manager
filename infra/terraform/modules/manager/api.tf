@@ -91,6 +91,12 @@ data "aws_iam_policy_document" "api" {
     ]
     resources = [aws_cognito_user_pool.main.arn]
   }
+  statement {
+    # The Overview says where alerts go (R6a).
+    sid       = "AlertSubscriptions"
+    actions   = ["sns:ListSubscriptionsByTopic"]
+    resources = [aws_sns_topic.alerts.arn]
+  }
   # With an SES identity, invitations while SES is in the sandbox: the invited address is verified as an SES identity
   # first. Without, Cognito sends its own email to any address.
   dynamic "statement" {
@@ -145,6 +151,7 @@ resource "aws_lambda_function" "api" {
       EMAIL_SENDER            = var.ses_identity == null ? "cognito" : "ses"
       DASHBOARD_URL           = "https://${local.dashboard_host}/"
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
+      ALERTS_TOPIC            = aws_sns_topic.alerts.arn
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name
       COMMAND_ROLE   = var.command_role_name

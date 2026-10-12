@@ -32,6 +32,16 @@ variable "admin_emails" {
   default     = []
 }
 
+variable "alert_emails" {
+  description = "Addresses the health alerts are sent to (router alarms, the watchdog's own failures), each subscribed to the alert topic and pending until its owner confirms the email AWS sends. Other subscriptions: the alerts_topic_arn output."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for e in var.alert_emails : can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", e))])
+    error_message = "alert_emails must be email addresses."
+  }
+}
+
 variable "domain" {
   description = "A custom domain: the dashboard host, the sign-in host under it (auth.<dashboard>), their certificate in us-east-1 (both names), and optionally the Route 53 zone where the records are created. Null: CloudFront's and Cognito's own domains."
   type = object({
@@ -156,6 +166,7 @@ locals {
     operations   = "${local.artifacts_dir}/lambda/operations.zip"
     access_check = "${local.artifacts_dir}/lambda/access-check.zip"
     fleet        = "${local.artifacts_dir}/lambda/fleet.zip"
+    watchdog     = "${local.artifacts_dir}/lambda/watchdog.zip"
     dashboard    = "${local.artifacts_dir}/dashboard/index.html"
     router       = "${local.artifacts_dir}/router/router.zip"
     blueprint    = "${local.artifacts_dir}/router/blueprint.json"
