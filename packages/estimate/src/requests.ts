@@ -5,6 +5,7 @@
 // metric it could not read is unreadable, never silence. Kept per account and region the same UTC day.
 import { lbDimension, tgDimension, type ScanPorts } from '@dormeto/discovery';
 import { freshRequests, type Cache } from './cache.js';
+import { mapLimit } from './limit.js';
 import type { Progress, RegionDiscovery, Workload } from './discover.js';
 
 const MIN_MS = 60_000;
@@ -65,44 +66,48 @@ export async function readRequests(cloudwatch: CloudWatchPort, workloads: Worklo
   return { account: workloads[0]?.account ?? '', region: workloads[0]?.region ?? '', from: new Date(from).toISOString(), to: new Date(to).toISOString(), minutes, unreadable };
 }
 
-export async function requestsAll({ regions, cloudwatchOf, cache, refresh, now, progress = () => {} }: {
+export async function requestsAll({ regions, cloudwatchOf, cache, refresh, now, progress = () => {}, concurrency = 5 }: {
   regions: RegionDiscovery[];
   cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>;
   cache: Cache;
   refresh: 'discovery' | 'metrics' | null;
   now: () => number;
   progress?: Progress;
+  // Regions read at once (--parallel).
+  concurrency?: number;
 }): Promise<RegionRequests[]> {
-  const out: RegionRequests[] = [];
-  for (const region of regions) {
-    if (region.error || !region.workloads.length) continue;
-    const path = `requests/${region.account}-${region.region}.json`;
-    const kept = refresh ? null : await cache.get<RegionRequests>(path, freshRequests(now()));
-    // Kept only while it covers every workload discovery found (a new one since: read again).
-    if (kept && region.workloads.every((w) => w.targetGroupArn in kept.minutes || w.targetGroupArn in kept.unreadable)) {
-      out.push(kept);
-      progress({ phase: 'requests', account: region.account, region: region.region, from: 'cache', workloads: region.workloads.length });
-      continue;
-    }
-    let read: RegionRequests;
-    try {
-      read = await readRequests(await cloudwatchOf(region.account, region.region), region.workloads, { days: 14, now: now() });
-      await cache.put(path, read);
-    } catch (err) {
-      // A region whose requests cannot be read at all (a denial, throttling, expired credentials): its workloads are
-      // unreadable with AWS's reason, nothing is kept, and the run goes on.
-      const why = `${(err as Error).name}: ${(err as Error).message}`;
-      const to = Math.floor(now() / MIN_MS) * MIN_MS;
-      read = {
-        account: region.account, region: region.region, from: new Date(to - 14 * DAY_MS).toISOString(), to: new Date(to).toISOString(),
-        minutes: {}, unreadable: Object.fromEntries(region.workloads.map((w) => [w.targetGroupArn, why])),
-      };
-      progress({ phase: 'requests', account: region.account, region: region.region, from: 'aws', workloads: region.workloads.length, error: why });
-      out.push(read);
-      continue;
-    }
-    out.push(read);
-    progress({ phase: 'requests', account: region.account, region: region.region, from: 'aws', workloads: region.workloads.length });
+  const read = await mapLimit(regions, concurrency, (region) => regionRequests(region, { cloudwatchOf, cache, refresh, now, progress }));
+  return read.filter((r): r is RegionRequests => r !== null);
+}
+
+// One region's requests: kept, read, or unreadable with AWS's reason; null for a region without workload or that failed.
+async function regionRequests(region: RegionDiscovery, { cloudwatchOf, cache, refresh, now, progress }: {
+  cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>; cache: Cache; refresh: 'discovery' | 'metrics' | null; now: () => number; progress: Progress;
+}): Promise<RegionRequests | null> {
+  if (region.error || !region.workloads.length) return null;
+  const path = `requests/${region.account}-${region.region}.json`;
+  const kept = refresh ? null : await cache.get<RegionRequests>(path, freshRequests(now()));
+  // Kept only while it covers every workload discovery found (a new one since: read again).
+  if (kept && region.workloads.every((w) => w.targetGroupArn in kept.minutes || w.targetGroupArn in kept.unreadable)) {
+    progress({ phase: 'requests', account: region.account, region: region.region, from: 'cache', workloads: region.workloads.length });
+    return kept;
   }
-  return out;
+  let read: RegionRequests;
+  try {
+    read = await readRequests(await cloudwatchOf(region.account, region.region), region.workloads, { days: 14, now: now() });
+    await cache.put(path, read);
+  } catch (err) {
+    // A region whose requests cannot be read at all (a denial, throttling, expired credentials): its workloads are
+    // unreadable with AWS's reason, nothing is kept, and the run goes on.
+    const why = `${(err as Error).name}: ${(err as Error).message}`;
+    const to = Math.floor(now() / MIN_MS) * MIN_MS;
+    read = {
+      account: region.account, region: region.region, from: new Date(to - 14 * DAY_MS).toISOString(), to: new Date(to).toISOString(),
+      minutes: {}, unreadable: Object.fromEntries(region.workloads.map((w) => [w.targetGroupArn, why])),
+    };
+    progress({ phase: 'requests', account: region.account, region: region.region, from: 'aws', workloads: region.workloads.length, error: why });
+    return read;
+  }
+  progress({ phase: 'requests', account: region.account, region: region.region, from: 'aws', workloads: region.workloads.length });
+  return read;
 }

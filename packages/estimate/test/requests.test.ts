@@ -81,6 +81,29 @@ describe('the requests of every region', () => {
     return { run, reads: () => reads, later: (ms: number) => { t += ms; } };
   }
 
+  // The user, 2026-10-11: CloudWatch read --parallel regions at a time, as discovery reads accounts.
+  it('reads --parallel regions at a time (5 by default), in their order', async () => {
+    const regions = Array.from({ length: 8 }, (_, i) => region([{ ...workload(i), account: String(i + 1).repeat(12) }], { account: String(i + 1).repeat(12) }));
+    const measure = async (concurrency?: number) => {
+      const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+      let active = 0;
+      let most = 0;
+      const out = await requestsAll({
+        regions, cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW, ...(concurrency ? { concurrency } : {}),
+        cloudwatchOf: async () => ({ getMetricData: async (input) => {
+          active += 1;
+          most = Math.max(most, active);
+          await new Promise((r) => setTimeout(r, 5));
+          active -= 1;
+          return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: [], Values: [], StatusCode: 'Complete' })) };
+        } }),
+      });
+      return { most, accounts: out.map((r) => r.account) };
+    };
+    expect(await measure()).toEqual({ most: 5, accounts: regions.map((r) => r.account) });
+    expect((await measure(2)).most).toBe(2);
+  });
+
   it('kept per account and region the same UTC day, read again the next day or when refreshed', async () => {
     const s = setup();
     const regions = [region([workload(0)])];

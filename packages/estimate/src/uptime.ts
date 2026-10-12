@@ -6,6 +6,7 @@
 // every page. A metric CloudWatch could not read is unreadable, never a stop. What Dormeto manages is not measured: its
 // uptime is already its naps. Kept per account and region the same UTC day.
 import { freshRequests, type Cache } from './cache.js';
+import { mapLimit } from './limit.js';
 import { clusterOf, type Progress, type RegionDiscovery, type Workload } from './discover.js';
 import type { CloudWatchPort, RegionRequests } from './requests.js';
 
@@ -88,7 +89,7 @@ export async function readUptime(cloudwatch: CloudWatchPort, ids: string[], { fr
   return { running, unreadable };
 }
 
-export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refresh, now, progress = () => {}, kinds = { ec2: true, ecs: false } }: {
+export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refresh, now, progress = () => {}, kinds = { ec2: true, ecs: false }, concurrency = 5 }: {
   regions: RegionDiscovery[];
   requests: RegionRequests[];
   cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>;
@@ -97,36 +98,42 @@ export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refres
   now: () => number;
   progress?: Progress;
   kinds?: UptimeKinds;
+  // Regions read at once (--parallel).
+  concurrency?: number;
 }): Promise<RegionUptime[]> {
-  const out: RegionUptime[] = [];
-  for (const region of regions) {
-    const ids = [...new Set([
-      ...region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id),
-      ...(kinds.rds ? (region.databases ?? []).filter((d) => !d.notStoppable).map(databaseKey) : []),
-    ])];
-    const period = requests.find((r) => r.account === region.account && r.region === region.region);
-    if (!ids.length || !period) continue;
-    const where = { account: region.account, region: region.region };
-    const path = `uptime/${region.account}-${region.region}.json`;
-    const kept = refresh ? null : await cache.get<RegionUptime>(path, freshRequests(now()));
-    // Kept while it measures the same period and every instance.
-    if (kept && kept.from === period.from && ids.every((id) => id in kept.running || id in kept.unreadable)) {
-      out.push(kept);
-      progress({ phase: 'uptime', ...where, from: 'cache', workloads: ids.length });
-      continue;
-    }
-    let read: RegionUptime;
-    try {
-      read = { ...where, from: period.from, to: period.to, ...(await readUptime(await cloudwatchOf(region.account, region.region), ids, period)) };
-      await cache.put(path, read);
-      progress({ phase: 'uptime', ...where, from: 'aws', workloads: ids.length });
-    } catch (err) {
-      // Not read at all (a denial, throttling): its instances and services unreadable with AWS's reason, nothing kept, the run goes on.
-      const why = `${(err as Error).name}: ${(err as Error).message}`;
-      read = { ...where, from: period.from, to: period.to, running: {}, unreadable: Object.fromEntries(ids.map((id) => [id, why])) };
-      progress({ phase: 'uptime', ...where, from: 'aws', workloads: ids.length, error: why });
-    }
-    out.push(read);
+  const read = await mapLimit(regions, concurrency, (region) => regionUptime(region, { requests, cloudwatchOf, cache, refresh, now, progress, kinds }));
+  return read.filter((r): r is RegionUptime => r !== null);
+}
+
+// One region's uptime: kept, read, or unreadable with AWS's reason; null when nothing of it is measured.
+async function regionUptime(region: RegionDiscovery, { requests, cloudwatchOf, cache, refresh, now, progress, kinds }: {
+  requests: RegionRequests[]; cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>; cache: Cache;
+  refresh: 'discovery' | 'metrics' | null; now: () => number; progress: Progress; kinds: UptimeKinds;
+}): Promise<RegionUptime | null> {
+  const ids = [...new Set([
+    ...region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id),
+    ...(kinds.rds ? (region.databases ?? []).filter((d) => !d.notStoppable).map(databaseKey) : []),
+  ])];
+  const period = requests.find((r) => r.account === region.account && r.region === region.region);
+  if (!ids.length || !period) return null;
+  const where = { account: region.account, region: region.region };
+  const path = `uptime/${region.account}-${region.region}.json`;
+  const kept = refresh ? null : await cache.get<RegionUptime>(path, freshRequests(now()));
+  // Kept while it measures the same period and every instance.
+  if (kept && kept.from === period.from && ids.every((id) => id in kept.running || id in kept.unreadable)) {
+    progress({ phase: 'uptime', ...where, from: 'cache', workloads: ids.length });
+    return kept;
   }
-  return out;
+  let read: RegionUptime;
+  try {
+    read = { ...where, from: period.from, to: period.to, ...(await readUptime(await cloudwatchOf(region.account, region.region), ids, period)) };
+    await cache.put(path, read);
+    progress({ phase: 'uptime', ...where, from: 'aws', workloads: ids.length });
+  } catch (err) {
+    // Not read at all (a denial, throttling): its instances and services unreadable with AWS's reason, nothing kept, the run goes on.
+    const why = `${(err as Error).name}: ${(err as Error).message}`;
+    read = { ...where, from: period.from, to: period.to, running: {}, unreadable: Object.fromEntries(ids.map((id) => [id, why])) };
+    progress({ phase: 'uptime', ...where, from: 'aws', workloads: ids.length, error: why });
+  }
+  return read;
 }

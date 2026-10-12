@@ -93,6 +93,7 @@ describe('the estimate command', () => {
     const d = deps(fakeAws().aws);
     expect(await main(['--profile', 'p', '--out', out], d.deps)).toBe(0);
     expect(d.out).toContain(`  discovery ${A} (1/1): 1 region, 1 workload`);
+    expect(d.out).toContain('Phase 2: requests (5 regions at a time)');
     const t = deps(fakeAws().aws);
     const updates: string[] = [];
     const ends: string[] = [];

@@ -8,6 +8,7 @@ import type { Credentials } from '@dormeto/discovery/aws';
 import type { StoppedItem } from '@dormeto/fleet';
 import type { Reached } from './accounts.js';
 import { freshDiscovery, type Cache } from './cache.js';
+import { mapLimit } from './limit.js';
 import { describeStopped, type RouterBackend, type StoppedPorts } from './stopped.js';
 
 export interface Workload {
@@ -218,15 +219,6 @@ async function databasesOf(ports: RegionPorts, groups: Set<string>): Promise<{ d
 
 // A region's workloads described this many at a time (an account's own calls: AWS throttles per account), in their order.
 const WORKLOADS_AT_ONCE = 8;
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]!);
-  }));
-  return out;
-}
 
 export async function discoverRegion(ports: RegionPorts, { account, region }: { account: string; region: string }): Promise<RegionDiscovery> {
   const described = await mapLimit(await ports.scan(), WORKLOADS_AT_ONCE, (rule) => describeRule(ports, rule, { account, region }));

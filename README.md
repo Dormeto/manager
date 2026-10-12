@@ -269,7 +269,7 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   other; in a terminal, one progress line with a bar, the accounts done, the regions, workloads, failures and the time,
   else a line per account; discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
-  five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`
+  five metrics per `GetMetricData` call, `--parallel` regions at a time, as the uptime), estimate (R10's replay priced by the product's price book, at `--window`
   (an hour by default) and at each workload's recommended one, net of Dormeto's cost). A workload Dormeto already manages is
   estimated with its waker target group's requests added.
 - **Cache:** `~/.cache/dormeto/estimate/<organization or account>/` (`$XDG_CACHE_HOME` when set): discovery and each

@@ -166,6 +166,28 @@ describe('the uptime of every region', () => {
     expect(Object.keys(read!.running)).toEqual(['rds-instance:shop-db', 'rds-instance:night-db', 'rds-cluster:aurora']);
   });
 
+  it('reads --parallel regions at a time (5 by default), in their order', async () => {
+    const accounts = Array.from({ length: 8 }, (_, i) => String(i + 1).repeat(12));
+    const many: RegionDiscovery[] = accounts.map((account) => ({ account, region: R, ineligible: [], workloads: [w('web', { account })] }));
+    const periods: RegionRequests[] = accounts.map((account) => ({ account, region: R, from: FROM, to: TO, minutes: {}, unreadable: {} }));
+    const measure = async (concurrency?: number) => {
+      const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+      let active = 0;
+      let most = 0;
+      const port: CloudWatchPort = { getMetricData: async (input) => {
+        active += 1;
+        most = Math.max(most, active);
+        await new Promise((r) => setTimeout(r, 5));
+        active -= 1;
+        return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: [], Values: [], StatusCode: 'Complete' })) };
+      } };
+      const out = await uptimeAll({ regions: many, requests: periods, cloudwatchOf: async () => port, cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW, ...(concurrency ? { concurrency } : {}) });
+      return { most, accounts: out.map((r) => r.account) };
+    };
+    expect(await measure()).toEqual({ most: 5, accounts });
+    expect((await measure(2)).most).toBe(2);
+  });
+
   it('a region whose uptime cannot be read at all: its instances unreadable with AWS\'s reason, the run goes on', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
     const port: CloudWatchPort = { getMetricData: async () => { throw Object.assign(new Error('not authorized to perform: cloudwatch:GetMetricData'), { name: 'AccessDenied' }); } };
