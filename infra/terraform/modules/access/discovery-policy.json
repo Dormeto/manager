@@ -16,7 +16,10 @@
         "ecs:ListClusters",
         "ecs:ListServices",
         "ecs:DescribeServices",
-        "cloudwatch:GetMetricData"
+        "cloudwatch:GetMetricData",
+        "cloudtrail:DescribeTrails",
+        "cloudtrail:GetTrailStatus",
+        "cloudtrail:GetEventSelectors"
       ],
       "Resource": "*"
     }

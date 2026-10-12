@@ -6,8 +6,8 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { OrganizationsClient } from '@aws-sdk/client-organizations';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import { commandCheck, createAssumeRole, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, type Credentials } from './aws.js';
-import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
+import { commandCheck, createAssumeRole, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, trailCovers, trailsPort, type Credentials } from './aws.js';
+import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { createStore } from './store.js';
 
@@ -39,7 +39,9 @@ type Event =
   | { step: 'account'; runId: string; account: string }
   | { step: 'finalize'; plan: RunPlan }
   | { step: 'abandon'; plan: RunPlan; error?: string }
-  | { step?: undefined; source?: string; by?: string; action?: string };
+  | { step?: undefined; source?: string; by?: string; action?: string }
+  // Forwarded load balancer changes, in batches from the refresh queue (packaging design §5).
+  | { step?: undefined; Records: { body: string }[] };
 
 const trigger = (e: { source?: string; by?: string } = {}) => ({ source: e.source === 'manual' ? 'manual' as const : 'schedule' as const, ...(e.by ? { by: e.by } : {}) });
 
@@ -54,6 +56,7 @@ export const handler = async (event: Event = {}) => {
     ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
     scan: (credentials, where) => scanRegion(scanPorts(regionalClients(credentials as Credentials, where.region)), where),
+    trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
     log,
   };
@@ -63,6 +66,10 @@ export const handler = async (event: Event = {}) => {
     return plan;
   }
   if (event.step === 'account') return scanAccount(deps, { runId: event.runId, account: event.account });
+  if ('Records' in event) {
+    const events = event.Records.map((r) => { try { return JSON.parse(r.body) as { account?: unknown; region?: unknown }; } catch { return {}; } });
+    return refreshAccounts(deps, events);
+  }
   const run = event.step === 'finalize' ? await finalizeRun(deps, event.plan)
     : event.step === 'abandon' ? await abandonRun(deps, event.plan, event.error ?? 'unknown error')
       : await runDiscovery(deps, trigger(event));
@@ -73,5 +80,7 @@ export const handler = async (event: Event = {}) => {
     ...(run.error ? { error: run.error } : {}),
     counts: run.counts,
     errors: run.targets.filter((t) => t.status === 'error').length,
+    // The operations task connections takes them (packaging design §5).
+    connections: run.connections ?? { connect: [], disconnect: [] },
   };
 };

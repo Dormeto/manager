@@ -74,6 +74,16 @@ describe('validateConfig', () => {
     expect(validateConfig({ ...valid, filters: crowded }).errors).toContain('at most 100 criteria in total');
   });
 
+  it('accepts event-driven refresh, on or off, for every ready account or some; refuses a malformed one', () => {
+    // Packaging design §5: off by default; accounts lets an administrator connect some accounts first.
+    expect(validateConfig(valid).config?.eventRefresh).toBeUndefined();
+    expect(validateConfig({ ...valid, eventRefresh: { enabled: true } }).config?.eventRefresh).toEqual({ enabled: true });
+    expect(validateConfig({ ...valid, eventRefresh: { enabled: false, accounts: ['121014831971'] } }).config?.eventRefresh).toEqual({ enabled: false, accounts: ['121014831971'] });
+    expect(validateConfig({ ...valid, eventRefresh: { enabled: 'yes' } }).errors).toEqual(['eventRefresh.enabled: must be true or false']);
+    expect(validateConfig({ ...valid, eventRefresh: { enabled: true, accounts: ['12'] } }).errors).toEqual(['eventRefresh.accounts: "12" is not an account id']);
+    expect(validateConfig({ ...valid, eventRefresh: true }).errors).toEqual(['eventRefresh: must be an object']);
+  });
+
   it('refuses something that is not an object', () => {
     expect(validateConfig('nope').errors).toEqual(['configuration: must be an object']);
   });

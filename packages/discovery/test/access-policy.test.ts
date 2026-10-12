@@ -11,4 +11,8 @@ describe('discovery role policy', () => {
     expect(DISCOVERY_ACTIONS.filter((a) => !granted.includes(a))).toEqual([]);
     expect(granted.filter((a) => !/:(Describe|List|Get)/.test(a))).toEqual([]);
   });
+
+  it('reads the CloudTrail trails of each region (event refresh, packaging design §5)', () => {
+    expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus', 'cloudtrail:GetEventSelectors']));
+  });
 });

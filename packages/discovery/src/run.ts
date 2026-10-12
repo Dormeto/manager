@@ -35,6 +35,8 @@ export interface RunDeps {
   assumeRole(account: string): Promise<unknown>; // credentials for the account's discovery role
   assumeCommand?(account: string): Promise<unknown>; // the account's command role, only to check it (packaging design §3)
   enabledRegions(credentials: unknown): Promise<string[]>;
+  // Whether a CloudTrail trail logs the management writes of the region (event refresh, packaging design §5).
+  trails?(credentials: unknown, region: string): Promise<boolean>;
   scan(credentials: unknown, where: { account: string; region: string }): Promise<ScannedRule[]>;
   now?: () => number;
   concurrency?: number; // regions of an account scanned at once (8)
@@ -190,7 +192,9 @@ function canonical(value: unknown): string {
 
 // One account of a run: its role, its regions (8 at a time, an empty one every 7th run only), the candidates that
 // changed written, its result recorded with its scan state. A failed account changes none of its candidates.
-export async function scanAccount(deps: RunDeps, { runId, account }: { runId: string; account: string }): Promise<{ account: string; ok: boolean; written: number }> {
+// only: a refresh of these regions (forwarded events, packaging design §5): the access checks, the run's result and the
+// other regions are kept, and the counts move with the candidates.
+export async function scanAccount(deps: RunDeps, { runId, account, only }: { runId: string; account: string; only?: string[] }): Promise<{ account: string; ok: boolean; written: number }> {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? silent;
   const at = iso(now());
@@ -213,8 +217,8 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     log.warn('DiscoveryAccountFailed', { account, error });
   }
   // The command role, only assumed: onboarding, router installs and forwarders need it (packaging design §3).
-  let access: AccountScan['access'];
-  if (!synthetic && deps.assumeCommand) {
+  let access: AccountScan['access'] = only ? state?.access : undefined;
+  if (!only && !synthetic && deps.assumeCommand) {
     // A check that does not answer is no verdict: the last one stands (none: the account stays unchecked).
     const command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? state?.access?.command : accessOf(err)));
     if (command) access = { discovery: discoveryAccess, command, checkedAt: at };
@@ -231,9 +235,16 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
   };
   const toScan: string[] = [];
   const own = { accounts: inventory.accounts.filter((a) => a.id === account), ous: inventory.ous };
+  const perimeter: string[] = [];
   for (const p of targetPairs(config, own, { [account]: enabled })) {
     if (!p.scan) {
       skip(p.reason);
+      continue;
+    }
+    perimeter.push(p.region);
+    if (only) {
+      // An event says something changed: scanned even where empty runs were skipping it.
+      if (only.includes(p.region) && !error) toScan.push(p.region);
       continue;
     }
     if (error) {
@@ -248,6 +259,22 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     }
     toScan.push(p.region);
   }
+  // The trails of the perimeter's regions, where event refresh is on for the account (packaging design §5).
+  const refresh = config.eventRefresh;
+  if (!only && access && credentials && deps.trails && refresh?.enabled && (!refresh.accounts || refresh.accounts.includes(account))) {
+    const trails: Record<string, boolean> = {};
+    let trailsError: string | undefined;
+    for (const region of perimeter) {
+      try {
+        trails[region] = await deps.trails(credentials, region);
+      } catch (err) {
+        trails[region] = false;
+        trailsError ??= `cannot read CloudTrail: ${errorText(err)}`;
+      }
+    }
+    access = { ...access, trails, ...(trailsError ? { trailsError } : {}) };
+  }
+
   await pool(toScan, deps.concurrency ?? 8, async (region) => {
     const started = now();
     try {
@@ -260,7 +287,7 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     }
   });
 
-  const stored = new Map((await deps.store.accountCandidates(account)).map((c) => [c.id, c]));
+  const stored = new Map((await deps.store.accountCandidates(account)).filter((c) => !only || only.includes(c.region)).map((c) => [c.id, c]));
   const previous = new Map(stored);
   // A rule candidate (earlier versions, or a rule that rejoined a target group) now inside a target group candidate is
   // merged into it: its dismissal, first seen date and history carry over, and it is deleted rather than gone.
@@ -282,7 +309,8 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     const before = stored.get(c.id);
     return !before || canonical(before) !== canonical(c);
   });
-  await deps.store.putCandidates(changed);
+  if (only) await deps.store.replaceCandidates(changed, [...stored.values()]);
+  else await deps.store.putCandidates(changed);
   if (superseded.length) {
     await deps.store.deleteCandidates(supersededCandidates);
     log.info('DiscoveryCandidatesMerged', { account, count: superseded.length });
@@ -294,8 +322,67 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
     written: changed.length,
   };
-  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}), ...(access ? { access } : {}) });
+  if (only && state) await deps.store.putAccountScan({ ...state, regions });
+  else await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}), ...(access ? { access } : {}) });
   return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+}
+
+// The account-regions forwarded events name (packaging design §5), each rescanned once per batch; skipped while a full run
+// holds the lock (it covers them). Events of accounts or regions outside the perimeter are ignored.
+export async function refreshAccounts(deps: RunDeps, events: { account?: unknown; region?: unknown }[]): Promise<{ skipped: boolean; pairs: string[] }> {
+  const now = deps.now ?? Date.now;
+  const log = deps.log ?? silent;
+  const byAccount = new Map<string, Set<string>>();
+  for (const e of events) {
+    if (typeof e?.account !== 'string' || !/^\d{12}$/.test(e.account) || typeof e.region !== 'string' || !/^[a-z]{2}(-[a-z]+)+-\d{1,2}$/.test(e.region)) continue;
+    byAccount.set(e.account, (byAccount.get(e.account) ?? new Set()).add(e.region));
+  }
+  const id = `refresh ${iso(now())}`;
+  if (!(await deps.store.acquireLock(id))) {
+    log.info('DiscoveryRefreshSkipped', { accounts: byAccount.size, reason: 'a run holds the lock' });
+    return { skipped: true, pairs: [] };
+  }
+  try {
+    const pairs: string[] = [];
+    for (const [account, regions] of byAccount) {
+      const state = await deps.store.getAccountScan(account);
+      // Only the accounts and regions the last run scanned: the perimeter as it is.
+      if (!state || state.retiredAt) continue;
+      const known = [...regions].filter((r) => r in (state.regions ?? {}));
+      if (!known.length) continue;
+      await scanAccount(deps, { runId: state.runId ?? '', account, only: known });
+      pairs.push(...known.map((r) => `${account}/${r}`));
+    }
+    log.info('DiscoveryRefresh', { pairs });
+    return { skipped: false, pairs };
+  } finally {
+    await deps.store.releaseLock(id);
+  }
+}
+
+// The connections a run decides (packaging design §5): on, the ready accounts with a trail (all, or those listed),
+// connected where they are not yet or in fewer regions; the connected accounts left, unlisted, or all when off.
+async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPlan, scans: AccountScan[], inventory: OrgInventory) {
+  const setting = config.eventRefresh;
+  const wanted = (account: string) => Boolean(setting?.enabled && (!setting.accounts || setting.accounts.includes(account)));
+  const connected = new Map((await deps.store.listConnections()).map((c) => [c.account, c]));
+  const inRun = new Set(plan.accounts);
+  const connect: { account: string; regions: string[] }[] = [];
+  const impossible: { account: string; name: string; reason: string }[] = [];
+  let connectedCount = 0;
+  for (const s of [...scans].sort((a, b) => a.account.localeCompare(b.account))) {
+    if (s.synthetic || !wanted(s.account)) continue;
+    const name = inventory.accounts.find((a) => a.id === s.account)?.name ?? s.account;
+    const regions = Object.entries(s.access?.trails ?? {}).filter(([, on]) => on).map(([r]) => r).sort();
+    const current = connected.get(s.account);
+    if (!s.access?.command.ok) impossible.push({ account: s.account, name, reason: 'no command role' });
+    else if (s.access.trailsError) impossible.push({ account: s.account, name, reason: s.access.trailsError });
+    else if (!regions.length) impossible.push({ account: s.account, name, reason: 'no CloudTrail trail logging management events in its regions' });
+    else if (!current || regions.some((r) => !current.regions.includes(r))) connect.push({ account: s.account, regions: [...new Set([...(current?.regions ?? []), ...regions])].sort() });
+    else connectedCount += 1;
+  }
+  const disconnect = [...connected.keys()].filter((account) => !wanted(account) || !inRun.has(account)).sort();
+  return { connections: { connect, disconnect }, forwarders: setting?.enabled ? { connected: connectedCount, connecting: connect.length, impossible } : undefined };
 }
 
 // Organization access of a run's accounts (packaging design §3): counted, those not ready listed; an account without a
@@ -370,14 +457,16 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const errors = targets.filter((t) => t.status === 'error').length;
     const status = errors === 0 ? 'ok' : errors === targets.length + emptyPairs ? 'failed' : 'partial';
     const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
+    const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory);
     const record: RunRecord = {
       startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,
       counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),
       ...(plan.delegation ? { delegation: plan.delegation } : {}),
+      ...(connections.connect.length || connections.disconnect.length || config.eventRefresh ? { connections } : {}),
     };
     await deps.store.putRun(record);
     await deps.store.putCounts(record.counts);
-    await deps.store.putAccess(accessSummary(plan, ofRun, inventory, iso(now())));
+    await deps.store.putAccess({ ...accessSummary(plan, ofRun, inventory, iso(now())), ...(forwarders ? { forwarders } : {}) });
     log.info('DiscoveryRun', { status, accounts: plan.accounts.length, errors, counts: record.counts });
     return record;
   } catch (err) {

@@ -47,6 +47,9 @@ export interface DiscoveryConfig {
   refreshHours: number;
   globalExcludes: Criterion[];
   filters: Filter[];
+  // Event-driven refresh (packaging design §5): the manager connects the ready accounts (all, or those listed) with a
+  // CloudTrail trail; off, it disconnects them. Absent: off.
+  eventRefresh?: { enabled: boolean; accounts?: string[] };
 }
 
 export interface Account {
@@ -148,7 +151,9 @@ export interface AccountScan {
   result?: AccountResult;
   synthetic?: boolean; // written by the synthetic scanner (dev): deleted with its candidates once it is turned off
   // Both organization roles, checked at each scan (a synthetic account has none).
-  access?: { discovery: AccessState; command: AccessState; checkedAt: string; trails?: Record<string, boolean> };
+  // trails (event refresh on for the account, packaging design §5): per region of the perimeter, whether a CloudTrail trail
+  // logs its management writes; trailsError: why they could not be read.
+  access?: { discovery: AccessState; command: AccessState; checkedAt: string; trails?: Record<string, boolean>; trailsError?: string };
 }
 
 // An account of the perimeter whose access is not complete, for the Organization access panel.
@@ -181,6 +186,9 @@ export interface AccessSummary {
   accounts: AccessRow[]; // sorted by account
   delegation: 'ok' | 'missing' | null;
   checkedAt: string | null;
+  // Event refresh on (packaging design §5): the forwarders connected, being connected by this run, and the accounts where
+  // one is not possible, with the reason.
+  forwarders?: { connected: number; connecting: number; impossible: { account: string; name: string; reason: string }[] };
 }
 
 export interface AccessReport extends AccessSummary {
@@ -248,4 +256,7 @@ export interface RunRecord {
   counts: Partial<Record<Status, number>>;
   lint: LintFinding[];
   delegation?: 'ok' | 'missing'; // organization mode: the delegation policy of the management account answered
+  // Event refresh (packaging design §5): the accounts to connect (with their regions) and to disconnect; the state machine
+  // passes them to the operations.
+  connections?: { connect: { account: string; regions: string[] }[]; disconnect: string[] };
 }

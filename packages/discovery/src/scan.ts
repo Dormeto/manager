@@ -54,6 +54,8 @@ export const DISCOVERY_ACTIONS = [
   'autoscaling:DescribeAutoScalingGroups',
   'ecs:ListClusters', 'ecs:ListServices', 'ecs:DescribeServices',
   'cloudwatch:GetMetricData',
+  // Event refresh: whether a trail logs the management writes of the region (aws.ts trailCovers).
+  'cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus', 'cloudtrail:GetEventSelectors',
 ];
 
 // Pages of an AWS list call: ELBv2 (Marker/NextMarker), Auto Scaling (NextToken), ECS (nextToken).

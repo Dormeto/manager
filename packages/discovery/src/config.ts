@@ -142,6 +142,17 @@ export function validateConfig(input: unknown): { config: DiscoveryConfig | null
   const total = globalExcludes.length + filters.reduce((n, f) => n + f.include.length + f.exclude.length, 0);
   if (total > MAX_CRITERIA) errors.push(`at most ${MAX_CRITERIA} criteria in total`);
 
+  let eventRefresh: DiscoveryConfig['eventRefresh'];
+  if (input.eventRefresh !== undefined) {
+    const e = input.eventRefresh;
+    if (!isObject(e)) errors.push('eventRefresh: must be an object');
+    else {
+      if (typeof e.enabled !== 'boolean') errors.push('eventRefresh.enabled: must be true or false');
+      const accounts = e.accounts === undefined ? undefined : strings(e.accounts, 'eventRefresh.accounts', errors, (s) => (ACCOUNT_ID.test(s) ? null : `"${s}" is not an account id`));
+      eventRefresh = { enabled: e.enabled === true, ...(accounts ? { accounts } : {}) };
+    }
+  }
+
   if (errors.length) return { config: null, errors };
-  return { config: { version: 1, mode: input.mode as DiscoveryConfig['mode'], regions, refreshHours: refreshHours as number, globalExcludes, filters }, errors };
+  return { config: { version: 1, mode: input.mode as DiscoveryConfig['mode'], regions, refreshHours: refreshHours as number, globalExcludes, filters, ...(eventRefresh ? { eventRefresh } : {}) }, errors };
 }

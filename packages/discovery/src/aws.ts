@@ -1,5 +1,6 @@
 // AWS SDK adapters: scan ports with an account's discovery credentials, AssumeRole, enabled regions, Organizations.
 import { AutoScalingClient, DescribeAutoScalingGroupsCommand } from '@aws-sdk/client-auto-scaling';
+import { CloudTrailClient, DescribeTrailsCommand, GetEventSelectorsCommand, GetTrailStatusCommand } from '@aws-sdk/client-cloudtrail';
 import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { DescribeServicesCommand, ECSClient, ListClustersCommand, ListServicesCommand } from '@aws-sdk/client-ecs';
@@ -99,4 +100,52 @@ export function commandCheck(invoke: (payload: Record<string, unknown>) => Promi
     if (answer?.ok === false && answer.name && answer.name !== 'InvalidInput') throw Object.assign(new Error(answer.message ?? ''), { name: answer.name });
     throw Object.assign(new Error(`the access check answered ${JSON.stringify(answer)?.slice(0, 200)}`), { name: 'CheckUnavailable', unavailable: true });
   };
+}
+
+// CloudTrail of an account and region (packaging design §5): whether a trail logs the management writes there, so that the
+// load balancer changes reach the forwarder. Trails of other regions apply when multi-region; the organization trail of
+// the management account counts even when a member account cannot read its status (it logs management events).
+export interface TrailsPort {
+  describeTrails(input: { includeShadowTrails: boolean }): Promise<{ trailList?: { TrailARN?: string; HomeRegion?: string; IsMultiRegionTrail?: boolean; IsOrganizationTrail?: boolean }[] }>;
+  getTrailStatus(input: { Name: string }): Promise<{ IsLogging?: boolean }>;
+  getEventSelectors(input: { TrailName: string }): Promise<{
+    EventSelectors?: { ReadWriteType?: string; IncludeManagementEvents?: boolean }[];
+    AdvancedEventSelectors?: { FieldSelectors?: { Field?: string; Equals?: string[] }[] }[];
+  }>;
+}
+
+const managementWrites = (s: Awaited<ReturnType<TrailsPort['getEventSelectors']>>) => {
+  if (s.AdvancedEventSelectors?.length) {
+    return s.AdvancedEventSelectors.some((a) => {
+      const field = (name: string) => a.FieldSelectors?.find((f) => f.Field === name)?.Equals ?? [];
+      return field('eventCategory').includes('Management') && !(field('readOnly').length === 1 && field('readOnly')[0] === 'true');
+    });
+  }
+  // Without selectors, a trail logs every management event.
+  if (!s.EventSelectors?.length) return true;
+  return s.EventSelectors.some((e) => e.IncludeManagementEvents !== false && (e.ReadWriteType ?? 'All') !== 'ReadOnly');
+};
+
+export async function trailCovers(cloudtrail: TrailsPort, region: string): Promise<boolean> {
+  for (const t of (await cloudtrail.describeTrails({ includeShadowTrails: true })).trailList ?? []) {
+    if (!t.TrailARN || !(t.IsMultiRegionTrail || t.HomeRegion === region)) continue;
+    try {
+      if (!(await cloudtrail.getTrailStatus({ Name: t.TrailARN })).IsLogging) continue;
+      if (managementWrites(await cloudtrail.getEventSelectors({ TrailName: t.TrailARN }))) return true;
+    } catch (err) {
+      if (t.IsOrganizationTrail && /AccessDenied|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`)) return true;
+      throw err;
+    }
+  }
+  return false;
+}
+
+// The CloudTrail calls of trailCovers, with an account's discovery role credentials in a region.
+export function trailsPort(credentials: Credentials, region: string): TrailsPort {
+  const client = new CloudTrailClient({ region, credentials, maxAttempts: 5 });
+  return {
+    describeTrails: (input) => client.send(new DescribeTrailsCommand(input)),
+    getTrailStatus: (input) => client.send(new GetTrailStatusCommand(input)),
+    getEventSelectors: (input) => client.send(new GetEventSelectorsCommand(input)),
+  } as TrailsPort;
 }
