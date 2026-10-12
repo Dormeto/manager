@@ -36,7 +36,7 @@ const watchdog = createWatchdog({
   // The manager's IP lists (R6b), from the list function's status; failed wakes (R7b), from the fleet's failure index.
   extraObservations: async () => [
     ...(listsBucket ? listObservations(await readJson<{ lists?: ListStatusLine[] }>(s3, listsBucket, 'status.json'), Date.now()) : []),
-    ...workloadObservations(await fleet.listFailures()),
+    ...workloadObservations(await fleet.listFailures(), Date.now()),
   ],
 });
 

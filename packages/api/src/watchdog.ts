@@ -60,15 +60,19 @@ const time = (at: string) => `${at.slice(0, 16).replace('T', ' ')} UTC`;
 const RANK = { warning: 1, error: 2 } as const;
 
 // The health a router reported, as problems (the router's levels; anything unreadable is a problem of its own).
+// A router's failed workloads (R7b): each failed wake is its own alert, from the failure index; the router's health
+// keeps saying it in the dashboard.
+const FAILED_WORKLOADS = new Set(['failed-workloads', problemCode({ text: '1 failed workload' }), problemCode({ text: '2 failed workloads' })]);
+
 function reportedProblems(summary: RouterSummary): Problem[] {
   const raw = (summary.health as { problems?: unknown } | null)?.problems;
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) throw new Error('problems is not a list');
-  return raw.map((p) => {
+  return raw.map((p): Problem => {
     const { level, text, code } = (p ?? {}) as { level?: unknown; text?: unknown; code?: unknown };
     if (typeof text !== 'string' || (level !== 'warning' && level !== 'error')) throw new Error('a problem without level or text');
     return { code: problemCode({ code, text }), level, text };
-  });
+  }).filter((p) => !FAILED_WORKLOADS.has(p.code));
 }
 
 export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now }: {
@@ -132,9 +136,13 @@ const ADVICE: Record<string, string> = {
   timeout: 'The start took longer than the wake timeout (wake_timeout_seconds), or the wake stopped.',
   unknown: "Dormeto does not know this error: the router's logs (WakeFailed) have it whole.",
 };
-export function workloadObservations(entries: FailureIndexEntry[]): Observation[] {
+export function workloadObservations(entries: FailureIndexEntry[], now = Date.now()): Observation[] {
   return entries.map((e) => {
-    const next = e.nextAttemptAt ? `A request retries it, next attempt after ${time(e.nextAttemptAt)} (${e.consecutiveFailures ?? 1} failure${(e.consecutiveFailures ?? 1) === 1 ? '' : 's'} in a row).` : 'A request retries it.';
+    const n = e.consecutiveFailures ?? 1;
+    const inARow = `${n} failure${n === 1 ? '' : 's'} in a row`;
+    const next = !e.nextAttemptAt ? 'A request retries it.'
+      : Date.parse(e.nextAttemptAt) > now ? `A request retries it, next attempt after ${time(e.nextAttemptAt)} (${inARow}).`
+        : `The next request retries it (${inARow}).`;
     const hint = [`${e.failure.backend ? `Backend: ${e.failure.backend}. ` : ''}${next}`, ADVICE[e.failure.kind] ?? ADVICE.unknown,
       'If its backends keep running without a healthy target, Dormeto stops them after its idle window.'].join('\n  ');
     return {

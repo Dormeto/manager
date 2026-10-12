@@ -100,6 +100,16 @@ describe('watchdog: routers', () => {
     expect(s.alarms.items.get(`router#${MANAGER}#eu-west-1`)!.alarm.problems[0]).toMatchObject({ text: 'controller: 3 errors in 24 hours', since: iso(NOW) });
   });
 
+  it('a router\'s failed workloads open no router alert: each failed wake is its own (R7b)', async () => {
+    const s = setup({ summaries: [summary(MANAGER, 'eu-west-1', MIN, [{ level: 'warning', code: 'failed-workloads', text: '1 failed workload' }])] });
+    await s.watchdog.run();
+    expect(s.sent).toEqual([]);
+    s.state.summaries = [summary(MANAGER, 'eu-west-1', MIN, [{ level: 'warning', text: '2 failed workloads' }])];
+    s.advance(5 * MIN);
+    await s.watchdog.run();
+    expect(s.sent, 'nor from a router before 0.24.0 (no codes)').toEqual([]);
+  });
+
   it('gives a router without codes (before 0.24.0) stable codes from its texts, numbers aside', () => {
     expect(problemCode({ text: 'controller: 2 errors in 24 hours' })).toBe(problemCode({ text: 'controller: 17 errors in 24 hours' }));
     expect(problemCode({ code: 'drift', text: '3 drift repairs' })).toBe('drift');
@@ -273,7 +283,12 @@ describe('watchdog: failed wakes (R7b)', () => {
     env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [],
     fleet: { listRouters: async () => [] }, registry: { listRouters: async () => [] }, alarms: s.alarms,
     notify: { publish: async (n) => { s.sent.push(n); } }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
-    extraObservations: async () => workloadObservations(entries() as never),
+    extraObservations: async () => workloadObservations(entries() as never, NOW),
+  });
+
+  it('says that the next request retries it once the next attempt has passed, not a past time', () => {
+    const [o] = workloadObservations([entry('unhealthy', { nextAttemptAt: iso(NOW - 10 * MIN) })] as never, NOW);
+    expect(o!.problems[0]!.hint).toMatch(/^Backend: rds:shop-db\. The next request retries it \(1 failure in a row\)\./);
   });
 
   it('names the router as the Routers view does (the index has the router\'s own name), in the link and the attributes', async () => {
@@ -282,7 +297,7 @@ describe('watchdog: failed wakes (R7b)', () => {
       env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [],
       fleet: { listRouters: async () => [] }, registry: { listRouters: async () => [installed('038606077307', 'eu-west-3')] }, alarms: s.alarms,
       notify: { publish: async (n) => { s.sent.push(n); } }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
-      extraObservations: async () => workloadObservations([entry('capacity', { router: 'dmtr-dev' })] as never),
+      extraObservations: async () => workloadObservations([entry('capacity', { router: 'dmtr-dev' })] as never, NOW),
     }).run();
     const n = s.sent.find((x) => x.attributes.kind === 'workload')!;
     expect(n.attributes.router).toBe('dmtr-dev-038606077307-eu-west-3');
