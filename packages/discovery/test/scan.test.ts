@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { scanRegion } from '../src/scan.js';
 import type { ScannedRule } from '../src/types.js';
-import { RULES, TGS, scanPorts } from './scan-fakes.js';
+import { BATCH_ASG_ARN, RULES, TGS, scanPorts } from './scan-fakes.js';
 
 const NOW = () => Date.UTC(2026, 9, 4, 12, 30);
 const WHERE = { account: '111122223333', region: 'eu-west-1' };
@@ -14,9 +14,10 @@ describe('scanRegion', () => {
     const found = byKey(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
     expect(Object.keys(found).sort()).toEqual(['api', 'batch', 'demo-app', 'empty', 'orphan', 'r-canary', 'r-default', 'r-fixed', 'r-fn', 'r80', 'shared', 'shop']);
     expect([found['demo-app']!.eligibility, found['demo-app']!.workloadId]).toEqual(['managed', 'demo']);
-    expect([found.shop!.eligibility, found.shop!.backend]).toEqual(['eligible', { kind: 'instance', id: 'i-shop' }]);
-    expect(found.api!.backend).toEqual({ kind: 'ecs', id: 'arn:aws:ecs:eu-west-1:111122223333:service/main/api' });
-    expect(found.batch!.backend).toEqual({ kind: 'asg', id: 'batch-asg' });
+    // Each backend with its ARN (the dashboard shows it).
+    expect([found.shop!.eligibility, found.shop!.backend]).toEqual(['eligible', { kind: 'instance', id: 'i-shop', arn: 'arn:aws:ec2:eu-west-1:111122223333:instance/i-shop' }]);
+    expect(found.api!.backend).toEqual({ kind: 'ecs', id: 'arn:aws:ecs:eu-west-1:111122223333:service/main/api', arn: 'arn:aws:ecs:eu-west-1:111122223333:service/main/api' });
+    expect(found.batch!.backend).toEqual({ kind: 'asg', id: 'batch-asg', arn: BATCH_ASG_ARN });
     expect([found.shared!.eligibility, found.shared!.rules.map((r) => r.id)]).toEqual(['eligible', ['r-shared-1', 'r-shared-2']]);
     const reasons = Object.fromEntries(Object.entries(found).filter(([, c]) => c.eligibility === 'ineligible').map(([k, c]) => [k, c.reason]));
     expect(reasons).toEqual({
@@ -69,7 +70,7 @@ describe('scanRegion', () => {
 
   it('gives a managed group the backend of its application target group, for backend type filters', async () => {
     const found = byKey(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
-    expect(found['demo-app']!.backend).toEqual({ kind: 'instance', id: 'i-demo' });
+    expect(found['demo-app']!.backend).toEqual({ kind: 'instance', id: 'i-demo', arn: 'arn:aws:ec2:eu-west-1:111122223333:instance/i-demo' });
     expect(found['demo-app']!.reason).toBeUndefined();
   });
 

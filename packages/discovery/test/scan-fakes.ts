@@ -14,6 +14,7 @@ export const TGS: Record<string, Group> = {
 };
 const forward = (...groups: [string, number][]) => [{ Type: 'forward', Order: 1, ForwardConfig: { TargetGroups: groups.map(([g, w]) => ({ TargetGroupArn: TGS[g]!.TargetGroupArn, Weight: w })) } }];
 const host = (...h: string[]) => [{ Field: 'host-header', HostHeaderConfig: { Values: h } }];
+export const BATCH_ASG_ARN = 'arn:aws:autoscaling:eu-west-1:111122223333:autoScalingGroup:6d4f2c1e-0000-4000-8000-000000000001:autoScalingGroupName/batch-asg';
 export const RULES: Record<string, Record<string, unknown>[]> = {
   [L80]: [{ RuleArn: 'r80', Priority: 'default', IsDefault: true, Conditions: [], Actions: [{ Type: 'redirect', Order: 1 }] }],
   [L443]: [
@@ -72,7 +73,7 @@ export function scanPorts({ hourly = {} as Record<string, number[]> } = {}) {
     },
     autoscaling: {
       async describeAutoScalingGroups() {
-        return { AutoScalingGroups: [{ AutoScalingGroupName: 'batch-asg', TargetGroupARNs: [TGS.batch!.TargetGroupArn] }] };
+        return { AutoScalingGroups: [{ AutoScalingGroupName: 'batch-asg', AutoScalingGroupARN: BATCH_ASG_ARN, TargetGroupARNs: [TGS.batch!.TargetGroupArn] }] };
       },
     },
     ecs: {

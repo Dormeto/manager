@@ -57,7 +57,7 @@ describe('candidates by target group', () => {
     expect(candidates).toHaveLength(2);
     const group = byTarget(candidates).ligoj!;
     expect(group.id).toBe(tgArn('ligoj'));
-    expect([group.eligibility, group.backend]).toEqual(['eligible', { kind: 'instance', id: 'i-ligoj' }]);
+    expect([group.eligibility, group.backend]).toEqual(['eligible', { kind: 'instance', id: 'i-ligoj', arn: 'arn:aws:ec2:eu-west-3:038606077307:instance/i-ligoj' }]);
     expect(group.rules.map((r) => r.priority)).toEqual(['10', '20', '30', '40', '50']);
     expect(group.priority).toBe('10');
     expect(group.conditions).toBe('host saas.ligoj.io, path /logout.html | /main/public/* (+4 rules)');

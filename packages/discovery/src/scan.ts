@@ -72,11 +72,11 @@ async function tagsOf(elbv2: ScanPorts['elbv2'], arns: string[]): Promise<Map<st
 
 // Target group → Auto Scaling group name and ECS service ARN (the backends that register targets in it).
 async function backendOwners({ autoscaling, ecs }: ScanPorts) {
-  const groups = new Map<string, string>();
+  const groups = new Map<string, { name: string; arn?: string }>();
   const services = new Map<string, string>();
   if (autoscaling) {
-    const asgs = await all<{ AutoScalingGroupName?: string; TargetGroupARNs?: string[] }>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
-    for (const g of asgs) for (const arn of g.TargetGroupARNs ?? []) groups.set(arn, g.AutoScalingGroupName ?? '');
+    const asgs = await all<{ AutoScalingGroupName?: string; AutoScalingGroupARN?: string; TargetGroupARNs?: string[] }>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
+    for (const g of asgs) for (const arn of g.TargetGroupARNs ?? []) groups.set(arn, { name: g.AutoScalingGroupName ?? '', ...(g.AutoScalingGroupARN ? { arn: g.AutoScalingGroupARN } : {}) });
   }
   if (ecs) {
     const clusters = await all<string>((i) => ecs.listClusters(i), 'clusterArns', { in: 'nextToken', out: 'nextToken' });
@@ -251,7 +251,7 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
   tags: Map<string, Record<string, string>>;
   weighted: Set<string>;
   elbv2: ScanPorts['elbv2'];
-  owners: { groups: Map<string, string>; services: Map<string, string> };
+  owners: { groups: Map<string, { name: string; arn?: string }>; services: Map<string, string> };
 }): Promise<ScannedRule> {
   const first = members[0]!;
   const app = first.app!;
@@ -345,16 +345,18 @@ function tagValues(sets: (Record<string, string> | undefined)[]): Record<string,
 async function backendOf(
   elbv2: ScanPorts['elbv2'],
   group: TargetGroup,
-  owners: { groups: Map<string, string>; services: Map<string, string> },
-): Promise<string | { kind: BackendKind; id: string }> {
+  owners: { groups: Map<string, { name: string; arn?: string }>; services: Map<string, string> },
+): Promise<string | { kind: BackendKind; id: string; arn?: string }> {
   const arn = group.TargetGroupArn ?? '';
   const asg = owners.groups.get(arn);
-  if (asg) return { kind: 'asg', id: asg };
+  if (asg) return { kind: 'asg', id: asg.name, ...(asg.arn ? { arn: asg.arn } : {}) };
   const service = owners.services.get(arn);
-  if (service) return { kind: 'ecs', id: service };
+  if (service) return { kind: 'ecs', id: service, arn: service };
   const { TargetHealthDescriptions = [] } = await elbv2.describeTargetHealth({ TargetGroupArn: arn });
   const ids = TargetHealthDescriptions.map((d) => d.Target?.Id).filter((id): id is string => Boolean(id));
   if (!ids.length) return 'no backend: no registered target, Auto Scaling group or ECS service';
   if (group.TargetType === 'ip') return 'IP targets without an ECS service';
-  return { kind: 'instance', id: ids[0]! };
+  // The instance's ARN in the target group's partition, region and account.
+  const [, partition, , region, account] = arn.split(':');
+  return { kind: 'instance', id: ids[0]!, arn: `arn:${partition}:ec2:${region}:${account}:instance/${ids[0]}` };
 }

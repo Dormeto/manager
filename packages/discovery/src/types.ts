@@ -85,7 +85,7 @@ export interface ScannedRule {
   targetGroup: string | null;
   targetGroupArn: string | null;
   suggestedId: string | null;
-  backend: { kind: BackendKind; id: string } | null;
+  backend: { kind: BackendKind; id: string; arn?: string } | null; // arn: from 2026-10-05 scans
   tags: Record<string, string[]>; // every value of each tag on the load balancer, the target group or the rule
   rules: RuleRef[]; // sorted by priority; the first one gives priority, listener and conditions
   eligibility: 'managed' | 'eligible' | 'ineligible';
