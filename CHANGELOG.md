@@ -7,12 +7,14 @@ CLI script, of the same release).
 
 ## 0.3.1 — 2026-10-07
 
-Router 0.23.1. Access: apply the access module or the AWS CLI script of this release again in every member account (the
+Router 0.23.2. Access: apply the access module or the AWS CLI script of this release again in every member account (the
 routers' permissions boundary allows reading the account's Cognito user pool clients, which ELB requires to change a rule
 that authenticates with Amazon Cognito).
 
 - A workload behind a rule that authenticates with Amazon Cognito can be onboarded, napped and woken: upgrade its router
-  to 0.23.1. Until the access module or script is applied again in its account, onboarding there says so.
+  to 0.23.2. Until the access module or script is applied again in its account, onboarding there says so.
+- A shadow rule covers its rule whatever the order AWS lists their conditions in: onboarding no longer fails at its check
+  for a rule with several conditions, and the idle check no longer rewrites such a shadow every 5 minutes.
 - Routers: the upgrade is an icon beside the router's version; upgrade, uninstall, pause and resume explain themselves in
   a tooltip (uninstall asks first); a count of workloads opens that workload, or the list of those workloads.
 - A notice of an operation just started links to its steps in Operations.
