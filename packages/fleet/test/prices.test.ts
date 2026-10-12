@@ -187,4 +187,27 @@ describe('price book', () => {
     expect(await s.book.hourly('eu-west-1', ec2, discounts)).toBeCloseTo(0.8 * 0.0912, 6);
     expect(await s.book.hourly('eu-west-1', ec2)).toBeCloseTo(0.0912, 6);
   });
+
+  // Kubernetes workloads (vision docs/specs/2026-10-11-kubernetes-design.md, section 9).
+  const pods = { kind: 'k8s-pods' as const, count: 2, cpu: 0.5, memoryGb: 1, nodeType: 'm5.large', os: 'Linux', autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } };
+  const M5 = (f: Record<string, string>) => (f.ServiceCode === 'AmazonEC2' && f.instanceType === 'm5.large' && f.operatingSystem === 'Linux' ? [product({}, '0.1070000000')] : []);
+
+  it('prices pods on nodes as their share of the node (the larger of CPU and memory over its allocatable) times its price and the pods', async () => {
+    const s = setup(M5, () => [{ AvailabilityZone: 'eu-west-1a', SpotPrice: '0.040000', Timestamp: new Date(T) }]);
+    expect(await s.book.hourly('eu-west-1', pods)).toBeCloseTo(0.107 * (0.5 / 1.93) * 2, 6);
+    expect(await s.book.hourly('eu-west-1', { ...pods, cpu: 0.1, memoryGb: 4 })).toBeCloseTo(0.107 * (4 / 6.886) * 2, 6);
+    // A pod asking more than its node's allocatable is at most the node.
+    expect(await s.book.hourly('eu-west-1', { ...pods, cpu: 3 })).toBeCloseTo(0.107 * 2, 6);
+    // Spot (Karpenter's capacity type) at the Spot price, never discounted; on-demand less the compute discount.
+    expect(await s.book.hourly('eu-west-1', { ...pods, spot: true }, { compute: 20, databases: 0 })).toBeCloseTo(0.04 * (0.5 / 1.93) * 2, 6);
+    expect(await s.book.hourly('eu-west-1', pods, { compute: 20, databases: 0 })).toBeCloseTo(0.8 * 0.107 * (0.5 / 1.93) * 2, 6);
+  });
+
+  it('pods on nodes no autoscaler removes save nothing ($0: the nodes stay); without the node\'s type or allocatable they are not priced', async () => {
+    const s = setup(M5);
+    expect(await s.book.hourly('eu-west-1', { ...pods, autoscaled: false })).toBe(0);
+    expect(await s.book.hourly('eu-west-1', { ...pods, nodeType: null })).toBeNull();
+    expect(await s.book.hourly('eu-west-1', { ...pods, allocatable: { cpu: 0, memoryGb: 0 } })).toBeNull();
+    expect(await s.book.hourly('eu-west-1', { ...pods, nodeType: 'x9.huge' })).toBeNull();
+  });
 });

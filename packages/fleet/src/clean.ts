@@ -46,11 +46,11 @@ const pauseOf = (p: unknown) => (isObject(p)
 export const pausesOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, PAUSES_MAX).map(pauseOf).filter(Boolean) : []);
 
 // The kinds of a workload's backends (routers 0.23.3): the known ones, once each.
-const BACKEND_KINDS = new Set(['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster']);
+const BACKEND_KINDS = new Set(['instance', 'asg', 'ecs', 'k8s', 'rds-instance', 'rds-cluster']);
 const backendsOf = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((k): k is string => typeof k === 'string' && BACKEND_KINDS.has(k)))] : undefined);
 
 // Why a wake (or a nap) failed (routers 0.25.0, R7a): a known kind, else unknown; the message cut to 300 characters.
-const FAILURE_KINDS = new Set(['capacity', 'quota', 'permission', 'configuration', 'unhealthy', 'throttled', 'timeout', 'unknown']);
+const FAILURE_KINDS = new Set(['capacity', 'quota', 'permission', 'configuration', 'unhealthy', 'throttled', 'timeout', 'cluster', 'unknown']);
 export interface Failure { kind: string; step: 'wake' | 'nap'; backend?: string; message: string; at: string }
 export function failureOf(v: unknown, fallbackAt?: string | null): Failure | undefined {
   if (!isObject(v)) return undefined;
@@ -90,6 +90,14 @@ function stoppedItemOf(v: unknown): Json | null {
   }
   if (v.kind === 'rds' && typeof v.class === 'string' && DB_CLASS.test(v.class) && typeof v.engine === 'string') return { kind: 'rds', class: v.class, engine: v.engine.slice(0, 40), multiAz: v.multiAz === true };
   if (v.kind === 'aurora-serverless' && typeof v.engine === 'string' && between(v.acu, 0, 256)) return { kind: 'aurora-serverless', engine: v.engine.slice(0, 40), acu: v.acu };
+  // Pods on EC2 nodes (routers 0.29.0, R10.5).
+  if (v.kind === 'k8s-pods' && between(v.count, 1, 10_000) && between(v.cpu, 0, 1024) && between(v.memoryGb, 0, 8192) && (v.nodeType === null || (typeof v.nodeType === 'string' && TYPE.test(v.nodeType)))
+    && typeof v.os === 'string' && typeof v.autoscaled === 'boolean' && isObject(v.allocatable) && between(v.allocatable.cpu, 0, 1024) && between(v.allocatable.memoryGb, 0, 8192)) {
+    return {
+      kind: 'k8s-pods', count: v.count, cpu: v.cpu, memoryGb: v.memoryGb, nodeType: v.nodeType, os: v.os.slice(0, 40), ...spotOf(v), autoscaled: v.autoscaled,
+      allocatable: { cpu: v.allocatable.cpu, memoryGb: v.allocatable.memoryGb },
+    };
+  }
   if (v.kind === 'unknown') return { kind: 'unknown', backend: text(v.backend, 200) ?? '', reason: text(v.reason, 200) ?? '' };
   return null;
 }

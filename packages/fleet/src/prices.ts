@@ -9,6 +9,9 @@ export type StoppedItem =
   | { kind: 'fargate'; vcpu: number; memoryGb: number; count: number; arch: string; os: string; spot?: true }
   | { kind: 'rds'; class: string; engine: string; multiAz: boolean }
   | { kind: 'aurora-serverless'; engine: string; acu: number }
+  // Pods on EC2 nodes (Kubernetes workloads, R10.5): each pod's requests, its node's type, OS and allocatable, Spot, and
+  // whether a node autoscaler removes the nodes they free.
+  | { kind: 'k8s-pods'; count: number; cpu: number; memoryGb: number; nodeType: string | null; os: string; spot?: true; autoscaled: boolean; allocatable: { cpu: number; memoryGb: number } }
   | { kind: 'unknown'; backend: string; reason: string };
 
 // The Price List API, as the manager's handlers give it (GetProducts).
@@ -105,22 +108,35 @@ export function createPriceBook({ pricing, spot, store, now = Date.now }: { pric
     (await spot.history(region, { InstanceTypes: [type], ProductDescriptions: [os === 'Windows' ? 'Windows' : 'Linux/UNIX'], StartTime: new Date(now()) })).SpotPriceHistory,
   ), SPOT_DAYS));
 
+  // An EC2 instance's net hourly price: Spot, or on-demand less the compute discount; null when it cannot be priced.
+  async function instanceHourly(region: string, type: string, os: string, spot: boolean, discounts: Discounts): Promise<number | null> {
+    if (!OS.has(os)) return null;
+    if (spot) return spotPrice(region, type, os);
+    const usd = await price(`${region}#ec2#${type}#${os}`, 'AmazonEC2', [
+      term('instanceType', type), term('regionCode', region), term('locationType', 'AWS Region'), term('operatingSystem', os), term('tenancy', 'Shared'),
+      term('preInstalledSw', 'NA'), term('capacitystatus', 'Used'), term('licenseModel', 'No License required'),
+    ]);
+    return off(usd, discounts.compute);
+  }
+
   return {
     // USD an hour of an item, in its region, net: a Spot price, or the list price less its family's discount; null when
     // it cannot be priced.
     async hourly(region: string, item: StoppedItem, discounts: Discounts = NO_DISCOUNTS): Promise<number | null> {
       switch (item.kind) {
         case 'ec2': {
-          if (!OS.has(item.os)) return null;
-          if (item.spot) {
-            const usd = await spotPrice(region, item.type, item.os);
-            return usd === null ? null : usd * item.count;
-          }
-          const usd = await price(`${region}#ec2#${item.type}#${item.os}`, 'AmazonEC2', [
-            term('instanceType', item.type), term('regionCode', region), term('locationType', 'AWS Region'), term('operatingSystem', item.os), term('tenancy', 'Shared'),
-            term('preInstalledSw', 'NA'), term('capacitystatus', 'Used'), term('licenseModel', 'No License required'),
-          ]);
-          return usd === null ? null : off(usd * item.count, discounts.compute);
+          const usd = await instanceHourly(region, item.type, item.os, item.spot === true, discounts);
+          return usd === null ? null : usd * item.count;
+        }
+        case 'k8s-pods': {
+          // Nothing saved where no autoscaler removes the nodes the pods free (decision 3): the nodes stay.
+          if (!item.autoscaled) return 0;
+          const { allocatable } = item;
+          if (!item.nodeType || !(allocatable.cpu > 0) || !(allocatable.memoryGb > 0)) return null;
+          // Whichever runs out first decides how pods fit: the larger of the CPU and memory shares, at most the node.
+          const share = Math.min(1, Math.max(item.cpu / allocatable.cpu, item.memoryGb / allocatable.memoryGb));
+          const node = await instanceHourly(region, item.nodeType, item.os, item.spot === true, discounts);
+          return node === null ? null : node * share * item.count;
         }
         case 'fargate': {
           if (!OS.has(item.os)) return null;

@@ -217,6 +217,14 @@ describe('fleet', () => {
     expect([a!.backends, b!.backends, c!.backends]).toEqual([['asg', 'rds-instance'], undefined, undefined]);
   });
 
+  it('keeps a Kubernetes workload\'s backend kind and the failure kind cluster (routers 0.29.0, R10.5)', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'FAILED', { backends: ['k8s', 'rds-instance'], failure: { kind: 'cluster', step: 'wake', backend: 'k8s:eks-demo/demo/Deployment/web', message: 'GET /apis: no connection within 3000 ms', at: at(T1, -60) }, consecutiveFailures: 1 })]));
+    const w = await s.store.getWorkload(ACCOUNT, REGION, 'a');
+    expect(w!.backends).toEqual(['k8s', 'rds-instance']);
+    expect(w!.failure).toMatchObject({ kind: 'cluster' });
+  });
+
   it('writes the workloads of a chunk ten at a time: a backlog drains within the Lambda timeout', async () => {
     const s = setup();
     let running = 0;
@@ -454,6 +462,16 @@ describe('state history (R8)', () => {
     ] }));
     const [entry] = await history(s);
     expect(entry!.stopped!.map((i) => i.kind)).toEqual(['ec2', 'fargate', 'rds', 'aurora-serverless', 'unknown']);
+  });
+
+  it('keeps the pods a Kubernetes nap stopped (router 0.29.0, R10.5), well-formed only', async () => {
+    const s = setup();
+    const pods = { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: 'm5.large', os: 'Linux', spot: true, autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } };
+    await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [
+      pods, { ...pods, nodeType: null, spot: false, autoscaled: false }, { ...pods, count: 0 }, { ...pods, allocatable: 'big' }, { ...pods, nodeType: 'not a type' },
+    ] }));
+    const [entry] = await history(s);
+    expect(entry!.stopped).toEqual([pods, { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: null, os: 'Linux', autoscaled: false, allocatable: { cpu: 1.93, memoryGb: 6.886 } }]);
   });
 
   it('caches a price 30 days, the absence of one a day (R9)', async () => {
