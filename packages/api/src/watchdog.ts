@@ -183,6 +183,11 @@ export function evaluate(observation: Observation, previous: Alarm | null, versi
   return { alarm, version, opened, raised, resolved, remove };
 }
 
+
+// The chat body of a message (Amazon Q Developer custom notification).
+const chatNotification = (title: string, description: string, nextSteps: string[] = []): ChatNotification => ({
+  version: '1.0', source: 'custom', content: { textType: 'client-markdown', title, description, ...(nextSteps.length ? { nextSteps } : {}) },
+});
 function render(change: Change, dashboardUrl: string, env: string, at: string): Notification | null {
   const { alarm, opened, raised, resolved } = change;
   const s = alarm.subject;
@@ -195,13 +200,10 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
     ...(s.workloadId ? { workload: s.workloadId } : {}),
   };
   const line = (p: OpenProblem) => `- [${p.level}] ${p.text} (since ${time(p.since)})${p.hint ? `\n  ${p.hint}` : ''}`;
-  const chat = (title: string, description: string, nextSteps: string[] = []): ChatNotification => ({
-    version: '1.0', source: 'custom', content: { textType: 'client-markdown', title, description, ...(nextSteps.length ? { nextSteps } : {}) },
-  });
   if (resolved) {
     const subject = snsSubject(`[Dormeto ${env}] ${where}: ${s.kind === 'workload' ? 'woke again' : 'resolved'}`);
     const text = s.kind === 'workload' ? `${where} woke again (no failure since ${time(at)}).` : `${where}: every problem cleared at ${time(at)}.`;
-    return { subject, message: `${text}\n\nOpen the dashboard: ${link}\n`, chat: chat(subject, `${text} [Open the dashboard](${link})`), attributes: { level: 'resolved', ...attributes } };
+    return { subject, message: `${text}\n\nOpen the dashboard: ${link}\n`, chat: chatNotification(subject, `${text} [Open the dashboard](${link})`), attributes: { level: 'resolved', ...attributes } };
   }
   const news = [...raised, ...opened];
   if (!news.length) return null;
@@ -215,7 +217,7 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
   const subject = snsSubject(`[Dormeto ${env}] ${where}: ${news[0]!.text}`);
   const description = [...news, ...others].map((p) => `*${p.level}* ${p.text}`).join('\n') + `\n[Open the dashboard](${link})`;
   const nextSteps = news.flatMap((p) => (p.hint ? p.hint.split('\n').map((x) => x.trim()).filter(Boolean) : []));
-  return { subject, message, chat: chat(subject, description, nextSteps), attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', ...attributes } };
+  return { subject, message, chat: chatNotification(subject, description, nextSteps), attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', ...attributes } };
 }
 
 export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations }: {
@@ -306,7 +308,10 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
           '', `Open the dashboard: ${dashboardUrl}/`, '',
         ].join('\n');
         try {
-          await notify.publish({ subject: snsSubject(`[Dormeto ${env}] ${digested.length} more alarms changed`), message, attributes: { level: digested.some((d) => d.change.alarm.level === 'error') ? 'error' : 'warning', kind: 'digest' } });
+          const subject = snsSubject(`[Dormeto ${env}] ${digested.length} more alarms changed`);
+          const chat = chatNotification(subject, [`${digested.length} more alarms changed in this check:`, ...listed,
+            ...(digested.length > DIGEST_LISTED ? [`- and ${digested.length - DIGEST_LISTED} more`] : []), `[Open the dashboard](${dashboardUrl}/)`].join('\n'));
+          await notify.publish({ subject, message, chat, attributes: { level: digested.some((d) => d.change.alarm.level === 'error') ? 'error' : 'warning', kind: 'digest' } });
           for (const { change } of digested) await write(change);
         } catch (err) {
           log.error('AlertNotSent', { subject: 'digest', count: digested.length, error: (err as Error).message });

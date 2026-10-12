@@ -354,6 +354,9 @@ describe('watchdog: failed wakes (R7b)', () => {
     await watchdogWith(s, () => entries).run();
     expect(s.sent).toHaveLength(11);
     expect(s.sent[10]!.attributes.kind).toBe('digest');
+    // Chat channels get the digest too (review I5): Amazon Q Developer drops a message without the custom format.
+    expect(s.sent[10]!.chat).toMatchObject({ version: '1.0', source: 'custom', content: { textType: 'client-markdown', title: '[Dormeto dev] 990 more alarms changed' } });
+    expect(s.sent[10]!.chat!.content.description).toMatch(/app-\d+ \(038606077307 eu-west-3\)[\s\S]*and 9\d\d more/);
   });
 });
 

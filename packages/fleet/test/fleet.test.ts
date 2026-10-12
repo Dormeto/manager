@@ -287,12 +287,15 @@ describe('failure index (R7b)', () => {
     expect(await s.store.listFailures()).toEqual([]);
   });
 
-  it('a router before 0.25.0 (FAILED without a reason) is indexed as unknown, and removed once no longer failed', async () => {
+  it('a router before 0.25.0 (FAILED without a reason) is indexed as unknown, kept back to ASLEEP, and removed once awake (review I4)', async () => {
     const s = setup();
     await s.ingest({ account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed', detail: { router: 'dmtr-dev', workloadId: 'a', from: 'WAKING', to: 'FAILED', at: at(T1, 10), cause: 'wake-failed' } });
     const [entry] = await s.store.listFailures();
     expect(entry!.failure).toEqual({ kind: 'unknown', step: 'wake', message: 'the wake failed (a router older than 0.25.0 gives no reason)', at: at(T1, 10) });
+    // Its summaries have no failure fields: back to ASLEEP is not a successful wake ("woke again" would be wrong).
     await s.ingest(checked(T2, [workload('a', 'ASLEEP')]));
+    expect(await s.store.listFailures()).toHaveLength(1);
+    await s.ingest(checked(at(T2, 300), [workload('a', 'AWAKE')]));
     expect(await s.store.listFailures()).toEqual([]);
   });
 

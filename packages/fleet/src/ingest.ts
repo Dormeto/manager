@@ -123,7 +123,9 @@ export function createIngest({ store, now = Date.now, log }: {
         account: after.account, region: after.region, router: after.router, workloadId: after.workloadId, name: after.name, url: after.url as string | null | undefined,
         failure: now, consecutiveFailures: after.consecutiveFailures as number | undefined, nextAttemptAt: after.nextAttemptAt as string | undefined,
       });
-    } else if (was) {
+    } else if ((was && after.consecutiveFailures !== undefined) || (after.state === 'AWAKE' && before?.state !== 'AWAKE')) {
+      // Removed when a router that reports failures (0.25.0) no longer has one (it clears it at a successful wake
+      // only), or when the workload is found awake (older routers: back to ASLEEP is not a successful wake).
       await unindexFailure(after.account, after.region, after.workloadId, at);
     }
   }
