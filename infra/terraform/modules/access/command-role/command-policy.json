@@ -58,7 +58,8 @@
         "StringEquals": {
           "iam:PassedToService": [
             "lambda.amazonaws.com",
-            "scheduler.amazonaws.com"
+            "scheduler.amazonaws.com",
+            "events.amazonaws.com"
           ]
         }
       }
