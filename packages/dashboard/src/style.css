@@ -1,0 +1,4 @@
+:root { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+.v-application { font-family: inherit; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
+.nowrap { white-space: nowrap; }
