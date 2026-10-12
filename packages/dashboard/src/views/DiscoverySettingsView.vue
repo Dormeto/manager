@@ -24,6 +24,16 @@ const saving = ref(false);
 const saved = ref(false);
 const regionsText = ref('');
 
+// Event-driven refresh (packaging design §5): off unless enabled; accounts, empty for every ready account.
+const eventRefresh = computed({
+  get: () => config.value?.eventRefresh?.enabled ?? false,
+  set: (enabled: boolean) => {
+    if (!config.value) return;
+    config.value.eventRefresh = { ...(config.value.eventRefresh ?? {}), enabled };
+  },
+});
+const refreshAccountsText = ref('');
+
 const allRegions = computed({
   get: () => config.value?.regions.includes('*') ?? false,
   set: (all: boolean) => {
@@ -36,6 +46,7 @@ function apply(answer: Answer) {
   config.value = structuredClone(answer.config);
   lint.value = answer.lint;
   regionsText.value = answer.config.regions.includes('*') ? '' : formatList(answer.config.regions);
+  refreshAccountsText.value = formatList(answer.config.eventRefresh?.accounts ?? []);
   if (answer.updatedAt !== undefined) updated.value = { at: answer.updatedAt ?? null, by: answer.updatedBy ?? null };
 }
 
@@ -58,6 +69,10 @@ async function load() {
 async function save() {
   if (!config.value) return;
   if (!allRegions.value) config.value.regions = parseList(regionsText.value);
+  if (config.value.eventRefresh) {
+    const accounts = parseList(refreshAccountsText.value);
+    config.value.eventRefresh = { enabled: config.value.eventRefresh.enabled, ...(accounts.length ? { accounts } : {}) };
+  }
   saving.value = true;
   errors.value = [];
   try {
@@ -116,6 +131,23 @@ onMounted(load);
           </v-col>
           <v-col cols="12" md="3">
             <v-text-field v-model.number="config.refreshHours" type="number" min="1" max="168" label="Refresh every (hours)" hint="1 to 168; the schedule ticks hourly" persistent-hint />
+          </v-col>
+        </v-row>
+      </v-card-text>
+    </v-card>
+
+    <v-card class="mb-4" title="Event-driven refresh"
+      subtitle="Load balancer changes appear within about 5 minutes instead of at the next run">
+      <v-card-text>
+        <p class="text-body-medium mb-2">The manager installs a forwarder in each ready account (a role, and a rule in each region a CloudTrail
+          trail covers), through the command role; it removes them when turned off. Accounts without the command role or a trail stay on the
+          refresh period, with the reason in the Organization access panel.</p>
+        <v-row>
+          <v-col cols="12" md="4">
+            <v-switch v-model="eventRefresh" label="Event-driven refresh" color="primary" hide-details />
+          </v-col>
+          <v-col cols="12" md="8">
+            <v-text-field v-if="eventRefresh" v-model="refreshAccountsText" label="Only these accounts" hint="account ids; empty: every ready account" persistent-hint />
           </v-col>
         </v-row>
       </v-card-text>

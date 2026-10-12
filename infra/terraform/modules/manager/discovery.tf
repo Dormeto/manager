@@ -46,6 +46,12 @@ data "aws_iam_policy_document" "discovery" {
     resources = [aws_lambda_function.access_check.arn]
   }
   statement {
+    # Event-driven refresh: the forwarded load balancer changes (refresh.tf).
+    sid       = "RefreshQueue"
+    actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes", "sqs:ChangeMessageVisibility"]
+    resources = [aws_sqs_queue.refresh.arn]
+  }
+  statement {
     sid       = "DiscoveryItems"
     actions   = ["dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
     resources = [aws_dynamodb_table.manager.arn, "${aws_dynamodb_table.manager.arn}/index/*"]
@@ -125,6 +131,12 @@ data "aws_iam_policy_document" "discovery_run" {
     actions   = ["lambda:InvokeFunction"]
     resources = [aws_lambda_function.discovery.arn, "${aws_lambda_function.discovery.arn}:*"]
   }
+  # The connections a run decides (packaging design §5): the operations task connections, with the run's lists only. The
+  # discovery Lambda itself may not invoke the operations function (its role: discovery.tf).
+  statement {
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.operations.arn, "${aws_lambda_function.operations.arn}:*"]
+  }
   # The Distributed Map runs each account as a child execution of this state machine.
   statement {
     actions   = ["states:StartExecution"]
@@ -199,6 +211,22 @@ resource "aws_sfn_state_machine" "discovery" {
         Retry      = local.discovery_retry
         # A finalize that times out or crashes: the run is recorded as failed and its lock released.
         Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.failure", Next = "Abandon" }]
+        Next  = "Connect?"
+      }
+      # Event-driven refresh: accounts to connect or disconnect go to the operations (one operation per account).
+      "Connect?" = {
+        Type    = "Choice"
+        Choices = [{ Or = [{ Variable = "$.connections.connect[0]", IsPresent = true }, { Variable = "$.connections.disconnect[0]", IsPresent = true }], Next = "Connections" }]
+        Default = "Done"
+      }
+      Connections = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::lambda:invoke"
+        Parameters = { FunctionName = aws_lambda_function.operations.arn, Payload = { task = "connections", "connect.$" = "$.connections.connect", "disconnect.$" = "$.connections.disconnect" } }
+        ResultPath = "$.connected"
+        Retry      = local.discovery_retry
+        # The run is recorded: a failure here waits for the next run.
+        Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.connectionsFailure", Next = "Done" }]
         End   = true
       }
       Abandon = {

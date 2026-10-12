@@ -3,13 +3,17 @@
 // reason and the procedure. Run now checks again.
 import { computed, ref } from 'vue';
 import { mdiOpenInNew } from '@mdi/js';
-import { accessLine, procedureLink, type AccessReport } from '../access';
+import { accessLine, forwardersLine, procedureLink, type AccessReport } from '../access';
 
 const props = defineProps<{ report: AccessReport; roles?: { discoveryRole: string; commandRole: string } | null }>();
 const all = ref(false);
 const shown = computed(() => (all.value ? props.report.accounts : props.report.accounts.slice(0, 5)));
 const notReady = computed(() => props.report.counts.discoveryMissing + props.report.counts.commandMissing > 0 || props.report.delegation === 'missing');
 const link = procedureLink();
+// Event-driven refresh (packaging design §5): forwarders connected, and where one is not possible.
+const forwarders = computed(() => forwardersLine(props.report.forwarders));
+const allImpossible = ref(false);
+const impossible = computed(() => (allImpossible.value ? props.report.forwarders?.impossible ?? [] : (props.report.forwarders?.impossible ?? []).slice(0, 5)));
 </script>
 
 <template>
@@ -26,6 +30,14 @@ const link = procedureLink();
         <li v-for="a in shown" :key="a.account" class="text-body-medium">{{ a.name }} ({{ a.account }}): {{ accessLine(a) }}</li>
       </ul>
       <v-btn v-if="report.accounts.length > shown.length" variant="text" size="small" @click="all = true">{{ report.accounts.length - shown.length }} more</v-btn>
+      <template v-if="forwarders">
+        <p class="mt-3">{{ forwarders }}</p>
+        <ul v-if="impossible.length" class="mt-2 pl-4">
+          <li v-for="f in impossible" :key="f.account" class="text-body-medium">{{ f.name }} ({{ f.account }}): {{ f.reason }}</li>
+        </ul>
+        <v-btn v-if="(report.forwarders?.impossible.length ?? 0) > impossible.length" variant="text" size="small" @click="allImpossible = true">
+          {{ (report.forwarders?.impossible.length ?? 0) - impossible.length }} more</v-btn>
+      </template>
     </v-card-text>
     <v-card-actions v-if="notReady">
       <v-btn :href="link" target="_blank" rel="noopener" variant="tonal" :append-icon="mdiOpenInNew">How to set up the roles</v-btn>

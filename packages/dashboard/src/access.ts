@@ -16,6 +16,22 @@ export interface AccessReport {
   cursor: string | null;
   delegation: 'ok' | 'missing' | null;
   checkedAt: string | null;
+  // Event-driven refresh on (packaging design §5).
+  forwarders?: Forwarders;
+}
+
+export interface Forwarders {
+  connected: number;
+  connecting: number;
+  impossible: { account: string; name: string; reason: string }[];
+}
+
+const accounts = (n: number) => `${n} account${n === 1 ? '' : 's'}`;
+// Null: event-driven refresh is off.
+export function forwardersLine(f: Forwarders | undefined): string | null {
+  if (!f) return null;
+  const parts = [`${accounts(f.connected)} connected`, ...(f.connecting ? [`${f.connecting} being connected`] : []), ...(f.impossible.length ? [`${f.impossible.length} not possible (refreshed daily)`] : [])];
+  return `Event-driven refresh: ${parts.join(', ')}.`;
 }
 
 // The website's page, with the roles' Terraform modules and AWS CLI commands.

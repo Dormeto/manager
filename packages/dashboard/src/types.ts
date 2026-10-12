@@ -175,7 +175,8 @@ export interface Exclusion {
 }
 
 // Operations (onboarding, R4b): run by the workflow, step by step.
-export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion';
+export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion'
+  | 'connect-account' | 'disconnect-account';
 export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Operation {

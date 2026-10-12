@@ -11,8 +11,9 @@ const moves = (text) => [...text.matchAll(/moved \{\s*from\s*=\s*(\S+)\s+to\s*=\
 
 // Optional in the module (count): their one instance is [0].
 const CONDITIONAL = ['aws_ses_identity_policy.cognito', 'aws_route53_record.auth'];
-// Added in the module, with no platform address (R5b review: the artifacts' check).
-const NEW = ['terraform_data.artifacts'];
+// Added in the module, with no platform address: the artifacts' check (R5b review), event-driven refresh (R5c).
+const NEW = ['terraform_data.artifacts', 'aws_cloudwatch_event_rule.refresh', 'aws_sqs_queue.refresh_failed', 'aws_sqs_queue.refresh', 'aws_sqs_queue_policy.refresh',
+  'aws_cloudwatch_event_target.refresh', 'aws_lambda_event_source_mapping.refresh'];
 
 test('every resource of the manager module has a moved block from its platform address', () => {
   const inModule = addresses(hcl('modules/manager'));

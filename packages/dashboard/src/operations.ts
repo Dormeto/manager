@@ -18,6 +18,9 @@ export function operationTitle(op: Operation): string {
     case 'uninstall-router': return `Uninstall the router of ${where(op)}`;
     case 'exclude': return `Pause the workloads of an exclusion in ${op.target.account}`;
     case 'lift-exclusion': return `Resume the workloads of a lifted exclusion in ${op.target.account}`;
+    // Event-driven refresh (packaging design §5): the account's forwarder.
+    case 'connect-account': return `Connect ${op.target.account} to event-driven refresh (${((op.input.regions as string[] | undefined) ?? []).join(', ')})`;
+    case 'disconnect-account': return `Disconnect ${op.target.account} from event-driven refresh`;
   }
 }
 

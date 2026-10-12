@@ -68,6 +68,12 @@ data "aws_iam_policy_document" "operations" {
     }
   }
   statement {
+    # The connections of a discovery run: their executions (packaging design §5).
+    sid       = "StartOperations"
+    actions   = ["states:StartExecution"]
+    resources = ["arn:aws:states:${local.region}:${local.account_id}:stateMachine:${local.name}-operations"]
+  }
+  statement {
     # The access check function runs as this role too.
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.operations.arn}:*", "${aws_cloudwatch_log_group.access_check.arn}:*"]
@@ -107,6 +113,8 @@ resource "aws_lambda_function" "operations" {
       ROUTER_VERSION     = local.router_version
       COMMAND_ROLE       = var.command_role_name
       MANAGER_PRINCIPALS = jsonencode([aws_iam_role.api.arn])
+      # The connections a discovery run decides start their executions here (by name: the state machine invokes this).
+      OPERATIONS_STATE_MACHINE = "arn:aws:states:${local.region}:${local.account_id}:stateMachine:${local.name}-operations"
       # Installed routers send their state there (scale design §3).
       MANAGER_BUS = aws_cloudwatch_event_bus.manager.arn
     }

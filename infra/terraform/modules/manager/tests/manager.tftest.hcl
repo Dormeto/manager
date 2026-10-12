@@ -62,6 +62,45 @@ run "without_a_domain_nor_ses" {
   }
 }
 
+# Event-driven refresh (packaging design §5): forwarded load balancer changes to a queue read in 5-minute batches by
+# discovery; the connections a run decides passed to the operations, which start their executions.
+run "event_driven_refresh" {
+  command = plan
+
+  # The state machine's definition holds the functions' ARNs: known at plan here.
+  override_resource {
+    target          = aws_lambda_function.discovery
+    override_during = plan
+    values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-discovery" }
+  }
+  override_resource {
+    target          = aws_lambda_function.operations
+    override_during = plan
+    values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-operations" }
+  }
+
+  assert {
+    condition     = jsondecode(aws_cloudwatch_event_rule.refresh.event_pattern) == { source = ["aws.elasticloadbalancing"], "detail-type" = ["AWS API Call via CloudTrail"] } && aws_cloudwatch_event_rule.refresh.event_bus_name == aws_cloudwatch_event_bus.manager.name
+    error_message = "The manager's bus sends the forwarded load balancer changes to the refresh queue."
+  }
+  assert {
+    condition     = aws_lambda_event_source_mapping.refresh.maximum_batching_window_in_seconds == 300 && aws_lambda_event_source_mapping.refresh.batch_size == 10000 && aws_lambda_event_source_mapping.refresh.scaling_config[0].maximum_concurrency == 2
+    error_message = "Discovery reads the refresh queue in 5-minute batches."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.discovery.statement : s if s.sid == "RefreshQueue"]) == 1
+    error_message = "Discovery may read the refresh queue."
+  }
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.discovery.definition).States.Finalize.Next == "Connect?" && jsondecode(aws_sfn_state_machine.discovery.definition).States.Connections.Parameters.Payload.task == "connections"
+    error_message = "After finalize, the run's connections go to the operations."
+  }
+  assert {
+    condition     = aws_lambda_function.operations.environment[0].variables.OPERATIONS_STATE_MACHINE == "arn:aws:states:eu-west-1:111122223333:stateMachine:dmt-test-manager-operations"
+    error_message = "The operations Lambda starts the executions of the operations it creates."
+  }
+}
+
 run "the_smoke_user_is_named_at_plan_without_a_domain" {
   command = plan
   variables {

@@ -23,6 +23,9 @@ describe('operations', () => {
     expect(operationTitle(op({ type: 'lift-exclusion', target: { exclusionId: 'x1', account: '121014831971' }, input: {} }))).toBe('Resume the workloads of a lifted exclusion in 121014831971');
     expect(operationTitle(op({ type: 'upgrade-router', target: { account: '1', region: 'eu-west-3' }, input: {} }))).toBe('Upgrade the router of 1/eu-west-3');
     expect(operationTitle(op({ type: 'uninstall-router', target: { account: '1', region: 'eu-west-3' }, input: {} }))).toBe('Uninstall the router of 1/eu-west-3');
+    // Event-driven refresh (packaging design §5): an account's forwarder.
+    expect(operationTitle(op({ type: 'connect-account', target: { account: '121014831971' }, input: { regions: ['eu-west-1', 'eu-west-3'] } }))).toBe('Connect 121014831971 to event-driven refresh (eu-west-1, eu-west-3)');
+    expect(operationTitle(op({ type: 'disconnect-account', target: { account: '121014831971' }, input: { regions: [] } }))).toBe('Disconnect 121014831971 from event-driven refresh');
   });
 
   it('shows the progress over the steps that ran', () => {
