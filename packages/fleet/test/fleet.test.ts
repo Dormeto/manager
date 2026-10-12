@@ -468,6 +468,30 @@ describe('state history (R8)', () => {
     expect([ttl('eu-west-1#ec2#t3.medium#Linux'), ttl('eu-west-1#ec2#x9.huge#Linux')]).toEqual([30 * 86_400, 86_400]);
   });
 
+  it('keeps what ran on Spot (router 0.28.0, R9.5): spot only when true', async () => {
+    const s = setup();
+    await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [
+      { kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux', spot: true }, { kind: 'fargate', vcpu: 0.5, memoryGb: 1, count: 1, arch: 'arm64', os: 'Linux', spot: true },
+      { kind: 'ec2', type: 't3.small', count: 1, os: 'Linux', spot: 'yes' }, { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: false, spot: true },
+    ] }));
+    const [entry] = await history(s);
+    expect(entry!.stopped!.map((i) => 'spot' in i && i.spot)).toEqual([true, true, false, false]);
+  });
+
+  it('caches a Spot price a day (R9.5)', async () => {
+    const dynamo = fakeDynamo();
+    const store = createFleetStore({ dynamo, table: 'dmt-dev-manager', now: () => NOW });
+    await store.putPrice('eu-west-1#ec2-spot#t3.medium#Linux', 0.019, 1);
+    expect(Number([...dynamo.items.values()].find((i) => i.sk?.S === 'PRICE#eu-west-1#ec2-spot#t3.medium#Linux')!.expiresAt!.N) - Math.floor(NOW / 1000)).toBe(86_400);
+  });
+
+  it('keeps the savings discounts with who set them and when; none set is 0 and 0 (R9.5)', async () => {
+    const store = createFleetStore({ dynamo: fakeDynamo(), table: 'dmt-dev-manager', now: () => NOW });
+    expect(await store.getSavingsSettings()).toEqual({ compute: 0, databases: 0, updatedAt: null, updatedBy: null });
+    await store.putSavingsSettings({ compute: 20, databases: 30 }, 'admin@example.com');
+    expect(await store.getSavingsSettings()).toEqual({ compute: 20, databases: 30, updatedAt: new Date(NOW).toISOString(), updatedBy: 'admin@example.com' });
+  });
+
   it('a period is read in pages up to a cap, with the entry before it', async () => {
     const s = setup();
     for (let i = 0; i < 30; i += 1) await s.ingest(change(i % 2 ? 'ASLEEP' : 'AWAKE', at(T1, i * 60), { cause: 'idle' }));

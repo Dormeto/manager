@@ -2,7 +2,7 @@
 // router, WS#<account>#<region>#<workloadId> per workload. Written from the router events, read by the API. Each
 // workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
-import type { StoppedItem } from './prices.js';
+import type { Discounts, StoppedItem } from './prices.js';
 
 const PK = 'T#default';
 const VERSIONED = 'attribute_not_exists(version) OR version = :version';
@@ -90,7 +90,10 @@ export interface SavingsSummary {
   unpriced: { workloads: number; hours: number };
   workloads: number;
   dormeto: { usdMonth: number };
+  discounts?: Discounts; // those of its latest day (R9.5); none before 0.8.0
 }
+// The discounts for commitments (R9.5), set by administrators (T#default / SAVINGS#SETTINGS).
+export interface SavingsSettings extends Discounts { updatedAt: string | null; updatedBy: string | null }
 
 // A workload whose last wake failed (R7b): its failure until a successful wake.
 export interface FailureEntry {
@@ -266,14 +269,27 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key('SAVINGS'), data: { S: JSON.stringify(summary) } } }));
     },
 
-    // AWS list prices (R9), per region and item: 30 days; the absence of one a day (a new instance type appears).
+    // The discounts for commitments (R9.5): 0 and 0 until an administrator sets them.
+    async getSavingsSettings(): Promise<SavingsSettings> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key('SAVINGS#SETTINGS') }));
+      const d = data<Discounts>(Item);
+      return { compute: d?.compute ?? 0, databases: d?.databases ?? 0, updatedAt: Item?.updatedAt?.S ?? null, updatedBy: Item?.updatedBy?.S ?? null };
+    },
+    async putSavingsSettings(discounts: Discounts, by: string): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key('SAVINGS#SETTINGS'), data: { S: JSON.stringify({ compute: discounts.compute, databases: discounts.databases }) }, updatedAt: { S: new Date(now()).toISOString() }, updatedBy: { S: by } },
+      }));
+    },
+
+    // AWS list prices (R9), per region and item: 30 days (a Spot price a day, R9.5); the absence of one a day (a new
+    // instance type appears).
     async getPrice(priceKey: string): Promise<{ usd: number | null } | null> {
       const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(`PRICE#${priceKey}`) }));
       return Item && Number(Item.expiresAt?.N ?? 0) > now() / 1000 ? { usd: Item.usd?.N ? Number(Item.usd.N) : null } : null;
     },
-    async putPrice(priceKey: string, usd: number | null): Promise<void> {
+    async putPrice(priceKey: string, usd: number | null, days = 30): Promise<void> {
       await dynamo.send(new PutItemCommand({
-        TableName: table, Item: { ...key(`PRICE#${priceKey}`), ...(usd === null ? {} : { usd: { N: String(usd) } }), expiresAt: { N: String(Math.floor(now() / 1000) + (usd === null ? 1 : 30) * 86_400) } },
+        TableName: table, Item: { ...key(`PRICE#${priceKey}`), ...(usd === null ? {} : { usd: { N: String(usd) } }), expiresAt: { N: String(Math.floor(now() / 1000) + (usd === null ? 1 : days) * 86_400) } },
       }));
     },
 

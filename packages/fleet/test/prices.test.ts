@@ -8,7 +8,8 @@ const product = (attributes: Record<string, string>, usd: string, unit = 'Hrs') 
   terms: { OnDemand: { 'X.JRTCKXETXF': { priceDimensions: { 'X.JRTCKXETXF.6YS6EN2CT7': { unit, pricePerUnit: { USD: usd } } } } } },
 });
 
-function setup(answers: (filters: Record<string, string>) => string[]) {
+type SpotEntry = { AvailabilityZone?: string; SpotPrice?: string; Timestamp?: Date };
+function setup(answers: (filters: Record<string, string>) => string[], spotAnswer: (region: string, input: { InstanceTypes: string[]; ProductDescriptions: string[] }) => SpotEntry[] = () => []) {
   const asked: Record<string, string>[] = [];
   const cache = new Map<string, number | null>();
   const pricing = {
@@ -19,9 +20,12 @@ function setup(answers: (filters: Record<string, string>) => string[]) {
     },
   };
   let t = Date.parse('2026-10-08T12:00:00.000Z');
-  const store = { getPrice: async (key: string) => (cache.has(key) ? { usd: cache.get(key)!, fresh: true } : null), putPrice: async (key: string, usd: number | null) => { cache.set(key, usd); } };
-  const book = createPriceBook({ pricing, store, now: () => t });
-  return { book, asked, cache, advance: (ms: number) => { t += ms; } };
+  const days = new Map<string, number>();
+  const store = { getPrice: async (key: string) => (cache.has(key) ? { usd: cache.get(key)!, fresh: true } : null), putPrice: async (key: string, usd: number | null, d = 30) => { cache.set(key, usd); days.set(key, d); } };
+  const spotAsked: { region: string; InstanceTypes: string[]; ProductDescriptions: string[]; StartTime: Date }[] = [];
+  const spot = { async history(region: string, input: { InstanceTypes: string[]; ProductDescriptions: string[]; StartTime: Date }) { spotAsked.push({ region, ...input }); return { SpotPriceHistory: spotAnswer(region, input) }; } };
+  const book = createPriceBook({ pricing, spot, store, now: () => t });
+  return { book, asked, cache, days, spotAsked, advance: (ms: number) => { t += ms; } };
 }
 
 describe('price book', () => {
@@ -115,5 +119,72 @@ describe('price book', () => {
     expect(await book.hourly('eu-west-1', item)).toBeCloseTo(0.0456, 6);
     expect(reads.length, 'from memory, not the table').toBe(before);
   });
-});
 
+  // R9.5b: Spot capacity at Spot prices, commitments as discounts.
+  const HOUR = 3_600_000;
+  const T = Date.parse('2026-10-08T12:00:00.000Z');
+  const FARGATE = (f: Record<string, string>) => {
+    const usd = { 'Fargate-vCPU-Hours:perCPU': '0.0404800000', 'Fargate-GB-Hours': '0.0044450000' }[f['~usagetype'] ?? ''];
+    return f.ServiceCode === 'AmazonECS' && usd ? [product({}, usd, 'hours')] : [];
+  };
+  const fargate = { kind: 'fargate' as const, vcpu: 0.5, memoryGb: 1, count: 2, arch: 'x86_64', os: 'Linux' };
+  const fargateUsd = 2 * (0.5 * 0.04048 + 1 * 0.004445);
+
+  it('prices a Spot instance at the region\'s Spot price: the latest of each zone averaged, times the count; cached a day', async () => {
+    const s = setup(() => [], () => [
+      { AvailabilityZone: 'eu-west-1a', SpotPrice: '0.020000', Timestamp: new Date(T - HOUR) },
+      { AvailabilityZone: 'eu-west-1a', SpotPrice: '0.030000', Timestamp: new Date(T - 3 * HOUR) },
+      { AvailabilityZone: 'eu-west-1b', SpotPrice: '0.018000', Timestamp: new Date(T - 2 * HOUR) },
+    ]);
+    expect(await s.book.hourly('eu-west-1', { kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux', spot: true })).toBeCloseTo(2 * 0.019, 6);
+    expect(s.spotAsked).toEqual([{ region: 'eu-west-1', InstanceTypes: ['t3.medium'], ProductDescriptions: ['Linux/UNIX'], StartTime: new Date(T) }]);
+    expect([s.cache.get('eu-west-1#ec2-spot#t3.medium#Linux'), s.days.get('eu-west-1#ec2-spot#t3.medium#Linux')]).toEqual([0.019, 1]);
+    expect(s.asked).toEqual([]);
+  });
+
+  it('asks Windows as Windows; another OS, or no answer, is no Spot price (none cached a day)', async () => {
+    const s = setup(() => [], (_r, input) => (input.ProductDescriptions[0] === 'Windows' ? [{ AvailabilityZone: 'eu-west-1a', SpotPrice: '0.050000', Timestamp: new Date(T) }] : []));
+    expect(await s.book.hourly('eu-west-1', { kind: 'ec2', type: 'm5.large', count: 1, os: 'Windows', spot: true })).toBeCloseTo(0.05, 6);
+    expect(await s.book.hourly('eu-west-1', { kind: 'ec2', type: 'm5.large', count: 1, os: 'Red Hat Enterprise Linux', spot: true })).toBeNull();
+    expect(await s.book.hourly('eu-west-1', { kind: 'ec2', type: 'x9.huge', count: 1, os: 'Linux', spot: true })).toBeNull();
+    expect(s.spotAsked.map((a) => a.ProductDescriptions[0])).toEqual(['Windows', 'Linux/UNIX']);
+    expect([s.cache.get('eu-west-1#ec2-spot#x9.huge#Linux'), s.days.get('eu-west-1#ec2-spot#x9.huge#Linux')]).toEqual([null, 1]);
+  });
+
+  it('a region the manager\'s account has not enabled prices nothing, caches nothing, and is asked again after five minutes', async () => {
+    let calls = 0;
+    const s = setup(() => [], () => { calls += 1; throw Object.assign(new Error('You are not subscribed to this service'), { name: 'OptInRequired' }); });
+    expect(await s.book.hourly('ap-east-2', { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux', spot: true })).toBeNull();
+    expect(await s.book.hourly('ap-east-2', { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux', spot: true })).toBeNull();
+    expect([calls, s.cache.size]).toEqual([1, 0]);
+    s.advance(301_000);
+    await s.book.hourly('ap-east-2', { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux', spot: true });
+    expect(calls).toBe(2);
+  });
+
+  it('prices Fargate Spot at 30% of the on-demand price (AWS\'s largest discount: the smallest saving)', async () => {
+    const s = setup(FARGATE);
+    expect(await s.book.hourly('eu-west-1', { ...fargate, spot: true })).toBeCloseTo(0.3 * fargateUsd, 6);
+    expect(await s.book.hourly('eu-west-1', fargate)).toBeCloseTo(fargateUsd, 6);
+  });
+
+  it('takes the compute discount off on-demand EC2 and Fargate, the databases one off RDS and Aurora, none off Spot', async () => {
+    const s = setup((f) => {
+      if (f.ServiceCode === 'AmazonEC2') return [product({}, '0.0456000000')];
+      if (f.ServiceCode === 'AmazonRDS') return [product({}, f['~usagetype'] === 'Aurora:ServerlessV2Usage' ? '0.1400000000' : '0.0170000000')];
+      return FARGATE(f);
+    }, () => [{ AvailabilityZone: 'eu-west-1a', SpotPrice: '0.019000', Timestamp: new Date(T) }]);
+    const discounts = { compute: 20, databases: 30 };
+    const ec2 = { kind: 'ec2' as const, type: 't3.medium', count: 2, os: 'Linux' };
+    expect(await s.book.hourly('eu-west-1', ec2, discounts)).toBeCloseTo(0.8 * 0.0912, 6);
+    expect(await s.book.hourly('eu-west-1', fargate, discounts)).toBeCloseTo(0.8 * fargateUsd, 6);
+    expect(await s.book.hourly('eu-west-1', { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: false }, discounts)).toBeCloseTo(0.7 * 0.017, 6);
+    expect(await s.book.hourly('eu-west-1', { kind: 'aurora-serverless', engine: 'aurora-mysql', acu: 0.5 }, discounts)).toBeCloseTo(0.7 * 0.07, 6);
+    expect(await s.book.hourly('eu-west-1', { ...ec2, spot: true }, discounts)).toBeCloseTo(2 * 0.019, 6);
+    expect(await s.book.hourly('eu-west-1', { ...fargate, spot: true }, discounts)).toBeCloseTo(0.3 * fargateUsd, 6);
+    // The list price stays as it is, in the table and in memory: no discount taken twice.
+    expect(s.cache.get('eu-west-1#ec2#t3.medium#Linux')).toBeCloseTo(0.0456, 6);
+    expect(await s.book.hourly('eu-west-1', ec2, discounts)).toBeCloseTo(0.8 * 0.0912, 6);
+    expect(await s.book.hourly('eu-west-1', ec2)).toBeCloseTo(0.0912, 6);
+  });
+});
