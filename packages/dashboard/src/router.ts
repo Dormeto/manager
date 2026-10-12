@@ -10,6 +10,7 @@ export const router = createRouter({
     { path: '/workloads', name: 'workloads', component: () => import('./views/WorkloadsView.vue') },
     { path: '/workloads/:router/:id', name: 'workload', component: () => import('./views/WorkloadView.vue'), props: true },
     { path: '/discovery', name: 'discovery', component: () => import('./views/DiscoveryView.vue') },
+    { path: '/discovery/settings', name: 'discovery-settings', component: () => import('./views/DiscoverySettingsView.vue'), meta: { admin: true } },
     { path: '/users', name: 'users', component: () => import('./views/UsersView.vue'), meta: { admin: true } },
     { path: '/audit', name: 'audit', component: () => import('./views/AuditView.vue'), meta: { admin: true } },
     { path: '/callback', name: 'callback', component: () => import('./views/CallbackView.vue'), meta: { public: true } },

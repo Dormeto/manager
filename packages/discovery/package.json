@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./filters": "./src/filters.ts"
   },
   "scripts": {
     "test": "vitest run",

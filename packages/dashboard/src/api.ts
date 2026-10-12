@@ -1,7 +1,8 @@
 import { idToken, signIn } from './auth';
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  // body: the error answer of the API, for example the validation errors of a configuration.
+  constructor(readonly status: number, message: string, readonly body: unknown = null) {
     super(message);
   }
 }
@@ -22,6 +23,6 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(401, 'sign in required');
   }
   const body = (await res.json().catch(() => null)) as { message?: string } | null;
-  if (!res.ok) throw new ApiError(res.status, body?.message ?? res.statusText);
+  if (!res.ok) throw new ApiError(res.status, body?.message ?? res.statusText, body);
   return body as T;
 }

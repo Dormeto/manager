@@ -83,19 +83,3 @@ export interface RouterInfo {
   checkSchedule?: string | null;
   lastScheduledCheckAt?: string | null;
 }
-
-export interface Candidate {
-  loadBalancer: string;
-  listener: string;
-  ruleArn: string;
-  priority: string;
-  conditions: string;
-  targetGroup: string | null;
-  suggestedId: string | null;
-  backend: { kind: string; id: string } | null;
-  status: 'managed' | 'eligible' | 'ineligible';
-  reason?: string;
-  workloadId?: string;
-  idleHours7d: number | null;
-  requests7d: number | null;
-}
