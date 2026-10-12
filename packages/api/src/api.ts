@@ -4,12 +4,22 @@ import {
   DEFAULT_CONFIG, EXCLUSION_KINDS, activeExclusions, exclusionCriterion, lint, matches, rescope, restatus, validateConfig, withExclusions,
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind,
 } from '@dormeto/discovery';
+import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 
 export interface Router {
   name: string;
   region: string;
   controller: string;
   account?: string; // the manager's account until routers run in other accounts (onboarding, R4)
+  source?: 'terraform' | 'manager'; // written in Terraform, or installed by the manager (operations)
+}
+
+// Operations (onboarding, R4b): created by the API, run by the workflow.
+export interface OperationsApi {
+  create(type: OperationType, input: Record<string, unknown>, by: string): Promise<Operation>;
+  list(): Promise<Operation[]>;
+  get(id: string): Promise<Operation | null>;
+  installedRouters(): Promise<InstalledRouter[]>;
 }
 
 export interface ApiEvent {
@@ -126,6 +136,8 @@ export interface ApiOptions {
   users?: UsersService;
   preferences?: PreferencesStore;
   discovery?: DiscoveryApi;
+  operations?: OperationsApi;
+  managerAccount?: string;
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -174,7 +186,23 @@ function roleIn(body: Record<string, unknown>): Role {
   return role;
 }
 
-export function createApi({ routers, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery }: ApiOptions) {
+// Workload ids of onboarded workloads (the waker finds a workload from its target group name).
+const WORKLOAD_ID = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
+
+export function createApi({ routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount }: ApiOptions) {
+  // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
+  // same in every region).
+  let routers: Router[] = terraformRouters;
+  async function refreshRouters() {
+    const installed = (await operations?.installedRouters()) ?? [];
+    routers = [
+      ...terraformRouters.map((r) => ({ ...r, source: 'terraform' as const })),
+      ...installed.filter((i) => !terraformRouters.some((t) => (t.account ?? managerAccount) === i.account && t.region === i.region)).map((i) => ({
+        name: `${i.name}${i.account === managerAccount ? '' : `-${i.account}`}-${i.region}`, region: i.region, controller: i.controller, account: i.account, source: 'manager' as const,
+      })),
+    ];
+  }
   const routerOf = (name: string | undefined): Router => {
     const router = routers.find((r) => r.name === name);
     if (!router) throw new HttpError(404, 'not_found', `unknown router: ${name}`);
@@ -217,7 +245,7 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
       throw err;
     }
   }
-  const where = (router: Router) => ({ name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}) });
+  const where = (router: Router) => ({ name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}) });
 
   type RouterInfo = {
     router: { version?: string; build?: string };
@@ -343,6 +371,11 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
           return { result: result?.state ?? 'done', response: reply(200, result) };
         });
       }
+    }
+
+    if (resource === 'operations' && operations && !b) {
+      const response = await operationsRoute(method, a, identity, event, operations);
+      if (response) return response;
     }
 
     if (resource === 'exclusions' && discovery && !b) {
@@ -612,6 +645,64 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
     return null;
   }
 
+  // --- Operations: onboard, offboard, install, upgrade and uninstall routers -------------------------------------------
+
+  const ADMIN_TYPES = new Set(['install-router', 'upgrade-router', 'uninstall-router']);
+  async function operationsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, ops: OperationsApi): Promise<ApiResponse | null> {
+    if (method === 'GET' && !id) return reply(200, { operations: await ops.list() });
+    if (method === 'GET' && id) {
+      const op = await ops.get(decodeURIComponent(id));
+      if (!op) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
+      return reply(200, op);
+    }
+    if (method !== 'POST' || id) return null;
+    const body = bodyOf(event);
+    const type = String(body.type ?? '') as OperationType;
+    if (!['onboard', 'offboard', ...ADMIN_TYPES].includes(type)) throw new HttpError(400, 'bad_request', 'type must be onboard, offboard, install-router, upgrade-router or uninstall-router');
+    need(identity, ADMIN_TYPES.has(type) ? 'admin' : 'operator');
+    let input: Record<string, unknown>;
+    let target: string;
+    if (type === 'onboard') {
+      const workloadId = String(body.workloadId ?? '');
+      if (!WORKLOAD_ID.test(workloadId)) throw new HttpError(400, 'bad_request', 'workloadId: lowercase letters, digits and hyphens, not starting or ending with a hyphen');
+      const candidateId = String(body.candidateId ?? '');
+      if (!(await discovery?.store.getCandidate(candidateId))) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
+      if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
+      if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
+      input = { candidateId, workloadId, settings: body.settings ?? {}, databases: body.databases ?? [] };
+      target = `${candidateId} as ${workloadId}`;
+    } else if (type === 'install-router') {
+      const account = String(body.account ?? '');
+      const region = String(body.region ?? '');
+      if (!ACCOUNT.test(account) || !REGION.test(region)) throw new HttpError(400, 'bad_request', 'account (12 digits) and region required');
+      input = { account, region };
+      target = `${account}/${region}`;
+    } else {
+      const router = routerOf(String(body.router ?? ''));
+      const account = router.account ?? managerAccount ?? '';
+      if (type === 'offboard') {
+        const workloadId = String(body.workloadId ?? '');
+        if (!ID.test(workloadId)) throw new HttpError(400, 'bad_request', `invalid workload id: ${workloadId}`);
+        input = { router: router.name, account, region: router.region, workloadId };
+        target = `${router.name}/${workloadId}`;
+      } else {
+        input = { account, region: router.region };
+        target = router.name;
+      }
+    }
+    return audited(identity, `operation-${type}`, target, async () => {
+      try {
+        const op = await ops.create(type, input, identity.email);
+        return { result: `started ${op.id}`, response: reply(202, { operation: op }) };
+      } catch (err) {
+        if ((err as Error).name === 'Conflict') {
+          return { result: `conflict: ${(err as { operationId?: string }).operationId}`, response: reply(409, { error: 'conflict', message: (err as Error).message, operationId: (err as { operationId?: string }).operationId }) };
+        }
+        throw err;
+      }
+    });
+  }
+
   return async function handler(event: ApiEvent): Promise<ApiResponse> {
     const method = event.requestContext.http.method;
     const parts = event.rawPath.replace(/^\/api\/?/, '').split('/').filter(Boolean);
@@ -619,6 +710,7 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
       if (method === 'GET' && parts.length === 1 && parts[0] === 'health') return reply(200, { status: 'ok', version });
       const identity = identityOf(event);
       if (!identity) throw new HttpError(401, 'unauthorized', 'sign in required');
+      await refreshRouters();
       return await route(method, parts, identity, event);
     } catch (err) {
       if (err instanceof HttpError) return reply(err.statusCode, { error: err.code, message: err.message });

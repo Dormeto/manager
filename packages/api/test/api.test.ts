@@ -77,7 +77,7 @@ describe('workloads', () => {
       };
     });
     expect(json(await api(event('GET', '/api/routers'))).routers[0]).toEqual({
-      name: 'dmt-dev', region: 'eu-west-1', version: '0.11.2', build: 'abc', workloads: 2,
+      name: 'dmt-dev', region: 'eu-west-1', source: 'terraform', version: '0.11.2', build: 'abc', workloads: 2,
       checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z',
     });
   });

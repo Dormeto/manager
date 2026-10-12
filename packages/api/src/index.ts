@@ -6,7 +6,9 @@ import {
 import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { createStore } from '@dormeto/discovery';
+import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
@@ -103,9 +105,32 @@ const discovery = {
   },
 };
 
+// Operations: the API creates them and starts the workflow; the operations Lambda runs their steps.
+const records = createRecords({ dynamo, table });
+const sfn = new SFNClient({});
+const unused = () => { throw new Error('steps run in the operations Lambda'); };
+const engine = createEngine({
+  records,
+  discovery: discovery.store,
+  routers: async () => [],
+  target: async () => unused(),
+  bundle: async () => unused(),
+  settings: { env: process.env.ENV ?? 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', noWakeRules: '', metrics: '' } },
+  start: async (op) => (await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.OPERATIONS, name: op.id, input: JSON.stringify({ operationId: op.id }) }))).executionArn ?? '',
+  log: { info: (event, data = {}) => console.log(JSON.stringify({ level: 'info', event, ...data })), warn: (event, data = {}) => console.log(JSON.stringify({ level: 'warn', event, ...data })), error: (event, data = {}) => console.log(JSON.stringify({ level: 'error', event, ...data })) },
+});
+const operations = {
+  create: engine.create,
+  list: () => records.listOperations(),
+  get: (id: string) => records.getOperation(id),
+  installedRouters: () => records.listRouters(),
+};
+
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   users: createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '' }),
   preferences,
   discovery,
+  operations: process.env.OPERATIONS ? operations : undefined,
+  managerAccount: process.env.MANAGER_ACCOUNT,
 });

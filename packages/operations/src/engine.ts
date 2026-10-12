@@ -45,6 +45,7 @@ export interface EngineDeps {
 
 // Another operation runs on the same target.
 export class Conflict extends Error {
+  override name = 'Conflict';
   constructor(readonly operationId: string) {
     super(`another operation is running on this target: ${operationId}`);
   }

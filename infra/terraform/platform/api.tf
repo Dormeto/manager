@@ -121,6 +121,8 @@ resource "aws_lambda_function" "api" {
       # Routers run in the manager account until onboarding deploys them elsewhere (R4).
       ROUTERS            = local.routers
       OPERATIONS         = aws_sfn_state_machine.operations.arn
+      MANAGER_ACCOUNT    = var.account_id
+      ENV                = var.env
       TABLE              = aws_dynamodb_table.manager.name
       VERSION            = local.version
       USER_POOL_ID       = aws_cognito_user_pool.main.id

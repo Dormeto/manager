@@ -13,12 +13,14 @@
     "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/client-lambda": "^3.1146.0",
     "@aws-sdk/client-sesv2": "^3.1146.0",
+    "@aws-sdk/client-sfn": "^3.1146.0",
     "@types/node": "^24.19.1",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "vitest": "^5.0.3"
   },
   "dependencies": {
-    "@dormeto/discovery": "*"
+    "@dormeto/discovery": "*",
+    "@dormeto/operations": "*"
   }
 }
