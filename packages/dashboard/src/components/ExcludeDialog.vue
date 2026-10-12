@@ -34,7 +34,7 @@ function submit() {
         </v-radio-group>
         <p class="text-body-medium mb-4">Discovery stops proposing it, whatever the perimeter includes. A managed workload it matches is woken and
           never napped; it waits for offboarding.</p>
-        <v-text-field v-model="reason" label="Reason" maxlength="256" counter autofocus />
+        <v-text-field v-model="reason" label="Reason" maxlength="246" counter autofocus />
         <v-select v-model="choice" :items="UNTIL_CHOICES.map((c) => (c.value === 'none' ? { ...c, title: 'Never (lift by hand)' } : c))" label="Expires" />
         <v-text-field v-if="choice === 'date'" v-model="date" type="datetime-local" label="Expires at (local time)" />
       </v-card-text>

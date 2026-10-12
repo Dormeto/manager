@@ -232,11 +232,12 @@ const headers = [
       <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
         <v-list-item-subtitle class="text-wrap">
           {{ e.reason }} · by {{ e.by }} {{ relative(e.at, now) }} · {{ e.expiresAt ? (e.expired ? `expired ${relative(e.expiresAt, now)}` : `expires ${relative(e.expiresAt, now)}`) : 'no expiry' }}
-          <template v-if="e.paused?.length"> · paused {{ e.paused.map((p) => `${p.router}/${p.workloadId}`).join(', ') }}</template>
+          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${p.router}/${p.workloadId}`).join(', ') }}</template>
         </v-list-item-subtitle>
         <template #append>
           <v-chip v-if="e.expired" variant="tonal" label class="mr-2">expired</v-chip>
-          <v-btn v-if="session.canOperate" variant="tonal" size="small" @click="lift(e)">Lift</v-btn>
+          <v-chip v-if="e.lifting" color="warning" variant="tonal" label class="mr-2">lift incomplete</v-chip>
+          <v-btn v-if="session.canOperate" variant="tonal" size="small" @click="lift(e)">{{ e.lifting ? 'Retry lift' : 'Lift' }}</v-btn>
         </template>
       </v-list-item>
     </v-list>

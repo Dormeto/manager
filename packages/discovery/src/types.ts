@@ -28,7 +28,9 @@ export interface Exclusion {
   by: string;
   at: string;
   expiresAt?: string;
-  paused?: { router: string; workloadId: string }[]; // managed workloads paused for it
+  paused?: { router: string; workloadId: string }[]; // managed workloads paused for it (still to resume once lifted)
+  liftedAt?: string; // lifted, but some workloads could not be resumed yet: no longer applies, Lift again retries
+  lapsedAt?: string; // expired, and the stored candidates re-scoped since
 }
 
 export interface Filter {

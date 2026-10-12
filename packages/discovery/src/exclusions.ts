@@ -2,7 +2,7 @@
 // exclusion is one more global exclude, after the configured ones, whose reason names its author and reason.
 import type { Criterion, DiscoveryConfig, Exclusion } from './types.js';
 
-export const activeExclusions = (exclusions: Exclusion[], now: number) => exclusions.filter((e) => !e.expiresAt || Date.parse(e.expiresAt) > now);
+export const activeExclusions = (exclusions: Exclusion[], now: number) => exclusions.filter((e) => !e.liftedAt && (!e.expiresAt || Date.parse(e.expiresAt) > now));
 
 export function exclusionCriterion(e: Exclusion): Criterion {
   const label = `manual exclusion by ${e.by}: ${e.reason}`;

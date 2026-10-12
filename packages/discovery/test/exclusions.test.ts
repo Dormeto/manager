@@ -35,6 +35,8 @@ describe('exclusion criteria', () => {
     const expired = { ...tgExclusion, expiresAt: iso(T0 - 1) };
     const later = { ...lbExclusion, expiresAt: iso(T0 + DAY) };
     expect(activeExclusions([expired, later, accountExclusion], T0).map((e) => e.id)).toEqual(['x2', 'x3']);
+    // A lift that could not resume every workload keeps the record (to retry), but the exclusion no longer applies.
+    expect(activeExclusions([{ ...accountExclusion, liftedAt: iso(T0) }], T0)).toEqual([]);
     expect(withExclusions(IN_AC, [expired], T0).globalExcludes).toEqual([]);
   });
 
