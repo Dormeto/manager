@@ -195,6 +195,10 @@ export function maskEndpoint(protocol: string, endpoint: string): string {
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const DAY_MS = 86_400_000;
+// The time in each state of a Workloads row and a workload's view: 7 days, kept 5 minutes, for at most 10,000 workloads.
+const STATES_DAYS = 7;
+const STATES_MS = 300_000;
+const STATES_KEPT_MAX = 10_000;
 const REASON_MAX = 256;
 // Pause until and exclusion expiry: at most this far ahead.
 const AHEAD_MAX_MS = 366 * DAY_MS;
@@ -431,6 +435,42 @@ export function createApi({
 
   // Every workload of the routers the caller sees: from the summaries of the routers that report, from the others by
   // their list action.
+  // A workload's history over a period (R8): its entries from the store, the state before them, and the view of it.
+  async function historyOf(account: string, region: string, id: string, from: string, to: string, summaryOf: () => Promise<{ state?: unknown; historySince?: unknown } | null>) {
+    const [{ entries, truncated }, found] = await Promise.all([fleet!.listHistory!(account, region, id, from, to), fleet!.historyBefore!(account, region, id, from)]);
+    // Capped (review I2): the newest entries are kept, and the time before the oldest of them is unknown.
+    const before = truncated ? null : found;
+    // No entry before the period, but a history that began before it (review I3: its last change expired): the state
+    // then was the one before the period's first change, or, with none, the summary's.
+    let initial: string | undefined;
+    if (!before && !truncated) {
+      const summary = await summaryOf().catch(() => null);
+      if (typeof summary?.historySince === 'string' && summary.historySince < from) initial = entries[0]?.from ?? (summary.state as string | undefined);
+    }
+    return { view: historyView({ before, entries, from, to, now: to, initial }), before, entries, truncated };
+  }
+
+  // Seconds in each state over the last 7 days (user request: the bar of a Workloads row and of a workload's view), kept
+  // 5 minutes per workload while its state stays the same; without its history, none (never an error).
+  const statesKept = new Map<string, { state: unknown; until: number; value: { from: string; to: string; totals: Record<string, number> } }>();
+  async function statesOf(account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null) {
+    if (!fleet?.listHistory || !fleet.historyBefore) return undefined;
+    const key = `${account}#${region}#${id}`;
+    const t = now();
+    const kept = statesKept.get(key);
+    if (kept && kept.until > t && kept.state === summary?.state) return kept.value;
+    try {
+      const [from, to] = [new Date(t - STATES_DAYS * DAY_MS).toISOString(), new Date(t).toISOString()];
+      const { view } = await historyOf(account, region, id, from, to, async () => summary);
+      const value = { from, to, totals: view.totals };
+      if (statesKept.size >= STATES_KEPT_MAX) statesKept.clear();
+      statesKept.set(key, { state: summary?.state, until: t + STATES_MS, value });
+      return value;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function listAll(identity: Identity) {
     const { summaries, workloads } = await reports();
     const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
@@ -678,11 +718,15 @@ export function createApi({
       else if (q.offset) start = Number(q.offset);
       if (!Number.isInteger(start) || start < 0) throw new HttpError(400, 'bad_request', q.cursor ? 'invalid cursor' : 'invalid offset');
       const listed = matching.slice(start, start + limit);
-      // A page's idle hours and requests over 7 days (the Workloads view asks): from each workload's discovery candidate,
-      // one per target group, found by its ARN.
-      const page = q.idle === '1' && q.limit && discovery ? await Promise.all(listed.map(async (w) => {
-        const c = typeof w.targetGroupArn === 'string' ? await discovery.store.getCandidate(w.targetGroupArn).catch(() => null) : null;
-        return c && typeof c.idleHours7d === 'number' ? { ...w, idleHours7d: c.idleHours7d, requests7d: c.requests7d } : w;
+      // A page's idle hours and requests over 7 days, from each workload's discovery candidate (one per target group, found
+      // by its ARN), and its time in each state over 7 days, from its history: when the Workloads view asks.
+      const page = q.limit && (q.idle === '1' || q.states === '1') ? await Promise.all(listed.map(async (w) => {
+        const router = routers.find((r) => r.name === w.router);
+        const [c, states7d] = await Promise.all([
+          q.idle === '1' && discovery && typeof w.targetGroupArn === 'string' ? discovery.store.getCandidate(w.targetGroupArn).catch(() => null) : null,
+          q.states === '1' && router ? statesOf(String(w.account ?? accountOfRouter(router)), String(w.region ?? router.region), String(w.workloadId), w) : undefined,
+        ]);
+        return { ...w, ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}), ...(states7d ? { states7d } : {}) };
       })) : listed;
       const cursor = start + limit < matching.length ? Buffer.from(String(start + limit)).toString('base64url') : null;
       return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors, ...(q.routers === '1' ? { routers: routerRows() } : {}) });
@@ -699,19 +743,7 @@ export function createApi({
         const t = now();
         const [from, to] = [new Date(t - days * 86_400_000).toISOString(), new Date(t).toISOString()];
         const account = accountOfRouter(router);
-        const [{ entries, truncated }, found] = await Promise.all([
-          fleet.listHistory(account, router.region, id, from, to), fleet.historyBefore(account, router.region, id, from),
-        ]);
-        // Capped (review I2): the newest entries are kept, and the time before the oldest of them is unknown.
-        const before = truncated ? null : found;
-        // No entry before the period, but a history that began before it (review I3: its last change expired): the state
-        // then was the one before the period's first change, or, with none, the summary's.
-        let initial: string | undefined;
-        if (!before && !truncated) {
-          const summary = await fleet.getWorkload(account, router.region, id).catch(() => null);
-          if (summary?.historySince && summary.historySince < from) initial = entries[0]?.from ?? summary.state;
-        }
-        const view = historyView({ before, entries, from, to, now: to, initial });
+        const { view, before, entries, truncated } = await historyOf(account, router.region, id, from, to, () => fleet.getWorkload(account, router.region, id));
         // The estimate never fails the history (review I4): without it, the card shows the history alone.
         const priced = savings
           ? await savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item), baseline: savings.baseline }).then((r) => ({ ...r, baseline: savings.baseline })).catch(() => undefined)
@@ -724,7 +756,15 @@ export function createApi({
           invoke(router, { action: 'status', workloadId: id }),
           fleet ? fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null,
         ]);
-        return reply(200, { ...(status as object), url: (summary?.url as string | null | undefined) ?? null });
+        // The bar of its header, as on a Workloads row: its time in each state, and its idle hours from discovery.
+        const [states7d, c] = await Promise.all([
+          statesOf(accountOfRouter(router), router.region, id, summary),
+          discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
+        ]);
+        return reply(200, {
+          ...(status as object), url: (summary?.url as string | null | undefined) ?? null, ...(states7d ? { states7d } : {}),
+          ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
+        });
       }
       if (method === 'POST' && action === 'nap' && !parts[4]) {
         need(identity, 'operator');
