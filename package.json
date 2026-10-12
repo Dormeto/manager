@@ -11,7 +11,8 @@
     "packages/fleet",
     "packages/api",
     "packages/operations",
-    "packages/dashboard"
+    "packages/dashboard",
+    "packages/estimate"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present && node --test scripts/*.test.mjs scripts/release/*.test.mjs",
