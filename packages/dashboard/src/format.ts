@@ -67,3 +67,13 @@ export function refreshLabel({ seconds, nextAt, loading }: { seconds: number; ne
   if (!seconds || nextAt === null) return 'Auto-refresh off';
   return `Refreshing in ${duration(Math.max(0, Math.ceil((nextAt - now) / 1000)))}`;
 }
+
+// Route of a workload over all its rules (router status).
+const ROUTES: Record<string, { label: string; color: string }> = {
+  app: { label: 'application', color: 'success' },
+  waker: { label: 'waker', color: 'info' },
+  mixed: { label: 'mixed: the rules disagree (repaired at the next idle check)', color: 'warning' },
+  unknown: { label: 'unknown: a rule is missing or changed', color: 'error' },
+};
+export const routeLabel = (route: string): string => ROUTES[route]?.label ?? route;
+export const routeColor = (route: string): string => ROUTES[route]?.color ?? 'grey';

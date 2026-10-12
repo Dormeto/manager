@@ -1,5 +1,5 @@
 // Organization discovery in the dashboard: statuses, run targets, and criterion editing (dimension values as text).
-import type { BackendKind, Criterion, LintFinding, RunTarget, Status } from '@dormeto/discovery/types';
+import type { BackendKind, Criterion, LintFinding, RuleRef, RunTarget, Status } from '@dormeto/discovery/types';
 import { percent } from './format';
 
 export const STATUSES: Status[] = ['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible', 'dismissed', 'excluded', 'out-of-scope', 'gone'];
@@ -84,3 +84,6 @@ export const availableDimensions = (c: Criterion): DimensionKey[] => DIMENSIONS.
 
 // Lint findings about one include criterion of a filter.
 export const lintFor = (findings: LintFinding[], filter: string, include: number) => findings.filter((f) => f.filter === filter && f.include === include);
+
+// The rules of a candidate, one line each, by priority.
+export const ruleLines = (rules: RuleRef[]): string[] => rules.map((r) => `priority ${r.priority} · ${r.listener} · ${r.conditions}`);

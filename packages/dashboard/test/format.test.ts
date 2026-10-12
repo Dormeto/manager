@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkHealth, duration, listSourceHref, percent, refreshLabel, relative, ruleText, shortId, stateColor } from '../src/format';
+import { checkHealth, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -53,5 +53,15 @@ describe('listSourceHref', () => {
     expect(listSourceHref('s3://dmt-dev-ip-lists-1/scanners/censys.txt')).toBe('https://s3.console.aws.amazon.com/s3/object/dmt-dev-ip-lists-1?prefix=scanners%2Fcensys.txt');
     expect(listSourceHref('javascript:alert(1)')).toBeNull();
     expect(listSourceHref(null)).toBeNull();
+  });
+});
+
+describe('route', () => {
+  it('names the route of a workload over all its rules', () => {
+    expect(routeLabel('app')).toBe('application');
+    expect(routeLabel('waker')).toBe('waker');
+    expect(routeLabel('mixed')).toBe('mixed: the rules disagree (repaired at the next idle check)');
+    expect(routeLabel('unknown')).toBe('unknown: a rule is missing or changed');
+    expect([routeColor('app'), routeColor('waker'), routeColor('mixed')]).toEqual(['success', 'info', 'warning']);
   });
 });

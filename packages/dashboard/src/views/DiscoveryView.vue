@@ -6,7 +6,7 @@ import { mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiPlay } from '@mdi/js
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
 import LintAlert from '../components/LintAlert.vue';
-import { STATUSES, idleShare, statusColor, statusHelp, statusLabel, targetText } from '../discovery';
+import { STATUSES, idleShare, ruleLines, statusColor, statusHelp, statusLabel, targetText } from '../discovery';
 import { backendLabel, relative, shortId } from '../format';
 import { backendIcon } from '../icons';
 import { useNow } from '../now';
@@ -157,7 +157,12 @@ const headers = [
       </template>
       <template #[`item.conditions`]="{ item }">
         <div class="font-weight-medium">{{ item.conditions }}</div>
-        <div class="text-body-small text-medium-emphasis">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}</div>
+        <div class="text-body-small text-medium-emphasis">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
+          <v-tooltip v-if="item.rules?.length > 1" location="top" max-width="520">
+            <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" class="ml-1" tabindex="0">{{ item.rules.length }} rules</v-chip></template>
+            <div v-for="line in ruleLines(item.rules)" :key="line">{{ line }}</div>
+          </v-tooltip>
+        </div>
       </template>
       <template #[`item.backend`]="{ item }">
         <span v-if="item.backend" class="d-inline-flex align-center ga-2">

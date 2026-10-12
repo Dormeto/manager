@@ -60,7 +60,8 @@ export interface WorkloadStatus {
   pendingWake: boolean;
   lastRequestAt: string | null;
   nap: { eligibleAt: string; latestAt: string; inSeconds: number } | null;
-  route: string;
+  route: string; // over all the rules: app, waker, mixed, unknown
+  rules?: { arn: string; priority: string | null; conditions: string; route: string }[];
   backends: Backend[];
   ignoredTargets: { id: string; reason: string }[];
   recommendations: { backend: string; message: string }[];

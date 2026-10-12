@@ -6,7 +6,7 @@ import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendLabel, duration, listSourceHref, relative, ruleText, shortId, stateColor } from '../format';
+import { backendLabel, duration, listSourceHref, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
 import { useSession } from '../stores/session';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -62,7 +62,7 @@ const summary = computed(() => {
   const s = status.value;
   if (!s) return [];
   return [
-    { label: 'Route', value: s.route === 'app' ? 'application' : s.route },
+    { label: 'Route', value: routeLabel(s.route) },
     { label: 'Nap', value: s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' },
     { label: 'Last request', value: relative(s.lastRequestAt, now.value) },
     { label: 'Awake since', value: relative(s.awakeSince, now.value) },
@@ -118,6 +118,15 @@ const summary = computed(() => {
           </v-list-item>
         </v-list>
         <v-card-text v-if="status.ignoredTargets.length" class="pt-0 text-body-small">Ignored: {{ status.ignoredTargets.map((t) => `${t.id} (${t.reason})`).join(', ') }}</v-card-text>
+      </v-card>
+      <v-card v-if="status.rules?.length" :title="status.rules.length > 1 ? `Rules (${status.rules.length}, switched together)` : 'Rule'" class="mb-4">
+        <v-list density="compact" class="py-0">
+          <v-list-item v-for="r in status.rules" :key="r.arn" :title="r.conditions" :subtitle="`priority ${r.priority ?? '—'}`">
+            <template #append>
+              <v-chip :color="routeColor(r.route)" variant="tonal" label size="small">{{ r.route === 'app' ? 'application' : r.route }}</v-chip>
+            </template>
+          </v-list-item>
+        </v-list>
       </v-card>
       <v-card title="Targets">
         <v-card-text>

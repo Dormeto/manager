@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATUSES, idleShare, statusColor, statusLabel, targetText } from '../src/discovery';
+import { STATUSES, idleShare, ruleLines, statusColor, statusLabel, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -23,5 +23,15 @@ describe('discovery format', () => {
   it('gives the idle share of the last 7 days', () => {
     expect(idleShare({ idleHours7d: 154 })).toBe('92 %');
     expect(idleShare({ idleHours7d: null })).toBeNull();
+  });
+});
+
+describe('rules of a candidate', () => {
+  it('lists each rule by priority with its listener and conditions', () => {
+    const rule = (priority: string, conditions: string) => ({ id: `r${priority}`, listener: 'HTTPS:443', priority, conditions, hosts: [], managed: false });
+    expect(ruleLines([rule('10', 'host saas.ligoj.io, path /logout.html'), rule('50', 'host saas.ligoj.io, path *')])).toEqual([
+      'priority 10 · HTTPS:443 · host saas.ligoj.io, path /logout.html',
+      'priority 50 · HTTPS:443 · host saas.ligoj.io, path *',
+    ]);
   });
 });
