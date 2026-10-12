@@ -24,7 +24,7 @@ const engine = createEngine({
   settings: {
     env,
     principals: JSON.parse(process.env.MANAGER_PRINCIPALS ?? '[]'),
-    routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false' },
+    routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false', managerBus: process.env.MANAGER_BUS ?? '' },
   },
   // Executions are started by the API; the workflow only runs tasks.
   start: async () => { throw new Error('operations are created by the API'); },

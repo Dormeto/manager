@@ -119,6 +119,8 @@ resource "aws_lambda_function" "operations" {
       ROUTER_VERSION     = local.router_version
       COMMAND_ROLE       = "DmtCommandRole"
       MANAGER_PRINCIPALS = jsonencode([aws_iam_role.api.arn])
+      # Installed routers send their state there (scale design §3).
+      MANAGER_BUS = aws_cloudwatch_event_bus.manager.arn
     }
   }
 

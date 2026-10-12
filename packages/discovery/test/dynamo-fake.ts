@@ -26,6 +26,8 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
         const existing = items.get(keyOf(input.Item));
         if (input.ConditionExpression === 'attribute_not_exists(sk) OR expiresAt < :now' && existing
           && !(Number(existing.expiresAt?.N) < Number(input.ExpressionAttributeValues[':now'].N))) throw fail('ConditionalCheckFailedException');
+        if (input.ConditionExpression === 'attribute_not_exists(sk) OR version = :version' && existing
+          && existing.version?.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
         items.set(keyOf(input.Item), input.Item);
         return {};
       }

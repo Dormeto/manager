@@ -59,7 +59,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
       },
     }),
     bundle: async () => ({ blueprint: published as unknown as Blueprint, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
-    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false' } },
+    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS } },
     start: async (op) => { started.push(op.id); return `arn:execution:${op.id}`; },
     now: () => now, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
   });
@@ -82,6 +82,7 @@ const DEV_ROUTER: RouterRef = {
 };
 
 const WORKLOAD_ID = '7010ea54b5c02245';
+const BUS = 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager';
 
 describe('operations engine', () => {
   it('onboards a candidate with an existing router: lock, slot, preview, onboard, verify, candidate managed, everything released', async () => {
@@ -115,9 +116,11 @@ describe('operations engine', () => {
     expect(stored.steps.find((x) => x.name === 'install functions')!.attempts).toBeGreaterThan(1);
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toMatchObject({
       name: 'dmtr-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`,
-      version: '0.20.1', build: 'd959e54b048a', installedBy: 'ops@example.com',
+      version: '0.21.0', build: '774e766c20de', installedBy: 'ops@example.com',
     });
     expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
+    // The router sends its state to the manager's event bus (scale design §3).
+    expect((s.account.state.functions.get('dmtr-dev-controller')!.config.Environment as { Variables: Record<string, string> }).Variables.DMT_MANAGER_BUS).toBe(BUS);
   });
 
   it('a second request for the same target is a conflict naming the running operation', async () => {

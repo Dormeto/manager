@@ -5,7 +5,10 @@ import { fill, type Blueprint } from '../src/blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, createInstaller } from '../src/installer.js';
 import { fakeInstallAccount } from './install-fake.js';
 
-const VALUES = { name: 'dmtr-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false' };
+const VALUES = {
+  name: 'dmtr-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false',
+  managerBus: 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager',
+};
 const BOUNDARY = 'arn:aws:iam::121014831971:policy/DmtRouterBoundary';
 const PRINCIPALS = ['arn:aws:iam::121014831971:role/dmt-dev-manager-api'];
 const ZIP = new Uint8Array([1, 2, 3]);
@@ -144,7 +147,7 @@ describe('installer', () => {
     upgraded.state.logGroups = s.state.logGroups; upgraded.state.functions = s.state.functions; upgraded.state.schedules = s.state.schedules;
     upgraded.state.eventRules = s.state.eventRules;
     expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped', 'skipped']);
-    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(14);
+    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(15);
     const controller = s.state.functions.get('dmtr-dev-controller')!;
     expect((controller.config.Environment as { Variables: Record<string, string> }).Variables).toMatchObject({ DMT_VERSION: '0.18.0', DMT_METRICS: 'true' });
     expect(controller.codeSha256).toBe(createHash('sha256').update(new Uint8Array([9, 9])).digest('base64'));

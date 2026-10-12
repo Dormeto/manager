@@ -8,6 +8,7 @@
   },
   "workspaces": [
     "packages/discovery",
+    "packages/fleet",
     "packages/api",
     "packages/operations",
     "packages/dashboard"

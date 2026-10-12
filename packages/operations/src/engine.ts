@@ -44,7 +44,8 @@ export interface EngineDeps {
   routers(): Promise<RouterRef[]>;
   target(account: string, region: string): Promise<TargetAccess>;
   bundle(): Promise<{ blueprint: Blueprint; zip: Uint8Array; codeSha256: string }>;
-  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; noWakeRules: string; metrics: string } };
+  // managerBus: the manager's event bus, where the routers send their state (scale design §3).
+  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; noWakeRules: string; metrics: string; managerBus: string } };
   start(op: Operation): Promise<string>; // starts the workflow execution, returns its ARN
   now?: () => number;
   newId?: () => string;
