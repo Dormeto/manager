@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Routers (router management): version, health, idle check, workloads per state and pauses; pause and resume.
 import { ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useDisplay } from 'vuetify';
 import { mdiArrowUpBold, mdiArrowUpBoldCircleOutline, mdiDeleteOutline, mdiPause, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
 import { api } from '../api';
@@ -30,6 +30,7 @@ const expanded = ref<string[]>([]);
 const pausing = ref<RouterInfo | null>(null);
 const notice = ref<Notice | null>(null);
 const navigation = useRouter();
+let named = typeof useRoute().query.router === 'string' ? useRoute().query.router as string : null;
 const available = ref<string | null>(null);
 const installOpen = ref(false);
 const install = ref({ account: '', region: '' });
@@ -46,6 +47,11 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   ]);
   alarms.value = alerts?.alarms ?? [];
   routers.value = result.routers;
+  // A router the address names (?router=, a link from Workloads): its details open once it is listed.
+  if (named && result.routers.some((r) => r.name === named)) {
+    expanded.value = [...new Set([...expanded.value, named])];
+    named = null;
+  }
   available.value = result.available?.version ?? null;
   watch.refreshed(result.routers.flatMap((r) => (r.operation ? [{ ...r.operation, subject: r.name }] : [])));
 });

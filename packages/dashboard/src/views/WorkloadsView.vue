@@ -107,6 +107,7 @@ const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, 
         <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="font-weight-medium">{{ item.name ?? item.workloadId }}</router-link>
       </template>
       <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" /></template>
+      <template #[`item.router`]="{ item }"><router-link :to="{ path: '/routers', query: { router: item.router } }">{{ item.router }}</router-link></template>
       <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" :failure="item.failure" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.idleHours7d`]="{ item }">
         <IdleBar v-if="typeof item.idleHours7d === 'number'" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d ?? null" />

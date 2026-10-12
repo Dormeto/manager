@@ -633,7 +633,15 @@ export function createApi({
     }
     if (resource === 'routers' && a) {
       const router = routerOf(a, identity);
-      if (method === 'GET' && !b) return reply(200, { ...where(router), ...(await invokeNew(router, { action: 'router' }, 'router details') as object) });
+      if (method === 'GET' && !b) {
+        const details = await invokeNew(router, { action: 'router' }, 'router details') as { configuration?: Record<string, { source?: string }> };
+        // A router cannot tell who installed it: one the manager installed has its configuration from the manager (its
+        // router settings, in the blueprint), not from a Terraform of its own.
+        const configuration = router.source === 'manager' && details?.configuration
+          ? Object.fromEntries(Object.entries(details.configuration).map(([k, v]) => [k, v && typeof v === 'object' ? { ...v, source: 'manager' } : v]))
+          : details?.configuration;
+        return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}) });
+      }
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
     }
 

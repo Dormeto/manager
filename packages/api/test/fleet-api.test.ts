@@ -224,3 +224,17 @@ describe('workloads and routers from the summaries', () => {
     expect([body.byState, body.stats7d]).toEqual([{ AWAKE: 1, FAILED: 1, ASLEEP: 2 }, { wakes: 3, ignored: 5, deferred: 1 }]);
   });
 });
+
+describe('router configuration source (user report)', () => {
+  it('a router the manager installed shows its configuration as set by the manager, not Terraform', async () => {
+    const configuration = {
+      checkSchedule: { value: 'rate(5 minutes)', source: 'terraform' }, metrics: { value: false, source: 'terraform' },
+      ipListsCatalog: { value: { url: 's3://x', lists: [] }, source: 'manager' },
+    };
+    const invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'router' ? { router: { version: '0.26.0' }, configuration, health: {} } : null);
+    const { api } = setup({ routers: [ROUTERS[0]!], operations: withOperations(), invoke });
+    const installedRouter = json(await api(event('/api/routers/dmtr-dev-eu-west-3')));
+    expect(Object.values(installedRouter.configuration as Record<string, { source: string }>).map((c) => c.source)).toEqual(['manager', 'manager', 'manager']);
+    expect(json(await api(event('/api/routers/dmt-dev'))).configuration.checkSchedule.source).toBe('terraform');
+  });
+});

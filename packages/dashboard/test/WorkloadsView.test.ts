@@ -37,6 +37,19 @@ describe('Workloads view', () => {
     wrapper.unmount();
   });
 
+  it('links each workload\'s router to it in Routers (user request)', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+    await flushPromises();
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    const link = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Router')]!.find('a');
+    expect([link.text(), link.attributes('href')]).toEqual(['dmt-dev', '/routers?router=dmt-dev']);
+    wrapper.unmount();
+  });
+
   it('shows the AWS account of each workload in the first column', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);

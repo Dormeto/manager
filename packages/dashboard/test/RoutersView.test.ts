@@ -22,6 +22,12 @@ vi.mock('../src/api', () => ({
     }
     if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'upgrade-router', target: { account: '111122223333', region: 'eu-west-3' }, ...server.ended };
     if (path.startsWith('/workloads?')) return { workloads: [{ workloadId: 'a4dffc5bf369a297', router: 'dmtr-dev-eu-west-3', state: 'ASLEEP' }], total: 1 };
+    if (path.startsWith('/routers/')) {
+      return {
+        health: { checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: null, lambda: { controller: { errors: 0, throttles: 0 } }, queues: { check: 0, controller: 0 }, concurrency: null, ipLists: [] },
+        configuration: { checkSchedule: { value: 'rate(5 minutes)', source: 'terraform' }, metrics: { value: false, source: 'terraform' }, ipLists: { value: [], source: 'terraform' }, noWakeRules: { value: [], source: 'terraform' } },
+      };
+    }
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
       return {
@@ -51,13 +57,13 @@ Object.defineProperty(window, 'visualViewport', {
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mountView() {
+async function mountView(path = '/routers') {
   const pinia = createPinia();
   setActivePinia(pinia);
   useSession().role = 'admin';
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/routers', component: RoutersView }, { path: '/operations', component: { render: () => null } },
     { path: '/workloads', component: { render: () => null } }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
-  await router.push('/routers');
+  await router.push(path);
   const wrapper = mount(RoutersView, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
   await flushPromises();
   return Object.assign(wrapper, { router });
@@ -75,6 +81,13 @@ describe('Routers view', () => {
     server.running = null;
     server.ended = { status: 'succeeded' };
     document.body.innerHTML = '';
+  });
+
+  it('opens the details of the router the address names (a link from Workloads)', async () => {
+    const wrapper = await mountView('/routers?router=dmt-dev');
+    expect(calls.some((c) => c.path === '/routers/dmt-dev')).toBe(true);
+    expect(calls.some((c) => c.path === '/routers/dmtr-dev-eu-west-3')).toBe(false);
+    wrapper.unmount();
   });
 
   it('offers the upgrade as an icon beside the version of a router the manager installed', async () => {
