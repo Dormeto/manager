@@ -1,0 +1,28 @@
+import { describe, expect, it } from 'vitest';
+import { mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import { createVuetify } from 'vuetify';
+import * as components from 'vuetify/components';
+import MfaBanner from '../src/components/MfaBanner.vue';
+import { useSession } from '../src/stores/session';
+
+function mountBanner(me: Parameters<ReturnType<typeof useSession>['applyMe']>[0]) {
+  setActivePinia(createPinia());
+  useSession().applyMe(me);
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+  return mount(MfaBanner, { global: { plugins: [createVuetify({ components }), router] } });
+}
+
+describe('MfaBanner', () => {
+  it('asks a user whose rights wait for MFA to set it up, linking to the Account page', () => {
+    const wrapper = mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true } });
+    expect(wrapper.text()).toContain('Set up two-step verification to use your admin rights');
+    expect(wrapper.find('a').attributes('href')).toBe('/account');
+  });
+
+  it('says nothing once MFA is on, or where the policy does not require it', () => {
+    expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'admin', mfa: { mode: 'operators', enabled: true, required: true } }).text()).toBe('');
+    expect(mountBanner({ email: 'a@example.com', role: 'viewer', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: false } }).text()).toBe('');
+  });
+});

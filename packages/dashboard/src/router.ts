@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import { api } from './api';
 import { currentUser, signIn } from './auth';
-import { useSession } from './stores/session';
+import { useSession, type Me } from './stores/session';
 import { usePreferences } from './stores/preferences';
 
 export const router = createRouter({
@@ -15,6 +16,7 @@ export const router = createRouter({
     { path: '/discovery/settings', name: 'discovery-settings', component: () => import('./views/DiscoverySettingsView.vue'), meta: { admin: true } },
     { path: '/users', name: 'users', component: () => import('./views/UsersView.vue'), meta: { admin: true } },
     { path: '/audit', name: 'audit', component: () => import('./views/AuditView.vue'), meta: { admin: true } },
+    { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
     { path: '/callback', name: 'callback', component: () => import('./views/CallbackView.vue'), meta: { public: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
@@ -30,7 +32,17 @@ router.beforeEach(async (to) => {
   }
   const session = useSession();
   session.set(user);
+  // The role the user acts with and their MFA (R6c), once per page load (the Account page reads them again).
+  if (!session.loaded) {
+    try {
+      session.applyMe(await api<Me>('/me'));
+    } catch {
+      // Unreadable: the token's role, the API refuses what it must.
+    }
+  }
   void usePreferences().load();
+  // Nothing is allowed until MFA is set up (policy required): the Account page only.
+  if (session.loaded && session.effectiveRole === null && to.name !== 'account') return '/account';
   // The API enforces the roles; the dashboard only hides what the role cannot use.
   if (to.meta.admin && !session.isAdmin) return '/';
   return true;

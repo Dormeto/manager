@@ -11,7 +11,8 @@ export function initAuth(config: Config): void {
     redirect_uri: `${window.location.origin}/callback`,
     post_logout_redirect_uri: `${window.location.origin}/`,
     response_type: 'code',
-    scope: 'openid email profile',
+    // aws.cognito.signin.user.admin: the user sets up their own MFA with their access token (R6c).
+    scope: 'openid email profile aws.cognito.signin.user.admin',
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     automaticSilentRenew: true,
     loadUserInfo: false,
@@ -45,6 +46,17 @@ export async function idToken(): Promise<string | null> {
   if (user && !user.expired && user.id_token) return user.id_token;
   try {
     return (await users().signinSilent())?.id_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Access token for the user's own calls to Cognito (MFA set-up); renewed as the ID token.
+export async function accessToken(): Promise<string | null> {
+  const user = await users().getUser();
+  if (user && !user.expired && user.access_token) return user.access_token;
+  try {
+    return (await users().signinSilent())?.access_token ?? null;
   } catch {
     return null;
   }

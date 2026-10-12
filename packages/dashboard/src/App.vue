@@ -2,11 +2,12 @@
 import { computed, onMounted, ref } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { useRoute } from 'vue-router';
-import { mdiAccountCircle, mdiAccountGroup, mdiClipboardTextClock, mdiCogTransferOutline, mdiCompassOutline, mdiLogout, mdiRouterNetwork, mdiServerNetwork, mdiThemeLightDark, mdiViewDashboardOutline } from '@mdi/js';
+import { mdiAccountCircle, mdiAccountCogOutline, mdiAccountGroup, mdiClipboardTextClock, mdiCogTransferOutline, mdiCompassOutline, mdiLogout, mdiRouterNetwork, mdiServerNetwork, mdiThemeLightDark, mdiViewDashboardOutline } from '@mdi/js';
 import { signOut } from './auth';
 import { getConfig } from './config';
 import { useDiscoveryBadge } from './stores/discovery';
 import { useSession } from './stores/session';
+import MfaBanner from './components/MfaBanner.vue';
 
 const session = useSession();
 const badge = useDiscoveryBadge();
@@ -65,14 +66,16 @@ function toggleTheme() {
           <v-btn v-bind="props" :icon="mdiAccountCircle" aria-label="Account" />
         </template>
         <v-list density="compact" min-width="240">
-          <v-list-item :title="session.email" :subtitle="`Role: ${session.role}`" />
+          <v-list-item :title="session.email" :subtitle="`Role: ${session.role}${session.effectiveRole !== session.role ? ` (acting as ${session.effectiveRole ?? 'nothing'})` : ''}`" />
           <v-divider />
+          <v-list-item :prepend-icon="mdiAccountCogOutline" title="Account and two-step verification" to="/account" />
           <v-list-item :prepend-icon="mdiLogout" title="Sign out" @click="signOut(getConfig())" />
         </v-list>
       </v-menu>
     </v-app-bar>
     <v-main>
       <v-container fluid class="pa-4 pa-md-6">
+        <MfaBanner v-if="signedIn" />
         <router-view />
       </v-container>
     </v-main>
