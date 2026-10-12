@@ -18,6 +18,7 @@ import { baselineOf } from './baseline.js';
 import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
+import { createIdleRequests } from './idle-requests.js';
 import { readJson } from './s3-json.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
@@ -110,6 +111,13 @@ const ses: SesPort = {
 
 const sfn = new SFNClient({});
 
+// The idle window advisor (R10): the discovery function reads a workload's requests (member accounts trust only its
+// role). One attempt, answered within 25 s: API Gateway answers within 29 s.
+const discoveryLambda = new LambdaClient({ maxAttempts: 1, requestHandler: { connectionTimeout: 3_000, requestTimeout: 25_000, socketTimeout: 25_000, throwOnRequestTimeout: true } });
+const idleRequests = process.env.DISCOVERY_FUNCTION
+  ? createIdleRequests({ functionName: process.env.DISCOVERY_FUNCTION, invoke: (input) => discoveryLambda.send(new InvokeCommand(input)) })
+  : undefined;
+
 // Discovery: items of the manager table, runs on demand by the discovery state machine (plan, accounts, finalize).
 const discovery = {
   store: createStore({ dynamo, table }),
@@ -186,6 +194,7 @@ export const handler = createApi({
   managerAccount: process.env.MANAGER_ACCOUNT,
   // Routers and workloads as the routers report them (scale design §4).
   fleet,
+  idleRequests,
   // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1), cached in the table;
   // Spot prices and the discounts (R9.5).
   savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item, discounts) => prices.hourly(region, item, discounts) },

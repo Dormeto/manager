@@ -468,3 +468,16 @@ run "spot_prices_readable" {
   }
 }
 
+
+run "idle_window_requests" {
+  command = plan
+
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "IdleWindowRequests"]), "lambda:InvokeFunction")
+    error_message = "The API invokes the discovery function for a workload's requests (R10): lambda:InvokeFunction."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables["DISCOVERY_FUNCTION"] == "dmt-test-manager-discovery"
+    error_message = "The API knows the discovery function (R10): DISCOVERY_FUNCTION."
+  }
+}

@@ -78,6 +78,13 @@ data "aws_iam_policy_document" "api" {
     resources = concat([for r in var.routers : "arn:aws:lambda:${r.region}:${local.account_id}:function:${r.controller}"], ["arn:aws:lambda:*:*:function:dmtr-${var.env}-controller"])
   }
   statement {
+    # The idle window advisor (R10): a workload's requests per minute, read by the discovery function (member accounts
+    # trust only its role).
+    sid       = "IdleWindowRequests"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.discovery.arn]
+  }
+  statement {
     sid       = "Operations"
     actions   = ["states:StartExecution"]
     resources = [aws_sfn_state_machine.operations.arn]
@@ -171,6 +178,7 @@ resource "aws_lambda_function" "api" {
       EMAIL_SENDER            = var.ses_identity == null ? "cognito" : "ses"
       DASHBOARD_URL           = "https://${local.dashboard_host}/"
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
+      DISCOVERY_FUNCTION      = aws_lambda_function.discovery.function_name
       ALERTS_TOPIC            = aws_sns_topic.alerts.arn
       LISTS_BUCKET            = aws_s3_bucket.lists.id
       MFA_MODE                = var.mfa

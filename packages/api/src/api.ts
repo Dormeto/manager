@@ -5,7 +5,8 @@ import {
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
-import { baselineHours, historyView, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 
@@ -157,7 +158,12 @@ export interface ApiOptions {
     // The discounts for commitments (R9.5).
     getSavingsSettings?(): Promise<SavingsSettings>;
     putSavingsSettings?(discounts: Discounts, by: string): Promise<void>;
+    // A workload's idle window advice (R10), kept a day.
+    getIdleWindow?(account: string, region: string, id: string): Promise<IdleWindowAdvice | null>;
+    putIdleWindow?(account: string, region: string, id: string, advice: IdleWindowAdvice): Promise<void>;
   };
+  // The idle window advisor (R10): a workload's requests per minute, read by the discovery function.
+  idleRequests?: IdleRequests;
   // A period's savings (R9): AWS's list prices of what the naps stopped, within the baseline; Spot prices and the
   // discounts (R9.5).
   savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem, discounts?: Discounts): Promise<number | null> };
@@ -205,6 +211,10 @@ const DAY_MS = 86_400_000;
 // at most 10,000 workloads.
 const STATES_DAYS = 7;
 const COSTS_DAYS = 30;
+// The idle window advisor (R10): the days of requests replayed (CloudWatch keeps one-minute data 15 days), and the
+// router's idle window when the summary has none.
+const IDLE_DAYS = 14;
+const DEFAULT_IDLE_MINUTES = 15;
 const STATES_MS = 300_000;
 const STATES_KEPT_MAX = 10_000;
 const HOUR_MS = 3_600_000;
@@ -307,7 +317,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
 }
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa, savings,
-  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
+  fleet, idleRequests, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -898,6 +908,42 @@ export function createApi({
             .then((r) => ({ ...r, baseline: savings.baseline, ...(anyDiscount(discounts) ? { discounts } : {}) }))).catch(() => undefined)
           : undefined;
         return reply(200, { ...view, before, entries, truncated, ...(priced ? { savings: priced } : {}) });
+      }
+      // Its idle window advice (R10): its last 14 days of requests replayed against idle windows, priced as its savings;
+      // kept a day, or until its idle window changes.
+      if (method === 'GET' && action === 'idle-window' && !parts[4]) {
+        if (!fleet?.listHistory || !fleet.historyBefore || !idleRequests) throw new HttpError(404, 'not_found', 'no idle window advice in this manager');
+        const account = accountOfRouter(router);
+        const summary = await fleet.getWorkload(account, router.region, id);
+        if (!summary || typeof summary.targetGroupArn !== 'string') throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
+        const idle = (summary.settings as { idleMinutes?: unknown } | undefined)?.idleMinutes;
+        const current = typeof idle === 'number' && idle > 0 ? idle : DEFAULT_IDLE_MINUTES;
+        const kept = await fleet.getIdleWindow?.(account, router.region, id).catch(() => null);
+        if (kept && kept.current === current) return reply(200, kept);
+        let requests: Awaited<ReturnType<IdleRequests>>;
+        try {
+          requests = await idleRequests(account, router.region, summary.targetGroupArn, IDLE_DAYS);
+        } catch (err) {
+          throw new HttpError(502, 'requests_unreadable', (err as Error).message);
+        }
+        const t = now();
+        const [month, period, routerSummary, discounts] = await Promise.all([
+          historyOf(account, router.region, id, new Date(t - COSTS_DAYS * DAY_MS).toISOString(), new Date(t).toISOString(), async () => summary),
+          historyOf(account, router.region, id, requests.from, requests.to, async () => summary),
+          fleet.listRouters().then((all) => all.find((r) => r.account === account && r.region === router.region) ?? null).catch(() => null),
+          savings ? discountsOf().catch(() => null) : null,
+        ]);
+        // What the latest nap stopped, priced as the workload's costs: without prices, the advice is in hours.
+        const last = [...month.view.phases].reverse().find((p) => p.state === 'ASLEEP' && p.stopped);
+        const advice = await idleWindowAdvice({
+          requests, current, checkMinutes: checkMinutesOf(routerSummary?.checkSchedule ?? null), wakeMs: month.view.wakes.medianMs,
+          startAsleep: period.view.phases[0]?.state === 'ASLEEP', actualWakes: period.view.wakes.count,
+          stopped: savings && discounts ? last?.stopped ?? null : null,
+          hourly: (item) => (savings && discounts ? savings.hourly(router.region, item, discounts).catch(() => null) : Promise.resolve(null)),
+          baseline: savings?.baseline ?? { kind: 'always' }, wakerTargetGroup: requests.wakerTargetGroupArn !== null, now: t,
+        });
+        await fleet.putIdleWindow?.(account, router.region, id, advice).catch(() => undefined);
+        return reply(200, advice);
       }
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.
