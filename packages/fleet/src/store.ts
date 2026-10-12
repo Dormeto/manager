@@ -45,6 +45,21 @@ export interface WorkloadSummary {
   [field: string]: unknown;
 }
 
+// A workload whose last wake failed (R7b): its failure until a successful wake.
+export interface FailureEntry {
+  account: string;
+  region: string;
+  router: string;
+  workloadId: string;
+  name?: string;
+  url?: string | null;
+  wakeId?: string;
+  failure: { kind: string; step: string; backend?: string; message: string; at: string };
+  consecutiveFailures?: number;
+  nextAttemptAt?: string;
+}
+const failureKey = (account: string, region: string, id: string) => `WF#${account}#${region}#${id}`;
+
 // Any DynamoDB client: only send() is used.
 export interface DynamoSender {
   send(command: object): Promise<any>;
@@ -122,6 +137,26 @@ export function createFleetStore({ dynamo, table, now = Date.now }: { dynamo: Dy
     },
     async listWorkloads(): Promise<WorkloadSummary[]> {
       return (await query('WS#')).map((i) => data<WorkloadSummary>(i)!).filter(Boolean);
+    },
+    // The failure index (R7b): WF#<account>#<region>#<workloadId>, written on failures only, read by the watchdog.
+    async getFailure(account: string, region: string, id: string): Promise<{ entry: FailureEntry; version: number } | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(failureKey(account, region, id)), ConsistentRead: true }));
+      const entry = data<FailureEntry>(Item);
+      return entry ? { entry, version: Number(Item.version?.N ?? 0) } : null;
+    },
+    async putFailure(entry: FailureEntry, version: number): Promise<boolean> {
+      return conditional(() => dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key(failureKey(entry.account, entry.region, entry.workloadId)), data: { S: JSON.stringify(entry) }, version: { N: String(version + 1) } },
+        ConditionExpression: 'attribute_not_exists(sk) OR version = :version', ExpressionAttributeValues: { ':version': { N: String(version) } },
+      })));
+    },
+    async deleteFailure(account: string, region: string, id: string, version: number): Promise<boolean> {
+      return conditional(() => dynamo.send(new DeleteItemCommand({
+        TableName: table, Key: key(failureKey(account, region, id)), ConditionExpression: VERSIONED, ExpressionAttributeValues: { ':version': { N: String(version) } },
+      })));
+    },
+    async listFailures(): Promise<FailureEntry[]> {
+      return (await query('WF#')).map((i) => data<FailureEntry>(i)!).filter(Boolean);
     },
   };
 }

@@ -2,8 +2,11 @@
 // identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
 // arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
-import { CHUNK_WORKLOADS_MAX, chunkOf, regionOf, routerOf, stateOf, timely, workloadIdOf, workloadOf } from './clean.js';
-import type { FleetStore, RouterSummary, WorkloadSummary } from './store.js';
+import { CHUNK_WORKLOADS_MAX, chunkOf, failureOf, regionOf, routerOf, stateOf, timely, workloadIdOf, workloadOf, type Failure } from './clean.js';
+import type { FailureEntry, FleetStore, RouterSummary, WorkloadSummary } from './store.js';
+
+// A router before 0.25.0 says a workload FAILED, never why.
+const NO_REASON = 'the wake failed (a router older than 0.25.0 gives no reason)';
 
 // Workloads of a chunk written at once: a chunk holds about 90, a backlog of chunks drains within the Lambda timeout.
 const WRITES = 10;
@@ -24,7 +27,7 @@ export interface RouterEvent {
 }
 
 export function createIngest({ store, now = Date.now, log }: {
-  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'readWorkload' | 'writeWorkload' | 'deleteWorkload' | 'routerWorkloads'>;
+  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'readWorkload' | 'writeWorkload' | 'deleteWorkload' | 'routerWorkloads' | 'getWorkload' | 'getFailure' | 'putFailure' | 'deleteFailure'>;
   now?: () => number;
   log?: { warn: (event: string, data: object) => void };
 }) {
@@ -45,15 +48,22 @@ export function createIngest({ store, now = Date.now, log }: {
     if (current && current.summary.check.checkedAt > checkedAt) return;
     const listed: unknown[] = Array.isArray(d.workloads) ? d.workloads.slice(0, CHUNK_WORKLOADS_MAX) : [];
     const workloads = listed.map(workloadOf).filter((w): w is Record<string, unknown> => w !== null);
-    await eachAtOnce(workloads, WRITES, (w) => versioned(account, region, w.workloadId as string, (existing) => {
-      // A newer check wrote it already; a state change newer than this check is kept.
-      if ((existing?.checkedAt ?? '') > checkedAt) return null;
-      const newer = existing?.stateAt && existing.stateAt > checkedAt;
-      return {
-        ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
-        ...(newer ? { state: existing.state, stateAt: existing.stateAt } : existing?.stateAt ? { stateAt: existing.stateAt } : {}),
-      };
-    }));
+    await eachAtOnce(workloads, WRITES, async (w) => {
+      let before: WorkloadSummary | undefined;
+      let written: WorkloadSummary | null = null;
+      await versioned(account, region, w.workloadId as string, (existing) => {
+        before = existing;
+        // A newer check wrote it already; a state change newer than this check is kept.
+        if ((existing?.checkedAt ?? '') > checkedAt) return (written = null);
+        const newer = existing?.stateAt && existing.stateAt > checkedAt;
+        return (written = {
+          ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
+          ...(newer ? { state: existing.state, stateAt: existing.stateAt } : existing?.stateAt ? { stateAt: existing.stateAt } : {}),
+        });
+      });
+      // The failure index follows the summaries (a lost event made good; written on a change only).
+      if (written) await syncFailure(before, written, checkedAt);
+    });
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const stored = attempt === 0 ? current : await store.getRouter(account, region);
       const check = stored?.summary.check;
@@ -86,6 +96,48 @@ export function createIngest({ store, now = Date.now, log }: {
     const region = regionOf(d.region) ?? envelope;
     await versioned(account, region, workloadId, (existing) => ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at
       ? null : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at }));
+    // A failed wake is indexed for the watchdog (R7b), whatever comes after it before the next check; a wake that
+    // succeeds removes it.
+    if (to === 'FAILED') {
+      const failure = failureOf(d.failure) ?? { kind: 'unknown', step: 'wake' as const, message: NO_REASON, at };
+      const summary = await store.getWorkload(account, region, workloadId);
+      await indexFailure({ account, region, router, workloadId, name: summary?.name, url: summary?.url as string | null | undefined, wakeId: typeof d.wakeId === 'string' ? d.wakeId.slice(0, 64) : undefined, failure });
+    } else if (to === 'AWAKE') {
+      await unindexFailure(account, region, workloadId, at);
+    }
+  }
+
+  // The failure a summary shows: the router's record (0.25.0), or FAILED without a reason (older routers).
+  const failureIn = (w: WorkloadSummary | undefined, at: string): Failure | undefined => (!w ? undefined
+    : (w.failure as Failure | undefined) ?? (w.state === 'FAILED' ? { kind: 'unknown', step: 'wake', message: NO_REASON, at: (w.failedAt as string | undefined) ?? at } : undefined));
+
+  async function syncFailure(before: WorkloadSummary | undefined, after: WorkloadSummary, at: string) {
+    const now = failureIn(after, at);
+    const was = failureIn(before, at);
+    if (now && now.at !== was?.at) {
+      await indexFailure({
+        account: after.account, region: after.region, router: after.router, workloadId: after.workloadId, name: after.name, url: after.url as string | null | undefined,
+        failure: now, consecutiveFailures: after.consecutiveFailures as number | undefined, nextAttemptAt: after.nextAttemptAt as string | undefined,
+      });
+    } else if (!now && was) {
+      await unindexFailure(after.account, after.region, after.workloadId, at);
+    }
+  }
+
+  // Written when newer than what the index holds (events arrive late or twice).
+  async function indexFailure(entry: FailureEntry) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const read = await store.getFailure(entry.account, entry.region, entry.workloadId);
+      if (read && read.entry.failure.at > entry.failure.at) return;
+      const merged = read && read.entry.failure.at === entry.failure.at ? { ...read.entry, ...Object.fromEntries(Object.entries(entry).filter(([, v]) => v !== undefined)) } : entry;
+      if (await store.putFailure(merged as FailureEntry, read?.version ?? 0)) return;
+    }
+  }
+
+  // Removed unless it is newer than what removes it (a stale success leaves a later failure).
+  async function unindexFailure(account: string, region: string, id: string, at: string) {
+    const read = await store.getFailure(account, region, id);
+    if (read && read.entry.failure.at <= at) await store.deleteFailure(account, region, id, read.version);
   }
 
   // Read, decide (null: nothing to write) and write a workload's summary, again when another event changed it meanwhile.

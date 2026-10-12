@@ -49,6 +49,22 @@ export const pausesOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, PAUSES_MA
 const BACKEND_KINDS = new Set(['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster']);
 const backendsOf = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((k): k is string => typeof k === 'string' && BACKEND_KINDS.has(k)))] : undefined);
 
+// Why a wake (or a nap) failed (routers 0.25.0, R7a): a known kind, else unknown; the message cut to 300 characters.
+const FAILURE_KINDS = new Set(['capacity', 'quota', 'permission', 'configuration', 'unhealthy', 'throttled', 'timeout', 'unknown']);
+export interface Failure { kind: string; step: 'wake' | 'nap'; backend?: string; message: string; at: string }
+export function failureOf(v: unknown, fallbackAt?: string | null): Failure | undefined {
+  if (!isObject(v)) return undefined;
+  const at = time(v.at) ?? fallbackAt ?? null;
+  if (!at) return undefined;
+  return defined({
+    kind: typeof v.kind === 'string' && FAILURE_KINDS.has(v.kind) ? v.kind : 'unknown',
+    step: v.step === 'nap' ? 'nap' as const : 'wake' as const,
+    backend: text(v.backend, 200),
+    message: text(v.message, 300) ?? '',
+    at,
+  });
+}
+
 // A workload of a check, or null when it has no valid id.
 export function workloadOf(w: unknown): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
@@ -64,6 +80,10 @@ export function workloadOf(w: unknown): Json | null {
     awakeSince: time(w.awakeSince),
     wakeStartedAt: time(w.wakeStartedAt),
     failedAt: time(w.failedAt),
+    // Its last failure until a successful wake, the failures in a row and the next attempt (routers 0.25.0, R7a).
+    failure: failureOf(w.failure),
+    consecutiveFailures: count(w.consecutiveFailures),
+    nextAttemptAt: time(w.nextAttemptAt) ?? undefined,
     updatedAt: time(w.updatedAt),
     pendingWake: w.pendingWake === true,
     backends: backendsOf(w.backends),

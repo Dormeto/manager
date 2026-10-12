@@ -248,3 +248,60 @@ describe('fleet', () => {
     expect(reporting({ checkedAt: null, checkSchedule: 'rate(5 minutes)' }, now)).toBe(false);
   });
 });
+
+describe('failure index (R7b)', () => {
+  const failure = { kind: 'capacity', step: 'wake', backend: 'rds:db1', message: 'no capacity for db.t4g.micro in eu-west-1b', at: at(T1, 10) };
+  const failed = (when: string, extra: Record<string, unknown> = {}): RouterEvent => ({
+    account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed',
+    detail: { router: 'dmtr-dev', region: REGION, workloadId: 'a', from: 'WAKING', to: 'FAILED', at: when, wakeId: 'w1', cause: 'wake-failed', failure: { ...failure, at: when }, ...extra },
+  });
+  const awake = (when: string): RouterEvent => ({
+    account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed', detail: { router: 'dmtr-dev', region: REGION, workloadId: 'a', from: 'WAKING', to: 'AWAKE', at: when, wakeId: 'w2', durationMs: 40000 },
+  });
+
+  it('indexes a failed wake from its event, with the workload\'s name, and deletes it at the next successful wake', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP')]));
+    await s.ingest(failed(at(T1, 10)));
+    const [entry] = await s.store.listFailures();
+    expect(entry).toMatchObject({ account: ACCOUNT, region: REGION, router: 'dmtr-dev', workloadId: 'a', name: 'Name a', wakeId: 'w1', failure: { kind: 'capacity', backend: 'rds:db1', at: at(T1, 10) } });
+    await s.ingest(awake(at(T1, 20)));
+    expect(await s.store.listFailures()).toEqual([]);
+  });
+
+  it('a stale success (older than the failure) leaves the failure indexed', async () => {
+    const s = setup();
+    await s.ingest(failed(at(T1, 30)));
+    await s.ingest(awake(at(T1, 20)));
+    expect(await s.store.listFailures()).toHaveLength(1);
+  });
+
+  it('a lost event is made good by the next check, and a check without the failure removes it', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP', { failure: { ...failure, at: at(T1, -60) }, consecutiveFailures: 1 })]));
+    expect((await s.store.listFailures()).map((f) => f.failure.kind)).toEqual(['capacity']);
+    // Released (still the last wake's failure): kept.
+    await s.ingest(checked(T2, [workload('a', 'ASLEEP', { failure: { ...failure, at: at(T1, -60) }, consecutiveFailures: 1 })]));
+    expect(await s.store.listFailures()).toHaveLength(1);
+    await s.ingest(checked(at(T2, 300), [workload('a', 'AWAKE')]));
+    expect(await s.store.listFailures()).toEqual([]);
+  });
+
+  it('a router before 0.25.0 (FAILED without a reason) is indexed as unknown, and removed once no longer failed', async () => {
+    const s = setup();
+    await s.ingest({ account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed', detail: { router: 'dmtr-dev', workloadId: 'a', from: 'WAKING', to: 'FAILED', at: at(T1, 10), cause: 'wake-failed' } });
+    const [entry] = await s.store.listFailures();
+    expect(entry!.failure).toEqual({ kind: 'unknown', step: 'wake', message: 'the wake failed (a router older than 0.25.0 gives no reason)', at: at(T1, 10) });
+    await s.ingest(checked(T2, [workload('a', 'ASLEEP')]));
+    expect(await s.store.listFailures()).toEqual([]);
+  });
+
+  it('keeps the failure fields in summaries, and drops what is not one', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'FAILED', { failure: { ...failure, kind: 'bogus', message: 'x'.repeat(500) }, consecutiveFailures: 2, nextAttemptAt: at(T1, 120) })]));
+    const w = await s.store.getWorkload(ACCOUNT, REGION, 'a');
+    expect(w!.failure).toMatchObject({ kind: 'unknown', step: 'wake' });
+    expect((w!.failure as { message: string }).message).toHaveLength(300);
+    expect([w!.consecutiveFailures, w!.nextAttemptAt]).toEqual([2, at(T1, 120)]);
+  });
+});
