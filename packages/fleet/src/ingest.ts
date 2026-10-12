@@ -3,7 +3,7 @@
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
 // arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
 import { CHUNK_WORKLOADS_MAX, chunkOf, regionOf, routerOf, stateOf, timely, workloadIdOf, workloadOf } from './clean.js';
-import type { FleetStore, RouterSummary } from './store.js';
+import type { FleetStore, RouterSummary, WorkloadSummary } from './store.js';
 
 // Workloads of a chunk written at once: a chunk holds about 90, a backlog of chunks drains within the Lambda timeout.
 const WRITES = 10;
@@ -24,7 +24,7 @@ export interface RouterEvent {
 }
 
 export function createIngest({ store, now = Date.now, log }: {
-  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'getWorkload' | 'putWorkload' | 'deleteWorkload' | 'routerWorkloads'>;
+  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'readWorkload' | 'writeWorkload' | 'deleteWorkload' | 'routerWorkloads'>;
   now?: () => number;
   log?: { warn: (event: string, data: object) => void };
 }) {
@@ -45,15 +45,15 @@ export function createIngest({ store, now = Date.now, log }: {
     if (current && current.summary.check.checkedAt > checkedAt) return;
     const listed: unknown[] = Array.isArray(d.workloads) ? d.workloads.slice(0, CHUNK_WORKLOADS_MAX) : [];
     const workloads = listed.map(workloadOf).filter((w): w is Record<string, unknown> => w !== null);
-    await eachAtOnce(workloads, WRITES, async (w) => {
-      const existing = await store.getWorkload(account, region, w.workloadId as string);
-      // A state change newer than this check is kept.
+    await eachAtOnce(workloads, WRITES, (w) => versioned(account, region, w.workloadId as string, (existing) => {
+      // A newer check wrote it already; a state change newer than this check is kept.
+      if ((existing?.checkedAt ?? '') > checkedAt) return null;
       const newer = existing?.stateAt && existing.stateAt > checkedAt;
-      await store.putWorkload({
+      return {
         ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
         ...(newer ? { state: existing.state, stateAt: existing.stateAt } : existing?.stateAt ? { stateAt: existing.stateAt } : {}),
-      });
-    });
+      };
+    }));
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const stored = attempt === 0 ? current : await store.getRouter(account, region);
       const check = stored?.summary.check;
@@ -62,8 +62,11 @@ export function createIngest({ store, now = Date.now, log }: {
       const summary: RouterSummary = { account, region, ...own, checkedAt, check: { checkedAt, total: chunk.total, received } };
       if (!(await store.putRouter(summary, stored?.version ?? 0))) continue;
       if (received.length === chunk.total) {
-        for (const w of await store.routerWorkloads(account, region)) {
-          if ((w.checkedAt ?? '') < checkedAt && (w.stateAt ?? '') < checkedAt) await store.deleteWorkload(w);
+        // Read again before the delete, which is refused if it changed since: a state change landing meanwhile stays.
+        const unlisted = (w: WorkloadSummary) => (w.checkedAt ?? '') < checkedAt && (w.stateAt ?? '') < checkedAt;
+        for (const w of (await store.routerWorkloads(account, region)).filter(unlisted)) {
+          const read = await store.readWorkload(account, region, w.workloadId);
+          if (read && unlisted(read.summary)) await store.deleteWorkload(read.summary, read.version);
         }
       }
       return;
@@ -81,9 +84,18 @@ export function createIngest({ store, now = Date.now, log }: {
     const router = typeof d.router === 'string' ? d.router.slice(0, 64) : null;
     if (!at || !workloadId || !to || !router) return refuse(event, !at ? `change time ${String(d.at).slice(0, 40)}` : 'workload, state or router');
     const region = regionOf(d.region) ?? envelope;
-    const existing = await store.getWorkload(account, region, workloadId);
-    if ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at) return;
-    await store.putWorkload({ ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at });
+    await versioned(account, region, workloadId, (existing) => ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at
+      ? null : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at }));
+  }
+
+  // Read, decide (null: nothing to write) and write a workload's summary, again when another event changed it meanwhile.
+  async function versioned(account: string, region: string, id: string, next: (existing: WorkloadSummary | undefined) => WorkloadSummary | null) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const read = await store.readWorkload(account, region, id);
+      const summary = next(read?.summary);
+      if (!summary || (await store.writeWorkload(summary, read?.version ?? 0))) return;
+    }
+    throw new Error(`workload ${account}/${region}/${id}: summary kept changing`);
   }
 
   return async function ingest(event: RouterEvent) {

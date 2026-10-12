@@ -81,6 +81,55 @@ describe('fleet', () => {
     expect((await s.store.listWorkloads())[0]!.state).toBe('ASLEEP');
   });
 
+  // A store whose first read of a workload lets another event land before the read returns (two Lambdas at once).
+  const racing = (s: ReturnType<typeof setup>, other: () => Promise<unknown>) => {
+    let raced = false;
+    const race = <A extends unknown[], R>(read: (...args: A) => Promise<R>) => async (...args: A) => {
+      const value = await read(...args);
+      if (!raced) {
+        raced = true;
+        await other();
+      }
+      return value;
+    };
+    const store = s.store as Record<string, any>;
+    return createIngest({ store: { ...s.store, getWorkload: race(s.store.getWorkload), ...(store.readWorkload ? { readWorkload: race(store.readWorkload) } : {}) } as never, now: () => NOW });
+  };
+
+  it('a state change landing while a check writes the same workload is never overwritten by that check', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a')]));
+    const ingest = racing(s, () => s.ingest(stateChanged('a', 'AWAKE', 'NAPPING', at(T2, 30))));
+    await ingest(checked(T2, [workload('a', 'AWAKE', { name: 'Renamed' })]));
+    expect(await s.store.getWorkload(ACCOUNT, REGION, 'a')).toMatchObject({ state: 'NAPPING', stateAt: at(T2, 30), name: 'Renamed' });
+  });
+
+  it('a chunk of an older check written after a newer check leaves the newer check\'s values', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a')]));
+    const ingest = racing(s, () => s.ingest(checked(T2, [workload('a', 'AWAKE', { name: 'Newer' })])));
+    await ingest(checked(at(T1, 60), [workload('a', 'AWAKE', { name: 'Older' })]));
+    expect(await s.store.getWorkload(ACCOUNT, REGION, 'a')).toMatchObject({ name: 'Newer', checkedAt: T2 });
+  });
+
+  it('a workload changing state while the last chunk of a check removes the unlisted ones is kept', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a'), workload('b')]));
+    let raced = false;
+    const store = s.store as Record<string, any>;
+    const routerWorkloads = async (account: string, region: string) => {
+      const listed = await s.store.routerWorkloads(account, region);
+      if (!raced) {
+        raced = true;
+        await s.ingest(stateChanged('b', 'AWAKE', 'NAPPING', at(T2, 30)));
+      }
+      return listed;
+    };
+    const ingest = createIngest({ store: { ...s.store, ...(store.readWorkload ? { readWorkload: store.readWorkload } : {}), routerWorkloads } as never, now: () => NOW });
+    await ingest(checked(T2, [workload('a')]));
+    expect(await s.ids()).toEqual(['a', 'b']);
+  });
+
   it('a state change of a workload not reported yet creates it; the next check that does not list it removes it', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a')]));
@@ -158,7 +207,7 @@ describe('fleet', () => {
       await new Promise((r) => setTimeout(r, 2));
       try { return await f(...a); } finally { running -= 1; }
     };
-    const store = { ...s.store, getWorkload: slow(s.store.getWorkload), putWorkload: slow(s.store.putWorkload) };
+    const store = { ...s.store, readWorkload: slow(s.store.readWorkload), writeWorkload: slow(s.store.writeWorkload) };
     const ingest = createIngest({ store, now: () => NOW });
     await ingest(checked(T1, Array.from({ length: 90 }, (_, i) => workload(`w${i}`))));
     expect(peak).toBe(10);

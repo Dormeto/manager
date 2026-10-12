@@ -3,6 +3,17 @@
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 
 const PK = 'T#default';
+const VERSIONED = 'attribute_not_exists(version) OR version = :version';
+// A conditional write: false when its condition failed.
+async function conditional(write: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await write();
+    return true;
+  } catch (err) {
+    if ((err as Error).name === 'ConditionalCheckFailedException') return false;
+    throw err;
+  }
+}
 type Item = Record<string, AttributeValue>;
 
 export interface RouterSummary {
@@ -84,11 +95,23 @@ export function createFleetStore({ dynamo, table }: { dynamo: DynamoSender; tabl
       const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(workloadKey(account, region, id)), ConsistentRead: true }));
       return data<WorkloadSummary>(Item);
     },
-    async putWorkload(w: WorkloadSummary) {
-      await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key(workloadKey(w.account, w.region, w.workloadId)), data: { S: JSON.stringify(w) } } }));
+    // Versioned (several events of a router are ingested at once): a write or delete is refused (false) when another
+    // writer changed the workload since `version` was read; summaries written before versions count as version 0.
+    async readWorkload(account: string, region: string, id: string): Promise<{ summary: WorkloadSummary; version: number } | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(workloadKey(account, region, id)), ConsistentRead: true }));
+      const summary = data<WorkloadSummary>(Item);
+      return summary ? { summary, version: Number(Item.version?.N ?? 0) } : null;
     },
-    async deleteWorkload(w: Pick<WorkloadSummary, 'account' | 'region' | 'workloadId'>) {
-      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(workloadKey(w.account, w.region, w.workloadId)) }));
+    async writeWorkload(w: WorkloadSummary, version: number): Promise<boolean> {
+      return conditional(() => dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key(workloadKey(w.account, w.region, w.workloadId)), data: { S: JSON.stringify(w) }, version: { N: String(version + 1) } },
+        ConditionExpression: VERSIONED, ExpressionAttributeValues: { ':version': { N: String(version) } },
+      })));
+    },
+    async deleteWorkload(w: Pick<WorkloadSummary, 'account' | 'region' | 'workloadId'>, version: number): Promise<boolean> {
+      return conditional(() => dynamo.send(new DeleteItemCommand({
+        TableName: table, Key: key(workloadKey(w.account, w.region, w.workloadId)), ConditionExpression: VERSIONED, ExpressionAttributeValues: { ':version': { N: String(version) } },
+      })));
     },
     async routerWorkloads(account: string, region: string): Promise<WorkloadSummary[]> {
       return (await query(`WS#${account}#${region}#`)).map((i) => data<WorkloadSummary>(i)!).filter(Boolean);

@@ -10,6 +10,9 @@ export function itemSize(item: Record<string, { S?: string; N?: string; B?: Uint
 
 // laggingIndex: queries on gsi1 see the table as it was at the last settleIndex() (DynamoDB's indexes are eventually
 // consistent), the table itself is always current.
+// An item written with versions: unversioned (new or older) or at the version read.
+const VERSIONED = 'attribute_not_exists(version) OR version = :version';
+
 export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIndex = false } = {}) {
   const items = new Map<string, Item>();
   let indexed = new Map<string, Item>();
@@ -34,12 +37,14 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIn
           && existing.version?.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
         if (input.ConditionExpression === 'attribute_exists(sk) AND (attribute_not_exists(version) OR version = :version)'
           && (!existing || (existing.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N))) throw fail('ConditionalCheckFailedException');
+        if (input.ConditionExpression === VERSIONED && existing?.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
         items.set(keyOf(input.Item), input.Item);
         return {};
       }
       case 'DeleteItemCommand': {
         const existing = items.get(keyOf(input.Key));
         if (input.ConditionExpression === 'runId = :id' && existing?.runId?.S !== input.ExpressionAttributeValues[':id'].S) throw fail('ConditionalCheckFailedException');
+        if (input.ConditionExpression === VERSIONED && existing?.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
         items.delete(keyOf(input.Key));
         return {};
       }
