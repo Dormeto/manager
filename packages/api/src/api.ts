@@ -229,9 +229,11 @@ export function createApi({
       })),
     ];
   }
-  const routerOf = (name: string | undefined): Router => {
+  // What the caller may see (everything until R11): anything else answers as unknown.
+  const sees = (identity: Identity, account: string | undefined, region: string | undefined) => visible(identity, { account, region: region ?? '' });
+  const routerOf = (name: string | undefined, identity?: Identity): Router => {
     const router = routers.find((r) => r.name === name);
-    if (!router) throw new HttpError(404, 'not_found', `unknown router: ${name}`);
+    if (!router || (identity && !sees(identity, router.account ?? managerAccount ?? '', router.region))) throw new HttpError(404, 'not_found', `unknown router: ${name}`);
     return router;
   };
   const workloadId = (raw: string | undefined): string => {
@@ -440,7 +442,7 @@ export function createApi({
       return reply(200, { routers: rows, ...(routerVersion ? { available: { version: routerVersion } } : {}) });
     }
     if (resource === 'routers' && a) {
-      const router = routerOf(a);
+      const router = routerOf(a, identity);
       if (method === 'GET' && !b) return reply(200, { ...where(router), ...(await invokeNew(router, { action: 'router' }, 'router details') as object) });
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
     }
@@ -476,7 +478,7 @@ export function createApi({
     }
 
     if (resource === 'workloads' && a && b) {
-      const router = routerOf(a);
+      const router = routerOf(a, identity);
       const id = workloadId(b);
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.
@@ -666,7 +668,7 @@ export function createApi({
       }
       const note = typeof body.note === 'string' ? body.note.slice(0, 256) : undefined;
       const found = await Promise.all((ids as string[]).map((id) => d.store.getCandidate(id)));
-      const missing = (ids as string[]).filter((_, i) => !found[i]);
+      const missing = (ids as string[]).filter((_, i) => !found[i] || !sees(identity, found[i]!.account, found[i]!.region));
       if (missing.length) throw new HttpError(404, 'not_found', `unknown candidates: ${missing.join(', ')}`);
       const at = new Date(now()).toISOString();
       return audited(identity, `discovery-${sub}`, (ids as string[]).join(' '), async () => {
@@ -736,7 +738,7 @@ export function createApi({
 
   async function exclusionsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, d: DiscoveryApi): Promise<ApiResponse | null> {
     if (method === 'GET' && !id) {
-      const all = await settleExpired(d);
+      const all = (await settleExpired(d)).filter((e) => sees(identity, e.target.account, e.target.region));
       const active = new Set(activeExclusions(all, now()).map((e) => e.id));
       // The workloads each one paused, by their names (from their summaries; the id is not for people).
       const named = async (p: NonNullable<Exclusion['paused']>[number]) => {
@@ -754,6 +756,7 @@ export function createApi({
       const body = bodyOf(event);
       const inventory = await d.store.getInventory();
       const target = exclusionTarget(body, (account) => inventory?.accounts.find((a) => a.id === account)?.name ?? account);
+      if (!sees(identity, target.account, target.region)) throw new HttpError(404, 'not_found', `unknown target: ${targetText(target)}`);
       const reason = reasonIn(body, REASON_MAX - EXCLUDED.length);
       const expiresAt = aheadIn(body, 'expiresAt', now());
       const workload = body.workload as { router?: string; id?: string } | undefined;
@@ -791,7 +794,7 @@ export function createApi({
     if (method === 'DELETE' && id) {
       need(identity, 'operator');
       const exclusion = await d.store.getExclusion(decodeURIComponent(id));
-      if (!exclusion) throw new HttpError(404, 'not_found', `unknown exclusion: ${id}`);
+      if (!exclusion || !sees(identity, exclusion.target.account, exclusion.target.region)) throw new HttpError(404, 'not_found', `unknown exclusion: ${id}`);
       if (!operations) throw new HttpError(503, 'unavailable', 'the operations workflow is not configured');
       return audited(identity, 'exclusion-lift', targetText(exclusion.target), async () => {
         // The operation first: one runs per exclusion at a time, and a lift refused meanwhile changes nothing. Then marked
@@ -818,10 +821,10 @@ export function createApi({
 
   const ADMIN_TYPES = new Set(['install-router', 'upgrade-router', 'uninstall-router']);
   async function operationsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, ops: OperationsApi): Promise<ApiResponse | null> {
-    if (method === 'GET' && !id) return reply(200, { operations: await ops.list() });
+    if (method === 'GET' && !id) return reply(200, { operations: (await ops.list()).filter((op) => sees(identity, op.target.account, op.target.region)) });
     if (method === 'GET' && id) {
       const op = await ops.get(decodeURIComponent(id));
-      if (!op) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
+      if (!op || !sees(identity, op.target.account, op.target.region)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
       return reply(200, op);
     }
     if (method !== 'POST' || id) return null;
@@ -834,7 +837,8 @@ export function createApi({
     if (type === 'onboard') {
       const name = nameOf(body.name, { required: false });
       const candidateId = String(body.candidateId ?? '');
-      if (!(await discovery?.store.getCandidate(candidateId))) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
+      const c = await discovery?.store.getCandidate(candidateId);
+      if (!c || !sees(identity, c.account, c.region)) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
       input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [] };
@@ -843,10 +847,11 @@ export function createApi({
       const account = String(body.account ?? '');
       const region = String(body.region ?? '');
       if (!ACCOUNT.test(account) || !REGION.test(region)) throw new HttpError(400, 'bad_request', 'account (12 digits) and region required');
+      if (!sees(identity, account, region)) throw new HttpError(404, 'not_found', `unknown account or region: ${account}/${region}`);
       input = { account, region };
       target = `${account}/${region}`;
     } else {
-      const router = routerOf(String(body.router ?? ''));
+      const router = routerOf(String(body.router ?? ''), identity);
       const account = router.account ?? managerAccount ?? '';
       if (type === 'offboard') {
         const workloadId = String(body.workloadId ?? '');
