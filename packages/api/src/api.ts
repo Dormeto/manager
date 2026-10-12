@@ -251,6 +251,19 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
 }
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
+
+// What a failed wake does (R7a), checked before the operation starts (the router checks it again at its preview).
+const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
+function settingsOfFailures(settings: Record<string, unknown> | undefined) {
+  const types = settings?.fallbackInstanceTypes;
+  if (types !== undefined && (!Array.isArray(types) || types.length > 5 || !types.every((t) => typeof t === 'string' && INSTANCE_TYPE.test(t)))) {
+    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes must be at most 5 EC2 instance types (for example t3a.medium)');
+  }
+  const retry = settings?.failedRetrySeconds;
+  if (retry !== undefined && (!Number.isInteger(retry) || (retry as number) < 10 || (retry as number) > 600)) {
+    throw new HttpError(400, 'bad_request', 'settings: failedRetrySeconds must be a whole number from 10 to 600');
+  }
+}
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa,
   fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
@@ -1054,6 +1067,7 @@ export function createApi({
       await needCommandRole(c.account);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
+      settingsOfFailures(body.settings as Record<string, unknown> | undefined);
       input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [] };
       target = name ? `${candidateId} as ${name}` : candidateId;
     } else if (type === 'install-router') {

@@ -17,6 +17,7 @@ import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateChip from '../components/StateChip.vue';
 import { stateSince } from '../state';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
+import { failureTitle } from '../failures';
 import type { Counts, WorkloadStatus } from '../types';
 
 const now = useNow();
@@ -123,6 +124,17 @@ const rows = (kind: keyof Counts) => {
   return Object.keys(s.total[kind]).sort((a, b) => (s.total[kind][b] ?? 0) - (s.total[kind][a] ?? 0))
     .map((key) => ({ key, today: s.today[kind][key] ?? 0, total: s.total[kind][key] ?? 0 }));
 };
+// The last failure (R7b): where, when, how many in a row, and when a request may retry it.
+const failureDetail = computed(() => {
+  const s = status.value;
+  if (!s?.failure) return '';
+  const n = s.consecutiveFailures ?? 1;
+  const retry = s.state !== 'FAILED' ? 'the next request wakes it again'
+    : s.nextAttemptAt && Date.parse(s.nextAttemptAt) > now.value ? `next attempt ${relative(s.nextAttemptAt, now.value)}` : 'the next request retries it';
+  return [s.failure.backend && `backend ${s.failure.backend}`, relative(s.failure.at, now.value), n > 1 && `${n} failures in a row`, retry].filter(Boolean).join(' · ');
+});
+const fallbackText = computed(() => (status.value?.fallbacks ?? []).map((f) => `${f.instance} on ${f.to} instead of ${f.from}`).join(', '));
+
 const summary = computed(() => {
   const s = status.value;
   if (!s) return [];
@@ -145,7 +157,7 @@ const summary = computed(() => {
     <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
     <h1 class="text-headline-small">{{ title }}</h1>
     <v-btn v-if="session.canOperate && status?.source === 'manager'" :icon="mdiPencilOutline" variant="text" size="small" aria-label="Rename" @click="renameOpen = true" />
-    <StateChip v-if="status" :state="status.state" />
+    <StateChip v-if="status" :state="status.state" :failure="status.failure" />
     <PauseChip :pauses="pauses" />
     <span class="text-medium-emphasis">{{ router }}</span>
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
@@ -168,6 +180,13 @@ const summary = computed(() => {
       <router-link v-if="p.exclusionId" to="/discovery" class="ml-1">Lift the exclusion in Discovery</router-link>
       <router-link v-else-if="p.scope === 'router'" to="/routers" class="ml-1">Resume the router</router-link>
     </div>
+  </v-alert>
+  <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure)">
+    <div class="text-body-medium">{{ status.failure.message }}</div>
+    <div class="text-body-small text-medium-emphasis mt-1">{{ failureDetail }}</div>
+  </v-alert>
+  <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" title="On fallback instance types">
+    {{ fallbackText }}: AWS had no capacity for their own types at the last wake; the next nap gives them back.
   </v-alert>
   <v-progress-linear v-if="loading && !status" indeterminate color="primary" />
 

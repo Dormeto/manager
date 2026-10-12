@@ -82,6 +82,25 @@ describe('operations', () => {
     expect(created).toEqual([]);
   });
 
+  it('passes fallback instance types and the failed-retry delay, and refuses bad ones with their message (R7b)', async () => {
+    const { api, created } = setup();
+    const ok = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, settings: { fallbackInstanceTypes: ['t3a.medium', 'm6i.large'], failedRetrySeconds: 120 } }));
+    expect(ok.statusCode).toBe(202);
+    expect(created.at(-1)![1]).toMatchObject({ settings: { fallbackInstanceTypes: ['t3a.medium', 'm6i.large'], failedRetrySeconds: 120 } });
+    for (const [settings, message] of [
+      [{ fallbackInstanceTypes: ['t3a medium'] }, /fallbackInstanceTypes must be at most 5 EC2 instance types/],
+      [{ fallbackInstanceTypes: ['t3.small', 't3.medium', 't3.large', 't3a.small', 't3a.medium', 't3a.large'] }, /at most 5/],
+      [{ fallbackInstanceTypes: 't3.small' }, /fallbackInstanceTypes/],
+      [{ failedRetrySeconds: 5 }, /failedRetrySeconds must be a whole number from 10 to 600/],
+      [{ failedRetrySeconds: '60' }, /failedRetrySeconds/],
+    ] as const) {
+      const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, settings }));
+      expect(res.statusCode).toBe(400);
+      expect(json(res).message).toMatch(message);
+    }
+    expect(created).toHaveLength(1);
+  });
+
   it('a second operation on the same target answers 409 with the running one', async () => {
     const { api } = setup({ conflict: 'op0' });
     const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, workloadId: 'paris' }));

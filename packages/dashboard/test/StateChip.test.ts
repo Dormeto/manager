@@ -37,4 +37,15 @@ describe('StateChip', () => {
     expect(document.body.textContent).toMatch(/Asleep: .*the next request wakes it/);
     wrapper.unmount();
   });
+
+  it('adds the last failure\'s kind and message to the tooltip (R7b)', async () => {
+    const vuetify = createVuetify({ components, directives, icons: { defaultSet: 'mdi', aliases, sets: { mdi } } });
+    const failure = { kind: 'capacity', step: 'wake' as const, message: 'no capacity for db.t4g.micro in eu-west-3a', at: new Date().toISOString() };
+    const wrapper = mount(StateChip, { props: { state: 'FAILED', failure }, attachTo: document.body, global: { plugins: [vuetify] } });
+    await wrapper.find('.v-chip').trigger('mouseenter');
+    await nextTick();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.body.textContent).toMatch(/Last wake failed: no capacity \(no capacity for db\.t4g\.micro in eu-west-3a\)/);
+    wrapper.unmount();
+  });
 });

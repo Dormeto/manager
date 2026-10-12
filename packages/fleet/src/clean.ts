@@ -65,6 +65,16 @@ export function failureOf(v: unknown, fallbackAt?: string | null): Failure | und
   });
 }
 
+// The fallback instance types its instances run on (routers 0.25.0, R7a): well-formed ones, at most 20.
+const INSTANCE_ID = /^i-[0-9a-f]{8,17}$/;
+const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\.[a-z0-9]+$/;
+export interface Fallback { instance: string; from: string; to: string }
+const fallbacksOf = (v: unknown): Fallback[] | undefined => (Array.isArray(v)
+  ? v.filter((f): f is Fallback => isObject(f) && typeof f.instance === 'string' && INSTANCE_ID.test(f.instance)
+    && typeof f.from === 'string' && INSTANCE_TYPE.test(f.from) && typeof f.to === 'string' && INSTANCE_TYPE.test(f.to))
+    .slice(0, 20).map(({ instance, from, to }) => ({ instance, from, to }))
+  : undefined);
+
 // A workload of a check, or null when it has no valid id.
 export function workloadOf(w: unknown): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
@@ -84,6 +94,7 @@ export function workloadOf(w: unknown): Json | null {
     failure: failureOf(w.failure),
     consecutiveFailures: count(w.consecutiveFailures),
     nextAttemptAt: time(w.nextAttemptAt) ?? undefined,
+    fallbacks: fallbacksOf(w.fallbacks),
     updatedAt: time(w.updatedAt),
     pendingWake: w.pendingWake === true,
     backends: backendsOf(w.backends),

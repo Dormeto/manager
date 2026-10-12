@@ -16,10 +16,46 @@ const status = {
   backends: [], ignoredTargets: [], recommendations: [], targets: [], settings: { waitSeconds: 60, idleMinutes: 30, drainSeconds: 30, wakeTimeoutSeconds: 300, maxHolders: 100 },
   stats: null, ipLists: [], wakeMode: 'any', wakeRules: [], noWakeRules: [],
 };
-vi.mock('../src/api', () => ({ api: vi.fn(async () => structuredClone(status)) }));
+let current: Record<string, unknown> = status;
+vi.mock('../src/api', () => ({ api: vi.fn(async () => structuredClone(current)) }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
+async function mountView() {
+  setActivePinia(createPinia());
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads/:router/:id', component: WorkloadView }] });
+  await router.push('/workloads/dmtr-dev/5cdfbf844b925bf8');
+  const wrapper = mount(WorkloadView, { props: { router: 'dmtr-dev', id: '5cdfbf844b925bf8' }, global: { plugins: [createVuetify({ components, directives }), router] } });
+  await flushPromises();
+  return wrapper;
+}
+
 describe('Workload view', () => {
+  it('says why the last wake failed, how many times in a row, and when a request retries it (R7b)', async () => {
+    current = {
+      ...status, state: 'FAILED', failedAt: minutesAgo(2), consecutiveFailures: 3, nextAttemptAt: new Date(Date.now() + 4 * 60_000).toISOString(), fallbacks: [],
+      failure: { kind: 'capacity', step: 'wake', backend: 'rds-instance:shop-db', message: 'no capacity for db.t4g.micro in eu-west-3a', at: minutesAgo(2) },
+    };
+    const wrapper = await mountView();
+    const alert = wrapper.find('[data-test="failure"]');
+    expect(alert.text()).toContain('Last wake failed: no capacity');
+    expect(alert.text()).toContain('no capacity for db.t4g.micro in eu-west-3a');
+    expect(alert.text()).toContain('shop-db');
+    expect(alert.text()).toContain('3 failures in a row');
+    expect(alert.text()).toContain('next attempt in 4 min');
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('says which instances run on a fallback instance type, until the next nap (R7b)', async () => {
+    current = { ...status, fallbacks: [{ instance: 'i-0123456789abcdef0', from: 't3.medium', to: 't3a.medium' }] };
+    const wrapper = await mountView();
+    expect(wrapper.find('[data-test="failure"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="fallbacks"]').text()).toMatch(/i-0123456789abcdef0 on t3a\.medium instead of t3\.medium.*next nap/);
+    wrapper.unmount();
+    current = status;
+  });
+
+
   it('dates the state from when it began, not from the last write of the workload', async () => {
     setActivePinia(createPinia());
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads/:router/:id', component: WorkloadView }] });

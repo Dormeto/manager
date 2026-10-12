@@ -18,6 +18,8 @@ export interface Pause {
   exclusionId?: string;
 }
 
+import type { Failure, Fallback } from './failures';
+
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
@@ -30,6 +32,11 @@ export interface WorkloadSummary {
   awakeSince: string | null;
   wakeStartedAt: string | null;
   failedAt: string | null;
+  // Routers 0.25.0 (R7a): the last failure until a successful wake, the failures in a row, the next attempt, fallback types.
+  failure?: Failure | null;
+  consecutiveFailures?: number;
+  nextAttemptAt?: string | null;
+  fallbacks?: Fallback[];
   updatedAt: string | null;
   pendingWake: boolean;
   backends?: string[]; // the kinds of its backends, databases last (routers 0.23.3 and later)
@@ -74,6 +81,10 @@ export interface WorkloadStatus {
   awakeSince: string | null;
   wakeStartedAt: string | null;
   failedAt: string | null;
+  failure?: Failure | null; // routers 0.25.0 (R7a)
+  consecutiveFailures?: number;
+  nextAttemptAt?: string | null;
+  fallbacks?: Fallback[];
   wakeCount: number;
   holders: number;
   pendingWake: boolean;

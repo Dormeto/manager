@@ -305,6 +305,12 @@ describe('failure index (R7b)', () => {
     expect(await s.store.listFailures()).toEqual([]);
   });
 
+  it('keeps the fallback instance types in use, and drops what is not one', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { fallbacks: [{ instance: 'i-0123456789abcdef0', from: 't3.medium', to: 't3a.medium' }, { instance: 'x', from: 'a', to: 'b' }, 'junk'] })]));
+    expect((await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.fallbacks).toEqual([{ instance: 'i-0123456789abcdef0', from: 't3.medium', to: 't3a.medium' }]);
+  });
+
   it('keeps the failure fields in summaries, and drops what is not one', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a', 'FAILED', { failure: { ...failure, kind: 'bogus', message: 'x'.repeat(500) }, consecutiveFailures: 2, nextAttemptAt: at(T1, 120) })]));
