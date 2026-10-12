@@ -68,7 +68,8 @@ describe('runDiscovery', () => {
     expect(s.assumed.sort()).toEqual([A.id, B.id]);
     expect(s.scanned.sort()).toEqual([`${A.id}/eu-west-1`, `${A.id}/eu-west-3`, `${B.id}/eu-west-1`, `${B.id}/eu-west-3`]);
     expect(run).toMatchObject({ trigger: 'manual', by: 'ops@example.com', status: 'ok', counts: { 'pending-onboarding': 4 } });
-    expect(run.targets.filter((t) => t.status === 'skipped').map((t) => [t.account, t.reason])).toEqual([[C.id, 'no filter includes this account'], [C.id, 'no filter includes this account']]);
+    expect(run.skipped).toEqual([{ reason: 'no filter includes this account', accounts: 1, pairs: 2 }]);
+    expect(run.targets.map((t) => t.status)).toEqual(['ok', 'ok', 'ok', 'ok']);
     expect((await s.store.lastRun())!.startedAt).toBe(run.startedAt);
     expect((await s.store.listCandidates()).length).toBe(4);
     expect((await s.store.getInventory())!.accounts.length).toBe(3);
@@ -76,6 +77,13 @@ describe('runDiscovery', () => {
 
   it('never assumes a role in a globally excluded account', async () => {
     const s = setup({ cfg: { ...AB, globalExcludes: [{ accountIds: [B.id] }] } });
+    await s.ready;
+    await runDiscovery(s.deps, { source: 'manual' });
+    expect(s.assumed).toEqual([A.id]);
+  });
+
+  it('never assumes a role in an account whose only included regions are globally excluded', async () => {
+    const s = setup({ cfg: config({ globalExcludes: [{ regions: ['eu-west-3'] }], filters: [filter('ab', [{ accountIds: [A.id] }, { accountIds: [B.id], regions: ['eu-west-3'] }])] }) });
     await s.ready;
     await runDiscovery(s.deps, { source: 'manual' });
     expect(s.assumed).toEqual([A.id]);

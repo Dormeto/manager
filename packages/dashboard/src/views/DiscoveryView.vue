@@ -86,7 +86,8 @@ const visible = computed(() => candidates.value
   .sort((a, b) => order(a.status) - order(b.status) || a.account.localeCompare(b.account) || a.region.localeCompare(b.region) || a.loadBalancer.localeCompare(b.loadBalancer)));
 const failed = computed(() => lastRun.value?.targets.filter((t) => t.status === 'error') ?? []);
 const scanned = computed(() => lastRun.value?.targets.filter((t) => t.status === 'ok').length ?? 0);
-const skipped = computed(() => lastRun.value?.targets.filter((t) => t.status === 'skipped').length ?? 0);
+// Skipped pairs are summarized per reason (older records listed them as targets).
+const skipped = computed(() => lastRun.value?.skipped?.reduce((n, s) => n + s.pairs, 0) ?? lastRun.value?.targets.filter((t) => t.status === 'skipped').length ?? 0);
 const seconds = computed(() => (lastRun.value ? Math.round((Date.parse(lastRun.value.finishedAt) - Date.parse(lastRun.value.startedAt)) / 1000) : null));
 const selectedDismissed = computed(() => selected.value.length > 0 && selected.value.every((id) => candidates.value.find((c) => c.id === id)?.status === 'dismissed'));
 const runColor = (status: RunRecord['status']) => ({ ok: 'success', partial: 'warning', failed: 'error', skipped: 'grey' })[status];

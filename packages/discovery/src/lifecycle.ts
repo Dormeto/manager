@@ -11,9 +11,10 @@ export function computeStatus(c: StatusInput): { status: Status; statusReason: s
   const managed = c.eligibility === 'managed';
   if (c.goneAt) return { status: 'gone', statusReason: managed ? 'managed rule not found in the last scan: offboard it' : 'not found in the last scan' };
   if (managed) {
-    return c.scope === 'in'
-      ? { status: 'managed', statusReason: `managed as workload ${c.workloadId ?? '?'}` }
-      : { status: 'pending-offboarding', statusReason: c.scopeReason };
+    if (c.scope !== 'in') return { status: 'pending-offboarding', statusReason: c.scopeReason };
+    // A managed rule with an eligibility issue (its action or target group changed) waits for offboarding too.
+    if (c.reason) return { status: 'pending-offboarding', statusReason: `ineligible: ${c.reason}` };
+    return { status: 'managed', statusReason: `managed as workload ${c.workloadId ?? '?'}` };
   }
   if (c.dismissed) return { status: 'dismissed', statusReason: `dismissed by ${c.dismissed.by}${c.dismissed.note ? `: ${c.dismissed.note}` : ''}` };
   if (c.scope === 'excluded') return { status: 'excluded', statusReason: c.scopeReason };
@@ -28,6 +29,14 @@ function settle(next: Omit<Candidate, 'status' | 'statusReason' | 'history'>, pr
   const history = previous?.history ?? [];
   const changed = !previous || previous.status !== status || previous.statusReason !== statusReason;
   return { ...next, status, statusReason, history: changed ? [...history, { at, status, reason: statusReason }].slice(-HISTORY) : history };
+}
+
+// A candidate that no scan can reach any more: its account left the organization (or the account mode), or its region left
+// an explicit region list. Without this, it would keep its last status forever.
+function outsidePerimeter(c: Candidate, accounts: Map<string, Account>, config: DiscoveryConfig): { scope: 'out'; reason: string } | null {
+  if (!accounts.has(c.account)) return { scope: 'out', reason: `out of scope: ${config.mode === 'account' ? 'not the account of the account mode' : 'account no longer in the organization'}` };
+  if (!config.regions.includes('*') && !config.regions.includes(c.region)) return { scope: 'out', reason: `out of scope: region ${c.region} is no longer in the perimeter` };
+  return null;
 }
 
 const differs = (a: Candidate, b: Candidate) => a.status !== b.status || a.statusReason !== b.statusReason || a.scope !== b.scope || a.scopeReason !== b.scopeReason;
@@ -79,7 +88,7 @@ export function nextCandidates({ previous, results, inventory, config, now }: {
     } else if (!attempted.has(key)) {
       // Not scanned at all (perimeter change): decide again from what the last scan saw.
       const account = accountOf(prev.account, prev);
-      const decision = decide(config, account, prev, inventory);
+      const decision = outsidePerimeter(prev, accounts, config) ?? decide(config, account, prev, inventory);
       const { status: _s, statusReason: _r, history: _h, ...rest } = prev;
       const next = settle({ ...rest, scope: decision.scope, scopeReason: decision.reason }, prev, at);
       if (differs(next, prev)) out.push(next);

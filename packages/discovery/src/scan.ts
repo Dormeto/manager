@@ -212,7 +212,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
       targetGroupArn: group?.TargetGroupArn ?? null,
       suggestedId: managed ? null : group?.TargetGroupName ?? null,
       backend: null,
-      tags: { ...tags.get(lb.LoadBalancerArn ?? ''), ...(group ? tags.get(group.TargetGroupArn ?? '') : {}), ...ruleTags },
+      tags: tagValues([tags.get(lb.LoadBalancerArn ?? ''), group ? tags.get(group.TargetGroupArn ?? '') : undefined, ruleTags]),
       eligibility: 'eligible',
       idleHours7d: null,
       requests7d: null,
@@ -220,7 +220,8 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
     if (managed) {
       // Its backend too, so that backend type filters apply to managed workloads (pending offboarding).
       const backend = group?.TargetGroupArn ? await backendOf(elbv2, group, owners) : null;
-      scanned.push({ ...base, eligibility: 'managed', workloadId: managed, backend: typeof backend === 'string' ? null : backend });
+      const issue = managedIssue(forward, group, usage);
+      scanned.push({ ...base, eligibility: 'managed', workloadId: managed, backend: typeof backend === 'string' ? null : backend, ...(issue ? { reason: issue } : {}) });
       continue;
     }
     const verdict = await ineligibility(elbv2, forward, group, usage, owners);
@@ -232,6 +233,27 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   const idle = pairs.length && ports.cloudwatch ? await idleHours(ports.cloudwatch, pairs, now) : new Map();
   for (const r of measured) Object.assign(r, idle.get(r.targetGroupArn!) ?? {});
   return scanned;
+}
+
+// Every value of each tag over the load balancer, target group and rule: a tag criterion matches any of the three.
+function tagValues(sets: (Record<string, string> | undefined)[]): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const set of sets) {
+    for (const [key, value] of Object.entries(set ?? {})) {
+      out[key] ??= [];
+      if (!out[key].includes(value)) out[key].push(value);
+    }
+  }
+  return out;
+}
+
+// What makes a managed rule no longer manageable (it then waits for offboarding), or null.
+function managedIssue(forward: Forward, group: TargetGroup | undefined, usage: Map<string, number>): string | null {
+  if (forward.type !== 'forward') return REASONS[forward.type ?? ''] ?? `${forward.type} action`;
+  if (!group?.TargetGroupArn) return 'application target group not found';
+  // Asleep, the rule sends no traffic to its application target group: other rules using it count, not this one.
+  const others = (usage.get(group.TargetGroupArn) ?? 0) - (forward.groups.includes(group.TargetGroupArn) ? 1 : 0);
+  return others > 0 ? `target group shared by ${others + 1} rules` : null;
 }
 
 // Why Dormeto cannot manage the rule, or its backend when it can.

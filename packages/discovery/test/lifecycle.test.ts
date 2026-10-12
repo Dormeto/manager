@@ -25,11 +25,13 @@ describe('computeStatus', () => {
     [{ ...base, scope: 'out' as const, scopeReason: 'x', dismissed: { by: 'ops@example.com', at: iso(T0) } }, 'dismissed'],
     [{ ...base, eligibility: 'managed' as const, dismissed: { by: 'ops@example.com', at: iso(T0) } }, 'managed'],
     [{ ...base, goneAt: iso(T0) }, 'gone'],
+    [{ ...base, eligibility: 'managed' as const, workloadId: 'shop', reason: 'redirect action' }, 'pending-offboarding'],
   ])('%o → %s', (input, status) => {
     expect(computeStatus(input).status).toBe(status);
   });
 
   it('gives the decision reason to a pending offboarding and the backend to a pending onboarding', () => {
+    expect(computeStatus({ ...base, eligibility: 'managed', reason: 'redirect action' }).statusReason).toBe('ineligible: redirect action');
     expect(computeStatus({ ...base, eligibility: 'managed', scope: 'excluded', scopeReason: 'excluded: filter "a", exclude 1' }).statusReason).toBe('excluded: filter "a", exclude 1');
     expect(computeStatus({ ...base, backend: { kind: 'asg', id: 'web-asg' } }).statusReason).toBe('eligible: asg web-asg');
   });
@@ -88,6 +90,18 @@ describe('nextCandidates', () => {
     expect(still!.status).toBe('dismissed');
     const { dismissed: _, ...restored } = still!;
     expect(computeStatus(restored).status).toBe('ineligible');
+  });
+
+  it('takes a candidate out of scope when its region left the perimeter', () => {
+    const [c] = run([ok([rule({ eligibility: 'managed', workloadId: 'shop', region: 'eu-west-3' })], A.id, 'eu-west-3')]);
+    const [after] = run([], [c!], { ...IN_A, regions: ['eu-west-1'] }, T1);
+    expect([after!.status, after!.statusReason]).toEqual(['pending-offboarding', 'out of scope: region eu-west-3 is no longer in the perimeter']);
+  });
+
+  it('takes a candidate out of scope when its account left the organization', () => {
+    const [c] = run([ok([rule({ account: '444444444444' })], '444444444444')], [], config({ filters: [filter('x', [{ accountIds: ['444444444444'] }])] }));
+    const [after] = run([], [c!], config({ filters: [filter('x', [{ accountIds: ['444444444444'] }])] }), T1);
+    expect([after!.status, after!.statusReason]).toEqual(['out-of-scope', 'out of scope: account no longer in the organization']);
   });
 
   it('re-decides the candidates of pairs skipped without a scan, such as a newly globally excluded account', () => {

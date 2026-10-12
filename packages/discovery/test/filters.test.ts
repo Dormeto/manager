@@ -54,6 +54,12 @@ describe('matches', () => {
     expect(m({ resourceTags: { env: ['prod'] } })).toBe(false);
   });
 
+  it('matches a tag value of any of the three resources, so a load balancer tag cannot be overridden by the rule', () => {
+    const prodLb = rule({ tags: { env: ['prod', 'preview'] } });
+    expect(m({ resourceTags: { env: ['prod'] } }, A, prodLb)).toBe(true);
+    expect(m({ resourceTags: { constructor: [] } })).toBe(false);
+  });
+
   it('matches backend kinds, never for an ineligible rule', () => {
     expect(m({ backendKinds: ['instance', 'asg'] })).toBe(true);
     expect(m({ backendKinds: ['ecs'] })).toBe(false);
@@ -115,6 +121,17 @@ describe('scanAccounts and targetPairs', () => {
     const plans = scanAccounts(byOu, INVENTORY);
     expect(scanned(plans)).toEqual([]);
     expect(plans.find((p) => p.account === B.id)!.reason).toBe(`excluded: global exclude 1 "deep OUs" (OU ${OU1})`);
+  });
+
+  it('skips an account whose includable regions are all globally excluded, explicit regions or ["*"]', () => {
+    const include = filter('b', [{ accountIds: [B.id], regions: ['eu-west-3'] }]);
+    const explicit = config({ globalExcludes: [{ regions: ['eu-west-3'] }], filters: [include] });
+    expect(scanAccounts(explicit, INVENTORY).find((p) => p.account === B.id)).toEqual({ account: B.id, scan: false, reason: 'no region of the perimeter left to scan' });
+    expect(scanAccounts({ ...explicit, regions: ['*'] }, INVENTORY).find((p) => p.account === B.id)!.scan).toBe(false);
+    const allRegions = config({ globalExcludes: [{ accountIds: [A.id], regions: ['eu-west-1', 'eu-west-3'] }], filters: [filter('a', [{ accountIds: [A.id] }])] });
+    expect(scanAccounts(allRegions, INVENTORY).find((p) => p.account === A.id)!.scan).toBe(false);
+    const open = config({ regions: ['*'], globalExcludes: [{ regions: ['eu-west-3'] }], filters: [filter('b', [{ accountIds: [B.id] }])] });
+    expect(scanAccounts(open, INVENTORY).find((p) => p.account === B.id)!.scan).toBe(true);
   });
 
   it('skips a globally excluded region in every account', () => {

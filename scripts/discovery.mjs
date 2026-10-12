@@ -57,8 +57,7 @@ if (option('show') || option('run')) {
   const seconds = Math.round((Date.parse(lastRun.finishedAt) - Date.parse(lastRun.startedAt)) / 1000);
   console.log(`last run ${lastRun.startedAt} (${lastRun.trigger}${lastRun.by ? ` by ${lastRun.by}` : ''}): ${lastRun.status}${lastRun.error ? ` ${lastRun.error}` : ''}, ${seconds} s, counts ${JSON.stringify(lastRun.counts)}`);
   for (const t of lastRun.targets.filter((t) => t.status !== 'skipped')) console.log(`  ${t.account}/${t.region} ${t.status}${t.error ? `: ${t.error}` : ` ${t.rules} rules, ${t.ms} ms`}`);
-  const skipped = lastRun.targets.filter((t) => t.status === 'skipped');
-  console.log(`  ${skipped.length} pairs skipped (${[...new Set(skipped.map((t) => t.reason))].join('; ')})`);
+  for (const s of lastRun.skipped ?? []) console.log(`  ${s.pairs} pairs of ${s.accounts} accounts skipped: ${s.reason}`);
   for (const f of lastRun.lint) console.log(`  lint ${f.level}: ${f.message}`);
   for (const c of candidates.sort((a, b) => a.account.localeCompare(b.account) || a.region.localeCompare(b.region))) {
     console.log(`  ${c.status.padEnd(19)} ${c.account} ${c.region} ${c.loadBalancer} ${c.conditions} — ${c.statusReason}`);

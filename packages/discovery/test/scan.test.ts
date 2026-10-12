@@ -47,11 +47,11 @@ describe('scanRegion', () => {
     expect(rules['r-api']!.hosts).toEqual([]);
   });
 
-  it('merges the tags of the load balancer, the target group and the rule, the rule winning', async () => {
+  it('keeps every value a tag has on the load balancer, the target group or the rule', async () => {
     const { ports, calls } = scanPorts();
     const rules = byId(await scanRegion(ports, WHERE, { now: NOW }));
-    expect(rules['r-shop']!.tags).toEqual({ env: 'preview', team: 'shop' });
-    expect(rules['r-api']!.tags).toEqual({ env: 'dev', team: 'web' });
+    expect(rules['r-shop']!.tags).toEqual({ env: ['dev', 'preview'], team: ['web', 'shop'] });
+    expect(rules['r-api']!.tags).toEqual({ env: ['dev'], team: ['web'] });
     expect(calls.tagBatches.every((n) => n <= 20)).toBe(true);
   });
 
@@ -67,6 +67,20 @@ describe('scanRegion', () => {
   it('gives a managed rule the backend of its application target group, for backend type filters', async () => {
     const rules = byId(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
     expect(rules['r-demo']!.backend).toEqual({ kind: 'instance', id: 'i-demo' });
+  });
+
+  it('reports a managed rule that became ineligible, with the reason', async () => {
+    const rule = RULES[Object.keys(RULES)[1]!]![0]!;
+    const awake = rule.Actions;
+    rule.Actions = [{ Type: 'redirect', Order: 1 }];
+    try {
+      const rules = byId(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
+      expect([rules['r-demo']!.eligibility, rules['r-demo']!.reason]).toEqual(['managed', 'redirect action']);
+    } finally {
+      rule.Actions = awake;
+    }
+    const healthy = byId(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
+    expect(healthy['r-demo']!.reason).toBeUndefined();
   });
 
   it('reports the application target group of a sleeping managed workload, not the waker', async () => {

@@ -54,7 +54,7 @@ export async function runDiscovery(deps: RunDeps, event: { source: 'schedule' | 
   const startedAt = new Date(now()).toISOString();
   const base = { startedAt, trigger: event.source, ...(event.by ? { by: event.by } : {}) };
   const record = (rest: Partial<RunRecord> & Pick<RunRecord, 'status'>): RunRecord => ({
-    ...base, finishedAt: new Date(now()).toISOString(), targets: [], counts: {}, lint: [], ...rest,
+    ...base, finishedAt: new Date(now()).toISOString(), targets: [], skipped: [], counts: {}, lint: [], ...rest,
   });
   const config = (await deps.store.getConfig())?.config ?? DEFAULT_CONFIG;
 
@@ -87,7 +87,7 @@ export async function runDiscovery(deps: RunDeps, event: { source: 'schedule' | 
   }
 }
 
-async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => number, log: Logger): Promise<Pick<RunRecord, 'status' | 'targets' | 'counts' | 'lint'>> {
+async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => number, log: Logger): Promise<Pick<RunRecord, 'status' | 'targets' | 'skipped' | 'counts' | 'lint'>> {
   const concurrency = deps.concurrency ?? 8;
   const allRegions = config.regions.includes('*');
   const inventory = config.mode === 'organization'
@@ -141,18 +141,26 @@ async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => 
   const counts: Partial<Record<Status, number>> = {};
   for (const c of merged.values()) counts[c.status] = (counts[c.status] ?? 0) + 1;
 
+  // Skipped pairs are summarized per reason: listing them all would not fit an item for a large organization.
+  const skippedByReason = new Map<string, { accounts: Set<string>; pairs: number }>();
+  for (const p of pairs.filter((p) => !p.scan)) {
+    const entry = skippedByReason.get(p.reason) ?? { accounts: new Set<string>(), pairs: 0 };
+    entry.accounts.add(p.account);
+    entry.pairs += 1;
+    skippedByReason.set(p.reason, entry);
+  }
+  const skipped = [...skippedByReason].map(([reason, e]) => ({ reason, accounts: e.accounts.size, pairs: e.pairs }));
+
   const targets: RunTarget[] = [
-    ...pairs.filter((p) => !p.scan).map((p): RunTarget => ({ account: p.account, region: p.region, status: 'skipped', reason: p.reason })),
     ...(allRegions ? [...accountErrors].map(([account, error]): RunTarget => ({ account, region: '*', status: 'error', error })) : []),
     ...results.filter((r) => !failedRegions.some((f) => f.account === r.account && f.region === r.region)).map((r): RunTarget => (
       r.ok ? { account: r.account, region: r.region, status: 'ok', ms: r.ms, rules: r.rules.length } : { account: r.account, region: r.region, status: 'error', error: r.error!, ms: r.ms }
     )),
   ].sort((a, b) => a.account.localeCompare(b.account) || a.region.localeCompare(b.region));
 
-  const attempted = targets.filter((t) => t.status !== 'skipped');
-  const errors = attempted.filter((t) => t.status === 'error').length;
-  const status = errors === 0 ? 'ok' : errors === attempted.length ? 'failed' : 'partial';
-  return { status, targets, counts, lint: lint(config, inventory, { rules: results.flatMap((r) => r.rules) }) };
+  const errors = targets.filter((t) => t.status === 'error').length;
+  const status = errors === 0 ? 'ok' : errors === targets.length ? 'failed' : 'partial';
+  return { status, targets, skipped, counts, lint: lint(config, inventory, { rules: results.flatMap((r) => r.rules) }) };
 }
 
 function requireOrganizations(deps: RunDeps): OrganizationsPort {

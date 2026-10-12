@@ -34,7 +34,7 @@ export function rule(over: Partial<ScannedRule> = {}): ScannedRule {
     targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-1:111111111111:targetgroup/shop/1',
     suggestedId: 'shop',
     backend: { kind: 'instance', id: 'i-1' },
-    tags: { env: 'preview' },
+    tags: { env: ['preview'] },
     eligibility: 'eligible',
     idleHours7d: 100,
     requests7d: 10,

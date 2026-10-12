@@ -18,6 +18,11 @@ export function tagsMatch(wanted: Record<string, string[]>, tags: Record<string,
   return Object.entries(wanted).every(([key, values]) => key in tags && (values.length === 0 || values.includes(tags[key]!)));
 }
 
+// Resource tags: each key on the load balancer, the target group or the rule, with one of the values ([] = any value).
+function resourceTagsMatch(wanted: Record<string, string[]>, tags: Record<string, string[]>): boolean {
+  return Object.entries(wanted).every(([key, values]) => Object.hasOwn(tags, key) && (values.length === 0 || tags[key]!.some((v) => values.includes(v))));
+}
+
 // Account dimensions only: account IDs, OUs (recursive, the root matches every account), account tags.
 export function matchesAccount(c: Criterion, account: Account, _inventory?: OrgInventory): boolean {
   if (c.accountIds && !c.accountIds.includes(account.id)) return false;
@@ -32,7 +37,7 @@ export function matches(c: Criterion, account: Account, rule: ScannedRule, inven
   if (!matchesAccount(c, account, inventory) || !matchesRegion(c, rule.region)) return false;
   if (c.loadBalancers && !c.loadBalancers.some((p) => (p.startsWith('arn:') ? p === rule.loadBalancerArn : globMatches(p, rule.loadBalancer)))) return false;
   if (c.hosts && !c.hosts.some((p) => rule.hosts.some((h) => globMatches(p, h)))) return false;
-  if (c.resourceTags && !tagsMatch(c.resourceTags, rule.tags)) return false;
+  if (c.resourceTags && !resourceTagsMatch(c.resourceTags, rule.tags)) return false;
   if (c.backendKinds && !(rule.backend && c.backendKinds.includes(rule.backend.kind))) return false;
   return true;
 }
@@ -90,9 +95,17 @@ export function scanAccounts(config: DiscoveryConfig, inventory: OrgInventory): 
     const global = globalAccountExclude(config, account, inventory);
     if (global >= 0) return { account: account.id, scan: false, reason: globalReason(global, config.globalExcludes[global]!) };
     const filter = config.filters.find((f) => f.include.some((c) => matchesAccount(c, account, inventory)));
-    return filter
-      ? { account: account.id, scan: true, reason: `included by filter "${filter.name}"` }
-      : { account: account.id, scan: false, reason: 'no filter includes this account' };
+    if (!filter) return { account: account.id, scan: false, reason: 'no filter includes this account' };
+    // Regions the includes can reach in this account; when they are known and all globally excluded, no pair is left and
+    // the account's role is not even assumed.
+    const matching = includes(config).filter((c) => matchesAccount(c, account, inventory));
+    const reachable = config.regions.includes('*')
+      ? (matching.every((c) => c.regions) ? [...new Set(matching.flatMap((c) => c.regions!))] : null)
+      : config.regions.filter((r) => matching.some((c) => matchesRegion(c, r)));
+    if (reachable && reachable.every((r) => globalPairExclude(config, account, r, inventory) >= 0)) {
+      return { account: account.id, scan: false, reason: 'no region of the perimeter left to scan' };
+    }
+    return { account: account.id, scan: true, reason: `included by filter "${filter.name}"` };
   });
 }
 

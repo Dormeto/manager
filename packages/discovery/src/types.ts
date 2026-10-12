@@ -56,7 +56,7 @@ export interface ScannedRule {
   targetGroupArn: string | null;
   suggestedId: string | null;
   backend: { kind: BackendKind; id: string } | null;
-  tags: Record<string, string>; // load balancer, then target group, then rule (later wins)
+  tags: Record<string, string[]>; // every value of each tag on the load balancer, the target group or the rule
   eligibility: 'managed' | 'eligible' | 'ineligible';
   reason?: string;
   workloadId?: string;
@@ -147,7 +147,8 @@ export interface RunRecord {
   status: 'ok' | 'partial' | 'failed' | 'skipped';
   skippedReason?: string;
   error?: string;
-  targets: RunTarget[];
+  targets: RunTarget[]; // scanned and failed account-regions
+  skipped?: { reason: string; accounts: number; pairs: number }[]; // skipped pairs per reason (absent in older records)
   counts: Partial<Record<Status, number>>;
   lint: LintFinding[];
 }

@@ -1,6 +1,11 @@
 // In-memory DynamoDB for one partition: the commands and condition expressions the discovery store uses.
-type Value = { S?: string; N?: string };
+type Value = { S?: string; N?: string; B?: Uint8Array };
 type Item = Record<string, Value>;
+
+// DynamoDB item size: attribute names plus values (strings, numbers as text, binary bytes); the limit is 400 KB.
+export function itemSize(item: Record<string, { S?: string; N?: string; B?: Uint8Array }>): number {
+  return Object.entries(item).reduce((n, [name, v]) => n + Buffer.byteLength(name) + (v.B ? v.B.byteLength : Buffer.byteLength(v.S ?? v.N ?? '')), 0);
+}
 
 export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
   const items = new Map<string, Item>();
@@ -15,6 +20,7 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
       case 'GetItemCommand':
         return { Item: items.get(input.Key.sk.S) };
       case 'PutItemCommand': {
+        if (itemSize(input.Item) > 400 * 1024) throw fail('ValidationException');
         const existing = items.get(input.Item.sk.S);
         if (input.ConditionExpression === 'attribute_not_exists(sk) OR expiresAt < :now' && existing
           && !(Number(existing.expiresAt?.N) < Number(input.ExpressionAttributeValues[':now'].N))) throw fail('ConditionalCheckFailedException');

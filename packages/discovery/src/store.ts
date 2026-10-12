@@ -1,5 +1,6 @@
 // Discovery items of the manager table (spec section 6), partition T#default.
 import { BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import type { Candidate, DiscoveryConfig, OrgInventory, RunRecord } from './types.js';
 
 const PK = 'T#default';
@@ -38,7 +39,12 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
   const key = (sk: string) => ({ pk: { S: PK }, sk: { S: sk } });
   const get = async (sk: string): Promise<Item | undefined> => (await dynamo.send(new GetItemCommand({ TableName: table, Key: key(sk), ConsistentRead: true }))).Item;
   const put = (item: Item) => dynamo.send(new PutItemCommand({ TableName: table, Item: item }));
-  const data = <T>(item: Item | undefined): T | null => (item?.data?.S ? (JSON.parse(item.data.S) as T) : null);
+  // Runs and the inventory grow with the organization: stored gzipped (binary) to stay far below the 400 KB item limit.
+  const data = <T>(item: Item | undefined): T | null => {
+    if (item?.data?.B) return JSON.parse(gunzipSync(item.data.B).toString('utf8')) as T;
+    return item?.data?.S ? (JSON.parse(item.data.S) as T) : null;
+  };
+  const packed = (value: unknown): AttributeValue => ({ B: gzipSync(JSON.stringify(value)) });
 
   async function query(prefix: string, { forward = true, limit }: { forward?: boolean; limit?: number } = {}, stop?: (items: Item[]) => boolean): Promise<Item[]> {
     const items: Item[] = [];
@@ -101,7 +107,7 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       return data<RunRecord>(items.find(keep));
     },
     async putRun(run) {
-      await put({ ...key(`DISC#RUN#${run.startedAt}`), status: { S: run.status }, data: { S: JSON.stringify(run) }, expiresAt: { N: String(seconds(Date.parse(run.startedAt)) + RETENTION_S) } });
+      await put({ ...key(`DISC#RUN#${run.startedAt}`), status: { S: run.status }, data: packed(run), expiresAt: { N: String(seconds(Date.parse(run.startedAt)) + RETENTION_S) } });
     },
     async listCandidates() {
       return (await query('DISC#C#')).map((item) => data<Candidate>(item)!).filter(Boolean);
@@ -124,7 +130,7 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       return data<OrgInventory>(await get('DISC#ORG'));
     },
     async putInventory(inventory) {
-      await put({ ...key('DISC#ORG'), data: { S: JSON.stringify(inventory) }, updatedAt: { S: new Date(now()).toISOString() } });
+      await put({ ...key('DISC#ORG'), data: packed(inventory), updatedAt: { S: new Date(now()).toISOString() } });
     },
   };
 }

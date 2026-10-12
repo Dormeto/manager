@@ -75,3 +75,25 @@ describe('discovery store', () => {
     expect(await store.getInventory()).toEqual(inventory);
   });
 });
+
+describe('discovery store at organization scale', () => {
+  it('keeps a run of 4,000 account-regions under the DynamoDB item limit and reads it back', async () => {
+    const { store } = setup();
+    const targets = Array.from({ length: 4000 }, (_, i) => ({
+      account: String(100000000000 + i), region: 'ap-southeast-7', status: 'error' as const,
+      error: 'no access: deploy DmtDiscoveryRole to this account',
+    }));
+    await store.putRun({ ...run('2026-10-04T12:00:00.000Z'), targets });
+    expect((await store.lastRun())!.targets).toHaveLength(4000);
+  });
+
+  it('keeps the inventory of 3,000 accounts with tags under the item limit', async () => {
+    const { store } = setup();
+    const accounts = Array.from({ length: 3000 }, (_, i) => ({
+      id: String(100000000000 + i), name: `account-${i}-of-a-large-organization`, ouPath: ['r-1u0b', 'ou-1u0b-aaaaaaaa', 'ou-1u0b-bbbbbbbb'],
+      tags: { env: 'production', team: `team-${i % 40}`, 'cost-center': `cc-${i % 97}` },
+    }));
+    await store.putInventory({ accounts, ous: { 'r-1u0b': { name: 'Root', parent: null } } });
+    expect((await store.getInventory())!.accounts).toHaveLength(3000);
+  });
+});
