@@ -680,7 +680,13 @@ export function createApi({
       const limit = q.limit === undefined ? ACCESS_PAGE : Number(q.limit);
       if (!Number.isInteger(limit) || limit < 1 || limit > ACCESS_MAX) throw new HttpError(400, 'bad_request', `limit must be 1 to ${ACCESS_MAX}`);
       const report = await d.store.accessReport({ limit, ...(q.cursor ? { cursor: q.cursor } : {}) });
-      return reply(200, { ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')) });
+      // Every account it names, the forwarders' included (R5c review I6).
+      const forwarders = report.forwarders && {
+        ...report.forwarders,
+        impossible: report.forwarders.impossible.filter((f) => sees(identity, f.account, '')),
+        failed: (report.forwarders.failed ?? []).filter((f) => sees(identity, f.account, '')),
+      };
+      return reply(200, { ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')), ...(forwarders ? { forwarders } : {}) });
     }
     if (method === 'GET' && sub === 'candidates') {
       const q = event.queryStringParameters ?? {};
@@ -722,7 +728,9 @@ export function createApi({
         need(identity, 'admin');
         const { config, errors } = validateConfig(bodyOf(event));
         if (!config) return reply(400, { error: 'bad_request', message: 'invalid configuration', errors });
-        const summary = `${plural(config.filters.length, 'filter')}, ${plural(config.globalExcludes.length, 'global exclude')}, regions ${config.regions.join(' ')}`;
+        // Event-driven refresh creates roles and rules in the member accounts: audited with its accounts.
+        const refresh = config.eventRefresh ? `, event-driven refresh ${config.eventRefresh.enabled ? `on for ${config.eventRefresh.accounts?.join(' ') ?? 'every ready account'}` : 'off'}` : '';
+        const summary = `${plural(config.filters.length, 'filter')}, ${plural(config.globalExcludes.length, 'global exclude')}, regions ${config.regions.join(' ')}${refresh}`;
         return audited(identity, 'discovery-config', 'discovery', async () => {
           await d.store.putConfig(config, identity.email);
           return { result: summary, response: reply(200, { config, lint: linted(config) }) };

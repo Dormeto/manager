@@ -123,6 +123,16 @@ describe('discovery routes', () => {
     expect(audit[0]).toMatchObject({ action: 'discovery-config', target: 'discovery', result: '1 filter, 1 global exclude, regions eu-west-1' });
   });
 
+  it('audits event-driven refresh turned on or off, and for which accounts (R5c review: roles and rules in every account)', async () => {
+    const { api, audit } = setup();
+    await api(event('PUT', '/api/discovery/config', 'dmt-admin', { ...VALID, eventRefresh: { enabled: true, accounts: ['121014831971'] } }));
+    await api(event('PUT', '/api/discovery/config', 'dmt-admin', { ...VALID, eventRefresh: { enabled: false } }));
+    expect(audit.map((a: { result: string }) => a.result)).toEqual([
+      '1 filter, 1 global exclude, regions eu-west-1, event-driven refresh on for 121014831971',
+      '1 filter, 1 global exclude, regions eu-west-1, event-driven refresh off',
+    ]);
+  });
+
   it('refuses an invalid configuration with every error', async () => {
     const { api, store } = setup();
     const res = await api(event('PUT', '/api/discovery/config', 'dmt-admin', { ...VALID, refreshHours: 0, regions: ['nowhere'] }));

@@ -19,7 +19,10 @@ function setup({ visible }: { visible?: (identity: unknown, item: { account?: st
     [NO_COMMAND]: { account: NO_COMMAND, scannedAt: '', regions: {}, access: { discovery: { ok: true }, command: { ok: false, reason: DENIED }, checkedAt: '' } },
   };
   store.getAccountScan = async (account: string) => scans[account] ?? null;
-  const summary: AccessSummary = { counts: { ready: 1, discoveryMissing: 0, commandMissing: 2, unchecked: 1 }, accounts: [row(NO_COMMAND, false), row('444444444444', false)], delegation: 'ok', checkedAt: new Date(NOW).toISOString() };
+  const summary: AccessSummary = {
+    counts: { ready: 1, discoveryMissing: 0, commandMissing: 2, unchecked: 1 }, accounts: [row(NO_COMMAND, false), row('444444444444', false)], delegation: 'ok', checkedAt: new Date(NOW).toISOString(),
+    forwarders: { connected: 1, connecting: 0, impossible: [{ account: NO_COMMAND, name: 'shop', reason: 'no command role' }], failed: [{ account: '444444444444', name: 'data', reason: 'AccessDenied' }] },
+  };
   const pages: { cursor?: string; limit: number }[] = [];
   store.accessReport = async (page) => {
     pages.push(page);
@@ -54,6 +57,11 @@ describe('organization access', () => {
     expect((await s.api(event('GET', '/api/discovery/access', undefined, { limit: '0' }))).statusCode).toBe(400);
     const hidden = setup({ visible: (_i, item) => item.account !== NO_COMMAND });
     expect(json(await hidden.api(event('GET', '/api/discovery/access'))).accounts.map((a: { account: string }) => a.account)).toEqual(['444444444444']);
+    // The forwarders' accounts too (R5c review I6).
+    const forwarders = json(await hidden.api(event('GET', '/api/discovery/access'))).forwarders;
+    expect([forwarders.impossible, forwarders.failed.map((f: { account: string }) => f.account)]).toEqual([[], ['444444444444']]);
+    const none = setup({ visible: () => false });
+    expect(json(await none.api(event('GET', '/api/discovery/access'))).forwarders).toMatchObject({ impossible: [], failed: [] });
   });
 
   it('refuses onboarding where the last check found no command role; an account never checked, or ready, is let through', async () => {
