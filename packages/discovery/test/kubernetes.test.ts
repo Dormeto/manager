@@ -212,6 +212,15 @@ describe('scanRegion with the region\'s clusters', () => {
     expect(found.find((c) => c.targetGroupArn === TGS.orphan!.TargetGroupArn)?.reason).toBe('IP targets without an ECS service');
   });
 
+  it('tells the caller the region\'s clusters as read, and names who reads them in the reason of one refused (the estimate: the profile)', async () => {
+    const refused = Object.assign(new Error('Unauthorized'), { name: 'KubernetesError', status: 401 });
+    const seen: [string, string | null][] = [];
+    const { ports: base } = scanPorts();
+    const kube = { ...ports({ 'eks-demo': { cluster: CLUSTER('eks-demo'), client: cluster(demo()) }, 'eks-prod': { cluster: CLUSTER('eks-prod'), client: cluster({}, { refuse: refused }) } }), reader: 'the profile' };
+    await scanRegion({ ...base, kubernetes: kube }, WHERE, { now: () => Date.UTC(2026, 9, 11), onClusters: (clusters) => seen.push(...clusters.map((c): [string, string | null] => [c.name, c.reason ?? null])) });
+    expect(seen).toEqual([['eks-demo', null], ['eks-prod', 'the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized']]);
+  });
+
   it('the discovery role may list and describe the clusters', () => {
     expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['eks:ListClusters', 'eks:DescribeCluster']));
   });

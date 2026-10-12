@@ -211,7 +211,8 @@ interface Row {
   app?: TargetGroup; // the one application target group it forwards to
 }
 
-export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now }: { now?: () => number } = {}): Promise<ScannedRule[]> {
+// onClusters: the region's clusters as read (the estimate lists those it cannot read).
+export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now, onClusters }: { now?: () => number; onClusters?: (clusters: Cluster[]) => void } = {}): Promise<ScannedRule[]> {
   const { elbv2 } = ports;
   const lbs = (await all<LoadBalancer>((i) => elbv2.describeLoadBalancers(i), 'LoadBalancers')).filter((lb) => lb.Type === 'application');
   const rows: Row[] = [];
@@ -235,6 +236,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
     if (/AccessDenied|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`)) return [];
     throw err;
   }) : [];
+  onClusters?.(clusters);
 
   // The application target group of each rule: the one it forwards to, or, managed, its target group that is not the waker.
   for (const row of visible) {

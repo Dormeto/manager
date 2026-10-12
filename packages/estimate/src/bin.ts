@@ -11,7 +11,7 @@ import { DescribeServicesCommand, DescribeTaskDefinitionCommand } from '@aws-sdk
 import { DescribeRulesCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { loadInventory, scanRegion } from '@dormeto/discovery';
-import { createAssumeRole, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, type Credentials } from '@dormeto/discovery/aws';
+import { createAssumeRole, enabledRegionsOf, kubernetesPorts, organizationsPort, regionalClients, scanPorts, type Credentials } from '@dormeto/discovery/aws';
 import { createPriceBook } from '@dormeto/fleet';
 import { createSpotPort } from '@dormeto/manager-api/spot';
 import { cacheDir } from './cache.js';
@@ -38,8 +38,16 @@ function awsOf(_options: Options, name: string): EstimateAws {
     portsOf: (account, region, credentials) => {
       const clients = regionalClients(creds(credentials) as Credentials, region);
       const ec2 = new EC2Client({ region, credentials: creds(credentials) });
+      // Kubernetes workloads (R10.5): the region's EKS clusters, read with the profile's own access; those it cannot read
+      // are listed in the report.
+      const kubernetes = kubernetesPorts(creds(credentials) as Credentials, region, undefined, 'the profile');
+      let unreadable: { name: string; reason: string }[] = [];
       return {
-        scan: () => scanRegion(scanPorts(clients), { account, region }),
+        scan: () => scanRegion({ ...scanPorts(clients), kubernetes }, { account, region }, {
+          onClusters: (clusters) => { unreadable = clusters.flatMap((c) => (c.reason ? [{ name: c.name, reason: c.reason }] : [])); },
+        }),
+        unreadableClusters: () => unreadable,
+        kubernetesOf: kubernetes.kubernetesOf,
         autoscaling: { describeAutoScalingGroups: (input) => clients.autoscaling.send(new DescribeAutoScalingGroupsCommand(input)) },
         elbv2: { describeRules: (input) => clients.elbv2.send(new DescribeRulesCommand(input)) },
         ec2: { describeInstances: (input) => ec2.send(new DescribeInstancesCommand(input)) },

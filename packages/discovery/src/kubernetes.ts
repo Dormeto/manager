@@ -15,6 +15,7 @@ export interface KubernetesPorts {
     describeCluster(input: { name: string }): Promise<{ cluster?: any }>;
   };
   kubernetesOf(cluster: string): Promise<KubeClient>;
+  reader?: string; // who reads the clusters, in the reason of one it cannot read (DmtDiscoveryRole by default)
 }
 
 export type OwnerKind = 'Deployment' | 'StatefulSet';
@@ -82,7 +83,7 @@ export async function clustersOf(ports: KubernetesPorts): Promise<Cluster[]> {
       found.lists = new Map();
     } catch (err) {
       found.reason = status(err) === 401 || status(err) === 403
-        ? `the cluster does not let DmtDiscoveryRole read it (an access entry with AmazonEKSViewPolicy): ${message(err)}`
+        ? `the cluster does not let ${ports.reader ?? 'DmtDiscoveryRole'} read it (an access entry with AmazonEKSViewPolicy): ${message(err)}`
         : `the cluster cannot be read: ${message(err)}`;
     }
   }

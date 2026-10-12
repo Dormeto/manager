@@ -17,15 +17,16 @@ const E: Estimate = {
     workloads: { count: 12, unitMonth: 0.13, usdMonth: 1.56 },
     usdMonth: 7.08,
   },
-  totals: { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08, withDormetoMonth: 226.58 },
-  byAccount: { '111111111111': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
-  byRegion: { 'eu-west-1': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
+  totals: { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08, withDormetoMonth: 226.58 },
+  byAccount: { '111111111111': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
+  byRegion: { 'eu-west-1': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
   workloads: Array.from({ length: 12 }, (_, i) => (i === 5 ? { ...workload('napping', 15), workload: { ...workload('napping', 15).workload, managed: true as const } } : workload(i === 3 ? 'docs' : `app${i}`, 10 + i))),
   leftOut: [{ workload: workload('gpu', 0).workload, reason: 'what it stops has no AWS list price' }],
   excluded: [],
   ineligible: [{ account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }],
   unreachable: [{ account: '333333333333', name: 'sandbox', reason: 'not authorized to perform: sts:AssumeRole', fix: 'create a role this profile may assume, with read access, and name it with --role (tried OrganizationAccountAccessRole)' }],
   failedRegions: [{ account: '111111111111', region: 'eu-west-3', error: 'opt-in region not enabled' }],
+  unreadableClusters: [{ account: '111111111111', region: 'eu-west-1', name: 'eks-prod', reason: 'the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized' }],
   assumptions: ['Every request counts as activity and as a wake.'],
 };
 
@@ -55,12 +56,21 @@ describe('the estimate\'s reports', () => {
     expect(summaryLines(restricted)[0]).toContain('for 12 workloads in 2 of the organization\'s 28 accounts;');
   });
 
+  it('the EKS clusters the profile cannot read, with why (R10.5)', () => {
+    expect(markdownReport(E)).toContain([
+      '## Clusters not read', '',
+      '| Account | Region | Cluster | Why |', '|---|---|---|---|',
+      '| 111111111111 | eu-west-1 | eks-prod | the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized |',
+    ].join('\n'));
+    expect(markdownReport({ ...E, unreadableClusters: [] })).not.toContain('## Clusters not read');
+  });
+
   it('the accounts: a row each and the total, their actual cost, their cost with Dormeto enabled and the savings', () => {
     expect(markdownReport(E)).toContain([
-      '| Account | Name | Workloads | ASG | EC2 | ECS | Actual monthly cost | Cost with Dormeto enabled | Savings |',
-      '|---|---|---|---|---|---|---|---|---|',
-      '| 111111111111 | prod | 12 | 9 | 2 | 1 | $400.00 | $221.32 | 45% |',
-      '| **Total** | | **12** | **9** | **2** | **1** | **$400.00** | **$226.58** | **43%** |',
+      '| Account | Name | Workloads | ASG | EC2 | ECS | EKS | Actual monthly cost | Cost with Dormeto enabled | Savings |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| 111111111111 | prod | 12 | 9 | 2 | 1 | 0 | $400.00 | $221.32 | 45% |',
+      '| **Total** | | **12** | **9** | **2** | **1** | **0** | **$400.00** | **$226.58** | **43%** |',
       '',
       'Cost with Dormeto enabled: at a 1-hour idle window, Dormeto\'s cost included; the total includes the manager ($5.00), once per installation.',
     ].join('\n'));
@@ -162,9 +172,9 @@ describe('the estimate\'s reports', () => {
     expect(accounts[2]).toMatch(/^ {2}├─+┼[─┼]+┤$/);
     expect(accounts[6]).toMatch(/^ {2}└─+┴[─┴]+┘$/);
     expect(cells(accounts)).toEqual([
-      ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
-      ['111111111111', 'prod', '12', '9', '2', '1', '$400.00', '$221.32', '45%'],
-      ['Total', '', '12', '9', '2', '1', '$400.00', '$226.58', '43%'],
+      ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+      ['111111111111', 'prod', '12', '9', '2', '1', '0', '$400.00', '$221.32', '45%'],
+      ['Total', '', '12', '9', '2', '1', '0', '$400.00', '$226.58', '43%'],
     ]);
     // Aligned: every line as long, the figures right-aligned under their headings, the columns' borders in line.
     aligned(accounts);
@@ -187,7 +197,7 @@ describe('the estimate\'s reports', () => {
   });
 
   it('the terminal\'s accounts: the ten saving the most, the others counted', () => {
-    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, kinds: { asg: 1, ec2: 0, ecs: 0 }, actualMonth: 2 * i, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39, withDormetoMonth: i + 0.39 }]));
+    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, kinds: { asg: 1, ec2: 0, ecs: 0, eks: 0 }, actualMonth: 2 * i, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39, withDormetoMonth: i + 0.39 }]));
     const lines = summaryLines({ ...E, byAccount });
     const from = lines.indexOf('By account:');
     expect(lines[from + 4]).toMatch(/^ {2}│ 100000000011 /);

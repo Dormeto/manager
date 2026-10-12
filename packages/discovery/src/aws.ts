@@ -57,11 +57,14 @@ export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; 
 
 // The region's EKS clusters (Kubernetes workloads, R10.5): listed and described with the discovery role; their API called
 // with an EKS token signed with the same credentials (the router's client: the role's access entry, AmazonEKSViewPolicy).
-export function kubernetesPorts(credentials: Credentials, region: string, client: Sender = new EKSClient({ region, credentials, maxAttempts: 5 })): KubernetesPorts {
+// credentials: static, or a provider (the estimate's profile); reader: who reads, in the reason of a cluster it cannot read.
+export function kubernetesPorts(credentials: Credentials | (() => Promise<Credentials>), region: string, client: Sender = new EKSClient({ region, credentials, maxAttempts: 5 }), reader?: string): KubernetesPorts {
   const describeCluster = (input: { name: string }) => client.send(new DescribeClusterCommand(input));
+  const resolved = async () => (typeof credentials === 'function' ? credentials() : credentials);
   return {
     eks: { listClusters: (input) => client.send(new ListEksClustersCommand(input)), describeCluster },
-    kubernetesOf: kubernetesConnector({ eks: { describeCluster, credentials: async () => credentials }, region }),
+    kubernetesOf: kubernetesConnector({ eks: { describeCluster, credentials: resolved }, region }),
+    ...(reader ? { reader } : {}),
   };
 }
 

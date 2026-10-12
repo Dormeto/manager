@@ -27,8 +27,8 @@ export interface WorkloadEstimate {
 export interface LeftOut { workload: Workload; reason: string }
 // withDormetoMonth: the actual cost less the savings at the report's window, plus Dormeto's cost (an account's: its
 // routers and workloads; the total's: the manager too).
-// kinds: the workloads by backend (an Auto Scaling group, an EC2 instance, an ECS service).
-export interface Kinds { asg: number; ec2: number; ecs: number }
+// kinds: the workloads by backend (an Auto Scaling group, an EC2 instance, an ECS service, a Kubernetes owner on EKS).
+export interface Kinds { asg: number; ec2: number; ecs: number; eks: number }
 export interface Totals { workloads: number; kinds: Kinds; actualMonth: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number; withDormetoMonth: number }
 // Dormeto's cost by part: how many, the cost of one a month, theirs.
 export interface CostPart { count: number; unitMonth: number; usdMonth: number }
@@ -53,12 +53,14 @@ export interface Estimate {
   ineligible: (Ineligible & { account: string; region: string })[];
   unreachable: Unreachable[];
   failedRegions: { account: string; region: string; error: string }[];
+  // The EKS clusters the profile cannot read (R10.5): their workloads are not estimated.
+  unreadableClusters: { account: string; region: string; name: string; reason: string }[];
   assumptions: string[];
 }
 
 const NOTHING = 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or a stopped instance)';
 
-function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profiles'>): string[] {
+function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profiles'>, kubernetes: boolean): string[] {
   return [
     'Every request counts as activity and as a wake: no waker is installed yet to set scanners and other filtered requests apart, so the workloads stay awake longer here than they would (smaller savings).',
     'A wake lasts 60 seconds in the replay; the visitors\' wait is not estimated before install.',
@@ -68,11 +70,13 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
     options.ec2Uptime
       ? 'EC2 instances without an Auto Scaling group: their uptime measured over the 14 days (CloudWatch CPUUtilization, published every 5 minutes while an instance runs); their actual cost counts the hours they ran, their savings only the hours Dormeto would nap them while they ran. Instances Dormeto already manages, Auto Scaling groups and ECS services are assumed to run all the time.'
       : 'EC2 instances without an Auto Scaling group are assumed to run 24/7 (--ec2-uptime measures it): one stopped at night by a schedule saves less than estimated here.',
+    ...(kubernetes ? ['Kubernetes pods: their share of their nodes (the larger of CPU and memory over the node\'s allocatable) at the node\'s price, saved only where a node autoscaler removes the nodes they free; the EKS control plane and the nodes\' DaemonSets keep running.'] : []),
     `Dormeto's cost: about $${DORMETO_COST.manager} a month for the manager, $${DORMETO_COST.router} per account and region with workloads, $${DORMETO_COST.workload} per workload.`,
   ];
 }
 
-const empty = (): Totals => ({ workloads: 0, kinds: { asg: 0, ec2: 0, ecs: 0 }, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
+const empty = (): Totals => ({ workloads: 0, kinds: { asg: 0, ec2: 0, ecs: 0, eks: 0 }, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
+const KIND: Record<string, keyof Kinds> = { instance: 'ec2', asg: 'asg', ecs: 'ecs', k8s: 'eks' };
 
 export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now, excluded = [], uptime = null }: {
   reached: Reached;
@@ -177,7 +181,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
     routed.add(where);
     for (const t of [totals, (byAccount[x.workload.account] ??= empty()), (byRegion[x.workload.region] ??= empty())]) {
       t.workloads += 1;
-      t.kinds[x.workload.backend.kind === 'instance' ? 'ec2' : x.workload.backend.kind] += 1;
+      t.kinds[KIND[x.workload.backend.kind]!] += 1;
       t.actualMonth += x.actualMonth;
       t.usdMonthWindow += x.atWindow.usdMonth;
       t.usdMonthRecommended += x.recommended.usdMonth;
@@ -200,6 +204,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
     ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
     unreachable: reached.unreachable,
     failedRegions: regions.filter((r) => r.error).map((r) => ({ account: r.account, region: r.region, error: r.error! })),
-    assumptions: assumptionsOf(baseline, options),
+    unreadableClusters: regions.flatMap((r) => (r.clusters ?? []).map((c) => ({ account: r.account, region: r.region, name: c.name, reason: c.reason }))),
+    assumptions: assumptionsOf(baseline, options, regions.some((r) => r.workloads.some((x) => x.backend.kind === 'k8s'))),
   };
 }

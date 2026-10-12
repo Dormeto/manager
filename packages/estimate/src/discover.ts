@@ -18,7 +18,7 @@ export interface Workload {
   targetGroup: string;
   targetGroupArn: string;
   hosts: string[];
-  backend: { kind: 'instance' | 'asg' | 'ecs'; id: string };
+  backend: { kind: 'instance' | 'asg' | 'ecs' | 'k8s'; id: string };
   stopped: StoppedItem[];
   // Every value of each tag on its load balancer, target group or rule (discovery's), for --exclude-tags.
   tags: Record<string, string[]>;
@@ -30,9 +30,12 @@ export interface Workload {
   wakerTargetGroupArn?: string;
 }
 export interface Ineligible { loadBalancer: string; targetGroup: string | null; hosts: string[]; reason: string }
-export interface RegionDiscovery { account: string; region: string; workloads: Workload[]; ineligible: Ineligible[]; error?: string }
+// clusters: the region's EKS clusters the profile cannot read, with why (R10.5).
+export interface RegionDiscovery { account: string; region: string; workloads: Workload[]; ineligible: Ineligible[]; clusters?: { name: string; reason: string }[]; error?: string }
 export interface RegionPorts extends StoppedPorts {
   scan(): Promise<ScannedRule[]>;
+  // The clusters the last scan could not read (set by the scan).
+  unreadableClusters?: () => { name: string; reason: string }[];
   autoscaling: { describeAutoScalingGroups(input: { AutoScalingGroupNames: string[] }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; DesiredCapacity?: number; Instances?: { InstanceId?: string }[] }[] }> };
   elbv2: { describeRules(input: { RuleArns: string[] }): Promise<{ Rules?: Rule[] }> };
 }
@@ -48,6 +51,10 @@ const clusterOf = (serviceArn: string) => {
 // Discovery's backend as the router describes it: an Auto Scaling group's desired capacity and instances, an ECS
 // service's cluster and desired count, an instance (with its state, unless Dormeto manages it).
 async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, managed: boolean): Promise<{ running: RouterBackend | null; instanceState?: string }> {
+  if (backend.kind === 'k8s') {
+    const k = backend.kubernetes!;
+    return { running: { kind: 'k8s', id: backend.id, cluster: k.cluster, namespace: k.namespace, owner: k.owner, autoscaler: k.autoscaler } };
+  }
   if (backend.kind === 'asg') {
     const { AutoScalingGroups: [group] = [] } = await ports.autoscaling.describeAutoScalingGroups({ AutoScalingGroupNames: [backend.id] });
     return { running: { kind: 'asg', name: backend.id, desired: group?.DesiredCapacity ?? 0, instances: (group?.Instances ?? []).map((i) => i.InstanceId).filter((id): id is string => Boolean(id)) } };
@@ -87,8 +94,6 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
       ineligible.push({ loadBalancer: rule.loadBalancer, targetGroup: rule.targetGroup, hosts: rule.hosts, reason: rule.reason ?? 'no backend' });
       continue;
     }
-    // The estimate scans without the clusters' API: no Kubernetes backend comes here.
-    if (rule.backend.kind === 'k8s') continue;
     const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
     let stopped: StoppedItem[];
     let instanceState: string | undefined;
@@ -107,7 +112,8 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
       ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
     });
   }
-  return { account, region, workloads, ineligible };
+  const clusters = ports.unreadableClusters?.() ?? [];
+  return { account, region, workloads, ineligible, ...(clusters.length ? { clusters } : {}) };
 }
 
 // regions: --regions, used as given (never cached as an account's enabled regions); null: each account's enabled ones.

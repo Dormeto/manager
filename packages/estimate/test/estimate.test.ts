@@ -91,10 +91,27 @@ describe('the estimate', () => {
       workloads: { count: 3, unitMonth: DORMETO_COST.workload, usdMonth: 3 * DORMETO_COST.workload },
     });
     expect(e.dormeto.usdMonth).toBeCloseTo(e.totals.dormetoMonth, 9);
-    // Classified by backend: Auto Scaling group, EC2 instance, ECS service.
-    expect(e.totals.kinds).toEqual({ asg: 3, ec2: 0, ecs: 0 });
-    expect(e.byAccount[A]!.kinds).toEqual({ asg: 2, ec2: 0, ecs: 0 });
+    // Classified by backend: Auto Scaling group, EC2 instance, ECS service, Kubernetes on EKS.
+    expect(e.totals.kinds).toEqual({ asg: 3, ec2: 0, ecs: 0, eks: 0 });
+    expect(e.byAccount[A]!.kinds).toEqual({ asg: 2, ec2: 0, ecs: 0, eks: 0 });
     expect(e.assumptions.join(' ')).toContain('Every request counts');
+  });
+
+  it('Kubernetes workloads (R10.5): counted under EKS; the clusters the profile cannot read listed; the assumptions say what their pods\' share supposes', async () => {
+    const pods: StoppedItem = { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: 'm5.large', os: 'Linux', autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } };
+    const web: Workload = { ...w(A, 'eu-west-1', 'web', [pods]), backend: { kind: 'k8s', id: 'eks-demo/demo/Deployment/web' } };
+    const reason = 'the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized';
+    const e = await run({
+      regions: [{ account: A, region: 'eu-west-1', workloads: [web], ineligible: [], clusters: [{ name: 'eks-prod', reason }] }],
+      requests: [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/web': daily }, unreadable: {} }],
+      hourly: async (_region, item) => (item.kind === 'k8s-pods' ? 0.0277 : null),
+    });
+    expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['web']);
+    expect(e.totals.kinds).toEqual({ asg: 0, ec2: 0, ecs: 0, eks: 1 });
+    expect(e.unreadableClusters).toEqual([{ account: A, region: 'eu-west-1', name: 'eks-prod', reason }]);
+    expect(e.assumptions.join(' ')).toContain('Kubernetes pods: their share of their nodes (the larger of CPU and memory over the node\'s allocatable) at the node\'s price, saved only where a node autoscaler removes the nodes they free; the EKS control plane and the nodes\' DaemonSets keep running.');
+    // Without a Kubernetes workload, nothing said of them.
+    expect((await run()).assumptions.join(' ')).not.toContain('Kubernetes');
   });
 
   it('a backend behind two target groups is estimated once, with both target groups\' requests', async () => {
@@ -179,7 +196,7 @@ describe('the estimate', () => {
     it('managed by Dormeto, or behind an Auto Scaling group: not measured, 24/7', async () => {
       const e = await measuredRun([vm('napped', { managed: true, instanceState: undefined }), { ...w(A, 'eu-west-1', 'fleet', [T3]) }], uptime({}));
       expect(e.workloads.map((x) => x.uptime)).toEqual([undefined, undefined]);
-      expect(e.totals.kinds).toEqual({ asg: 1, ec2: 1, ecs: 0 });
+      expect(e.totals.kinds).toEqual({ asg: 1, ec2: 1, ecs: 0, eks: 0 });
     });
   });
 

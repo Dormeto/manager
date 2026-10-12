@@ -70,8 +70,8 @@ const textTable = (t: Table) => {
   ];
 };
 
-// The workloads, then by backend: Auto Scaling groups, EC2 instances, ECS services.
-const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs].map(String);
+// The workloads, then by backend: Auto Scaling groups, EC2 instances, ECS services, Kubernetes owners on EKS.
+const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs, t.kinds.eks ?? 0].map(String);
 
 // What Dormeto would save of an actual cost, cost with Dormeto included.
 const saved = (t: Totals) => (t.actualMonth ? `${Math.round(((t.actualMonth - t.withDormetoMonth) / t.actualMonth) * 100)}%` : '');
@@ -84,8 +84,8 @@ function accountsTable(e: Estimate, limit = Infinity): Table & { more: number } 
   const shown = limit < accounts.length ? [...accounts].sort((a, b) => b[1].usdMonthWindow - a[1].usdMonthWindow).slice(0, limit) : accounts;
   const manager = e.dormeto.manager.count ? `; the total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation` : '';
   return {
-    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
-    figures: [false, false, true, true, true, true, true, true, true],
+    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+    figures: [false, false, true, true, true, true, true, true, true, true],
     groups: [
       shown.map(([account, a]) => ({ cells: [account, name(account), ...counts(a), usd(a.actualMonth), usd(a.withDormetoMonth), saved(a)] })),
       [{ cells: ['Total', '', ...counts(t), usd(t.actualMonth), usd(t.withDormetoMonth), saved(t)], strong: true }],
@@ -187,6 +187,9 @@ export function markdownReport(e: Estimate): string {
     ...(e.ineligible.length
       ? ['| Account | Region | Load balancer | Target group | Why |', '|---|---|---|---|---|', ...e.ineligible.map((i) => `| ${i.account} | ${i.region} | ${cell(i.loadBalancer)} | ${cell(i.targetGroup ?? '')} | ${cell(i.reason)} |`)]
       : ['None.']), '',
+    ...((e.unreadableClusters ?? []).length
+      ? ['## Clusters not read', '', '| Account | Region | Cluster | Why |', '|---|---|---|---|', ...e.unreadableClusters.map((c) => `| ${c.account} | ${c.region} | ${cell(c.name)} | ${cell(c.reason)} |`), '']
+      : []),
     '## Accounts not reached', '',
     ...(e.unreachable.length
       ? ['| Account | Name | Why | To include it |', '|---|---|---|---|', ...e.unreachable.map((u) => `| ${u.account} | ${cell(u.name)} | ${cell(u.reason)} | ${cell(u.fix)} |`)]

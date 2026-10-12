@@ -226,3 +226,40 @@ describe('the discovery of every account and region', () => {
     expect(s.calls.most).toBe(4);
   });
 });
+
+// Kubernetes workloads (vision docs/specs/2026-10-11-kubernetes-design.md, section 9): read with the profile's own access.
+describe('a region\'s Kubernetes workloads', () => {
+  const k8sRule = (name: string, namespace: string) => rule(name, {
+    backend: { kind: 'k8s', id: `eks-demo/${namespace}/Deployment/${name}`, kubernetes: { cluster: 'eks-demo', namespace, owner: { kind: 'Deployment', name }, switch: 'ingress', hpa: false, keda: false, capacity: namespace === 'fargate' ? 'fargate' : 'nodes', autoscaler: 'karpenter' } },
+  });
+  // The cluster as the router's client reads it: the owners, their pods (on Fargate or a Karpenter node), the node.
+  const cluster = {
+    async get(path: string) {
+      if (path.endsWith('/deployments/web') || path.endsWith('/deployments/docs')) return { spec: { replicas: 1, selector: { matchLabels: { app: path.split('/').at(-1) } } } };
+      if (path.startsWith('/api/v1/nodes/')) return { metadata: { labels: { 'node.kubernetes.io/instance-type': 'm5.large', 'kubernetes.io/os': 'linux', 'karpenter.sh/nodepool': 'demo' } }, status: { allocatable: { cpu: '1930m', memory: '7220184Ki' } } };
+      throw Object.assign(new Error(`${path} not found`), { status: 404 });
+    },
+    async list(path: string, query: Record<string, string> = {}) {
+      const pod = (app: string, extra: Record<string, unknown>) => ({ metadata: { name: `${app}-1`, labels: { app } }, spec: { nodeName: 'ip-10-0-1-1', containers: [{ resources: { requests: { cpu: '250m', memory: '512Mi' } } }], ...extra }, status: { phase: 'Running' } });
+      if (path === '/api/v1/namespaces/demo/pods' && query.labelSelector === 'app=web') return [pod('web', {})];
+      if (path === '/api/v1/namespaces/fargate/pods' && query.labelSelector === 'app=docs') return [{ ...pod('docs', { schedulerName: 'fargate-scheduler', nodeName: 'fargate-ip-1' }), metadata: { name: 'docs-1', labels: { app: 'docs' }, annotations: { CapacityProvisioned: '0.25vCPU 0.5GB' } } }];
+      return [];
+    },
+  };
+
+  it('describes the pods a nap would stop: on a node, its share; on Fargate, its size', async () => {
+    const { ports } = regionPorts([k8sRule('web', 'demo'), k8sRule('docs', 'fargate')]);
+    const found = await discoverRegion({ ...ports, kubernetesOf: async () => cluster }, { account: A, region: R });
+    expect(found.workloads.map((w) => [w.targetGroup, w.backend, w.stopped])).toEqual([
+      ['web', { kind: 'k8s', id: 'eks-demo/demo/Deployment/web' }, [{ kind: 'k8s-pods', count: 1, cpu: 0.25, memoryGb: 0.5, nodeType: 'm5.large', os: 'Linux', autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } }]],
+      ['docs', { kind: 'k8s', id: 'eks-demo/fargate/Deployment/docs' }, [{ kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'x86_64', os: 'Linux' }]],
+    ]);
+  });
+
+  it('lists the clusters the profile cannot read, with the reason', async () => {
+    const { ports } = regionPorts([]);
+    const found = await discoverRegion({ ...ports, unreadableClusters: () => [{ name: 'eks-prod', reason: 'the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized' }] }, { account: A, region: R });
+    expect(found.clusters).toEqual([{ name: 'eks-prod', reason: 'the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized' }]);
+  });
+});
+
