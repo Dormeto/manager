@@ -163,7 +163,7 @@ time per target group, router or workload, one per load balancer (lock), three p
 - **API and dashboard:** `GET /api/workloads/{router}/{id}/history?days=1..31` answers the period's entries, phases,
   time per state and wakes (at most 5,000 entries, then `truncated`); the workload view's History card draws them.
 
-## Savings (R9)
+## Savings (R9, R9.5)
 
 - **What is priced:** what each nap stopped, as router 0.27.0 says in its `ASLEEP` event (`stopped`, kept in the
   history): EC2 instances and Auto Scaling capacity by type and OS, Fargate tasks by size, RDS and Aurora instances by
@@ -172,9 +172,18 @@ time per target group, router or workload, one per load balancer (lock), three p
   and an hour in each function's memory. A price is asked again at the first lookup after it expires; a day already
   computed keeps the prices it was computed with. To take a price change at once, delete its `PRICE#` items
   (`pk = T#default`) and run the job again for the days to price again.
+- **Spot (R9.5):** routers 0.28.0 say what ran on Spot (`spot: true`: an instance's Spot lifecycle, a Fargate service's
+  share on `FARGATE_SPOT` from its capacity provider strategy). EC2 Spot is priced from `DescribeSpotPriceHistory` in
+  the item's region (the latest price of each zone averaged; cached a day as `PRICE#<region>#ec2-spot#<type>#<os>`); a
+  region the manager's account has not enabled is not priced. Fargate Spot, which no AWS API prices, at 30% of
+  on-demand (AWS's largest announced discount: the smallest saving).
+- **Discounts (R9.5):** administrators set, on the Overview's Savings card, what Savings Plans, Reserved Instances or an
+  AWS agreement take off the list prices: `compute` (EC2, Fargate) and `databases` (RDS, Aurora), whole percentages
+  from 0 to 90, never off Spot (`PUT /api/savings/settings`, audited `savings-discounts`; item `T#default` /
+  `SAVINGS#SETTINGS`). An average rate: a nap saves the list price of what goes beyond a commitment and nothing within.
+  The job reads them once per run (a day computed keeps them; the summary records those of its latest day), the API at
+  most once a minute.
 - **Estimates, not bills:** AWS bills are not read (a bill cannot show what a nap did not spend, and comes a day late).
-  Spot capacity is priced on-demand, and Savings Plans or Reserved Instances are not taken off: both come with the
-  roadmap's R9.5.
 - **Baseline:** `savings_baseline` = `always` (24/7) or `business-hours` (weekdays 08:00 to 20:00 in `savings_timezone`).
 - **The 7-day bar:** a Workloads row and a workload's header read the workload's last 30 days of history (its time in
   each state over 7 days, what its naps saved, its last nap priced), kept 5 minutes while its state stays the same. The

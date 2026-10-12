@@ -5,6 +5,23 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## 0.8.0 — 2026-10-09
+
+Router 0.28.0. Access: nothing to apply again in the member accounts (the routers read only what they already
+describe); the manager's module adds `ec2:DescribeSpotPriceHistory` to its API and savings job. Then upgrade the routers
+to 0.28.0: older routers' Spot capacity stays priced on-demand.
+
+- Spot at Spot prices: routers 0.28.0 say what ran on Spot (an instance's Spot lifecycle, a Fargate service's share on
+  Fargate Spot from its capacity provider strategy); EC2 Spot is priced from the region's Spot price history (the
+  zones' latest averaged, cached a day), Fargate Spot at 30% of on-demand (AWS publishes no Fargate Spot price; its
+  largest announced discount gives the smallest saving).
+- Discounts for commitments: administrators set on the Savings card what Savings Plans, Reserved Instances or an AWS
+  agreement take off the list prices, for compute (EC2, Fargate) and databases (RDS, Aurora), as an average rate; never
+  off Spot; audited. A change applies from the next day computed (the card says so) and to the workload figures within
+  their cache.
+- Spot items say so ("2 × t3.medium (Linux, Spot)"); the 7-day bars', the backends' and the History card's estimates
+  say when they are after discounts.
+
 ## 0.7.0 — 2026-10-08
 
 Router 0.27.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
