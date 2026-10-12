@@ -12,10 +12,10 @@ const IDLE_WINDOW_HOURS = 168;
 type Tag = { Key?: string; Value?: string };
 type Condition = { Field?: string; Values?: string[]; HostHeaderConfig?: { Values?: string[] }; PathPatternConfig?: { Values?: string[] } };
 type Action = { Type?: string; Order?: number; TargetGroupArn?: string; ForwardConfig?: { TargetGroups?: { TargetGroupArn?: string; Weight?: number }[] } };
-type Rule = { RuleArn?: string; Priority?: string; IsDefault?: boolean; Conditions?: Condition[]; Actions?: Action[] };
+export type Rule = { RuleArn?: string; Priority?: string; IsDefault?: boolean; Conditions?: Condition[]; Actions?: Action[] };
 type LoadBalancer = { LoadBalancerArn?: string; LoadBalancerName?: string; Type?: string };
 type Listener = { ListenerArn?: string; Port?: number; Protocol?: string };
-type TargetGroup = { TargetGroupArn?: string; TargetGroupName?: string; TargetType?: string };
+type TargetGroup = { TargetGroupArn?: string; TargetGroupName?: string; TargetType?: string; LoadBalancerArns?: string[] };
 type MetricQuery = {
   Id: string;
   ReturnData: boolean;
@@ -29,7 +29,7 @@ export interface ScanPorts {
     describeListeners(input: { LoadBalancerArn: string; Marker?: string }): Promise<{ Listeners?: Listener[]; NextMarker?: string }>;
     describeRules(input: { ListenerArn: string; Marker?: string }): Promise<{ Rules?: Rule[]; NextMarker?: string }>;
     describeTags(input: { ResourceArns: string[] }): Promise<{ TagDescriptions?: { ResourceArn?: string; Tags?: Tag[] }[] }>;
-    describeTargetGroups(input: { Marker?: string }): Promise<{ TargetGroups?: TargetGroup[]; NextMarker?: string }>;
+    describeTargetGroups(input: { Marker?: string; TargetGroupArns?: string[] }): Promise<{ TargetGroups?: TargetGroup[]; NextMarker?: string }>;
     describeTargetHealth(input: { TargetGroupArn: string }): Promise<{ TargetHealthDescriptions?: { Target?: { Id?: string } }[] }>;
   };
   autoscaling?: {
@@ -41,7 +41,7 @@ export interface ScanPorts {
     describeServices(input: { cluster: string; services: string[] }): Promise<{ services?: { serviceArn?: string; loadBalancers?: { targetGroupArn?: string }[] }[] }>;
   };
   cloudwatch?: {
-    getMetricData(input: { StartTime: Date; EndTime: Date; MetricDataQueries: MetricQuery[] }): Promise<{ MetricDataResults?: { Id?: string; Values?: number[] }[] }>;
+    getMetricData(input: { StartTime: Date; EndTime: Date; MetricDataQueries: MetricQuery[]; NextToken?: string; ScanBy?: 'TimestampAscending' | 'TimestampDescending' }): Promise<{ MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[] }[]; NextToken?: string }>;
   };
 }
 
@@ -61,7 +61,7 @@ export const DISCOVERY_ACTIONS = [
 ];
 
 // Pages of an AWS list call: ELBv2 (Marker/NextMarker), Auto Scaling (NextToken), ECS (nextToken).
-async function all<T>(call: (token: Record<string, string>) => Promise<Record<string, unknown>>, key: string, token = { in: 'Marker', out: 'NextMarker' }): Promise<T[]> {
+export async function all<T>(call: (token: Record<string, string>) => Promise<Record<string, unknown>>, key: string, token = { in: 'Marker', out: 'NextMarker' }): Promise<T[]> {
   const items: T[] = [];
   let next: string | undefined;
   do {
@@ -144,8 +144,8 @@ const REASONS: Record<string, string> = {
   'authenticate-cognito': 'authentication only',
 };
 
-const lbDimension = (arn: string) => arn.split(':loadbalancer/')[1] ?? arn;
-const tgDimension = (arn: string) => arn.split(':').at(-1) ?? arn;
+export const lbDimension = (arn: string) => arn.split(':loadbalancer/')[1] ?? arn;
+export const tgDimension = (arn: string) => arn.split(':').at(-1) ?? arn;
 
 // Hourly request sums of the last 7 days per target group: idle hours = hours without data or with 0 requests.
 async function idleHours(cloudwatch: NonNullable<ScanPorts['cloudwatch']>, pairs: { lb: string; tg: string }[], now: () => number) {

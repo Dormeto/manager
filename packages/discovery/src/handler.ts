@@ -9,6 +9,8 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { commandCheck, createAssumeRole, discoveryOnlyOf, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, trailCovers, trailsPort, type Credentials } from './aws.js';
 import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSummary, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
+import { requestMinutes } from './requests.js';
+import { routeOf } from './route.js';
 import { createStore } from './store.js';
 
 const region = process.env.AWS_REGION ?? 'eu-west-1';
@@ -39,20 +41,31 @@ type Event =
   | { step: 'account'; runId: string; account: string }
   | { step: 'finalize'; plan: RunPlan }
   | { step: 'abandon'; plan: RunPlan; error?: string }
+  // The idle window advisor's requests of a workload (R10), for the API.
+  | { step: 'requests'; account: string; region: string; targetGroupArn: string; days: number }
   | { step?: undefined; source?: string; by?: string; action?: string }
   // Forwarded load balancer changes, in batches from the refresh queue (packaging design §5).
   | { step?: undefined; Records: { messageId: string; body: string }[] };
 
 const trigger = (e: { source?: string; by?: string } = {}) => ({ source: e.source === 'manual' ? 'manual' as const : 'schedule' as const, ...(e.by ? { by: e.by } : {}) });
 
+const assumeDiscovery = createAssumeRole({ sts, roleName, sessionName: `dmt-${process.env.ENV ?? 'dev'}-discovery` });
+
 export const handler = async (event: Event = {}, context?: { getRemainingTimeInMillis(): number }) => {
+  // An unknown step is refused, never taken for a whole run.
+  const route = routeOf(event);
+  if (route === 'requests' && 'step' in event && event.step === 'requests') {
+    const credentials = await assumeDiscovery(event.account);
+    const ports = scanPorts(regionalClients(credentials, event.region));
+    return requestMinutes({ elbv2: ports.elbv2, cloudwatch: ports.cloudwatch! }, { targetGroupArn: event.targetGroupArn, days: event.days, now: Date.now() });
+  }
   managerAccount ??= (await sts.send(new GetCallerIdentityCommand({}))).Account ?? '';
   const deps: RunDeps = {
     store,
     organizations,
     managerAccount,
     roleName,
-    assumeRole: createAssumeRole({ sts, roleName, sessionName: `dmt-${process.env.ENV ?? 'dev'}-discovery` }),
+    assumeRole: assumeDiscovery,
     ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
     scan: (credentials, where) => scanRegion(scanPorts(regionalClients(credentials as Credentials, where.region)), where),
@@ -75,6 +88,6 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
   }
   const run = event.step === 'finalize' ? await finalizeRun(deps, event.plan)
     : event.step === 'abandon' ? await abandonRun(deps, event.plan, event.error ?? 'unknown error')
-      : await runDiscovery(deps, trigger(event));
+      : await runDiscovery(deps, trigger(event as { source?: string; by?: string }));
   return runSummary(run);
 };
