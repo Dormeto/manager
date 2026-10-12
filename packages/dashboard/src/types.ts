@@ -73,6 +73,7 @@ export interface WorkloadStatus {
   pauses?: Pause[];
   targetGroupArn?: string;
   source?: 'terraform' | 'manager'; // routers 0.18.2 and later
+  drift?: { at: string; kind: string; detail: string; by: string }[]; // repairs of what onboarding added, newest first
   lastRequestAt: string | null;
   nap: { eligibleAt: string; latestAt: string; inSeconds: number } | null;
   route: string; // over all the rules: app, waker, mixed, unknown

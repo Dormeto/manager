@@ -89,7 +89,7 @@ describe('operations engine', () => {
     expect(result).toEqual({ done: true, status: 'succeeded' });
     const stored = (await s.records.getOperation(op.id))!;
     expect(stored.steps.map((x) => [x.name, x.status])).toEqual([
-      ['find router', 'done'], ['lock router', 'skipped'], ...['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'permissions', 'schedule'].map((n) => [`install ${n}`, 'skipped']),
+      ['find router', 'done'], ['lock router', 'skipped'], ...['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'permissions', 'event rule', 'schedule'].map((n) => [`install ${n}`, 'skipped']),
       ['register router', 'skipped'], ['lock load balancer', 'done'], ['slot', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
     ]);
     expect(s.invocations.map(([fn, p]) => [fn.split(':').at(-1), p.action])).toEqual([['dmt-dev-onboarder', 'preview'], ['dmt-dev-onboarder', 'onboard'], ['dmt-dev-controller', 'status']]);
@@ -105,11 +105,11 @@ describe('operations engine', () => {
     const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
     const stored = (await s.records.getOperation(op.id))!;
-    expect(stored.steps.filter((x) => x.name.startsWith('install ')).map((x) => x.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done']);
+    expect(stored.steps.filter((x) => x.name.startsWith('install ')).map((x) => x.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done', 'done']);
     expect(stored.steps.find((x) => x.name === 'install functions')!.attempts).toBeGreaterThan(1);
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toMatchObject({
       name: 'dmtr-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`,
-      version: '0.18.2', build: 'c4e866ca4535', installedBy: 'ops@example.com',
+      version: '0.19.0', build: '748e369d260e', installedBy: 'ops@example.com',
     });
     expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
   });
@@ -199,7 +199,7 @@ describe('operations engine', () => {
   it('a workflow failure releases what the operation holds and records the error', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
-    for (let i = 0; i < 14; i += 1) await s.engine.next(op.id);
+    for (let i = 0; i < 15; i += 1) await s.engine.next(op.id);
     expect((await s.records.getOperation(op.id))!.holds.locks).toEqual([`LB#${LB}`]);
     await s.engine.fail(op.id, 'States.Timeout: the task timed out');
     const stored = (await s.records.getOperation(op.id))!;

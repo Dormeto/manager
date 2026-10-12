@@ -13,6 +13,7 @@ export interface InstallerPorts {
   logs: Record<'describeLogGroups' | 'createLogGroup' | 'putRetentionPolicy' | 'deleteLogGroup', Call>;
   lambda: Record<'getFunction' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'getFunctionEventInvokeConfig' | 'putFunctionEventInvokeConfig' | 'getPolicy' | 'addPermission' | 'deleteFunction', Call>;
   scheduler: Record<'getSchedule' | 'createSchedule' | 'updateSchedule' | 'deleteSchedule', Call>;
+  events: Record<'describeRule' | 'putRule' | 'listTargetsByRule' | 'putTargets' | 'removeTargets' | 'deleteRule', Call>;
 }
 
 // pending with changed: this call changed something and the step comes back (the workflow records the step as done).
@@ -30,8 +31,8 @@ export class RetryLater extends Error {
   }
 }
 
-export const INSTALL_STEPS = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'permissions', 'schedule'] as const;
-export const UNINSTALL_STEPS = ['schedule', 'functions', 'queues', 'log groups', 'table', 'roles'] as const;
+export const INSTALL_STEPS = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'permissions', 'event rule', 'schedule'] as const;
+export const UNINSTALL_STEPS = ['event rule', 'schedule', 'functions', 'queues', 'log groups', 'table', 'roles'] as const;
 export type InstallStep = (typeof INSTALL_STEPS)[number];
 export type UninstallStep = (typeof UNINSTALL_STEPS)[number];
 
@@ -59,7 +60,7 @@ const tagList = (tags: Record<string, string>) => Object.entries(tags).map(([Key
 const result = (changed: string[]): StepResult => (changed.length ? { status: 'done', detail: changed.join(', ') } : { status: 'skipped' });
 
 export function createInstaller(ports: InstallerPorts, options: { boundaryArn: string; principals: string[]; zip: () => Promise<Uint8Array>; codeSha256: string }) {
-  const { iam, dynamodb, sqs, logs, lambda, scheduler } = ports;
+  const { iam, dynamodb, sqs, logs, lambda, scheduler, events } = ports;
   const boundaryName = options.boundaryArn.split('/').at(-1);
 
   async function roles(b: Blueprint): Promise<StepResult> {
@@ -217,6 +218,31 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
     return result(changed);
   }
 
+  // Drift repair (R4c): the rule, its target (the onboarder), and the permission letting EventBridge invoke it.
+  async function eventRule(b: Blueprint): Promise<StepResult> {
+    const r = b.eventRule;
+    const changed: string[] = [];
+    const current = await find(() => events.describeRule({ Name: r.name }));
+    let arn = current?.Arn as string | undefined;
+    if (!current || !same(JSON.parse(current.EventPattern), JSON.parse(r.pattern)) || current.State !== 'ENABLED') {
+      arn = (await events.putRule({ Name: r.name, EventPattern: r.pattern, State: 'ENABLED', Description: r.description, ...(current ? {} : { Tags: tagList(b.tags) }) })).RuleArn;
+      changed.push(`event rule ${r.name}`);
+    }
+    const targets = ((await events.listTargetsByRule({ Rule: r.name })).Targets ?? []) as { Id: string; Arn: string }[];
+    if (!targets.some((t) => t.Id === 'onboarder' && t.Arn === r.target)) {
+      await events.putTargets({ Rule: r.name, Targets: [{ Id: 'onboarder', Arn: r.target }] });
+      changed.push(`target of ${r.name}`);
+    }
+    const onboarder = r.target.split(':').at(-1)!;
+    const policy = await find(() => lambda.getPolicy({ FunctionName: onboarder }));
+    const sids = new Set(((policy ? JSON.parse(policy.Policy) : { Statement: [] }).Statement as { Sid: string }[]).map((st) => st.Sid));
+    if (!sids.has('drift-events')) {
+      await lambda.addPermission({ FunctionName: onboarder, StatementId: 'drift-events', Action: 'lambda:InvokeFunction', Principal: 'events.amazonaws.com', SourceArn: arn });
+      changed.push(`event permission of ${onboarder}`);
+    }
+    return result(changed);
+  }
+
   async function schedule(b: Blueprint): Promise<StepResult> {
     const s = b.schedule;
     const wanted = {
@@ -235,12 +261,18 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
   }
 
   const installSteps: Record<InstallStep, (b: Blueprint) => Promise<StepResult>> = {
-    roles, table, queues, 'log groups': logGroups, functions, 'async invoke': asyncInvoke, permissions, schedule,
+    roles, table, queues, 'log groups': logGroups, functions, 'async invoke': asyncInvoke, permissions, 'event rule': eventRule, schedule,
   };
 
   // Uninstall: each step deletes what exists.
   const deleted = async (call: () => Promise<unknown>) => (await find(call)) !== null;
   const uninstallSteps: Record<UninstallStep, (b: Blueprint) => Promise<StepResult>> = {
+    'event rule': async (b) => {
+      if (!(await find(() => events.describeRule({ Name: b.eventRule.name })))) return { status: 'skipped' };
+      await find(() => events.removeTargets({ Rule: b.eventRule.name, Ids: ['onboarder'] }));
+      await events.deleteRule({ Name: b.eventRule.name });
+      return { status: 'done', detail: `event rule ${b.eventRule.name}` };
+    },
     schedule: async (b) => result((await deleted(() => scheduler.deleteSchedule({ Name: b.schedule.name }))) ? [`schedule ${b.schedule.name}`] : []),
     functions: async (b) => {
       const changed: string[] = [];

@@ -14,6 +14,7 @@ export function fakeInstallAccount() {
     logGroups: new Map<string, { retention?: number; tags: Record<string, string> }>(),
     functions: new Map<string, { config: Record<string, unknown>; codeSha256: string; updating: boolean; asyncInvoke?: Record<string, unknown>; permissions: Map<string, string> }>(),
     schedules: new Map<string, Record<string, unknown>>(),
+    eventRules: new Map<string, { pattern: string; state: string; targets: { Id: string; Arn: string }[] }>(),
     newRoles: new Set<string>(), // roles Lambda cannot assume yet (one failed CreateFunction each)
     calls: [] as string[],
   };
@@ -156,16 +157,49 @@ export function fakeInstallAccount() {
         if (!f.permissions.size) throw error('ResourceNotFoundException');
         return { Policy: JSON.stringify({ Statement: [...f.permissions].map(([Sid, principal]) => ({ Sid, Principal: { AWS: principal } })) }) };
       },
-      async addPermission({ FunctionName, StatementId, Principal }) {
+      async addPermission({ FunctionName, StatementId, Principal, SourceArn }) {
         call('addPermission');
         const f = state.functions.get(FunctionName)!;
         if (f.permissions.has(StatementId)) throw error('ResourceConflictException');
-        f.permissions.set(StatementId, Principal);
+        f.permissions.set(StatementId, SourceArn ? `${Principal} ${SourceArn}` : Principal);
         return {};
       },
       async deleteFunction({ FunctionName }) {
         call('deleteFunction');
         if (!state.functions.delete(FunctionName)) throw error('ResourceNotFoundException');
+        return {};
+      },
+    },
+    events: {
+      async describeRule({ Name }) {
+        call('describeRule');
+        const r = state.eventRules.get(Name);
+        if (!r) throw error('ResourceNotFoundException');
+        return { Name, Arn: `arn:aws:events:eu-west-3:121014831971:rule/${Name}`, EventPattern: r.pattern, State: r.state };
+      },
+      async putRule({ Name, EventPattern, State }) {
+        call('putRule');
+        state.eventRules.set(Name, { pattern: EventPattern, state: State, targets: state.eventRules.get(Name)?.targets ?? [] });
+        return { RuleArn: `arn:aws:events:eu-west-3:121014831971:rule/${Name}` };
+      },
+      async listTargetsByRule({ Rule }) {
+        call('listTargetsByRule');
+        const r = state.eventRules.get(Rule);
+        if (!r) throw error('ResourceNotFoundException');
+        return { Targets: r.targets };
+      },
+      async putTargets({ Rule, Targets }) { call('putTargets'); state.eventRules.get(Rule)!.targets = Targets; return { FailedEntryCount: 0 }; },
+      async removeTargets({ Rule, Ids }) {
+        call('removeTargets');
+        const r = state.eventRules.get(Rule);
+        if (!r) throw error('ResourceNotFoundException');
+        r.targets = r.targets.filter((t) => !Ids.includes(t.Id));
+        return {};
+      },
+      async deleteRule({ Name }) {
+        call('deleteEventRule');
+        if (state.eventRules.get(Name)?.targets.length) throw error('ValidationException', 'Rule can\'t be deleted since it has targets.');
+        if (!state.eventRules.delete(Name)) throw error('ResourceNotFoundException');
         return {};
       },
     },

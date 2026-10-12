@@ -65,7 +65,12 @@ describe('installer', () => {
       Role: 'arn:aws:iam::121014831971:role/dormeto/router/dmtr-dev-eu-west-3-controller', Handler: 'controller.handler', Runtime: 'nodejs24.x', Timeout: 900, MemorySize: 256, Architectures: ['arm64'],
     });
     expect(s.state.functions.get('dmtr-dev-controller')!.asyncInvoke).toMatchObject({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 120, DestinationConfig: { OnFailure: { Destination: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-controller-failures' } } });
-    for (const f of ['dmtr-dev-controller', 'dmtr-dev-onboarder']) expect([...s.state.functions.get(f)!.permissions.values()]).toEqual(PRINCIPALS);
+    expect([...s.state.functions.get('dmtr-dev-controller')!.permissions.values()]).toEqual(PRINCIPALS);
+    expect([...s.state.functions.get('dmtr-dev-onboarder')!.permissions.values()]).toEqual([...PRINCIPALS, 'events.amazonaws.com arn:aws:events:eu-west-3:121014831971:rule/dmtr-dev-drift']);
+    const drift = s.state.eventRules.get('dmtr-dev-drift')!;
+    expect(drift.state).toBe('ENABLED');
+    expect(JSON.parse(drift.pattern).$or[0].detail.userIdentity.sessionContext.sessionIssuer.userName).toEqual([{ 'anything-but': { prefix: 'dmtr-dev-' } }]);
+    expect(drift.targets).toEqual([{ Id: 'onboarder', Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-onboarder' }]);
     expect(s.state.functions.get('dmtr-dev-waker')!.permissions.size).toBe(0);
     expect(s.state.schedules.get('dmtr-dev-check')).toMatchObject({
       ScheduleExpression: 'rate(5 minutes)', FlexibleTimeWindow: { Mode: 'OFF' },
@@ -97,7 +102,8 @@ describe('installer', () => {
     const upgraded = setup(new Uint8Array([9, 9]));
     upgraded.state.roles = s.state.roles; upgraded.state.tables = s.state.tables; upgraded.state.queues = s.state.queues;
     upgraded.state.logGroups = s.state.logGroups; upgraded.state.functions = s.state.functions; upgraded.state.schedules = s.state.schedules;
-    expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped']);
+    upgraded.state.eventRules = s.state.eventRules;
+    expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped', 'skipped']);
     expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(14);
     const controller = s.state.functions.get('dmtr-dev-controller')!;
     expect((controller.config.Environment as { Variables: Record<string, string> }).Variables).toMatchObject({ DMT_VERSION: '0.18.0', DMT_METRICS: 'true' });
@@ -117,7 +123,7 @@ describe('installer', () => {
     const statuses = [];
     for (const step of UNINSTALL_STEPS) statuses.push((await s.installer.uninstall(step, b)).status);
     expect(statuses).toEqual(UNINSTALL_STEPS.map(() => 'done'));
-    expect([s.state.roles.size, s.state.tables.size, s.state.queues.size, s.state.logGroups.size, s.state.functions.size, s.state.schedules.size]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect([s.state.roles.size, s.state.tables.size, s.state.queues.size, s.state.logGroups.size, s.state.functions.size, s.state.schedules.size, s.state.eventRules.size]).toEqual([0, 0, 0, 0, 0, 0, 0]);
     const again = [];
     for (const step of UNINSTALL_STEPS) again.push((await s.installer.uninstall(step, b)).status);
     expect(again).toEqual(UNINSTALL_STEPS.map(() => 'skipped'));

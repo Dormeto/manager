@@ -16,6 +16,7 @@ export interface Blueprint {
     environment: Record<string, string>;
     asyncInvoke?: { maximumRetryAttempts: number; maximumEventAgeInSeconds: number; onFailure: string };
   }[];
+  eventRule: { name: string; pattern: string; target: string; description: string };
   schedule: { name: string; expression: string; target: string; roleArn: string; input: string; deadLetter: string; maximumRetryAttempts: number };
 }
 

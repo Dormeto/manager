@@ -14,6 +14,9 @@ import {
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { CreateScheduleCommand, DeleteScheduleCommand, GetScheduleCommand, SchedulerClient, UpdateScheduleCommand } from '@aws-sdk/client-scheduler';
 import { CreateQueueCommand, DeleteQueueCommand, GetQueueUrlCommand, SQSClient } from '@aws-sdk/client-sqs';
+import {
+  DeleteRuleCommand, DescribeRuleCommand, EventBridgeClient, ListTargetsByRuleCommand, PutRuleCommand, PutTargetsCommand, RemoveTargetsCommand,
+} from '@aws-sdk/client-eventbridge';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import { createHash } from 'node:crypto';
 import type { Blueprint } from './blueprint.js';
@@ -46,6 +49,10 @@ export function installerPorts(credentials: Credentials, region: string): Instal
       addPermission: AddPermissionCommand, deleteFunction: DeleteFunctionCommand,
     }),
     scheduler: port(new SchedulerClient(opts), { getSchedule: GetScheduleCommand, createSchedule: CreateScheduleCommand, updateSchedule: UpdateScheduleCommand, deleteSchedule: DeleteScheduleCommand }),
+    events: port(new EventBridgeClient(opts), {
+      describeRule: DescribeRuleCommand, putRule: PutRuleCommand, listTargetsByRule: ListTargetsByRuleCommand, putTargets: PutTargetsCommand,
+      removeTargets: RemoveTargetsCommand, deleteRule: DeleteRuleCommand,
+    }),
   };
 }
 

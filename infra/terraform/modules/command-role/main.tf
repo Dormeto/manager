@@ -119,6 +119,11 @@ data "aws_iam_policy_document" "command" {
     resources = ["*"]
   }
   statement {
+    sid       = "RouterEventRules"
+    actions   = ["events:DescribeRule", "events:PutRule", "events:DeleteRule", "events:PutTargets", "events:RemoveTargets", "events:ListTargetsByRule", "events:TagResource"]
+    resources = ["${local.arn}:events:*:${local.account}:rule/dmtr-*"]
+  }
+  statement {
     sid       = "RouterSchedules"
     actions   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"]
     resources = ["${local.arn}:scheduler:*:${local.account}:schedule/default/dmtr-*"]

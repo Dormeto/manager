@@ -197,6 +197,12 @@ const summary = computed(() => {
           </v-list-item>
         </v-list>
       </v-card>
+      <v-card v-if="status.drift?.length" title="Drift repaired" class="mb-4">
+        <v-card-subtitle class="text-wrap">Infrastructure as code changed what onboarding added; the router put it back.</v-card-subtitle>
+        <v-list density="compact" class="py-0">
+          <v-list-item v-for="(d, i) in status.drift" :key="`${d.at}-${i}`" :title="d.kind" :subtitle="`${d.detail} · ${relative(d.at, now)} · ${d.by}`" />
+        </v-list>
+      </v-card>
       <v-card title="Targets">
         <v-card-text>
           <span v-if="!status.targets.length" class="text-medium-emphasis">No registered target.</span>
