@@ -28,4 +28,19 @@ describe('synthetic organization', () => {
     const synthetic = (await s.store.listCandidates()).filter((c) => isSynthetic(c.account));
     expect([synthetic.length, run.status]).toEqual([30, 'ok']);
   });
+
+  it('turned off, it leaves nothing behind: the next run deletes its candidates and scan states, and counts without them', async () => {
+    const s = setup({ cfg: config({ regions: ['*'], filters: [filter('all', [{}])] }) });
+    await s.ready;
+    s.deps.synthetic = { accounts: 3 };
+    await runDiscovery(s.deps, { source: 'manual' });
+    const real = (await s.store.listCandidates()).filter((c) => !isSynthetic(c.account));
+    delete s.deps.synthetic;
+    const run = await runDiscovery(s.deps, { source: 'manual' });
+    expect((await s.store.listCandidates()).filter((c) => isSynthetic(c.account))).toEqual([]);
+    expect((await s.store.listAccountScans()).filter((scan) => isSynthetic(scan.account))).toEqual([]);
+    // The real organization's candidates stay, and the counts are theirs.
+    expect((await s.store.listCandidates()).map((c) => c.id).sort()).toEqual(real.map((c) => c.id).sort());
+    expect(Object.values(run.counts).reduce((n, c) => n + c, 0)).toBe(real.length);
+  });
 });

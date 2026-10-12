@@ -143,6 +143,7 @@ export interface AccountScan {
   runId?: string; // the run that scanned it last
   retiredAt?: string; // left the perimeter: its candidates were decided again, once
   result?: AccountResult;
+  synthetic?: boolean; // written by the synthetic scanner (dev): deleted with its candidates once it is turned off
 }
 
 // What an account step of a run found, for the run record (scale design §5).

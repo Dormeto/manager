@@ -48,6 +48,7 @@ export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null 
     async accountCandidates(account: string) { return [...items.values()].filter((c) => c.account === account); },
     async getAccountScan() { return null; },
     async putAccountScan() {},
+    async deleteAccountScan() {},
     async listAccountScans() { return []; },
     async getAccountScans() { return []; },
     async getRun() { return null; },

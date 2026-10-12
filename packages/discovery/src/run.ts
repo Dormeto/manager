@@ -253,7 +253,7 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
     written: changed.length,
   };
-  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result });
+  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}) });
   return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
 }
 
@@ -271,6 +271,12 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const inRun = new Set(plan.accounts);
     for (const left of scans.filter((s) => !inRun.has(s.account) && !s.retiredAt)) {
       const previous = new Map((await deps.store.accountCandidates(left.account)).map((c) => [c.id, c]));
+      // A synthetic account (dev) leaves nothing behind once the synthetic organization is turned off.
+      if (left.synthetic) {
+        await deps.store.deleteCandidates([...previous.values()]);
+        await deps.store.deleteAccountScan(left.account);
+        continue;
+      }
       await deps.store.putCandidates(nextCandidates({ previous, results: [], inventory, config, now: now() }));
       await deps.store.putAccountScan({ ...left, retiredAt: plan.runId });
     }

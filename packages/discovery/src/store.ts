@@ -42,6 +42,7 @@ export interface DiscoveryStore {
   deleteCandidates(candidates: Pick<Candidate, 'id' | 'account' | 'region'>[]): Promise<void>;
   getAccountScan(account: string): Promise<AccountScan | null>;
   putAccountScan(scan: AccountScan): Promise<void>;
+  deleteAccountScan(account: string): Promise<void>;
   listAccountScans(): Promise<AccountScan[]>;
   // The scan states of these accounts, read by key and consistent (a run's results, right after its last account).
   getAccountScans(accounts: string[]): Promise<AccountScan[]>;
@@ -290,6 +291,9 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     // Indexed (gsi1 ACCT): the run's finalize step reads every account's result.
     async putAccountScan(scan) {
       await put({ pk: { S: `CAND#${scan.account}` }, sk: { S: ACCOUNT_SCAN }, gsi1pk: { S: 'ACCT' }, gsi1sk: { S: scan.account }, data: { S: JSON.stringify(scan) } });
+    },
+    async deleteAccountScan(account) {
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: { pk: { S: `CAND#${account}` }, sk: { S: ACCOUNT_SCAN } } }));
     },
     async getAccountScans(accounts) {
       const found: AccountScan[] = [];
