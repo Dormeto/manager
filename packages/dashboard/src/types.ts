@@ -118,7 +118,10 @@ export interface RouterInfo {
   workloadStates?: Record<string, number>;
   paused?: number;
   lastActivityAt?: string | null;
+  operation?: { id: string; type: RouterOperationType }; // the install, upgrade or uninstall running on it
 }
+
+export type RouterOperationType = 'install-router' | 'upgrade-router' | 'uninstall-router';
 
 export interface Configured<T> {
   value: T;

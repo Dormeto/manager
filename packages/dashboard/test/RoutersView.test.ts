@@ -10,15 +10,22 @@ import RoutersView from '../src/views/RoutersView.vue';
 import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
+// The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
+const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
-    if (path === '/operations') return { operation: { id: 'op-9' } };
+    if (path === '/operations') {
+      server.running = 'op-9';
+      return { operation: { id: 'op-9' } };
+    }
+    if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'upgrade-router', target: { account: '111122223333', region: 'eu-west-3' }, ...server.ended };
     if (path.startsWith('/workloads?')) return { workloads: [{ workloadId: 'a4dffc5bf369a297', router: 'dmtr-dev-eu-west-3', state: 'ASLEEP' }], total: 1 };
     return {
       available: { version: '0.23.0' },
       routers: [
-        { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] } },
+        { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] },
+          ...(server.running ? { operation: { id: server.running, type: 'upgrade-router' } } : {}) },
         { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0, health: { status: 'ok', problems: [] },
           pauses: [{ scope: 'router', reason: 'load test', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z' }] },
         { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, health: { status: 'ok', problems: [] } },
@@ -56,6 +63,8 @@ const hover = async (el: { trigger: (e: string) => Promise<void> }) => {
 describe('Routers view', () => {
   beforeEach(() => {
     calls.length = 0;
+    server.running = null;
+    server.ended = { status: 'succeeded' };
     document.body.innerHTML = '';
   });
 
@@ -99,12 +108,55 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
-  it('links the upgrade it started to its steps in Operations', async () => {
+  it('starts an upgrade with a toast linking to its operation, not a banner, and animates the upgrade icon at once', async () => {
     const wrapper = await mountView();
     await wrapper.find('button[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.23.0"]').trigger('click');
     await flushPromises();
-    const link = wrapper.findAll('a').find((a) => a.text() === 'Follow it in Operations');
-    expect(link?.attributes('href')).toBe('/operations?id=op-9');
+    await sleep(50);
+    const toast = document.querySelector('.v-snackbar');
+    expect(toast?.textContent).toContain('Upgrade of dmtr-dev-eu-west-3 to 0.23.0 started');
+    expect([...toast!.querySelectorAll('a')].find((a) => a.textContent === 'Follow it in Operations')?.getAttribute('href')).toBe('/operations?id=op-9');
+    expect(wrapper.find('.v-alert').exists()).toBe(false);
+    expect(wrapper.find('a[aria-label="Upgrading dmtr-dev-eu-west-3: follow it in Operations"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('shows an upgrade running as the upgrade icon animated, opening its operation, and explains it in a tooltip', async () => {
+    server.running = 'op-7';
+    const wrapper = await mountView();
+    const versionCell = rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('td').find((td) => td.text().includes('0.22.6'))!;
+    const upgrading = versionCell.find('a[aria-label="Upgrading dmtr-dev-eu-west-3: follow it in Operations"]');
+    expect(upgrading.attributes('href')).toBe('/operations?id=op-7');
+    expect(upgrading.find('.v-progress-circular--indeterminate').exists()).toBe(true);
+    expect(versionCell.find('button[aria-label^="Upgrade"]').exists()).toBe(false);
+    await hover(upgrading);
+    expect(document.body.textContent).toContain('Upgrading dmtr-dev-eu-west-3 to 0.23.0');
+    wrapper.unmount();
+  });
+
+  it('says in a toast that an upgrade it showed running succeeded', async () => {
+    server.running = 'op-7';
+    const wrapper = await mountView();
+    server.running = null;
+    await wrapper.find('button[aria-label="Refresh now"]').trigger('click');
+    await flushPromises();
+    await sleep(50);
+    expect(calls.some((c) => c.path === '/operations/op-7')).toBe(true);
+    expect(document.querySelector('.v-snackbar')?.textContent).toContain('Upgrade of dmtr-dev-eu-west-3 succeeded');
+    wrapper.unmount();
+  });
+
+  it('says in a toast that an upgrade it showed running failed, with the reason and its operation', async () => {
+    server.running = 'op-7';
+    server.ended = { status: 'failed', error: 'install functions: Rate exceeded' };
+    const wrapper = await mountView();
+    server.running = null;
+    await wrapper.find('button[aria-label="Refresh now"]').trigger('click');
+    await flushPromises();
+    await sleep(50);
+    const toast = document.querySelector('.v-snackbar');
+    expect(toast?.textContent).toContain('Upgrade of dmtr-dev-eu-west-3 failed: install functions: Rate exceeded');
+    expect([...toast!.querySelectorAll('a')].find((a) => a.textContent === 'Follow it in Operations')?.getAttribute('href')).toBe('/operations?id=op-7');
     wrapper.unmount();
   });
 
