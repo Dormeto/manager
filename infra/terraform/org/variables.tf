@@ -23,15 +23,6 @@ variable "manager_account_id" {
   type        = string
 }
 
-variable "discovery_accounts" {
-  description = "Accounts that get DmtDiscoveryRole. Only these can ever be read by discovery."
-  type        = list(string)
-  validation {
-    condition     = alltrue([for a in var.discovery_accounts : can(regex("^\\d{12}$", a))])
-    error_message = "discovery_accounts must be 12-digit account IDs."
-  }
-}
-
 variable "command_account_id" {
   description = "Member account that gets DmtCommandRole and DmtRouterBoundary, so that the manager installs routers there by API calls (the manager's own account gets them from the platform stack)."
   type        = string

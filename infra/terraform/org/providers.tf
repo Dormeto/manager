@@ -1,4 +1,4 @@
-# Organization management account: delegation policy and StackSets (vision docs/architecture/organization-iam.md).
+# Organization management account: the delegation policy (vision docs/architecture/organization-iam.md). No CloudFormation.
 provider "aws" {
   region              = var.region
   profile             = var.aws_profile

@@ -95,7 +95,7 @@ onMounted(load);
   <v-alert v-if="delegationMissing && config?.mode === 'organization'" type="warning" variant="tonal" class="mb-4"
     title="Organization mode is unavailable">
     The last run could not list the organization's accounts: the delegation policy of the management account is missing.
-    <a :href="procedureLink([])" target="_blank" rel="noopener">How to set it up</a>, then Run now.
+    <a :href="procedureLink()" target="_blank" rel="noopener">How to set it up</a>, then Run now.
   </v-alert>
   <v-alert v-if="errors.length" type="error" variant="tonal" class="mb-4">
     <div class="font-weight-medium mb-1">The perimeter was not saved</div>

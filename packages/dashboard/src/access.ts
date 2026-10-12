@@ -20,7 +20,6 @@ export interface AccessReport {
 
 // The website's page, with the roles' Terraform modules and AWS CLI commands.
 export const PROCEDURE_URL = 'https://dormeto.com/organization-access.html';
-const LINKED_ACCOUNTS = 40;
 
 export function accessLine(row: AccessRow): string {
   const missing = [!row.discovery.ok && 'no discovery role', !row.command.ok && 'no command role'].filter(Boolean).join(', ');
@@ -29,7 +28,7 @@ export function accessLine(row: AccessRow): string {
   return `${missing} (${reason}): ${stops}`;
 }
 
-// The procedure, with the accounts to set up (in the fragment: never sent to a server).
-export function procedureLink(accounts: string[]): string {
-  return accounts.length ? `${PROCEDURE_URL}#accounts=${accounts.slice(0, LINKED_ACCOUNTS).join(',')}` : PROCEDURE_URL;
+// The procedure: a static page (the website runs no script); the panel lists the accounts to set up.
+export function procedureLink(): string {
+  return PROCEDURE_URL;
 }

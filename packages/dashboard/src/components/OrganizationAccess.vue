@@ -9,7 +9,7 @@ const props = defineProps<{ report: AccessReport; roles?: { discoveryRole: strin
 const all = ref(false);
 const shown = computed(() => (all.value ? props.report.accounts : props.report.accounts.slice(0, 5)));
 const notReady = computed(() => props.report.counts.discoveryMissing + props.report.counts.commandMissing > 0 || props.report.delegation === 'missing');
-const link = computed(() => procedureLink(props.report.accounts.map((a) => a.account)));
+const link = procedureLink();
 </script>
 
 <template>
