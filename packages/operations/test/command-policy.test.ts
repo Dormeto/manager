@@ -24,6 +24,10 @@ describe('the command role\'s EKS access entries (Kubernetes workloads, R10.5)',
   it('creates the entries of the router roles in the group dormeto:router and of DmtDiscoveryRole, nothing else', () => {
     expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': routerRole, 'eks:kubernetesGroups': ['dormeto:router'] })).toBe(true);
     expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': discovery })).toBe(true);
+    // DmtDiscoveryRole only reads, through its view policy: never in a group (the final review's minor 9: a compromised
+    // command role could have put it in dormeto:router).
+    expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': discovery, 'eks:kubernetesGroups': ['dormeto:router'] })).toBe(false);
+    expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': discovery, 'eks:kubernetesGroups': ['system:masters'] })).toBe(false);
     expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': routerRole, 'eks:kubernetesGroups': ['system:masters'] })).toBe(false);
     expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': routerRole, 'eks:kubernetesGroups': ['dormeto:router', 'system:masters'] })).toBe(false);
     expect(allows('eks:CreateAccessEntry', cluster, { 'eks:principalArn': `arn:aws:iam::${ACCOUNT}:role/Admin`, 'eks:kubernetesGroups': ['dormeto:router'] })).toBe(false);

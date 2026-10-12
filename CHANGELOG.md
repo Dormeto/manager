@@ -18,9 +18,9 @@ CLI script, of the same release).
 Router 0.29.0. Access: apply the access module or the AWS CLI script of this release again in every member account:
 `DmtDiscoveryRole` reads the EKS clusters (`eks:ListClusters`, `eks:DescribeCluster`) and the instances behind a target
 group (`ec2:DescribeInstances`: a cluster's nodes are never offered to nap); `DmtCommandRole` manages the
-routers' EKS access entries (statements `EksClusters`, `EksAccessEntries`, `EksAccessEntriesRemoved`, `EksDiscoveryView`:
-the routers' roles in the Kubernetes group `dormeto:router` and `DmtDiscoveryRole` with `AmazonEKSViewPolicy`, nothing
-else); the routers' permissions boundary allows `eks:DescribeCluster`. Then upgrade the routers to 0.29.0 (the upgrade
+routers' EKS access entries (statements `EksClusters`, `EksAccessEntries`, `EksAccessEntriesDiscovery`,
+`EksAccessEntriesRemoved`, `EksDiscoveryView`: the routers' roles in the Kubernetes group `dormeto:router` and
+`DmtDiscoveryRole` with `AmazonEKSViewPolicy`, in no group, nothing else); the routers' permissions boundary allows `eks:DescribeCluster`. Then upgrade the routers to 0.29.0 (the upgrade
 makes the access entries in the account and region's clusters) and apply `dormeto-kubernetes-0.10.0.yaml` of the release
 in each cluster whose workloads Dormeto should nap (`kubectl apply -f`). Without them nothing changes for the other
 workloads: a router upgraded first skips its access entries and says what to apply, and Kubernetes candidates are not

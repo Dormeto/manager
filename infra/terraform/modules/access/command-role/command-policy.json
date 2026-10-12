@@ -232,14 +232,29 @@
       "Condition": {
         "ArnLike": {
           "eks:principalArn": [
-            "arn:${partition}:iam::${account}:role/dormeto/router/dmtr-*",
-            "arn:${partition}:iam::${account}:role/DmtDiscoveryRole"
+            "arn:${partition}:iam::${account}:role/dormeto/router/dmtr-*"
           ]
         },
         "ForAllValues:StringEquals": {
           "eks:kubernetesGroups": [
             "dormeto:router"
           ]
+        }
+      }
+    },
+    {
+      "Sid": "EksAccessEntriesDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "eks:CreateAccessEntry"
+      ],
+      "Resource": "arn:${partition}:eks:*:${account}:cluster/*",
+      "Condition": {
+        "ArnLike": {
+          "eks:principalArn": "arn:${partition}:iam::${account}:role/DmtDiscoveryRole"
+        },
+        "Null": {
+          "eks:kubernetesGroups": "true"
         }
       }
     },
