@@ -96,7 +96,7 @@ describe('a region\'s discovery', () => {
 
 describe('the discovery of every account and region', () => {
   const account = (id: string, credentials: () => Promise<null | { accessKeyId: string; secretAccessKey: string; sessionToken: string }> = async () => null) => ({ account: id, name: id, credentials });
-  const reachedOf = (accounts: ReturnType<typeof account>[]): Reached => ({ organization: 'o-abc123', why: null, accounts, unreachable: [] });
+  const reachedOf = (accounts: ReturnType<typeof account>[]): Reached => ({ organization: 'o-abc123', why: null, accounts, unreachable: [], listed: accounts.length });
 
   function setup({ accounts = [account(A)], regions = [R, 'eu-west-3'], failing = new Set<string>(), delay = 0, unreachable = [] as Reached['unreachable'] } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));

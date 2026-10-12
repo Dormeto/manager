@@ -9,8 +9,8 @@ const workload = (name: string, usd15: number, recommended = 30) => ({
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { regions: ['eu-west-1'], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
-  accounts: 2,
+  options: { accounts: null, regions: ['eu-west-1'], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
+  accounts: 2, accountsListed: 2,
   totals: { workloads: 12, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08 },
   byAccount: { '111111111111': { workloads: 12, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82 } },
   byRegion: { 'eu-west-1': { workloads: 12, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82 } },
@@ -36,7 +36,16 @@ describe('the estimate\'s reports', () => {
     expect(md).toContain('what it stops has no AWS list price');
     expect(md).toContain('create a role this profile may assume');
     expect(md).toContain('compute 20%, databases 0%');
+    expect(md).toContain('- Accounts: every account reached');
     expect(md).toContain('Every request counts');
+  });
+
+  it('restricted to the accounts given: how many of the organization\'s, in the target and the summary; the options name them', () => {
+    const restricted: Estimate = { ...E, accountsListed: 28, options: { ...E.options, accounts: ['111111111111', '222222222222'] } };
+    const md = markdownReport(restricted);
+    expect(md).toContain('Organization o-abc123, 2 of its 28 accounts (--accounts), estimated');
+    expect(md).toContain('- Accounts: 111111111111, 222222222222 (--accounts)');
+    expect(summaryLines(restricted)[0]).toContain('for 12 workloads in 2 of the organization\'s 28 accounts;');
   });
 
   it('the JSON parses back to the estimate', () => {

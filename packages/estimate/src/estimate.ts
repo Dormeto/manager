@@ -25,6 +25,8 @@ export interface Estimate {
   why: string | null;
   options: Omit<Options, 'out' | 'profile'>;
   accounts: number;
+  // The accounts reached before --accounts restricted them.
+  accountsListed: number;
   totals: Totals;
   byAccount: Record<string, Totals>;
   byRegion: Record<string, Totals>;
@@ -133,7 +135,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   }
   if (workloads.length) totals.dormetoMonth += DORMETO_COST.manager;
   return {
-    generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length,
+    generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length, accountsListed: reached.listed,
     totals, byAccount, byRegion, workloads, leftOut,
     ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
     unreachable: reached.unreachable,

@@ -18,12 +18,15 @@ const RULE: ScannedRule = {
   hosts: ['shop.example.com'], targetGroup: 'shop', targetGroupArn: TG, backend: { kind: 'instance', id: 'i-1' }, tags: {}, rules: [], eligibility: 'eligible', idleHours7d: 150, requests7d: 20,
 };
 
-function fakeAws({ whoami = async () => A }: { whoami?: () => Promise<string> } = {}) {
+const B = '222222222222';
+const member = (id: string) => ({ id, name: id === A ? 'management' : 'prod', ouPath: ['r-root'], tags: {} });
+
+function fakeAws({ whoami = async () => A, organization = null }: { whoami?: () => Promise<string>; organization?: string | null } = {}) {
   const calls = { scans: 0, metrics: 0, regions: 0, assumed: 0, discounts: [] as Discounts[] };
   const aws: EstimateAws = {
     accounts: {
-      whoami, organization: async () => { throw Object.assign(new Error('Your account is not a member of an organization.'), { name: 'AWSOrganizationsNotInUseException' }); },
-      inventory: async () => ({ accounts: [], ous: {} }), assume: async () => { calls.assumed += 1; return { accessKeyId: 'a', secretAccessKey: 's', sessionToken: 't' }; },
+      whoami, organization: async () => { if (organization) return organization; throw Object.assign(new Error('Your account is not a member of an organization.'), { name: 'AWSOrganizationsNotInUseException' }); },
+      inventory: async () => ({ accounts: organization ? [member(A), member(B)] : [], ous: {} }), assume: async () => { calls.assumed += 1; return { accessKeyId: 'a', secretAccessKey: 's', sessionToken: 't' }; },
     },
     regionsOf: async () => { calls.regions += 1; return [R]; },
     portsOf: () => ({
@@ -83,5 +86,23 @@ describe('the estimate command', () => {
     const before = { ...calls };
     expect(await main(['--profile', 'p', '--out', out], d.deps)).toBe(0);
     expect([calls.scans, calls.metrics, calls.regions, calls.assumed]).toEqual([before.scans, before.metrics, before.regions, before.assumed]);
+  });
+
+  it('restricted to accounts of the organization (--accounts): only those, and how many of its accounts', async () => {
+    const { aws, calls } = fakeAws({ organization: 'o-abc123' });
+    const d = deps(aws);
+    const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
+    expect(await main(['--profile', 'p', '--accounts', A, '--out', out], d.deps)).toBe(0);
+    expect(d.out[0]).toBe(`Estimating the organization o-abc123 (1 of its 2 accounts, --accounts); cache ${join(d.cacheRoot, 'o-abc123')}`);
+    // The other account is never reached.
+    expect([calls.assumed, calls.regions]).toEqual([0, 1]);
+    expect(JSON.parse(readFileSync(join(out, 'estimate-2026-10-10.json'), 'utf8'))).toMatchObject({ accounts: 1, accountsListed: 2, options: { accounts: [A] } });
+  });
+
+  it('accounts given that cannot be estimated: why, exit code 2', async () => {
+    const d = deps(fakeAws({ organization: 'o-abc123' }).aws);
+    // A temporary --out: a run that went on would write nothing in the repository.
+    expect(await main(['--profile', 'p', '--accounts', '999999999999', '--out', mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'))], d.deps)).toBe(2);
+    expect(d.errors).toEqual(['--accounts: 999999999999: not an active account of the organization o-abc123']);
   });
 });

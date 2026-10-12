@@ -11,12 +11,16 @@ const net = (t: Totals) => t.usdMonthWindow - t.dormetoMonth;
 const hours = (m: number) => m % 60 === 0;
 const windowAdjective = (m: number) => (hours(m) ? `${m / 60}-hour` : `${m}-minute`);
 const windowWords = (m: number) => (hours(m) ? n(m / 60, 'hour') : n(m, 'minute'));
-const target = (e: Estimate) => (e.organization ? `Organization ${e.organization}, ${n(e.accounts, 'account')}` : `Account ${e.workloads[0]?.workload.account ?? ''}`.trim());
+// Restricted by --accounts: how many of the organization's accounts.
+const restricted = (e: Estimate) => Boolean(e.organization && e.options.accounts);
+const target = (e: Estimate) => (e.organization
+  ? `Organization ${e.organization}, ${restricted(e) ? `${e.accounts} of its ${n(e.accountsListed, 'account')} (--accounts)` : n(e.accounts, 'account')}`
+  : `Account ${e.workloads[0]?.workload.account ?? ''}`.trim());
 
 export function summaryLines(e: Estimate): string[] {
   const t = e.totals;
   const lines = [
-    `About ${usd(t.usdMonthWindow)} a month at a ${windowAdjective(e.options.window)} idle window (${usd(t.usdMonthRecommended)} at the recommended windows) for ${n(t.workloads, 'workload')} in ${n(e.accounts, 'account')}; Dormeto costs about ${usd(t.dormetoMonth)} a month: net about ${usd(net(t))}.`,
+    `About ${usd(t.usdMonthWindow)} a month at a ${windowAdjective(e.options.window)} idle window (${usd(t.usdMonthRecommended)} at the recommended windows) for ${n(t.workloads, 'workload')} in ${restricted(e) ? `${e.accounts} of the organization's ${n(e.accountsListed, 'account')}` : n(e.accounts, 'account')}; Dormeto costs about ${usd(t.dormetoMonth)} a month: net about ${usd(net(t))}.`,
   ];
   if (e.why) lines.push(e.why);
   const top = [...e.workloads].sort((a, b) => b.atWindow.usdMonth - a.atWindow.usdMonth).slice(0, 10);
@@ -73,6 +77,7 @@ export function markdownReport(e: Estimate): string {
     '## Regions that failed', '',
     ...(e.failedRegions.length ? e.failedRegions.map((r) => `- ${r.account} ${r.region}: ${r.error}`) : ['None.']), '',
     '## Options', '',
+    `- Accounts: ${o.accounts ? `${o.accounts.join(', ')} (--accounts)` : 'every account reached'}`,
     `- Regions: ${o.regions ? o.regions.join(', ') : 'each account\'s enabled regions'}`,
     `- Role in member accounts: ${o.role}`,
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,

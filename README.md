@@ -221,8 +221,8 @@ time per target group, router or workload, one per load balancer (lock), three p
 anything is installed, from a laptop with read access (vision docs/specs/2026-10-10-savings-estimate-design.md).
 
 ```
-npm run estimate -- --profile prospect [--regions eu-west-1,eu-west-3] [--role <name>]
-  [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
+npm run estimate -- --profile prospect [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
+  [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
   [--refresh discovery|metrics] [--window 60] [--out <dir>]
 ```
 
@@ -230,7 +230,8 @@ npm run estimate -- --profile prospect [--regions eu-west-1,eu-west-3] [--role <
   delegated administrator), else its own account only, and the report says why. Member accounts through `--role`, else
   `OrganizationAccountAccessRole` (accounts created by AWS Organizations have it; invited ones do not): an account whose
   role cannot be assumed is listed with AWS's reason and how to include it. The profile's own account uses its own
-  credentials.
+  credentials. `--accounts` restricts the estimate to some of the organization's accounts: an id it does not have is
+  listed apart, and none of them is refused (exit code 2).
 - **Three phases:** discovery (discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
   five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`

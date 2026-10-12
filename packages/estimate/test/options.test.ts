@@ -3,19 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { UsageError, parseOptions } from '../src/options.js';
 
 describe('the estimate command\'s options', () => {
-  it('a profile alone: every enabled region, the supposed role, 24/7, no discount, the cache as it is, here, a 1-hour window', () => {
+  it('a profile alone: every account reached, every enabled region, the supposed role, 24/7, no discount, the cache as it is, here, a 1-hour window', () => {
     expect(parseOptions(['--profile', 'prospect'])).toEqual({
-      profile: 'prospect', regions: null, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
+      profile: 'prospect', accounts: null, regions: null, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
       discounts: { compute: 0, databases: 0 }, refresh: null, out: process.cwd(), window: 60,
     });
   });
 
   it('every option given', () => {
     expect(parseOptions([
-      '--profile', 'prospect', '--regions', 'eu-west-1,eu-west-3', '--role', 'ReadOnlyAudit', '--baseline', 'business-hours',
+      '--profile', 'prospect', '--accounts', '222222222222, 333333333333,222222222222', '--regions', 'eu-west-1,eu-west-3', '--role', 'ReadOnlyAudit', '--baseline', 'business-hours',
       '--timezone', 'Europe/Paris', '--discount-compute', '20', '--discount-databases', '30', '--refresh', 'metrics', '--out', '/tmp/reports', '--window', '30',
     ])).toEqual({
-      profile: 'prospect', regions: ['eu-west-1', 'eu-west-3'], role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
+      profile: 'prospect', accounts: ['222222222222', '333333333333'], regions: ['eu-west-1', 'eu-west-3'], role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
       discounts: { compute: 20, databases: 30 }, refresh: 'metrics', out: '/tmp/reports', window: 30,
     });
     expect(parseOptions(['--profile', 'p', '--baseline', 'business-hours']).baseline).toEqual({ kind: 'business-hours', timeZone: 'UTC' });
@@ -32,6 +32,8 @@ describe('the estimate command\'s options', () => {
       [['--profile', 'p', '--refresh', 'all'], '--refresh: discovery or metrics'],
       [['--profile', 'p', '--regions', ''], '--regions: one region or more, such as eu-west-1,us-east-1'],
       [['--profile', 'p', '--regions', 'eu-west-1,mars'], '--regions: unknown region mars'],
+      [['--profile', 'p', '--accounts', ','], '--accounts: one AWS account id or more, such as 111111111111,222222222222'],
+      [['--profile', 'p', '--accounts', '111111111111,12345'], '--accounts: not an AWS account id: 12345'],
       [['--profile', 'p', '--window', '4'], '--window: whole minutes from 5 to 1440'],
       [['--profile', 'p', '--window', '90.5'], '--window: whole minutes from 5 to 1440'],
       [['--profile', 'p', '--verbose'], 'unknown option: --verbose'],

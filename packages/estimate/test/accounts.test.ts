@@ -2,6 +2,7 @@
 // own credentials, the others through a role given or supposed, assumed when an account's turn comes.
 import { describe, expect, it } from 'vitest';
 import { reachAccounts, type AccountsPorts } from '../src/accounts.js';
+import { UsageError } from '../src/options.js';
 
 const SELF = '111111111111';
 const CREDS = { accessKeyId: 'AKIA', secretAccessKey: 's', sessionToken: 't' };
@@ -27,7 +28,7 @@ describe('the accounts an estimate reaches', () => {
   it('an organization: its active accounts, the profile\'s own with its own credentials, the others when their turn comes', async () => {
     const { p, assumed } = ports();
     const reached = await reachAccounts(p, { role: 'OrganizationAccountAccessRole' });
-    expect(reached).toMatchObject({ organization: 'o-abc123', why: null, unreachable: [] });
+    expect(reached).toMatchObject({ organization: 'o-abc123', why: null, unreachable: [], listed: 3 });
     expect(reached.accounts.map((a) => [a.account, a.name])).toEqual([[SELF, 'management'], ['222222222222', 'prod'], ['333333333333', 'staging']]);
     // Nothing assumed until an account's turn; the management account never.
     expect(assumed).toEqual([]);
@@ -85,5 +86,45 @@ describe('the accounts an estimate reaches', () => {
     // Asked again, the same refusal, said once.
     await expect(reached.accounts[2]!.credentials()).rejects.toThrow();
     expect(reached.unreachable).toHaveLength(1);
+  });
+
+  describe('restricted to the accounts given (--accounts)', () => {
+    it('the organization\'s accounts given, in its order; one it does not have is listed apart; nothing assumed elsewhere', async () => {
+      const { p, assumed } = ports();
+      const reached = await reachAccounts(p, { role: 'OrganizationAccountAccessRole', only: ['333333333333', '999999999999', SELF] });
+      expect(reached.accounts.map((a) => [a.account, a.name])).toEqual([[SELF, 'management'], ['333333333333', 'staging']]);
+      expect(reached).toMatchObject({ organization: 'o-abc123', why: null, listed: 3 });
+      expect(reached.unreachable).toEqual([{
+        account: '999999999999', name: '', reason: 'not an active account of the organization o-abc123',
+        fix: 'check the id given with --accounts: the organization\'s active accounts are estimated',
+      }]);
+      await reached.accounts[1]!.credentials();
+      expect(assumed).toEqual([['333333333333', 'OrganizationAccountAccessRole']]);
+    });
+
+    it('none of them in the organization: refused, saying why', async () => {
+      const { p } = ports();
+      const reach = reachAccounts(p, { role: 'OrganizationAccountAccessRole', only: ['999999999999', '888888888888'] });
+      await expect(reach).rejects.toThrow(UsageError);
+      await expect(reachAccounts(p, { role: 'OrganizationAccountAccessRole', only: ['999999999999', '888888888888'] }))
+        .rejects.toThrow('--accounts: 999999999999, 888888888888: not active accounts of the organization o-abc123');
+    });
+
+    it('a profile that cannot list the organization: its own account if given, the others listed apart with why', async () => {
+      const { p } = ports({ inventory: awsError('AccessDeniedException', 'You don\'t have permissions to access this resource.') });
+      const reached = await reachAccounts(p, { role: 'OrganizationAccountAccessRole', only: [SELF, '222222222222'] });
+      expect(reached.accounts.map((a) => a.account)).toEqual([SELF]);
+      expect(reached.listed).toBe(1);
+      expect(reached.unreachable).toEqual([{
+        account: '222222222222', name: '', reason: 'this profile cannot list the organization\'s accounts',
+        fix: 'a profile of the management account or of a delegated administrator estimates every account',
+      }]);
+    });
+
+    it('a profile that estimates only its own account, given others alone: refused, saying why', async () => {
+      const { p } = ports({ organization: awsError('AWSOrganizationsNotInUseException', 'Your account is not a member of an organization.') });
+      await expect(reachAccounts(p, { role: 'OrganizationAccountAccessRole', only: ['222222222222'] }))
+        .rejects.toThrow(`--accounts: 222222222222: not in an organization: only the account ${SELF} is estimated`);
+    });
   });
 });

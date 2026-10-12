@@ -1,6 +1,6 @@
 // The estimate command (vision docs/specs/2026-10-10-savings-estimate-design.md §3, §8): the options, the accounts, the
 // three phases with their progress, the reports and the summary. Exit code 0, 1 when AWS refuses (credentials, an
-// organization call), 2 on a bad option. AWS comes through EstimateAws (bin.ts wires the SDK; the tests, fakes).
+// organization call), 2 on a bad option (accounts given that cannot be estimated too). AWS comes through EstimateAws (bin.ts wires the SDK; the tests, fakes).
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Credentials } from '@dormeto/discovery/aws';
@@ -47,10 +47,11 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
   }
   try {
     const aws = deps.aws(options);
-    const reached = await reachAccounts(aws.accounts, { role: options.role });
+    const reached = await reachAccounts(aws.accounts, { role: options.role, only: options.accounts });
     const key = reached.organization ?? reached.accounts[0]!.account;
     const cache = createCache({ dir: join(deps.cacheRoot, key), now: deps.now });
-    deps.log(`Estimating ${reached.organization ? `the organization ${reached.organization} (${reached.accounts.length} accounts)` : `the account ${key}`}; cache ${join(deps.cacheRoot, key)}`);
+    const counted = options.accounts ? `${reached.accounts.length} of its ${reached.listed} accounts, --accounts` : `${reached.accounts.length} accounts`;
+    deps.log(`Estimating ${reached.organization ? `the organization ${reached.organization} (${counted})` : `the account ${key}`}; cache ${join(deps.cacheRoot, key)}`);
     if (reached.why) deps.log(reached.why);
     const progress: Progress = (p) => deps.log(`  ${p.phase} ${p.account} ${p.region}: ${p.error ? `failed (${p.error})` : `${p.workloads} workload${p.workloads === 1 ? '' : 's'}`}${p.from === 'cache' ? ' (cache)' : ''}`);
     deps.log('Phase 1: discovery');
@@ -75,6 +76,11 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     deps.log(`Reports: ${md} and ${json}`);
     return 0;
   } catch (err) {
+    // Accounts given that cannot be estimated: a bad option, known once AWS has said which accounts there are.
+    if (err instanceof UsageError) {
+      deps.error(err.message);
+      return 2;
+    }
     deps.error(`${(err as Error).name}: ${(err as Error).message}`);
     return 1;
   }
