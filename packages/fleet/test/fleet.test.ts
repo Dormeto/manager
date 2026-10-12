@@ -427,6 +427,15 @@ describe('state history (R8)', () => {
     expect((await history(s)).at(-1)).toMatchObject({ from: 'ASLEEP', to: 'AWAKE', at: at(T2, 300), inferred: true });
   });
 
+  it('an event before the first check of a known workload writes what the manager knew as the first entry (found live)', async () => {
+    const s = setup();
+    await s.store.writeWorkload({ account: ACCOUNT, region: REGION, router: 'dmtr-dev', workloadId: 'a', state: 'ASLEEP', stateAt: at(T1, -7_200), checkedAt: at(T1, -60) } as never, 0);
+    await s.ingest(change('WAKING', at(T1, 10), { from: 'ASLEEP', cause: 'normal' }));
+    expect((await history(s)).map((e) => [e.from, e.to, e.at, e.inferred ?? false])).toEqual([[null, 'ASLEEP', at(T1, -7_200), true], ['ASLEEP', 'WAKING', at(T1, 10), false]]);
+    await s.ingest(checked(T2, [workload('a', 'WAKING', { stateAt: at(T1, 10) })]));
+    expect(await history(s)).toHaveLength(2);
+  });
+
   it('a period is read in pages up to a cap, with the entry before it', async () => {
     const s = setup();
     for (let i = 0; i < 30; i += 1) await s.ingest(change(i % 2 ? 'ASLEEP' : 'AWAKE', at(T1, i * 60), { cause: 'idle' }));

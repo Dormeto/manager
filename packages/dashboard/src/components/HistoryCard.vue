@@ -5,7 +5,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { duration, stateColor } from '../format';
-import { causeText, dayRows, stateLabel, type Phase } from '../history';
+import { causeText, collapseRows, dayRows, stateLabel, type Phase } from '../history';
 import type { WorkloadHistory } from '../types';
 
 const props = defineProps<{ router: string; id: string; now: number }>();
@@ -15,7 +15,7 @@ const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${en
 const { error, run } = usePoll(async () => { history.value = await api<WorkloadHistory>(path.value); });
 watch(days, () => void run());
 
-const rows = computed(() => (history.value?.phases ? dayRows(history.value.phases, history.value.from, history.value.to) : []));
+const rows = computed(() => (history.value?.phases ? collapseRows(dayRows(history.value.phases, history.value.from, history.value.to)) : []));
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const dayLabel = (d: Date) => d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 const seconds = (p: Phase) => Math.round((Date.parse(p.to) - Date.parse(p.from)) / 1000);
@@ -26,11 +26,13 @@ const segmentLabel = (p: Phase, merged: number) => {
 const summary = computed(() => {
   const h = history.value;
   if (!h?.totals) return [];
-  const total = Object.values(h.totals).reduce((a, b) => a + b, 0) || 1;
+  // The share of the time the history knows (before it starts, or past its retention, the state is unknown).
+  const known = Object.entries(h.totals).filter(([state]) => state !== 'UNKNOWN').reduce((a, [, b]) => a + b, 0);
+  if (!known) return ['No history in this period yet: it starts when the manager first sees the workload'];
   const w = h.wakes;
   const ms = (v: number | null) => duration(Math.round((v ?? 0) / 1000));
   return [
-    `Asleep ${Math.round(((h.totals.ASLEEP ?? 0) / total) * 100)}%`,
+    `Asleep ${Math.round(((h.totals.ASLEEP ?? 0) / known) * 100)}%${h.totals.UNKNOWN ? ' of the time with history' : ''}`,
     `awake ${duration(h.totals.AWAKE ?? 0)}`,
     w.count ? `${w.count} wake${w.count === 1 ? '' : 's'}${w.medianMs !== null ? `, median ${ms(w.medianMs)}, longest ${ms(w.maxMs)}` : ''}` : 'no wake',
     ...(w.failed ? [`${w.failed} failed`] : []),
@@ -53,20 +55,29 @@ const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
     <v-card-text v-else-if="history?.phases">
       <div class="text-body-medium mb-3">{{ summary.join(' · ') }}</div>
       <v-alert v-if="history.truncated" type="info" variant="tonal" density="compact" class="mb-2" text="Only the period's first 5,000 changes are drawn." />
-      <div class="d-flex text-body-small text-medium-emphasis ticks"><span v-for="h in ['00:00', '06:00', '12:00', '18:00']" :key="h">{{ h }}</span></div>
-      <div v-for="row in rows" :key="row.day.getTime()" data-test="day" class="d-flex align-center ga-2 mb-1">
-        <span class="text-body-small text-medium-emphasis day-label">{{ dayLabel(row.day) }}</span>
-        <div class="bar">
-          <v-tooltip v-for="(s, i) in row.segments" :key="i" location="top" :text="segmentLabel(s.phase, s.merged)">
-            <template #activator="{ props: tip }">
-              <div v-bind="tip" data-test="segment" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
-                :class="['segment', `bg-${stateColor(s.state)}`]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
-            </template>
-          </v-tooltip>
-        </div>
+      <div class="d-flex ga-2 text-body-small text-medium-emphasis">
+        <span class="day-label" />
+        <div class="ticks"><span v-for="(h, i) in ['00:00', '06:00', '12:00', '18:00']" :key="h" :style="{ left: `${i * 25}%` }">{{ h }}</span></div>
       </div>
+      <template v-for="item in rows" :key="item.kind === 'day' ? item.row.day.getTime() : `gap-${item.first.getTime()}`">
+        <div v-if="item.kind === 'gap'" data-test="gap" class="d-flex align-center ga-2 mb-1 text-body-small text-medium-emphasis">
+          <span class="day-label">{{ item.days === 1 ? dayLabel(item.first) : `${dayLabel(item.first)} to ${dayLabel(item.last)}` }}</span>
+          <span>No history: it starts when the manager first sees the workload, and is kept for the manager's history_days.</span>
+        </div>
+        <div v-else data-test="day" class="d-flex align-center ga-2 mb-1">
+          <span class="text-body-small text-medium-emphasis day-label">{{ dayLabel(item.row.day) }}</span>
+          <div class="bar">
+            <v-tooltip v-for="(s, i) in item.row.segments" :key="i" location="top" :text="segmentLabel(s.phase, s.merged)">
+              <template #activator="{ props: tip }">
+                <div v-bind="tip" data-test="segment" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
+                  :class="['segment', `bg-${stateColor(s.state)}`, { napping: s.state === 'NAPPING' }]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
+              </template>
+            </v-tooltip>
+          </div>
+        </div>
+      </template>
       <div class="d-flex flex-wrap ga-3 mt-2 text-body-small text-medium-emphasis">
-        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-1"><span :class="['swatch', `bg-${stateColor(state)}`]" />{{ stateLabel(state) }}</span>
+        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-1"><span :class="['swatch', `bg-${stateColor(state)}`, { napping: state === 'NAPPING' }]" />{{ stateLabel(state) }}</span>
       </div>
       <v-table v-if="transitions.length" density="compact" class="mt-3">
         <thead><tr><th>When</th><th>Change</th><th>Why</th><th>Wake</th></tr></thead>
@@ -86,7 +97,10 @@ const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
 
 <style scoped>
 .day-label { width: 92px; flex: none; }
-.ticks { margin-left: 100px; justify-content: space-between; padding-right: 25%; }
+.ticks { position: relative; flex: 1; height: 18px; }
+.ticks span { position: absolute; top: 0; }
+/* Napping shares waking's color (the state chips), lighter here to tell them apart. */
+.napping { opacity: 0.5; }
 .bar { position: relative; flex: 1; height: 14px; border-radius: 3px; background: rgba(var(--v-theme-on-surface), 0.06); overflow: hidden; }
 .segment { position: absolute; top: 0; bottom: 0; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }

@@ -46,6 +46,20 @@ export function dayRows(phases: Phase[], from: string, to: string): DayRow[] {
   return rows;
 }
 
+// Days with no history at all (before the manager knew the workload, or past the retention) are one line, not rows.
+export type RowItem = { kind: 'day'; row: DayRow } | { kind: 'gap'; first: Date; last: Date; days: number };
+export function collapseRows(rows: DayRow[]): RowItem[] {
+  const items: RowItem[] = [];
+  for (const row of rows) {
+    const empty = row.segments.every((s) => s.state === 'UNKNOWN');
+    const last = items.at(-1);
+    if (!empty) items.push({ kind: 'day', row });
+    else if (last?.kind === 'gap') { last.last = row.day; last.days += 1; }
+    else items.push({ kind: 'gap', first: row.day, last: row.day, days: 1 });
+  }
+  return items;
+}
+
 const CAUSES: Record<string, string> = {
   normal: 'a request',
   probe: "the waiting page's check",

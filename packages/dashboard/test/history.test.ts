@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { causeText, dayRows, MIN_WIDTH } from '../src/history';
+import { causeText, collapseRows, dayRows, MIN_WIDTH } from '../src/history';
 
 // Local times: the rows follow the viewer's days.
 const local = (d: number, h: number, m = 0, s = 0) => new Date(2026, 9, d, h, m, s).toISOString();
@@ -43,3 +43,15 @@ describe('causes in words', () => {
     expect(causeText({ state: 'WAKING', cause: 'something-new' })).toBe('something-new');
   });
 });
+
+describe('days without history', () => {
+  it('consecutive days before the history are one line, not empty rows (found live)', () => {
+    const rows = dayRows([{ state: 'UNKNOWN', from: local(1, 12), to: local(8, 20) }, { state: 'ASLEEP', from: local(8, 20), to: local(8, 21) }], local(1, 12), local(8, 21));
+    const items = collapseRows(rows);
+    expect(items.map((i) => i.kind)).toEqual(['gap', 'day']);
+    expect(items[0]).toMatchObject({ kind: 'gap', days: 7 });
+    expect((items[0] as { first: Date }).first.getDate()).toBe(1);
+    expect((items[0] as { last: Date }).last.getDate()).toBe(7);
+  });
+});
+

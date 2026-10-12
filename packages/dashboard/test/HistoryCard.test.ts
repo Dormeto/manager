@@ -55,6 +55,17 @@ describe('HistoryCard', () => {
     wrapper.unmount();
   });
 
+  it('the asleep share is of the time with history; napping is told apart from waking (found live)', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), totals: { UNKNOWN: 86_000, ASLEEP: 300, AWAKE: 100 },
+      phases: [{ state: 'UNKNOWN', from: local(7, 12), to: local(8, 11, 53) }, { state: 'NAPPING', from: local(8, 11, 53), to: local(8, 11, 54) }, { state: 'ASLEEP', from: local(8, 11, 54), to: local(8, 12) }] });
+    const wrapper = await mountCard();
+    expect(wrapper.text()).toContain('Asleep 75% of the time with history');
+    expect(wrapper.find('[data-test="gap"]').exists()).toBe(true);
+    const napping = wrapper.findAll('[data-test="segment"]').find((x) => x.attributes('aria-label')?.startsWith('Napping'))!;
+    expect(napping.classes()).toContain('napping');
+    wrapper.unmount();
+  });
+
   it('reloads for another period', async () => {
     const wrapper = await mountCard();
     await wrapper.findAll('button').find((b) => b.text() === '30 days')!.trigger('click');

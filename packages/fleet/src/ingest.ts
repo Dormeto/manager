@@ -109,8 +109,19 @@ export function createIngest({ store, now = Date.now, log }: {
     const region = regionOf(d.region) ?? envelope;
     // The history keeps every transition, also one older than the summary (R8).
     await store.putHistory({ account, region, router, workloadId, to, at, ...transitionOf(d, at), from: stateOf(d.from) } as HistoryEntry);
-    await versioned(account, region, workloadId, (existing) => ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at
-      ? null : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at, historySince: existing?.historySince ?? at }));
+    // A workload known before its history (R8) starts it with what the manager knew: its stored state, since then.
+    let known: WorkloadSummary | null = null;
+    await versioned(account, region, workloadId, (existing) => {
+      known = existing && !existing.historySince && existing.state ? existing : null;
+      return (existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at
+        ? (known = null) : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at, historySince: existing?.historySince ?? (known ? undefined : at) };
+    });
+    const first = known as WorkloadSummary | null;
+    const since = first ? first.stateAt ?? first.checkedAt : undefined;
+    if (first && since && since < at) {
+      await store.putHistory({ account, region, router, workloadId, from: null, to: first.state!, at: since, inferred: true });
+      await versioned(account, region, workloadId, (existing) => (existing && !existing.historySince ? { ...existing, historySince: since } : null));
+    }
     // A failed wake is indexed for the watchdog (R7b), whatever comes after it before the next check; a wake that
     // succeeds removes it.
     if (to === 'FAILED') {
