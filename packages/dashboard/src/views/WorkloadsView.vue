@@ -8,6 +8,7 @@ import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
 import BackendKinds from '../components/BackendKinds.vue';
+import IdleBar from '../components/IdleBar.vue';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -35,7 +36,7 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   // Router health every minute is enough (the warning is about checks late by 15 minutes), in the same request.
   const withRouters = Date.now() - routersCheckedAt > 60_000;
   const query = new URLSearchParams({
-    limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), ...(search.value.trim() ? { q: search.value.trim() } : {}),
+    limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), idle: '1', ...(search.value.trim() ? { q: search.value.trim() } : {}),
     ...(attentionOnly.value ? { attention: '1' } : {}), ...(withRouters ? { routers: '1' } : {}),
     ...(routerFilter.value ? { router: routerFilter.value } : {}), ...(stateFilter.value ? { state: stateFilter.value } : {}),
   });
@@ -64,6 +65,7 @@ const headers = [
   { title: 'Router', key: 'router', sortable: false },
   { title: 'State', key: 'state', sortable: false },
   { title: 'Since', key: 'since', sortable: false },
+  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end' as const, sortable: false },
   { title: 'URL', key: 'url', sortable: false },
   { title: 'Wake mode', key: 'wakeMode', sortable: false },
   { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end' as const, value: (w: WorkloadSummary) => w.stats7d?.wakes ?? null, sortable: false },
@@ -104,6 +106,9 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
       </template>
       <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" /></template>
       <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" /><PauseChip :pauses="item.pauses" /></span></template>
+      <template #[`item.idleHours7d`]="{ item }">
+        <IdleBar v-if="typeof item.idleHours7d === 'number'" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d ?? null" />
+      </template>
       <template #[`item.since`]="{ item }"><span class="nowrap">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">
         <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="nowrap">{{ item.url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>

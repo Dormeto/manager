@@ -33,6 +33,8 @@ export interface WorkloadSummary {
   updatedAt: string | null;
   pendingWake: boolean;
   backends?: string[]; // the kinds of its backends, databases last (routers 0.23.3 and later)
+  idleHours7d?: number; // hours without any request over the last 7 days, and the requests (from discovery)
+  requests7d?: number | null;
   pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored: number; deferred: number; wakes: number } | null;
   settings: Settings;
