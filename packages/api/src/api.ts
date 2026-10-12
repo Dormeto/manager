@@ -144,6 +144,8 @@ export interface ApiOptions {
   fleet?: { listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null> };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
+  // The organization roles the manager assumes, set in its Terraform (packaging design §3).
+  accessRoles?: { discoveryRole: string; commandRole: string };
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
   callConcurrency?: number; // at most this many such calls at once (10)
   callDeadlineMs?: number; // and all of them within (20 s: API Gateway answers within 29 s); the others are not called
@@ -157,6 +159,9 @@ const AHEAD_MAX_MS = 366 * DAY_MS;
 const ACCOUNT = /^\d{12}$/;
 // Candidates per page of the Discovery view: 50 by default, at most 200 (scale design §5).
 const CANDIDATES_PAGE = 50;
+// Accounts not ready per page of the Organization access panel.
+const ACCESS_PAGE = 100;
+const ACCESS_MAX = 1000;
 const CANDIDATES_MAX = 200;
 const ARNS: Record<Exclude<ExclusionKind, 'account'>, RegExp> = {
   'target-group': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):targetgroup\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
@@ -215,7 +220,7 @@ const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion,
-  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000,
+  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -667,7 +672,15 @@ export function createApi({
       // never hides that run and its result.
       const [newest, lastRun, counts] = await Promise.all([d.store.lastRun(), d.store.lastRun({ completed: true }), d.store.getCounts()]);
       const refused = newest?.status === 'skipped' && (!lastRun || newest.startedAt > lastRun.startedAt) ? newest : null;
-      return reply(200, { lastRun, ...(refused ? { refused } : {}), counts: counts?.counts ?? lastRun?.counts ?? {} });
+      return reply(200, { lastRun, ...(refused ? { refused } : {}), counts: counts?.counts ?? lastRun?.counts ?? {}, ...(accessRoles ? { access: { ...accessRoles, source: 'terraform' } } : {}) });
+    }
+    // Organization access of the last run (packaging design §3): the counts, and the accounts not ready by page.
+    if (method === 'GET' && sub === 'access') {
+      const q = event.queryStringParameters ?? {};
+      const limit = q.limit === undefined ? ACCESS_PAGE : Number(q.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > ACCESS_MAX) throw new HttpError(400, 'bad_request', `limit must be 1 to ${ACCESS_MAX}`);
+      const report = await d.store.accessReport({ limit, ...(q.cursor ? { cursor: q.cursor } : {}) });
+      return reply(200, { ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')) });
     }
     if (method === 'GET' && sub === 'candidates') {
       const q = event.queryStringParameters ?? {};
@@ -897,6 +910,7 @@ export function createApi({
       const candidateId = String(body.candidateId ?? '');
       const c = await discovery?.store.getCandidate(candidateId);
       if (!c || !sees(identity, c.account, c.region)) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
+      await needCommandRole(c.account);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
       input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [] };
@@ -906,6 +920,7 @@ export function createApi({
       const region = String(body.region ?? '');
       if (!ACCOUNT.test(account) || !REGION.test(region)) throw new HttpError(400, 'bad_request', 'account (12 digits) and region required');
       if (!sees(identity, account, region)) throw new HttpError(404, 'not_found', `unknown account or region: ${account}/${region}`);
+      await needCommandRole(account);
       input = { account, region };
       target = `${account}/${region}`;
     } else {
@@ -931,6 +946,15 @@ export function createApi({
         throw err;
       }
     });
+  }
+
+  // Refused before an operation starts where the last discovery run found the account's command role missing (packaging
+  // design §3); an account never checked is let through (its operation fails as before).
+  async function needCommandRole(account: string) {
+    const command = (await discovery?.store.getAccountScan(account).catch(() => null))?.access?.command;
+    if (command && !command.ok) {
+      throw new HttpError(409, 'no_access', `account ${account}: its command role ${accessRoles?.commandRole ?? 'DmtCommandRole'} cannot be assumed (${command.reason}); see the Organization access page`);
+    }
   }
 
   // Another operation holds the same target: 409, with its id.

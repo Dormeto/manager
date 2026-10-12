@@ -144,6 +144,9 @@ resource "aws_lambda_function" "api" {
       USER_POOL_ID            = aws_cognito_user_pool.main.id
       DASHBOARD_URL           = "https://${var.dashboard_domain}/"
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
+      # The organization roles, shown in the dashboard (packaging design §3).
+      DISCOVERY_ROLE = var.discovery_role_name
+      COMMAND_ROLE   = var.command_role_name
     }
   }
 

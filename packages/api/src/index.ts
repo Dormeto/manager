@@ -126,6 +126,7 @@ const operations = {
 
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
+  accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
   users: createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '' }),
   preferences,
   discovery,

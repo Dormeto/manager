@@ -10,6 +10,8 @@ import ExcludeDialog from '../components/ExcludeDialog.vue';
 import OnboardDialog from '../components/OnboardDialog.vue';
 import type { RouterInfo } from '../types';
 import LintAlert from '../components/LintAlert.vue';
+import OrganizationAccess from '../components/OrganizationAccess.vue';
+import type { AccessReport } from '../access';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
 import { STATUSES, cursorPages, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
@@ -31,6 +33,9 @@ const { smAndDown } = useDisplay();
 type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string } };
 const PAGE = 50;
 const lastRun = ref<RunRecord | null>(null);
+// Organization access of the last run (packaging design §3), and the roles set in the manager's Terraform.
+const access = ref<AccessReport | null>(null);
+const roles = ref<{ discoveryRole: string; commandRole: string } | null>(null);
 const counts = ref<Partial<Record<Status, number>>>({});
 const candidates = ref<Listed[]>([]);
 const loading = ref(false);
@@ -78,10 +83,13 @@ async function loadPage() {
 async function load() {
   loading.value = true;
   try {
-    const [result, excluded] = await Promise.all([
-      api<{ lastRun: RunRecord | null; refused?: RunRecord; counts: Partial<Record<Status, number>> }>('/discovery'),
+    const [result, excluded, report] = await Promise.all([
+      api<{ lastRun: RunRecord | null; refused?: RunRecord; counts: Partial<Record<Status, number>>; access?: { discoveryRole: string; commandRole: string } }>('/discovery'),
       api<{ exclusions: Exclusion[] }>('/exclusions'),
+      api<AccessReport>('/discovery/access?limit=1000').catch(() => null),
     ]);
+    access.value = report;
+    roles.value = result.access ?? null;
     lastRun.value = result.lastRun;
     refused.value = result.refused ?? null;
     counts.value = result.counts;
@@ -188,6 +196,8 @@ async function lift(e: Exclusion) {
 // Onboarding and offboarding: operations run by the workflow (Operations view).
 const single = computed(() => (selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined));
 const onboardable = computed(() => single.value?.status === 'pending-onboarding');
+// Refused by the API where the last run found the account's command role missing: said here, before trying.
+const noCommand = computed(() => access.value?.accounts.find((a) => a.account === single.value?.account && !a.command.ok) ?? null);
 const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status));
 
 async function startOperation(body: Record<string, unknown>, what: string) {
@@ -275,6 +285,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
   </v-card>
 
   <LintAlert v-if="lastRun" :findings="lastRun.lint" :settings-link="session.isAdmin" />
+  <OrganizationAccess v-if="access && access.checkedAt" :report="access" :roles="roles" />
 
   <div class="d-flex flex-wrap align-center ga-2 mb-2">
     <v-chip-group :model-value="status" mandatory column @update:model-value="show">
@@ -287,7 +298,10 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
     </v-chip-group>
     <v-spacer />
     <template v-if="session.canOperate && selected.length">
-      <v-btn v-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="tonal" @click="onboardOpen = true">Onboard…</v-btn>
+      <v-tooltip v-if="onboardable && noCommand" location="top" max-width="380" :text="`Its account has no command role: ${noCommand.command.ok ? '' : noCommand.command.reason}. See Organization access.`">
+        <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
+      </v-tooltip>
+      <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="tonal" @click="onboardOpen = true">Onboard…</v-btn>
       <v-btn v-if="offboardable" :prepend-icon="mdiLogoutVariant" variant="tonal" @click="offboard">Offboard</v-btn>
       <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
       <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>

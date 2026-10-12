@@ -10,6 +10,7 @@ import LintAlert from '../components/LintAlert.vue';
 import { formatList, lintFor, parseList } from '../discovery';
 import { relative } from '../format';
 import { useNow } from '../now';
+import { procedureLink, type AccessReport } from '../access';
 
 type Answer = { config: DiscoveryConfig; lint: LintFinding[]; updatedAt?: string | null; updatedBy?: string | null };
 
@@ -38,10 +39,15 @@ function apply(answer: Answer) {
   if (answer.updatedAt !== undefined) updated.value = { at: answer.updatedAt ?? null, by: answer.updatedBy ?? null };
 }
 
+// The last run found no delegation policy: organization mode is unavailable (packaging design §3).
+const delegationMissing = ref(false);
+
 async function load() {
   loading.value = true;
   try {
-    apply(await api<Answer>('/discovery/config'));
+    const [answer, access] = await Promise.all([api<Answer>('/discovery/config'), api<AccessReport>('/discovery/access?limit=1').catch(() => null)]);
+    delegationMissing.value = access?.delegation === 'missing';
+    apply(answer);
   } catch (err) {
     errors.value = [(err as Error).message];
   } finally {
@@ -86,6 +92,11 @@ onMounted(load);
     Global excludes come first: nothing includes them again, and Dormeto never reads a globally excluded account or region.
     Without any filter, nothing is scanned.</p>
 
+  <v-alert v-if="delegationMissing && config?.mode === 'organization'" type="warning" variant="tonal" class="mb-4"
+    title="Organization mode is unavailable">
+    The last run could not list the organization's accounts: the delegation policy of the management account is missing.
+    <a :href="procedureLink([])" target="_blank" rel="noopener">How to set it up</a>, then Run now.
+  </v-alert>
   <v-alert v-if="errors.length" type="error" variant="tonal" class="mb-4">
     <div class="font-weight-medium mb-1">The perimeter was not saved</div>
     <ul class="pl-4"><li v-for="e in errors" :key="e" class="mono text-body-small">{{ e }}</li></ul>
