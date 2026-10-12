@@ -88,6 +88,8 @@ const installSteps = INSTALL_STEPS.map((s) => `install ${s}`);
 const uninstallSteps = UNINSTALL_STEPS.map((s) => `uninstall ${s}`);
 // The router's access to the EKS clusters of its account and region, and its check of each (Kubernetes workloads, R10.5).
 const clusterSteps = ['access entries', 'check clusters'];
+// EKS honours a new access entry within seconds: until then the cluster does not know the router's role.
+const ENTRY_PROPAGATION_MS = 120_000;
 const PLANS: Record<OperationType, string[]> = {
   'install-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
@@ -482,6 +484,7 @@ export function createEngine(deps: EngineDeps) {
           throw err;
         }
         op.context.clusters = results.filter((r) => r.ready).map((r) => r.cluster);
+        if (results.some((r) => r.status === 'done')) op.context.entriesAt = now();
         if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
         return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
       }
@@ -497,6 +500,11 @@ export function createEngine(deps: EngineDeps) {
             if (/unknown action/.test((err as Error).message)) return { status: 'skipped', detail: `router ${(op.context.router as RouterRef).name} is older than 0.29.0: no cluster check` };
             throw err;
           }
+        }
+        // Entries just made: a cluster that does not know the router's role yet is asked again.
+        const entriesAt = op.context.entriesAt as number | undefined;
+        if (entriesAt && now() - entriesAt < ENTRY_PROPAGATION_MS && checks.some((c) => c.reachable && !c.allowed && !c.missing?.length)) {
+          return { status: 'wait', seconds: 15, detail: 'the cluster takes the new access entries' };
         }
         // Kept on the router: its view lists the clusters with their reach and rights.
         const installed = await records.getRouter(op.target.account!, op.target.region!);

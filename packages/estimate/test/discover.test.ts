@@ -232,7 +232,7 @@ describe('a region\'s Kubernetes workloads', () => {
   const k8sRule = (name: string, namespace: string) => rule(name, {
     backend: { kind: 'k8s', id: `eks-demo/${namespace}/Deployment/${name}`, kubernetes: { cluster: 'eks-demo', namespace, owner: { kind: 'Deployment', name }, switch: 'ingress', hpa: false, keda: false, capacity: namespace === 'fargate' ? 'fargate' : 'nodes', autoscaler: 'karpenter' } },
   });
-  // The cluster as the router's client reads it: the owners, their pods (on Fargate or a Karpenter node), the node.
+  // The cluster as the router's client reads it: the owners, their ReplicaSets and pods (on Fargate or a Karpenter node), the node.
   const cluster = {
     async get(path: string) {
       if (path.endsWith('/deployments/web') || path.endsWith('/deployments/docs')) return { spec: { replicas: 1, selector: { matchLabels: { app: path.split('/').at(-1) } } } };
@@ -240,9 +240,12 @@ describe('a region\'s Kubernetes workloads', () => {
       throw Object.assign(new Error(`${path} not found`), { status: 404 });
     },
     async list(path: string, query: Record<string, string> = {}) {
-      const pod = (app: string, extra: Record<string, unknown>) => ({ metadata: { name: `${app}-1`, labels: { app } }, spec: { nodeName: 'ip-10-0-1-1', containers: [{ resources: { requests: { cpu: '250m', memory: '512Mi' } } }], ...extra }, status: { phase: 'Running' } });
+      const owned = (app: string) => ({ ownerReferences: [{ kind: 'ReplicaSet', name: `${app}-5d4f8`, controller: true }] });
+      const sets = /^\/apis\/apps\/v1\/namespaces\/[^/]+\/replicasets$/.test(path) && query.labelSelector?.startsWith('app=');
+      if (sets) return [{ metadata: { name: `${query.labelSelector!.slice(4)}-5d4f8`, ownerReferences: [{ kind: 'Deployment', name: query.labelSelector!.slice(4), controller: true }] } }];
+      const pod = (app: string, extra: Record<string, unknown>) => ({ metadata: { name: `${app}-1`, labels: { app }, ...owned(app) }, spec: { nodeName: 'ip-10-0-1-1', containers: [{ resources: { requests: { cpu: '250m', memory: '512Mi' } } }], ...extra }, status: { phase: 'Running' } });
       if (path === '/api/v1/namespaces/demo/pods' && query.labelSelector === 'app=web') return [pod('web', {})];
-      if (path === '/api/v1/namespaces/fargate/pods' && query.labelSelector === 'app=docs') return [{ ...pod('docs', { schedulerName: 'fargate-scheduler', nodeName: 'fargate-ip-1' }), metadata: { name: 'docs-1', labels: { app: 'docs' }, annotations: { CapacityProvisioned: '0.25vCPU 0.5GB' } } }];
+      if (path === '/api/v1/namespaces/fargate/pods' && query.labelSelector === 'app=docs') return [{ ...pod('docs', { schedulerName: 'fargate-scheduler', nodeName: 'fargate-ip-1' }), metadata: { name: 'docs-1', labels: { app: 'docs' }, annotations: { CapacityProvisioned: '0.25vCPU 0.5GB' }, ...owned('docs') } }];
       return [];
     },
   };

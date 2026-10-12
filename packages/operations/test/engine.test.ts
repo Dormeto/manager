@@ -57,7 +57,10 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = 
     list: () => ({ workloads: Array.from({ length: router.workloads }, (_, i) => ({ workloadId: `w${i}` })) }),
     router: () => ({ router: { name: 'dmt-dev', version: '0.17.0', build: '1d50494cac65' } }),
     // Routers 0.29.0 and later: whether they reach a cluster and have the published ClusterRole's rights.
-    clusterCheck: (p) => router.clusterChecks[p.cluster as string] ?? { cluster: p.cluster, reachable: true, allowed: true, missing: [] },
+    clusterCheck: (p) => {
+      const answer = router.clusterChecks[p.cluster as string];
+      return (typeof answer === 'function' ? answer() : answer) ?? { cluster: p.cluster, reachable: true, allowed: true, missing: [] };
+    },
   };
   const started: string[] = [];
   const engine = createEngine({
@@ -468,6 +471,36 @@ describe('cluster access', () => {
     const onboard = s.invocations.find(([, p]) => p.action === 'onboard')![1];
     expect(preview.kubernetes).toEqual((k8sCandidate().backend as { kubernetes: unknown }).kubernetes);
     expect(onboard.kubernetes).toEqual(preview.kubernetes);
+  });
+
+  // EKS takes some seconds to honour a new access entry: until then the cluster does not know the router's role.
+  const unknownRole = { cluster: 'eks-demo', reachable: true, allowed: false, missing: [], reason: 'the cluster does not know the router\'s role (no access entry, or not mapped in aws-auth): Unauthorized' };
+  it('the cluster is checked again while it does not know the access entries just made, up to 2 minutes', async () => {
+    const s = setup({ candidates: [k8sCandidate()], eks: fakeEks([eksCluster('eks-demo')]) });
+    let checks = 0;
+    s.router.clusterChecks['eks-demo'] = () => (++checks < 4 ? unknownRole : undefined);
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(checks).toBe(4);
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.clusters![0]).toMatchObject({ name: 'eks-demo', allowed: true });
+
+    // Still unknown after 2 minutes: the onboarding stops with the cluster's answer.
+    const late = setup({ candidates: [k8sCandidate()], eks: fakeEks([eksCluster('eks-demo')]) });
+    late.router.clusterChecks['eks-demo'] = unknownRole;
+    const failed = await late.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await late.drive(failed.id)).toEqual({ done: true, status: 'failed' });
+    expect((await late.records.getOperation(failed.id))!.error).toMatch(/^check clusters: cluster eks-demo: the cluster does not know the router's role/);
+  });
+
+  it('entries already in place are not waited for: an unknown role fails the onboarding at once', async () => {
+    const s = setup({ candidates: [k8sCandidate()], eks: fakeEks([eksCluster('eks-demo')]) });
+    let checks = 0;
+    s.router.clusterChecks['eks-demo'] = () => (++checks, unknownRole);
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    checks = 0;
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect(checks).toBe(1);
   });
 
   it('a Kubernetes candidate whose cluster the router may not use is not onboarded, with what the router lacks', async () => {
