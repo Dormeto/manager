@@ -3,6 +3,7 @@
 // workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import type { Discounts, StoppedItem } from './prices.js';
+import { checkMinutesOf, type IdleWindowAdvice } from './idle.js';
 
 const PK = 'T#default';
 const VERSIONED = 'attribute_not_exists(version) OR version = :version';
@@ -294,6 +295,18 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       }));
     },
 
+    // A workload's idle window advice (R10), kept a day: read when its card is, past its expiresAt no more (DynamoDB
+    // deletes an expired item within days).
+    async getIdleWindow(account: string, region: string, id: string): Promise<IdleWindowAdvice | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(`IDLE#${account}#${region}#${id}`) }));
+      return Item && Number(Item.expiresAt?.N ?? 0) > now() / 1000 ? data<IdleWindowAdvice>(Item) : null;
+    },
+    async putIdleWindow(account: string, region: string, id: string, advice: IdleWindowAdvice): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key(`IDLE#${account}#${region}#${id}`), data: { S: JSON.stringify(advice) }, expiresAt: { N: String(Math.floor(now() / 1000) + 86_400) } },
+      }));
+    },
+
     // The last entry before a time: the state a period starts in.
     async historyBefore(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null> {
       const { Items = [] } = await dynamo.send(new QueryCommand({
@@ -310,7 +323,5 @@ export type FleetStore = ReturnType<typeof createFleetStore>;
 // A router reports while its last check is at most 3 periods of its schedule old (5 minutes by default).
 export function reporting(router: { checkedAt: string | null; checkSchedule: string | null }, now = Date.now()): boolean {
   if (!router.checkedAt) return false;
-  const rate = /rate\((\d+) (minute|minutes|hour|hours)\)/.exec(router.checkSchedule ?? '');
-  const periodMs = rate ? Number(rate[1]) * (rate[2]!.startsWith('hour') ? 3_600_000 : 60_000) : 5 * 60_000;
-  return now - Date.parse(router.checkedAt) <= 3 * periodMs;
+  return now - Date.parse(router.checkedAt) <= 3 * checkMinutesOf(router.checkSchedule) * 60_000;
 }
