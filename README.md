@@ -137,7 +137,8 @@ time per target group, router or workload, one per load balancer (lock), three p
   a failure the index lacks; a successful wake (an `AWAKE` change or a summary without failure) deletes it, and so does
   the workload leaving its router. Nothing is written while workloads wake well.
 - **Alerts:** the watchdog makes each entry an alarm subject (`workload#<account>#<region>#<workloadId>`, problem
-  `wake-failed:<kind>`): one alert per kind across retries, "woke again" when the entry leaves. Each message is published
+  `wake-failed:<kind>`): one alert per kind across retries, "woke again" when the entry leaves; failing again more than
+  15 minutes after waking is a new alert (routers and lists are damped 6 hours). Each message is published
   with `MessageStructure: json`: the text for `email` (and `default`), an Amazon Q Developer custom notification for
   `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`), `account`,
   `region`, `router` and `workload` for subscription filter policies (for example `{"kind": ["workload"], "account":

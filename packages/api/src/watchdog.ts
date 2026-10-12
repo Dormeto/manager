@@ -39,6 +39,8 @@ interface Log { info(event: string, data?: object): void; warn(event: string, da
 
 const MIN = 60_000;
 const DAMP_MS = 6 * 60 * MIN;
+// A workload that woke well and fails again is a new incident: damped only while it flaps within a wake cycle.
+const WORKLOAD_DAMP_MS = 15 * MIN;
 // A router installed this recently has not reported yet: not expected before.
 const GRACE_MS = 15 * MIN;
 const MAX_MESSAGES = 10;
@@ -165,7 +167,8 @@ export function evaluate(observation: Observation, previous: Alarm | null, versi
   const before = new Map((previous?.problems ?? []).map((p) => [p.code, p]));
   const problems: OpenProblem[] = [...byCode.values()].map((p) => ({ ...p, since: before.get(p.code)?.since ?? at }))
     .sort((a, b) => RANK[b.level] - RANK[a.level]);
-  const cleared = Object.fromEntries(Object.entries(previous?.cleared ?? {}).filter(([, t]) => now - Date.parse(t) < DAMP_MS));
+  const damp = observation.subject.kind === 'workload' ? WORKLOAD_DAMP_MS : DAMP_MS;
+  const cleared = Object.fromEntries(Object.entries(previous?.cleared ?? {}).filter(([, t]) => now - Date.parse(t) < damp));
   for (const code of before.keys()) if (!byCode.has(code)) cleared[code] = at;
   const notified = (previous?.notified ?? []).filter((code) => byCode.has(code));
   const opened = problems.filter((p) => !notified.includes(p.code) && !cleared[p.code]);

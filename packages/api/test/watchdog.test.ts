@@ -336,6 +336,28 @@ describe('watchdog: failed wakes (R7b)', () => {
     expect(s.sent.at(-1)!.subject).toBe('[Dormeto dev] shop (038606077307 eu-west-3): woke again');
   });
 
+  it('a workload failing again 15 minutes after it woke is alerted again; a quicker flap is not (found live)', async () => {
+    const s = setup();
+    let t = NOW;
+    let entries: unknown[] = [entry('unhealthy')];
+    const watchdog = createWatchdog({
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [],
+      fleet: { listRouters: async () => [] }, registry: { listRouters: async () => [] }, alarms: s.alarms,
+      notify: { publish: async (n) => { s.sent.push(n); } }, now: () => t, log: { info: () => {}, warn: () => {}, error: () => {} },
+      extraObservations: async () => workloadObservations(entries as never, t),
+    });
+    const step = async (minutes: number, next: unknown[]) => { t += minutes * MIN; entries = next; await watchdog.run(); };
+    await watchdog.run();
+    await step(5, []);
+    expect(s.sent.map((n) => n.subject.split(': ')[1])).toEqual(['wake failed', 'woke again'].map((x, i) => (i ? x : expect.stringMatching(/^wake failed/)) as never));
+    await step(10, [entry('unhealthy')]);
+    expect(s.sent, 'failing again 10 minutes after waking: damped').toHaveLength(2);
+    await step(5, []);
+    await step(20, [entry('unhealthy')]);
+    expect(s.sent, 'failing again 20 minutes after waking: a new alert').toHaveLength(3);
+    expect(s.sent.at(-1)!.subject).toMatch(/wake failed/);
+  });
+
   it('every message has a chat body (Amazon Q Developer custom notification) beside its text', async () => {
     const s = setup();
     await watchdogWith(s, () => [entry('unhealthy', { failure: { kind: 'unhealthy', step: 'wake', message: '2 targets, none healthy: Target.FailedHealthChecks', at: iso(NOW) } })]).run();
