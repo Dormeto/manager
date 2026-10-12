@@ -24,7 +24,13 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
   // The workflow: the API creates the operation; its steps run elsewhere (operations engine tests).
   const created: [string, Record<string, unknown>, string][] = [];
   const operations = {
-    async create(type: string, input: Record<string, unknown>, by: string) { created.push([type, input, by]); return { id: `op${created.length}`, type, input } as never; },
+    // An operation already running on the exclusion: the workflow refuses a second one.
+    busy: null as string | null,
+    async create(type: string, input: Record<string, unknown>, by: string) {
+      if (operations.busy) throw Object.assign(new Error(`operation ${operations.busy} is running`), { name: 'Conflict', operationId: operations.busy });
+      created.push([type, input, by]);
+      return { id: `op${created.length}`, type, input } as never;
+    },
     list: async () => [], get: async () => null, installedRouters: async () => [],
   };
   const api = createApi({
@@ -46,7 +52,7 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
     discovery: { store, run: async () => {} },
     operations: operations as never,
   });
-  return { api, audit, calls, store, created };
+  return { api, audit, calls, store, created, operations };
 }
 
 function event(method: string, path: string, groups = '', body?: unknown): ApiEvent {
@@ -97,7 +103,15 @@ describe('exclusions', () => {
   it('passes the workload it was created from to the workflow, even without a discovery candidate', async () => {
     const { api, created } = setup([]);
     await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration', workload: { router: 'dmt-dev', id: 'demo-asg' } }));
-    expect(created).toEqual([['exclude', { exclusionId: 'x1', hint: { router: 'dmt-dev', workloadId: 'demo-asg' } }, 'ops@example.com']]);
+    // The workflow finds the routers from the target group's account and region: it names installed routers otherwise.
+    expect(created).toEqual([['exclude', { exclusionId: 'x1', hint: { workloadId: 'demo-asg' } }, 'ops@example.com']]);
+  });
+
+  it('refuses a workload whose router is not in the target group\'s account and region', async () => {
+    const { api, store } = setup([]);
+    const res = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration', workload: { router: 'dmt-paris', id: 'demo-asg' } }));
+    expect(res.statusCode).toBe(400);
+    expect(await store.listExclusions()).toEqual([]);
   });
 
   it('refuses an unknown kind, a malformed ARN or account, a missing reason, an expiry in the past or an unknown router', async () => {
@@ -144,6 +158,17 @@ describe('exclusions', () => {
     // Still listed (the operation deletes it once everything is resumed): lifting again starts another operation.
     expect((await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'))).statusCode).toBe(202);
     expect(calls).toEqual([]);
+  });
+
+  it('a lift while an operation runs on the exclusion is a conflict, and changes nothing', async () => {
+    const { api, store, operations } = setup();
+    await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }));
+    const before = structuredClone(await store.getExclusion('x1'));
+    operations.busy = 'op1';
+    const res = await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([409, { error: 'conflict', message: 'operation op1 is running', operationId: 'op1' }]);
+    expect(await store.getExclusion('x1')).toEqual(before);
+    expect((await store.getCandidate(TG))!.status).toBe('pending-offboarding');
   });
 
   it('an expired exclusion brings its candidates back without a run, once', async () => {

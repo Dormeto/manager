@@ -688,13 +688,14 @@ export function createApi({
       const reason = reasonIn(body, REASON_MAX - EXCLUDED.length);
       const expiresAt = aheadIn(body, 'expiresAt', now());
       const workload = body.workload as { router?: string; id?: string } | undefined;
-      let hint: { router: Router; id: string } | undefined;
+      let hint: { id: string } | undefined;
       if (workload !== undefined) {
         const router = routers.find((r) => r.name === workload?.router);
-        if (!router || !ID.test(String(workload?.id ?? '')) || target.kind !== 'target-group') {
-          throw new HttpError(400, 'bad_request', 'workload must name a registered router and a workload id, with a target group exclusion');
+        if (!router || !ID.test(String(workload?.id ?? '')) || target.kind !== 'target-group'
+          || (router.account ?? managerAccount) !== target.account || router.region !== target.region) {
+          throw new HttpError(400, 'bad_request', 'workload must name a registered router of the target group\'s account and region and a workload id, with a target group exclusion');
         }
-        hint = { router, id: String(workload.id) };
+        hint = { id: String(workload.id) };
       }
       const exclusion: Exclusion = { id: newId(), target, reason, by: identity.email, at: new Date(now()).toISOString(), ...(expiresAt ? { expiresAt } : {}) };
       if (!operations) throw new HttpError(503, 'unavailable', 'the operations workflow is not configured');
@@ -703,7 +704,9 @@ export function createApi({
         // (scale design §6): the API answers at once, whatever their number.
         await d.store.putExclusion(exclusion);
         const candidates = await rescoped(d, [target.account]);
-        const op = await operations.create('exclude', { exclusionId: exclusion.id, ...(hint ? { hint: { router: hint.router.name, workloadId: hint.id } } : {}) }, identity.email);
+        // The workflow pauses it in the routers of the target group's account and region (it knows installed routers by
+        // another name).
+        const op = await operations.create('exclude', { exclusionId: exclusion.id, ...(hint ? { hint: { workloadId: hint.id } } : {}) }, identity.email);
         const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), `operation ${op.id}`].join('; ');
         return { result, response: reply(202, { exclusion, candidates, operation: op }) };
       });
@@ -714,12 +717,20 @@ export function createApi({
       if (!exclusion) throw new HttpError(404, 'not_found', `unknown exclusion: ${id}`);
       if (!operations) throw new HttpError(503, 'unavailable', 'the operations workflow is not configured');
       return audited(identity, 'exclusion-lift', targetText(exclusion.target), async () => {
-        // Marked lifted first (it no longer applies); the workflow resumes its workloads and deletes it once all are
-        // resumed: until then it stays listed, and Lift again retries.
-        const lifted = { ...exclusion, liftedAt: exclusion.liftedAt ?? new Date(now()).toISOString() };
-        await d.store.putExclusion(lifted);
+        // The operation first: one runs per exclusion at a time, and a lift refused meanwhile changes nothing. Then marked
+        // lifted (it no longer applies; the operation marks it too); the operation resumes its workloads and deletes it
+        // once all are resumed: until then it stays listed, and Lift again retries.
+        let op: Operation;
+        try {
+          op = await operations.create('lift-exclusion', { exclusionId: exclusion.id }, identity.email);
+        } catch (err) {
+          const conflict = conflictOf(err);
+          if (conflict) return conflict;
+          throw err;
+        }
+        const at = new Date(now()).toISOString();
+        await d.store.updateExclusion(exclusion.id, (x) => ({ ...x, liftedAt: x.liftedAt ?? at }));
         const candidates = await rescoped(d, [exclusion.target.account]);
-        const op = await operations.create('lift-exclusion', { exclusionId: exclusion.id }, identity.email);
         return { result: `${exclusion.reason}; operation ${op.id}`, response: reply(202, { candidates, operation: op }) };
       });
     }
@@ -775,12 +786,18 @@ export function createApi({
         const op = await ops.create(type, input, identity.email);
         return { result: `started ${op.id}`, response: reply(202, { operation: op }) };
       } catch (err) {
-        if ((err as Error).name === 'Conflict') {
-          return { result: `conflict: ${(err as { operationId?: string }).operationId}`, response: reply(409, { error: 'conflict', message: (err as Error).message, operationId: (err as { operationId?: string }).operationId }) };
-        }
+        const conflict = conflictOf(err);
+        if (conflict) return conflict;
         throw err;
       }
     });
+  }
+
+  // Another operation holds the same target: 409, with its id.
+  function conflictOf(err: unknown): { result: string; response: ApiResponse } | null {
+    if ((err as Error).name !== 'Conflict') return null;
+    const operationId = (err as { operationId?: string }).operationId;
+    return { result: `conflict: ${operationId}`, response: reply(409, { error: 'conflict', message: (err as Error).message, operationId }) };
   }
 
   return async function handler(event: ApiEvent): Promise<ApiResponse> {

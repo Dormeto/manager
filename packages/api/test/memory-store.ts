@@ -32,6 +32,13 @@ export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null 
     async listExclusions() { return [...store.exclusions.values()]; },
     async getExclusion(id: string) { return store.exclusions.get(id) ?? null; },
     async putExclusion(e: Exclusion) { store.exclusions.set(e.id, structuredClone(e)); },
+    async updateExclusion(id: string, change: (e: Exclusion) => Exclusion | Promise<Exclusion>) {
+      const e = store.exclusions.get(id);
+      if (!e) return null;
+      const next = await change(structuredClone(e));
+      store.exclusions.set(id, structuredClone(next));
+      return next;
+    },
     async deleteExclusion(id: string) { store.exclusions.delete(id); },
   };
   return store;

@@ -96,6 +96,26 @@ describe('exclusions in the store and in runs', () => {
     expect(await store.getExclusion('x1')).toBeNull();
   });
 
+  it('changes an exclusion without losing a concurrent change: the change is applied again on the newer version', async () => {
+    const store = createStore({ dynamo: fakeDynamo(), table: 't', now: () => T0 });
+    await store.putExclusion(tgExclusion);
+    let concurrent = true;
+    const paused = await store.updateExclusion('x1', async (e) => {
+      // Another writer changes it between this read and this write.
+      if (concurrent) {
+        concurrent = false;
+        await store.updateExclusion('x1', (other) => ({ ...other, liftedAt: iso(T0) }));
+      }
+      return { ...e, paused: [...(e.paused ?? []), { router: 'dmt-dev', workloadId: 'shop' }] };
+    });
+    expect(paused).toEqual({ ...tgExclusion, liftedAt: iso(T0), paused: [{ router: 'dmt-dev', workloadId: 'shop' }] });
+    expect(await store.getExclusion('x1')).toEqual(paused);
+    // Gone: nothing is written back; no change: nothing is written.
+    await store.deleteExclusion('x1');
+    expect(await store.updateExclusion('x1', (e) => ({ ...e, reason: 'back' }))).toBeNull();
+    expect(await store.getExclusion('x1')).toBeNull();
+  });
+
   it('a run never assumes a role in an excluded account and excludes the candidates of an excluded target group', async () => {
     const dynamo = fakeDynamo();
     const store = createStore({ dynamo, table: 't', now: () => T0 });

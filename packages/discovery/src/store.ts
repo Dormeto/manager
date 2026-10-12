@@ -9,6 +9,8 @@ const RETENTION_S = 90 * 86_400;
 const LOCK_MS = 15 * 60_000;
 // An expired exclusion stays listed (shown as expired) for 30 days.
 const EXPIRED_EXCLUSION_S = 30 * 86_400;
+// Writes of one exclusion tried before giving up, when other writers keep changing it.
+const EXCLUSION_WRITES = 5;
 type Item = Record<string, AttributeValue>;
 
 export interface StoredConfig {
@@ -38,6 +40,8 @@ export interface DiscoveryStore {
   listExclusions(): Promise<Exclusion[]>;
   getExclusion(id: string): Promise<Exclusion | null>;
   putExclusion(exclusion: Exclusion): Promise<void>;
+  // Read, change and write back, again on the newer version when another writer changed it in between; null when gone.
+  updateExclusion(id: string, change: (exclusion: Exclusion) => Exclusion | Promise<Exclusion>): Promise<Exclusion | null>;
   deleteExclusion(id: string): Promise<void>;
 }
 
@@ -85,6 +89,12 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     return item?.data?.S ? (JSON.parse(item.data.S) as T) : null;
   };
   const packed = (value: unknown): AttributeValue => ({ B: gzipSync(JSON.stringify(value)) });
+  const exclusionItem = (exclusion: Exclusion, version: number): Item => ({
+    ...key(`EXCL#${exclusion.id}`),
+    data: { S: JSON.stringify(exclusion) },
+    version: { N: String(version) },
+    ...(exclusion.expiresAt ? { expiresAt: { N: String(seconds(Date.parse(exclusion.expiresAt)) + EXPIRED_EXCLUSION_S) } } : {}),
+  });
 
   async function query(prefix: string, { forward = true, limit }: { forward?: boolean; limit?: number } = {}, stop?: (items: Item[]) => boolean): Promise<Item[]> {
     const items: Item[] = [];
@@ -232,11 +242,27 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       return data<Exclusion>(await get(`EXCL#${id}`));
     },
     async putExclusion(exclusion) {
-      await put({
-        ...key(`EXCL#${exclusion.id}`),
-        data: { S: JSON.stringify(exclusion) },
-        ...(exclusion.expiresAt ? { expiresAt: { N: String(seconds(Date.parse(exclusion.expiresAt)) + EXPIRED_EXCLUSION_S) } } : {}),
-      });
+      await put(exclusionItem(exclusion, 1));
+    },
+    // The API, the workflow and expiry write the same exclusion: each write is conditional on the version it read.
+    async updateExclusion(id, change) {
+      for (let attempt = 1; ; attempt += 1) {
+        const item = await get(`EXCL#${id}`);
+        const current = data<Exclusion>(item);
+        if (!current) return null;
+        const version = item!.version?.N ?? '0';
+        const next = await change(structuredClone(current));
+        try {
+          await dynamo.send(new PutItemCommand({
+            TableName: table, Item: exclusionItem(next, Number(version) + 1),
+            ConditionExpression: 'attribute_exists(sk) AND (attribute_not_exists(version) OR version = :version)',
+            ExpressionAttributeValues: { ':version': { N: version } },
+          }));
+          return next;
+        } catch (err) {
+          if ((err as Error).name !== 'ConditionalCheckFailedException' || attempt >= EXCLUSION_WRITES) throw err;
+        }
+      }
     },
     async deleteExclusion(id) {
       await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(`EXCL#${id}`) }));

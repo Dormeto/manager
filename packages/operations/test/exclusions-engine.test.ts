@@ -24,11 +24,16 @@ const exclusion = (over: Partial<Exclusion> = {}): Exclusion => ({
 });
 
 // Workloads each router knows; a pause or resume elsewhere answers "workload not configured".
-function setup({ candidates, known, fail = new Set<string>() }: { candidates: Candidate[]; known: Record<string, string[]>; fail?: Set<string> }) {
+function setup({ candidates, known, fail = new Set<string>(), routers = ROUTERS, failWrite }: {
+  candidates: Candidate[]; known: Record<string, string[]>; fail?: Set<string>; routers?: RouterRef[]; failWrite?: (n: number) => boolean;
+}) {
   const dynamo = fakeDynamo();
   const records = createRecords({ dynamo, table: 't', now: () => Date.parse('2026-10-05T12:00:00.000Z') });
   const exclusions = new Map<string, Exclusion>();
   const calls: [string, Record<string, unknown>][] = [];
+  // What the exclusion recorded when each router call was made.
+  const recordedAtCall: string[][] = [];
+  let writes = 0;
   const discovery = {
     getCandidate: async (id: string) => candidates.find((c) => c.id === id) ?? null,
     putCandidates: async () => {},
@@ -36,16 +41,26 @@ function setup({ candidates, known, fail = new Set<string>() }: { candidates: Ca
     getInventory: async () => ({ accounts: [{ id: ACCOUNT, name: 'dormeto', ouPath: [], tags: {} }], ous: {} }),
     getExclusion: async (id: string) => structuredClone(exclusions.get(id) ?? null),
     putExclusion: async (e: Exclusion) => { exclusions.set(e.id, structuredClone(e)); },
+    updateExclusion: async (id: string, change: (e: Exclusion) => Exclusion | Promise<Exclusion>) => {
+      const e = exclusions.get(id);
+      if (!e) return null;
+      const next = await change(structuredClone(e));
+      writes += 1;
+      if (failWrite?.(writes)) throw Object.assign(new Error('Throttling'), { name: 'ThrottlingException' });
+      exclusions.set(id, structuredClone(next));
+      return next;
+    },
     deleteExclusion: async (id: string) => { exclusions.delete(id); },
   };
   let ids = 0;
   const engine = createEngine({
-    records, discovery: discovery as never, routers: async () => ROUTERS,
+    records, discovery: discovery as never, routers: async () => routers,
     target: async () => ({
       installer: () => { throw new Error('no installer'); },
       invoke: async (arn: string, payload: Record<string, unknown>) => {
-        const router = ROUTERS.find((r) => r.controller === arn)!.name;
+        const router = routers.find((r) => r.controller === arn)!.name;
         calls.push([router, payload]);
+        recordedAtCall.push((exclusions.get('x1')?.paused ?? []).map((p) => `${p.router}/${p.workloadId}`));
         const id = String(payload.workloadId);
         if (fail.has(`${router}/${id}`)) throw new Error('Throttling');
         if (!known[router]?.includes(id)) throw Object.assign(new Error(`workload not configured: ${id}`), { name: 'RouterError' });
@@ -63,7 +78,7 @@ function setup({ candidates, known, fail = new Set<string>() }: { candidates: Ca
     }
     throw new Error('never finished');
   }
-  return { engine, records, exclusions, calls, drive };
+  return { engine, records, exclusions, calls, recordedAtCall, drive };
 }
 
 describe('exclusions through the workflow', () => {
@@ -83,9 +98,30 @@ describe('exclusions through the workflow', () => {
   it('pauses the workload it was created from, even without a candidate', async () => {
     const s = setup({ candidates: [], known: { 'dmt-dev': ['shop'] } });
     s.exclusions.set('x1', exclusion({ target: { kind: 'target-group', arn: tg(1), account: ACCOUNT, region: 'eu-west-1', name: 'app-1' } }));
-    const op = await s.engine.create('exclude', { exclusionId: 'x1', hint: { router: 'dmt-dev', workloadId: 'shop' } }, 'ops');
+    const op = await s.engine.create('exclude', { exclusionId: 'x1', hint: { workloadId: 'shop' } }, 'ops');
     await s.drive(op.id);
     expect(s.exclusions.get('x1')!.paused!.map((p) => p.workloadId)).toEqual(['shop']);
+  });
+
+  it('pauses the workload it was created from in the routers of its target group\'s account and region, an installed one included', async () => {
+    // The workflow knows an installed router by its AWS name; the API by another (dmtr-dev-eu-west-1): the hint names none.
+    const installed: RouterRef = { name: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-1', controller: 'arn:dmtr-dev-controller', source: 'manager' };
+    const s = setup({ candidates: [managed(1, 'shop')], known: { 'dmtr-dev': ['shop'] }, routers: [installed] });
+    s.exclusions.set('x1', exclusion({ target: { kind: 'target-group', arn: tg(1), account: ACCOUNT, region: 'eu-west-1', name: 'app-1' } }));
+    const op = await s.engine.create('exclude', { exclusionId: 'x1', hint: { workloadId: 'shop' } }, 'ops');
+    await s.drive(op.id);
+    expect(s.exclusions.get('x1')!.paused).toEqual([{ router: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-1', workloadId: 'shop' }]);
+  });
+
+  it('records each pause before its router is called; a batch run again after a failed write records it once', async () => {
+    // The write after the first batch's router calls fails once: the step runs that batch again.
+    const s = setup({ candidates: [managed(1, 'shop'), managed(2, 'blog')], known: { 'dmt-dev': ['shop', 'blog'] }, failWrite: (n) => n === 2 });
+    s.exclusions.set('x1', exclusion());
+    const op = await s.engine.create('exclude', { exclusionId: 'x1' }, 'ops');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const pauses = s.calls.map(([router, p], i) => [`${router}/${p.workloadId}`, s.recordedAtCall[i]!.includes(`${router}/${p.workloadId}`)]);
+    expect(pauses.every(([, recorded]) => recorded)).toBe(true);
+    expect(s.exclusions.get('x1')!.paused!.map((p) => `${p.router}/${p.workloadId}`)).toEqual(['dmt-dev/shop', 'dmt-dev/blog']);
   });
 
   it('pauses a large exclusion in several steps, each workload once', async () => {
@@ -121,6 +157,31 @@ describe('exclusions through the workflow', () => {
     await s.drive(second.id);
     expect(s.exclusions.has('x1')).toBe(false);
     expect(s.calls.filter(([, p]) => p.action === 'resume').map(([router, p]) => `${router}/${p.workloadId}/${p.exclusionId}`)).toEqual(['dmt-dev/shop/x1', 'dmt-dev2/blog/x1', 'dmt-dev2/blog/x1']);
+  });
+
+  it('a lift of several batches resumes each pause once; only the one it could not resume stays, and the exclusion is marked lifted', async () => {
+    const paused = Array.from({ length: 30 }, (_, i) => ({ router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-1', workloadId: `w${i + 1}` }));
+    const fail = new Set(['dmt-dev/w1']);
+    const s = setup({ candidates: [], known: { 'dmt-dev': paused.map((p) => p.workloadId) }, fail });
+    s.exclusions.set('x1', exclusion({ paused }));
+    const first = await s.engine.create('lift-exclusion', { exclusionId: 'x1' }, 'ops');
+    await s.drive(first.id);
+    expect(s.exclusions.get('x1')!.paused!.map((p) => p.workloadId)).toEqual(['w1']);
+    expect(s.exclusions.get('x1')!.liftedAt).toBe('2026-10-05T12:00:00.000Z');
+    expect(s.calls.filter(([, p]) => p.action === 'resume' && p.workloadId === 'w1')).toHaveLength(1);
+    expect((await s.records.getOperation(first.id))!.steps[0]!.detail).toBe('not resumed: dmt-dev/w1: Throttling (lift again to retry)');
+    fail.clear();
+    const second = await s.engine.create('lift-exclusion', { exclusionId: 'x1' }, 'ops');
+    await s.drive(second.id);
+    expect(s.exclusions.has('x1')).toBe(false);
+  });
+
+  it('a lift counts a workload its router no longer knows (offboarded since) as resumed', async () => {
+    const s = setup({ candidates: [], known: { 'dmt-dev': [] } });
+    s.exclusions.set('x1', exclusion({ paused: [{ router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-1', workloadId: 'gone' }], liftedAt: 'x' }));
+    const op = await s.engine.create('lift-exclusion', { exclusionId: 'x1' }, 'ops');
+    await s.drive(op.id);
+    expect(s.exclusions.has('x1')).toBe(false);
   });
 
   it('runs one operation per exclusion at a time', async () => {
