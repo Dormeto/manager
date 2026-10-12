@@ -1,6 +1,17 @@
 # Organization discovery (vision docs/specs/2026-10-04-org-discovery-design.md): the discovery Lambda reads the
 # organization through its delegation policy and assumes the read-only DmtDiscoveryRole in each account of the perimeter.
 
+# The discovery role of the manager's own account (packaging design §3): the access module, without the command role
+# (module command_role, operations.tf). Other accounts get theirs from the published access module, or its procedure.
+module "discovery_role" {
+  source              = "../modules/access"
+  manager_account_id  = var.account_id
+  env                 = var.env
+  organization_id     = var.organization_id
+  discovery_role_name = var.discovery_role_name
+  create_command_role = false
+}
+
 resource "aws_iam_role" "discovery" {
   name               = "${local.name}-discovery"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json

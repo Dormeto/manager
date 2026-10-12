@@ -103,7 +103,7 @@ variable "organization_id" {
 }
 
 variable "discovery_role_name" {
-  description = "Read-only role deployed in each account of the perimeter (manager/infra/org/discovery-role.yaml)."
+  description = "Read-only role the manager assumes in each account of the perimeter (modules/access); a path may precede the name."
   type        = string
   default     = "DmtDiscoveryRole"
 }

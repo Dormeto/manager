@@ -14,6 +14,12 @@ variable "operations_role_arn" {
   type        = string
 }
 
+variable "role_name" {
+  description = "The command role's name, a path may precede it (path/name)."
+  type        = string
+  default     = "DmtCommandRole"
+}
+
 variable "boundary_policy" {
   description = "DmtRouterBoundary policy document: the router's dist/router-boundary.json with $${account} and $${partition} filled."
   type        = string
@@ -23,10 +29,12 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  account  = data.aws_caller_identity.current.account_id
-  arn      = "arn:${data.aws_partition.current.partition}"
-  roles    = "${local.arn}:iam::${local.account}:role/dormeto/router/*"
-  boundary = "${local.arn}:iam::${local.account}:policy/DmtRouterBoundary"
+  role_parts = split("/", var.role_name)
+  role_path  = length(local.role_parts) > 1 ? "/${join("/", slice(local.role_parts, 0, length(local.role_parts) - 1))}/" : "/"
+  account    = data.aws_caller_identity.current.account_id
+  arn        = "arn:${data.aws_partition.current.partition}"
+  roles      = "${local.arn}:iam::${local.account}:role/dormeto/router/*"
+  boundary   = "${local.arn}:iam::${local.account}:policy/DmtRouterBoundary"
 }
 
 resource "aws_iam_policy" "boundary" {
@@ -46,110 +54,18 @@ data "aws_iam_policy_document" "trust" {
 }
 
 resource "aws_iam_role" "command" {
-  name                 = "DmtCommandRole"
+  name                 = element(local.role_parts, length(local.role_parts) - 1)
+  path                 = local.role_path
   description          = "Dormeto manager: installs, upgrades and removes routers by API calls, onboards workloads through them."
   assume_role_policy   = data.aws_iam_policy_document.trust.json
   max_session_duration = 3600
 }
 
-data "aws_iam_policy_document" "command" {
-  statement {
-    sid       = "RouterRolesWithBoundary"
-    actions   = ["iam:CreateRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy"]
-    resources = [local.roles]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PermissionsBoundary"
-      values   = [local.boundary]
-    }
-  }
-  statement {
-    sid       = "RouterRoles"
-    actions   = ["iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole"]
-    resources = [local.roles]
-  }
-  statement {
-    # Reads: a role that does not exist yet is authorized without its path (its ARN is unknown).
-    sid       = "RouterRolesRead"
-    actions   = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies"]
-    resources = [local.roles, "${local.arn}:iam::${local.account}:role/dmtr-*"]
-  }
-  statement {
-    sid       = "PassRouterRoles"
-    actions   = ["iam:PassRole"]
-    resources = [local.roles]
-    condition {
-      test     = "StringEquals"
-      variable = "iam:PassedToService"
-      values   = ["lambda.amazonaws.com", "scheduler.amazonaws.com"]
-    }
-  }
-  statement {
-    sid = "RouterFunctions"
-    actions = [
-      "lambda:CreateFunction", "lambda:TagResource", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionCode",
-      "lambda:UpdateFunctionConfiguration", "lambda:GetFunctionEventInvokeConfig", "lambda:PutFunctionEventInvokeConfig", "lambda:GetPolicy",
-      "lambda:AddPermission", "lambda:DeleteFunction", "lambda:InvokeFunction",
-    ]
-    resources = ["${local.arn}:lambda:*:${local.account}:function:dmtr-*"]
-  }
-  statement {
-    sid       = "InvokeRouters"
-    actions   = ["lambda:InvokeFunction"]
-    resources = ["${local.arn}:lambda:*:${local.account}:function:dmt-*-controller", "${local.arn}:lambda:*:${local.account}:function:dmt-*-onboarder"]
-  }
-  statement {
-    sid       = "RouterTables"
-    actions   = ["dynamodb:CreateTable", "dynamodb:TagResource", "dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive", "dynamodb:UpdateTimeToLive", "dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups", "dynamodb:DeleteTable"]
-    resources = ["${local.arn}:dynamodb:*:${local.account}:table/dmtr-*"]
-  }
-  statement {
-    sid       = "RouterQueues"
-    actions   = ["sqs:CreateQueue", "sqs:TagQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:DeleteQueue"]
-    resources = ["${local.arn}:sqs:*:${local.account}:dmtr-*"]
-  }
-  statement {
-    # The readers of a router's work and drift queues (routers 0.22.0 and later): its functions only.
-    sid       = "RouterEventSources"
-    actions   = ["lambda:CreateEventSourceMapping", "lambda:UpdateEventSourceMapping", "lambda:DeleteEventSourceMapping", "lambda:GetEventSourceMapping"]
-    resources = ["*"]
-    condition {
-      test     = "ArnLike"
-      variable = "lambda:FunctionArn"
-      values   = ["${local.arn}:lambda:*:${local.account}:function:dmtr-*"]
-    }
-  }
-  statement {
-    sid       = "ListEventSources"
-    actions   = ["lambda:ListEventSourceMappings"]
-    resources = ["*"]
-  }
-  statement {
-    sid       = "RouterLogs"
-    actions   = ["logs:CreateLogGroup", "logs:TagResource", "logs:TagLogGroup", "logs:PutRetentionPolicy", "logs:DeleteLogGroup"]
-    resources = ["${local.arn}:logs:*:${local.account}:log-group:/aws/lambda/dmtr-*"]
-  }
-  statement {
-    sid       = "DescribeLogGroups"
-    actions   = ["logs:DescribeLogGroups"]
-    resources = ["*"]
-  }
-  statement {
-    sid       = "RouterEventRules"
-    actions   = ["events:DescribeRule", "events:PutRule", "events:DeleteRule", "events:PutTargets", "events:RemoveTargets", "events:ListTargetsByRule", "events:TagResource"]
-    resources = ["${local.arn}:events:*:${local.account}:rule/dmtr-*"]
-  }
-  statement {
-    sid       = "RouterSchedules"
-    actions   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"]
-    resources = ["${local.arn}:scheduler:*:${local.account}:schedule/default/dmtr-*"]
-  }
-}
-
+# The policy as a document with $${account} and $${partition} (packaging design §3): the AWS CLI procedure fills the same.
 resource "aws_iam_role_policy" "command" {
   name   = "command"
   role   = aws_iam_role.command.id
-  policy = data.aws_iam_policy_document.command.json
+  policy = replace(replace(file("${path.module}/command-policy.json"), "$${account}", local.account), "$${partition}", data.aws_partition.current.partition)
 }
 
 output "role_arn" {

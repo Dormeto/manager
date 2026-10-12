@@ -44,6 +44,7 @@ resource "aws_s3_object" "router_bundle" {
 # DmtCommandRole and DmtRouterBoundary of the manager's account (other accounts: the organization bootstrap).
 module "command_role" {
   source              = "../modules/command-role"
+  role_name           = var.command_role_name
   operations_role_arn = aws_iam_role.operations.arn
   boundary_policy     = replace(replace(file("${local.router_dir}/dist/router-boundary.json"), "$${account}", var.account_id), "$${partition}", "aws")
 }
@@ -67,7 +68,7 @@ data "aws_iam_policy_document" "operations" {
   statement {
     sid       = "AssumeCommandRoles"
     actions   = ["sts:AssumeRole"]
-    resources = ["arn:aws:iam::*:role/DmtCommandRole"]
+    resources = ["arn:aws:iam::*:role/${var.command_role_name}"]
     condition {
       test     = "StringEquals"
       variable = "aws:ResourceOrgID"
@@ -117,7 +118,7 @@ resource "aws_lambda_function" "operations" {
       ROUTERS            = local.routers
       ARTIFACTS_BUCKET   = aws_s3_bucket.artifacts.id
       ROUTER_VERSION     = local.router_version
-      COMMAND_ROLE       = "DmtCommandRole"
+      COMMAND_ROLE       = var.command_role_name
       MANAGER_PRINCIPALS = jsonencode([aws_iam_role.api.arn])
       # Installed routers send their state there (scale design §3).
       MANAGER_BUS = aws_cloudwatch_event_bus.manager.arn

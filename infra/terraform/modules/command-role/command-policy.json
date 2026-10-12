@@ -1,0 +1,214 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RouterRolesWithBoundary",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy"
+      ],
+      "Resource": [
+        "arn:${partition}:iam::${account}:role/dormeto/router/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": [
+            "arn:${partition}:iam::${account}:policy/DmtRouterBoundary"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RouterRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:DeleteRole"
+      ],
+      "Resource": [
+        "arn:${partition}:iam::${account}:role/dormeto/router/*"
+      ]
+    },
+    {
+      "Sid": "RouterRolesRead",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": [
+        "arn:${partition}:iam::${account}:role/dormeto/router/*",
+        "arn:${partition}:iam::${account}:role/dmtr-*"
+      ]
+    },
+    {
+      "Sid": "PassRouterRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:${partition}:iam::${account}:role/dormeto/router/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "scheduler.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "RouterFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:TagResource",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:GetFunctionEventInvokeConfig",
+        "lambda:PutFunctionEventInvokeConfig",
+        "lambda:GetPolicy",
+        "lambda:AddPermission",
+        "lambda:DeleteFunction",
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "arn:${partition}:lambda:*:${account}:function:dmtr-*"
+      ]
+    },
+    {
+      "Sid": "InvokeRouters",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "arn:${partition}:lambda:*:${account}:function:dmt-*-controller",
+        "arn:${partition}:lambda:*:${account}:function:dmt-*-onboarder"
+      ]
+    },
+    {
+      "Sid": "RouterTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:TagResource",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTimeToLive",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:DeleteTable"
+      ],
+      "Resource": [
+        "arn:${partition}:dynamodb:*:${account}:table/dmtr-*"
+      ]
+    },
+    {
+      "Sid": "RouterQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:TagQueue",
+        "sqs:GetQueueUrl",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "sqs:DeleteQueue"
+      ],
+      "Resource": [
+        "arn:${partition}:sqs:*:${account}:dmtr-*"
+      ]
+    },
+    {
+      "Sid": "RouterEventSources",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateEventSourceMapping",
+        "lambda:UpdateEventSourceMapping",
+        "lambda:DeleteEventSourceMapping",
+        "lambda:GetEventSourceMapping"
+      ],
+      "Resource": [
+        "*"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "lambda:FunctionArn": [
+            "arn:${partition}:lambda:*:${account}:function:dmtr-*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ListEventSources",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:ListEventSourceMappings"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "RouterLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:TagResource",
+        "logs:TagLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:DeleteLogGroup"
+      ],
+      "Resource": [
+        "arn:${partition}:logs:*:${account}:log-group:/aws/lambda/dmtr-*"
+      ]
+    },
+    {
+      "Sid": "DescribeLogGroups",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": [
+        "*"
+      ]
+    },
+    {
+      "Sid": "RouterEventRules",
+      "Effect": "Allow",
+      "Action": [
+        "events:DescribeRule",
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule",
+        "events:TagResource"
+      ],
+      "Resource": [
+        "arn:${partition}:events:*:${account}:rule/dmtr-*"
+      ]
+    },
+    {
+      "Sid": "RouterSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "scheduler:CreateSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:UpdateSchedule",
+        "scheduler:DeleteSchedule"
+      ],
+      "Resource": [
+        "arn:${partition}:scheduler:*:${account}:schedule/default/dmtr-*"
+      ]
+    }
+  ]
+}

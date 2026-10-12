@@ -45,6 +45,17 @@ export interface ScanPorts {
   };
 }
 
+// The IAM actions of these calls and of the enabled regions: the discovery role's policy grants them, nothing more
+// (infra/terraform/modules/access/discovery-policy.json; a test keeps them in line).
+export const DISCOVERY_ACTIONS = [
+  'ec2:DescribeRegions',
+  'elasticloadbalancing:DescribeLoadBalancers', 'elasticloadbalancing:DescribeListeners', 'elasticloadbalancing:DescribeRules',
+  'elasticloadbalancing:DescribeTags', 'elasticloadbalancing:DescribeTargetGroups', 'elasticloadbalancing:DescribeTargetHealth',
+  'autoscaling:DescribeAutoScalingGroups',
+  'ecs:ListClusters', 'ecs:ListServices', 'ecs:DescribeServices',
+  'cloudwatch:GetMetricData',
+];
+
 // Pages of an AWS list call: ELBv2 (Marker/NextMarker), Auto Scaling (NextToken), ECS (nextToken).
 async function all<T>(call: (token: Record<string, string>) => Promise<Record<string, unknown>>, key: string, token = { in: 'Marker', out: 'NextMarker' }): Promise<T[]> {
   const items: T[] = [];
