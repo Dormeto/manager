@@ -84,6 +84,14 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
 const pauses = computed(() => status.value?.pauses ?? []);
 const ownPause = computed(() => pauses.value.find((p) => p.scope === 'workload' && !p.exclusionId));
 const excluded = computed(() => pauses.value.some((p) => p.exclusionId));
+// What a backend is, then what it runs: an Auto Scaling group's capacities, a Kubernetes owner's replicas and switch.
+function backendDetails(b: Backend): string {
+  const parts: (string | false | null | undefined)[] = [backendLabel(b.kind), b.companion && 'companion', b.cluster && `cluster ${b.cluster}`];
+  if (b.kind === 'asg') parts.push(`min ${b.min} · desired ${b.desired} · max ${b.max}`, b.warmPool && `warm pool ${b.warmPool.state} (${b.warmPool.size})`);
+  if (b.kind === 'k8s') parts.push(`${b.replicas} replica${b.replicas === 1 ? '' : 's'}`, b.keda && 'KEDA', b.switch && switchText(b.switch));
+  return parts.filter(Boolean).join(' · ');
+}
+
 // A backend's costs in its tooltip (user request): its list price an hour and a month, its saving a month at the rate of
 // the last 30 days, what is not priced.
 function costRows(b: Backend): { label: string; value: string }[] {
@@ -247,17 +255,14 @@ const summary = computed(() => {
           <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)" :rows="costRows(b)"
             :note="costRows(b).some((r) => r.label === 'Base cost') ? costNote : null">
             <template #default="{ tip }">
-              <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : shortId(b.id)"
-                :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '') + (b.cluster ? ` · cluster ${b.cluster}` : '')">
+              <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : shortId(b.id)">
                 <template v-if="backendIcon(b.kind)" #prepend>
                   <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
                 </template>
+                <!-- Its details under its name, wrapped: beside the state they crushed the name at a phone's width. -->
+                <v-list-item-subtitle class="text-wrap">{{ backendDetails(b) }}</v-list-item-subtitle>
                 <template #append>
-                  <div class="d-flex align-center ga-2">
-                    <span v-if="b.kind === 'asg'" class="text-body-small text-medium-emphasis">min {{ b.min }} · desired {{ b.desired }} · max {{ b.max }}<template v-if="b.warmPool"> · warm pool {{ b.warmPool.state }} ({{ b.warmPool.size }})</template></span>
-                    <span v-if="b.kind === 'k8s'" class="text-body-small text-medium-emphasis">{{ b.replicas }} replica{{ b.replicas === 1 ? '' : 's' }}<template v-if="b.keda"> · KEDA</template><template v-if="b.switch"> · {{ switchText(b.switch) }}</template></span>
-                    <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
-                  </div>
+                  <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
                 </template>
               </v-list-item>
             </template>

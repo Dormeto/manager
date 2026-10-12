@@ -93,6 +93,26 @@ describe('Workload view', () => {
     current = status;
   });
 
+  // At a phone's width the details beside the state crushed the owner's name and clipped the state chip (read on dev).
+  it('a backend\'s details go in its subtitle, wrapped, its state alone on its right', async () => {
+    current = {
+      ...status, account: '111122223333', region: 'eu-west-1',
+      backends: [
+        { kind: 'k8s', id: 'eks-demo/demo/Deployment/web', status: 'stopped', cluster: 'eks-demo', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, replicas: 1, keda: false, switch: 'ingress' },
+        { kind: 'asg', id: 'shop-asg', status: 'running', min: 0, desired: 1, max: 2 },
+      ],
+    };
+    const wrapper = await mountView();
+    const [k8s, asg] = wrapper.findAll('[data-test="backend"]');
+    expect(k8s!.find('.v-list-item-subtitle').text()).toBe('Kubernetes workload · cluster eks-demo · 1 replica · Dormeto\'s Ingress in the group');
+    expect(k8s!.find('.v-list-item-subtitle').classes()).toContain('text-wrap');
+    expect(k8s!.find('.v-list-item__append').text()).toBe('stopped');
+    expect(asg!.find('.v-list-item-subtitle').text()).toBe('Auto Scaling group · min 0 · desired 1 · max 2');
+    expect(asg!.find('.v-list-item__append').text()).toBe('running');
+    wrapper.unmount();
+    current = status;
+  });
+
   it('groups its actions in one menu on the right of its header: wake, nap, pause, rename, exclude, offboard (user request)', async () => {
     current = { ...status, source: 'manager', targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-3:111122223333:targetgroup/shop/0123456789abcdef' };
     const wrapper = await mountView('operator');
