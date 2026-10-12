@@ -84,11 +84,19 @@ export function organizationsPort(client: Sender): OrganizationsPort {
   };
 }
 
-// The command role's check (packaging design §3): the operations Lambda assumes it, since the role trusts that Lambda
-// only; its refusal comes back as the error it got.
+// The command role's check (packaging design §3): the access check function assumes it (it runs as the operations role,
+// which the command role trusts); its refusal comes back as the error it got. A check that does not answer (the function
+// throttled, missing or failing) is no verdict on the role: `unavailable`, and the account keeps its last check.
 export function commandCheck(invoke: (payload: Record<string, unknown>) => Promise<unknown>) {
   return async (account: string): Promise<void> => {
-    const answer = (await invoke({ task: 'check-command', account })) as { ok?: boolean; name?: string; message?: string } | null;
-    if (!answer?.ok) throw Object.assign(new Error(answer?.message ?? 'no answer from the operations Lambda'), { name: answer?.name ?? 'Error' });
+    let answer: { ok?: boolean; name?: string; message?: string } | null;
+    try {
+      answer = (await invoke({ account })) as typeof answer;
+    } catch (err) {
+      throw Object.assign(err as Error, { unavailable: true });
+    }
+    if (answer?.ok === true) return;
+    if (answer?.ok === false && answer.name && answer.name !== 'InvalidInput') throw Object.assign(new Error(answer.message ?? ''), { name: answer.name });
+    throw Object.assign(new Error(`the access check answered ${JSON.stringify(answer)?.slice(0, 200)}`), { name: 'CheckUnavailable', unavailable: true });
   };
 }

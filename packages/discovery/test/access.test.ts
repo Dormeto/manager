@@ -54,13 +54,36 @@ describe('organization access', () => {
     expect(await fresh.store.accessReport({ limit: 10 })).toEqual({ counts: { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 }, accounts: [], cursor: null, delegation: null, checkedAt: null });
   });
 
-  it('checks the command role through the operations Lambda (the role trusts it, not discovery): its refusal is an access denied', async () => {
+  it('checks the command role through the access check function (the role trusts the operations role, not discovery): its refusal is an access denied', async () => {
     const asked: unknown[] = [];
     let answer: unknown = { ok: true };
     const check = commandCheck(async (payload) => { asked.push(payload); return answer; });
     await expect(check(B.id)).resolves.toBeUndefined();
     answer = { ok: false, name: 'AccessDenied', message: 'not authorized to perform: sts:AssumeRole' };
     await expect(check(C.id)).rejects.toMatchObject({ name: 'AccessDenied', message: 'not authorized to perform: sts:AssumeRole' });
-    expect(asked).toEqual([{ task: 'check-command', account: B.id }, { task: 'check-command', account: C.id }]);
+    expect(asked).toEqual([{ account: B.id }, { account: C.id }]);
+  });
+
+  it('a check that does not answer (its function throttled, missing or failing) is no verdict: the account keeps what the last check found', async () => {
+    const down = commandCheck(async () => { throw Object.assign(new Error('Rate exceeded'), { name: 'TooManyRequestsException' }); });
+    await expect(down(A.id)).rejects.toMatchObject({ unavailable: true });
+    const failing = commandCheck(async () => { throw Object.assign(new Error('Unhandled: unknown task'), { name: 'FunctionError' }); });
+    await expect(failing(A.id)).rejects.toMatchObject({ unavailable: true });
+    // In a run: denied first, then the check down: still denied (never turned "missing" by a manager-side failure, nor ok).
+    const s = setup({ cfg: ALL, denyCommand: [C.id] });
+    await s.ready;
+    await runDiscovery(s.deps, { source: 'manual' });
+    s.deps.assumeCommand = async () => { throw Object.assign(new Error('Rate exceeded'), { name: 'TooManyRequestsException', unavailable: true }); };
+    s.advance(60_000);
+    await runDiscovery(s.deps, { source: 'manual' });
+    expect((await s.store.getAccountScan(C.id))!.access!.command).toEqual({ ok: false, reason: DENIED });
+    expect((await s.store.getAccountScan(A.id))!.access!.command).toEqual({ ok: true });
+    // Never checked before: unchecked, not refused.
+    const fresh = setup({ cfg: ALL });
+    await fresh.ready;
+    fresh.deps.assumeCommand = s.deps.assumeCommand;
+    await runDiscovery(fresh.deps, { source: 'manual' });
+    expect((await fresh.store.getAccountScan(A.id))!.access).toBeUndefined();
+    expect((await fresh.store.accessReport({ limit: 10 })).counts).toEqual({ ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 3 });
   });
 });

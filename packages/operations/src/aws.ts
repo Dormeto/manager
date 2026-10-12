@@ -101,6 +101,15 @@ export function checkRole({ sts, roleName, sessionName }: { sts: Pick<STSClient,
   };
 }
 
+// The access check function (packaging design §3): an account id, nothing else, then the check. Discovery may invoke this
+// function only, never the operations function (which could run any operation under the command role).
+export function checkHandler(check: (account: string) => Promise<{ ok: true } | { ok: false; name: string; message: string }>) {
+  return async (event: { account?: unknown }) => {
+    if (typeof event?.account !== 'string' || !/^\d{12}$/.test(event.account)) return { ok: false as const, name: 'InvalidInput', message: 'account must be 12 digits' };
+    return check(event.account);
+  };
+}
+
 // The router bundle of the manager's router version: router/<version>/blueprint.json and router.zip, cached.
 export function createBundle({ s3, bucket, version }: { s3: S3Client; bucket: string; version: string }) {
   let cached: { blueprint: Blueprint; zip: Uint8Array; codeSha256: string } | undefined;

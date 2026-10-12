@@ -13,11 +13,12 @@ import { createStore } from './store.js';
 
 const region = process.env.AWS_REGION ?? 'eu-west-1';
 const roleName = process.env.ROLE_NAME ?? 'DmtDiscoveryRole';
-// The command role of each account, checked by the operations Lambda (the role trusts it only; packaging design §3).
-const lambda = new LambdaClient({ region });
-const operations = process.env.OPERATIONS_FUNCTION ?? '';
-const invokeOperations = async (payload: Record<string, unknown>) => {
-  const out = await lambda.send(new InvokeCommand({ FunctionName: operations, Payload: Buffer.from(JSON.stringify(payload)) }));
+// The command role of each account, checked by the access check function (it runs as the operations role, which the role
+// trusts; packaging design §3). Discovery may invoke that function only.
+const lambda = new LambdaClient({ region, maxAttempts: 2, requestHandler: { connectionTimeout: 3_000, requestTimeout: 30_000 } });
+const accessCheck = process.env.ACCESS_CHECK_FUNCTION ?? '';
+const invokeCheck = async (payload: Record<string, unknown>) => {
+  const out = await lambda.send(new InvokeCommand({ FunctionName: accessCheck, Payload: Buffer.from(JSON.stringify(payload)) }));
   const text = out.Payload ? Buffer.from(out.Payload).toString('utf8') : 'null';
   if (out.FunctionError) throw new Error((JSON.parse(text) as { errorMessage?: string }).errorMessage ?? out.FunctionError);
   return JSON.parse(text) as unknown;
@@ -50,7 +51,7 @@ export const handler = async (event: Event = {}) => {
     managerAccount,
     roleName,
     assumeRole: createAssumeRole({ sts, roleName, sessionName: `dmt-${process.env.ENV ?? 'dev'}-discovery` }),
-    ...(operations ? { assumeCommand: commandCheck(invokeOperations) } : {}),
+    ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
     scan: (credentials, where) => scanRegion(scanPorts(regionalClients(credentials as Credentials, where.region)), where),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),

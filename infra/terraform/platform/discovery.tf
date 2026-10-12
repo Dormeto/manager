@@ -34,10 +34,11 @@ data "aws_iam_policy_document" "discovery" {
     }
   }
   statement {
-    # The command role trusts the operations Lambda only: it checks the role for discovery (packaging design §3).
+    # The command role trusts the operations role only: the access check function (that role, nothing but an assume)
+    # checks it for discovery (packaging design §3). Never the operations function, whose steps act under the role.
     sid       = "CheckCommandRoles"
     actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.operations.arn]
+    resources = [aws_lambda_function.access_check.arn]
   }
   statement {
     sid       = "DiscoveryItems"
@@ -85,8 +86,8 @@ resource "aws_lambda_function" "discovery" {
       TABLE     = aws_dynamodb_table.manager.name
       ENV       = var.env
       ROLE_NAME = var.discovery_role_name
-      # The operations Lambda checks the command role of each account.
-      OPERATIONS_FUNCTION = aws_lambda_function.operations.function_name
+      # The access check function checks the command role of each account.
+      ACCESS_CHECK_FUNCTION = aws_lambda_function.access_check.function_name
       # Dev only: a synthetic organization added to the real one (acceptance at scale, scale design §7).
       SYNTHETIC_ACCOUNTS = tostring(var.discovery_synthetic_accounts)
     }

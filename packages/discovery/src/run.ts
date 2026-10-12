@@ -215,8 +215,10 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
   // The command role, only assumed: onboarding, router installs and forwarders need it (packaging design §3).
   let access: AccountScan['access'];
   if (!synthetic && deps.assumeCommand) {
-    const command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), accessOf);
-    access = { discovery: discoveryAccess, command, checkedAt: at };
+    // A check that does not answer is no verdict: the last one stands (none: the account stays unchecked).
+    const command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? state?.access?.command : accessOf(err)));
+    if (command) access = { discovery: discoveryAccess, command, checkedAt: at };
+    else log.warn('AccessCheckUnavailable', { account });
   }
 
   const regions = { ...(state?.regions ?? {}) };

@@ -128,6 +128,42 @@ resource "aws_lambda_function" "operations" {
   depends_on = [aws_cloudwatch_log_group.operations, aws_iam_role_policy.operations]
 }
 
+# The access check (packaging design §3): assumes an account's command role and answers whether it could, nothing else.
+# It runs as the operations role, the one the command role trusts; discovery may invoke it, never the operations
+# function (whose steps act under the command role).
+data "archive_file" "access_check" {
+  type        = "zip"
+  source_file = "${path.module}/../../../packages/operations/dist/check.mjs"
+  output_path = "${path.module}/.build/${local.name}-access-check.zip"
+}
+
+resource "aws_cloudwatch_log_group" "access_check" {
+  name              = "/aws/lambda/${local.name}-access-check"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_lambda_function" "access_check" {
+  function_name    = "${local.name}-access-check"
+  role             = aws_iam_role.operations.arn
+  runtime          = "nodejs24.x"
+  architectures    = ["arm64"]
+  handler          = "check.handler"
+  filename         = data.archive_file.access_check.output_path
+  source_code_hash = data.archive_file.access_check.output_base64sha256
+  # Two STS attempts of 10 s at most.
+  timeout     = 30
+  memory_size = 256
+
+  environment {
+    variables = {
+      ENV          = var.env
+      COMMAND_ROLE = var.command_role_name
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.access_check, aws_iam_role_policy.operations]
+}
+
 data "aws_iam_policy_document" "states_assume" {
   statement {
     actions = ["sts:AssumeRole"]

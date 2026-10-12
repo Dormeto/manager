@@ -9,7 +9,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/handler.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.mjs --external:@aws-sdk/*"
+    "build": "esbuild src/handler.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.mjs --external:@aws-sdk/* && esbuild src/check.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/check.mjs --external:@aws-sdk/*"
   },
   "devDependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.1146.0",
