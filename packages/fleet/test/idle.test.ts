@@ -160,6 +160,23 @@ describe('the advice of a workload', () => {
     }
   });
 
+  it('a backend that does not run all the time (measured running periods): saves only its asleep time while it ran', async () => {
+    // Running 08:00 to 20:00 UTC each day (stopped at night by a schedule).
+    const running = Array.from({ length: DAYS }, (_, d) => ({ from: at(d * 1440 + 480), to: at(d * 1440 + 1200) }));
+    const measured = await advice({ running });
+    // Counted minute by minute: asleep in the replay and running.
+    const asleep = replayIdle({ requests: daily, windows: [15], checkMinutes: 5, wakeSeconds: 30, startAsleep: false })[0]!.asleep;
+    const within = (periods: { from: string; to: string }[], minute: number) => periods.some((p) => at(minute) >= p.from && at(minute) < p.to);
+    let minutes = 0;
+    for (let m = 0; m < END; m += 1) if (within(asleep, m) && within(running, m)) minutes += 1;
+    expect(row(measured, 15).usdMonth).toBeCloseTo((0.0456 * (minutes / 60) * 30) / DAYS, 9);
+    // The hours asleep and the wakes are the replay's, whatever the backend ran.
+    expect(row(measured, 15)).toMatchObject({ asleepHours: row(await advice(), 15).asleepHours, wakesPerDay: row(await advice(), 15).wakesPerDay });
+    // Running all the time: as without; never running: nothing saved.
+    expect(row(await advice({ running: [{ from: FROM, to: TO }] }), 15).usdMonth).toBeCloseTo(row(await advice(), 15).usdMonth!, 9);
+    expect(row(await advice({ running: [] }), 15).usdMonth).toBe(0);
+  });
+
   it('no wake measured yet: the wait is unknown', async () => {
     const a = await advice({ wakeMs: null });
     expect(a.wakeSeconds).toBeNull();

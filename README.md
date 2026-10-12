@@ -221,7 +221,7 @@ time per target group, router or workload, one per load balancer (lock), three p
 anything is installed, from a laptop with read access (vision docs/specs/2026-10-10-savings-estimate-design.md).
 
 ```
-npm run estimate -- --profile prospect [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
+npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
   [--exclude-tags 'env=dev|test,team=web' ...] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
   [--refresh discovery|metrics] [--window 60] [--out <dir>]
 ```
@@ -231,7 +231,9 @@ npm run estimate -- --profile prospect [--accounts 111111111111,222222222222] [-
   `OrganizationAccountAccessRole` (accounts created by AWS Organizations have it; invited ones do not): an account whose
   role cannot be assumed is listed with AWS's reason and how to include it. The profile's own account uses its own
   credentials. `--accounts` restricts the estimate to some of the organization's accounts: an id it does not have is
-  listed apart, and none of them is refused (exit code 2).
+  listed apart, and none of them is refused (exit code 2). Several profiles, comma-separated, such as one SSO profile
+  per account when none may list the organization: each reaches its accounts, merged into one estimate; an account a
+  profile logs in to directly is read with it, never through another's role; `--accounts` restricts the merged accounts.
 - **Excluded tags:** `--exclude-tags` leaves out the workloads with these tags on their load balancer, target group or
   listener rule, as discovery's `resourceTags`: in one value, every comma-separated key must match (and), each with one
   of its `|`-separated values (or), a key alone with any value; repeated, any of them excludes (or). For example

@@ -106,6 +106,30 @@ describe('the estimate command', () => {
     expect(d.errors).toEqual(['--accounts: 999999999999: not an active account of the organization o-abc123']);
   });
 
+  it('several profiles (--profile a,b), such as one SSO profile per account: each account through its own profile', async () => {
+    // Neither profile may list the organization's accounts: each reaches its own
+    const profileOf = (self: string) => {
+      const fake = fakeAws({ whoami: async () => self, organization: 'o-abc123' });
+      fake.aws.accounts.inventory = async () => { throw Object.assign(new Error('You don\'t have permissions to access this resource.'), { name: 'AccessDeniedException' }); };
+      return fake;
+    };
+    const qal = profileOf(A);
+    const prd = profileOf(B);
+    const d = deps(qal.aws);
+    const asked: string[] = [];
+    const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
+    const code = await main(['--profile', 'qal,prd', '--accounts', `${A},${B}`, '--out', out], { ...d.deps, aws: (_options, profile) => { asked.push(profile); return profile === 'qal' ? qal.aws : prd.aws; } });
+    expect(code).toBe(0);
+    expect(asked).toEqual(['qal', 'prd']);
+    // Each account discovered and read with its own profile's credentials, nothing assumed
+    expect([qal.calls.scans, prd.calls.scans]).toEqual([1, 1]);
+    expect([qal.calls.metrics, prd.calls.metrics]).toEqual([1, 1]);
+    expect(qal.calls.assumed + prd.calls.assumed).toBe(0);
+    const json = JSON.parse(readFileSync(join(out, 'estimate-2026-10-10.json'), 'utf8'));
+    expect(json).toMatchObject({ organization: 'o-abc123', accounts: 2, unreachable: [] });
+    expect(d.out[0]).toContain('the organization o-abc123 (2 of its 2 accounts, --accounts)');
+  });
+
   it('workloads excluded by their tags (--exclude-tags): not estimated, their requests never read, listed in the report', async () => {
     const { aws, calls } = fakeAws({ tags: { env: ['dev'], team: ['shop'] } });
     const d = deps(aws);

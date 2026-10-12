@@ -21,8 +21,9 @@ import type { Options } from './options.js';
 // The SDK takes static credentials or a provider: the profile's own account uses its provider (refreshed by the SDK).
 type AnyCredentials = Credentials | ReturnType<typeof fromIni>;
 
-function awsOf(options: Options): EstimateAws {
-  const profile = fromIni({ profile: options.profile });
+// One profile's AWS: several are given with --profile a,b (each reaching its accounts).
+function awsOf(_options: Options, name: string): EstimateAws {
+  const profile = fromIni({ profile: name });
   const sts = new STSClient({ region: 'us-east-1', credentials: profile });
   const organizations = new OrganizationsClient({ region: 'us-east-1', credentials: profile });
   const creds = (credentials: Credentials | null): AnyCredentials => credentials ?? profile;

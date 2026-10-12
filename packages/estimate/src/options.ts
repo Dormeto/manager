@@ -1,10 +1,11 @@
-// The estimate command's options (vision docs/specs/2026-10-10-savings-estimate-design.md §3): an AWS profile, the
+// The estimate command's options (vision docs/specs/2026-10-10-savings-estimate-design.md §3): the AWS profiles, the
 // accounts it is restricted to, the regions, the tags of the workloads it leaves out, the role assumed in member accounts, the savings' baseline and discounts as the manager's, the cache to
 // refresh, where the reports go.
 import type { Baseline, Discounts } from '@dormeto/fleet';
 
 export interface Options {
-  profile: string;
+  // One AWS profile or more, such as one SSO profile per account: the accounts each reaches, merged.
+  profiles: string[];
   // The organization's accounts the estimate is restricted to (--accounts): every account reached when null.
   accounts: string[] | null;
   regions: string[] | null;
@@ -22,7 +23,7 @@ export interface Options {
 
 export class UsageError extends Error {}
 
-export const USAGE = `Usage: npm run estimate -- --profile <profile> [--accounts 111111111111,222222222222]
+export const USAGE = `Usage: npm run estimate -- --profile <profile>[,<profile>...] [--accounts 111111111111,222222222222]
   [--regions eu-west-1,eu-west-3] [--exclude-tags 'env=dev|test,team=web' ...] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 0-90] [--discount-databases 0-90]
   [--refresh discovery|metrics] [--window 60] [--out <dir>]`;
@@ -70,8 +71,9 @@ export function parseOptions(argv: string[]): Options {
     else given.set(name, value);
     i += 1;
   }
-  const profile = given.get('profile');
-  if (!profile) throw new UsageError('--profile is required');
+  if (!given.has('profile')) throw new UsageError('--profile is required');
+  const profiles = [...new Set(given.get('profile')!.split(',').map((p) => p.trim()).filter(Boolean))];
+  if (!profiles.length) throw new UsageError('--profile: one AWS profile or more, such as qal,prod');
   let accounts: string[] | null = null;
   if (given.has('accounts')) {
     accounts = [...new Set(given.get('accounts')!.split(',').map((a) => a.trim()).filter(Boolean))];
@@ -99,7 +101,7 @@ export function parseOptions(argv: string[]): Options {
   const window = given.has('window') ? Number(given.get('window')) : WINDOW.default;
   if (!/^\d+$/.test(given.get('window') ?? String(WINDOW.default)) || window < WINDOW.min || window > WINDOW.max) throw new UsageError(`--window: whole minutes from ${WINDOW.min} to ${WINDOW.max}`);
   return {
-    profile, accounts, regions, excludeTags, role: given.get('role') ?? DEFAULT_ROLE,
+    profiles, accounts, regions, excludeTags, role: given.get('role') ?? DEFAULT_ROLE,
     baseline: kind === 'always' ? { kind } : { kind, timeZone },
     discounts: { compute: percent('discount-compute', given.get('discount-compute')), databases: percent('discount-databases', given.get('discount-databases')) },
     refresh, out: given.get('out') ?? process.cwd(), window,

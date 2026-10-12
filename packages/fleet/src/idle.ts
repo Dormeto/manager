@@ -106,9 +106,26 @@ export function recommendWindow(rows: { minutes: number; wakes: number }[]): num
 
 // actualFrom: when the history starts knowing the period (its first known phase; null when it knows none of it, or only
 // its newest entries): the real wakes are compared with the replay's from then on only.
-export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs, startAsleep, actualWakes, actualFrom, stopped, hourly, baseline, wakerTargetGroup, now }: {
+// Two lists of periods, each sorted and disjoint: the time in both.
+function intersect(a: { from: string; to: string }[], b: { from: string; to: string }[]): { from: string; to: string }[] {
+  const out: { from: string; to: string }[] = [];
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    const from = a[i]!.from > b[j]!.from ? a[i]!.from : b[j]!.from;
+    const to = a[i]!.to < b[j]!.to ? a[i]!.to : b[j]!.to;
+    if (from < to) out.push({ from, to });
+    if (a[i]!.to < b[j]!.to) i += 1;
+    else j += 1;
+  }
+  return out;
+}
+
+// running: the backend's measured running periods (sorted, disjoint), when it does not run all the time (an instance
+// stopped at night by a schedule): its asleep time is worth something only while it ran. The hours asleep and the
+// wakes stay the replay's.
+export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs, startAsleep, actualWakes, actualFrom, stopped, hourly, baseline, wakerTargetGroup, now, running = null }: {
   requests: RequestMinutes; current: number; checkMinutes: number; wakeMs: number | null; startAsleep: boolean; actualWakes: number; actualFrom: string | null;
   stopped: StoppedItem[] | null; hourly: (item: StoppedItem) => Promise<number | null>; baseline: Baseline; wakerTargetGroup: boolean; now: number;
+  running?: { from: string; to: string }[] | null;
 }): Promise<IdleWindowAdvice> {
   const wakeSeconds = wakeMs === null ? null : wakeMs / 1000;
   const replayed = replayIdle({ requests, windows: windowsFor(current), checkMinutes, wakeSeconds: wakeSeconds ?? 0, startAsleep });
@@ -120,7 +137,8 @@ export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs
     const hours = r.asleep.reduce((n, p) => n + (Date.parse(p.to) - Date.parse(p.from)) / HOUR_MS, 0);
     let usd: number | null = null;
     if (priced) {
-      const savings = await savingsOf(r.asleep.map((p) => ({ state: 'ASLEEP', ...p, stopped: stopped! })), { hourly, baseline });
+      const worth = running ? intersect(r.asleep, running) : r.asleep;
+      const savings = await savingsOf(worth.map((p) => ({ state: 'ASLEEP', ...p, stopped: stopped! })), { hourly, baseline });
       if (savings.unpriced.length) priced = false;
       else usd = savings.usd;
     }

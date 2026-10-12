@@ -1,7 +1,7 @@
 // The accounts an estimate reaches (spec §4, decision 4): an organization's active accounts, the profile's own with its
 // own credentials, the others through a role given or supposed, assumed when an account's turn comes.
 import { describe, expect, it } from 'vitest';
-import { reachAccounts, type AccountsPorts } from '../src/accounts.js';
+import { reachAccounts, reachProfiles, type AccountsPorts } from '../src/accounts.js';
 import { UsageError } from '../src/options.js';
 
 const SELF = '111111111111';
@@ -126,5 +126,67 @@ describe('the accounts an estimate reaches', () => {
       await expect(reachAccounts(p, { role: 'OrganizationAccountAccessRole', only: ['222222222222'] }))
         .rejects.toThrow(`--accounts: 222222222222: not in an organization: only the account ${SELF} is estimated`);
     });
+  });
+});
+
+describe('the accounts several profiles reach (--profile a,b)', () => {
+  const OTHER = '222222222222';
+  const cannotList = (self: string) => {
+    const assumed: string[] = [];
+    const p: AccountsPorts = {
+      whoami: async () => self,
+      organization: async () => 'o-abc123',
+      inventory: async () => { throw awsError('AccessDeniedException', 'You don\'t have permissions to access this resource.'); },
+      assume: async (account) => { assumed.push(account); return CREDS; },
+    };
+    return { p, assumed };
+  };
+
+  it('one profile: as reached alone, each account knowing its profile', async () => {
+    const reached = await reachProfiles([{ profile: 'mgmt', ports: ports().p }], { role: 'OrganizationAccountAccessRole', only: ['333333333333'] });
+    const alone = await reachAccounts(ports().p, { role: 'OrganizationAccountAccessRole', only: ['333333333333'] });
+    expect({ ...reached, accounts: reached.accounts.map((a) => a.account) }).toEqual({ ...alone, accounts: alone.accounts.map((a) => a.account) });
+    expect(reached.accounts.map((a) => a.profile)).toEqual(['mgmt']);
+  });
+
+  it('profiles that cannot list the organization: each its own account, with its own credentials, none listed apart', async () => {
+    const qal = cannotList(SELF);
+    const prd = cannotList(OTHER);
+    const reached = await reachProfiles([{ profile: 'qal', ports: qal.p }, { profile: 'prd', ports: prd.p }], { role: 'OrganizationAccountAccessRole', only: [SELF, OTHER] });
+    expect(reached.accounts.map((a) => [a.account, a.profile])).toEqual([[SELF, 'qal'], [OTHER, 'prd']]);
+    expect(reached).toMatchObject({ organization: 'o-abc123', unreachable: [], listed: 2 });
+    expect(await reached.accounts[1]!.credentials()).toBeNull();
+    expect([...qal.assumed, ...prd.assumed]).toEqual([]);
+    // Why each profile reaches its account only
+    expect(reached.why).toBe(`qal: this profile cannot list the organization's accounts (AccessDeniedException: You don't have permissions to access this resource.): only its account ${SELF} is estimated; a profile of the management account or of a delegated administrator estimates every account; prd: this profile cannot list the organization's accounts (AccessDeniedException: You don't have permissions to access this resource.): only its account ${OTHER} is estimated; a profile of the management account or of a delegated administrator estimates every account`);
+  });
+
+  it('an account another profile logs in to directly: reached with that profile, no role assumed for it', async () => {
+    const mgmt = ports();
+    const prd = cannotList(OTHER);
+    const reached = await reachProfiles([{ profile: 'mgmt', ports: mgmt.p }, { profile: 'prd', ports: prd.p }], { role: 'OrganizationAccountAccessRole' });
+    expect(reached.accounts.map((a) => [a.account, a.name, a.profile])).toEqual([[SELF, 'management', 'mgmt'], [OTHER, 'prod', 'prd'], ['333333333333', 'staging', 'mgmt']]);
+    expect(reached.listed).toBe(3);
+    expect(await reached.accounts[1]!.credentials()).toBeNull();
+    expect(mgmt.assumed).toEqual([]);
+  });
+
+  it('an id no profile reaches: listed apart, saying which profiles were tried; none reached, refused', async () => {
+    const profiles = [{ profile: 'qal', ports: cannotList(SELF).p }, { profile: 'prd', ports: cannotList(OTHER).p }];
+    const reached = await reachProfiles(profiles, { role: 'OrganizationAccountAccessRole', only: [SELF, '999999999999'] });
+    expect(reached.accounts.map((a) => a.account)).toEqual([SELF]);
+    expect(reached.unreachable).toEqual([{
+      account: '999999999999', name: '', reason: 'none of the profiles qal, prd reaches it',
+      fix: 'add a profile of this account to --profile, or use a profile of the management account, which reaches every account',
+    }]);
+    await expect(reachProfiles(profiles, { role: 'OrganizationAccountAccessRole', only: ['999999999999'] }))
+      .rejects.toThrow('--accounts: 999999999999: none of the profiles qal, prd reaches it');
+  });
+
+  it('a role a profile cannot assume: the account is listed apart, as with one profile', async () => {
+    const mgmt = ports({ refuse: new Set(['333333333333']) });
+    const reached = await reachProfiles([{ profile: 'mgmt', ports: mgmt.p }, { profile: 'prd', ports: cannotList(OTHER).p }], { role: 'OrganizationAccountAccessRole' });
+    await expect(reached.accounts[2]!.credentials()).rejects.toThrow('sts:AssumeRole');
+    expect(reached.unreachable.map((u) => u.account)).toEqual(['333333333333']);
   });
 });

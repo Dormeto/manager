@@ -13,3 +13,5 @@ crash.log
 *.local.tfvars
 # Module tests (terraform test) lock their providers locally; a module carries no lock file.
 infra/terraform/modules/**/.terraform.lock.hcl
+estimate-*.json
+estimate-*.md

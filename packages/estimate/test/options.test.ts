@@ -5,7 +5,7 @@ import { UsageError, parseOptions } from '../src/options.js';
 describe('the estimate command\'s options', () => {
   it('a profile alone: every account reached, every enabled region, the supposed role, 24/7, no discount, the cache as it is, here, a 1-hour window', () => {
     expect(parseOptions(['--profile', 'prospect'])).toEqual({
-      profile: 'prospect', accounts: null, regions: null, excludeTags: [], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
+      profiles: ['prospect'], accounts: null, regions: null, excludeTags: [], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
       discounts: { compute: 0, databases: 0 }, refresh: null, out: process.cwd(), window: 60,
     });
   });
@@ -16,7 +16,7 @@ describe('the estimate command\'s options', () => {
       '--exclude-tags', 'env=dev|test, team=web', '--exclude-tags', 'dormeto:ignore', '--role', 'ReadOnlyAudit', '--baseline', 'business-hours',
       '--timezone', 'Europe/Paris', '--discount-compute', '20', '--discount-databases', '30', '--refresh', 'metrics', '--out', '/tmp/reports', '--window', '30',
     ])).toEqual({
-      profile: 'prospect', accounts: ['222222222222', '333333333333'], regions: ['eu-west-1', 'eu-west-3'],
+      profiles: ['prospect'], accounts: ['222222222222', '333333333333'], regions: ['eu-west-1', 'eu-west-3'],
       // Each --exclude-tags a criterion (any of them excludes): every key in it (and), one of a key's values (or).
       excludeTags: [{ env: ['dev', 'test'], team: ['web'] }, { 'dormeto:ignore': [] }], role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
       discounts: { compute: 20, databases: 30 }, refresh: 'metrics', out: '/tmp/reports', window: 30,
@@ -24,10 +24,15 @@ describe('the estimate command\'s options', () => {
     expect(parseOptions(['--profile', 'p', '--baseline', 'business-hours']).baseline).toEqual({ kind: 'business-hours', timeZone: 'UTC' });
   });
 
+  it('several profiles, such as one SSO profile per account: in their order, once each', () => {
+    expect(parseOptions(['--profile', 'qal, prd,qal,pilot']).profiles).toEqual(['qal', 'prd', 'pilot']);
+  });
+
   it('refuses what it cannot use, saying why', () => {
     const refused: [string[], string][] = [
       [[], '--profile is required'],
       [['--profile'], '--profile needs a value'],
+      [['--profile', ' , '], '--profile: one AWS profile or more, such as qal,prod'],
       [['--profile', 'p', '--baseline', 'nightly'], '--baseline: always or business-hours'],
       [['--profile', 'p', '--timezone', 'Mars/Olympus'], '--timezone: unknown time zone Mars/Olympus'],
       [['--profile', 'p', '--discount-compute', '91'], '--discount-compute: a whole number from 0 to 90'],

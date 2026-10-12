@@ -31,7 +31,7 @@ export interface Estimate {
   generatedAt: string;
   organization: string | null;
   why: string | null;
-  options: Omit<Options, 'out' | 'profile'>;
+  options: Omit<Options, 'out' | 'profiles'>;
   accounts: number;
   // The accounts reached before --accounts restricted them.
   accountsListed: number;
@@ -52,7 +52,7 @@ export interface Estimate {
 
 const NOTHING = 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or a stopped instance)';
 
-function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profile'>): string[] {
+function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profiles'>): string[] {
   return [
     'Every request counts as activity and as a wake: no waker is installed yet to set scanners and other filtered requests apart, so the workloads stay awake longer here than they would (smaller savings).',
     'A wake lasts 60 seconds in the replay; the visitors\' wait is not estimated before install.',
@@ -73,7 +73,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   // A price lookup AWS refused (the Price List API, Spot price history): unpriced workloads say so.
   priceFailure?: () => string | null;
   baseline: Baseline;
-  options: Omit<Options, 'out' | 'profile'>;
+  options: Omit<Options, 'out' | 'profiles'>;
   now: number;
   excluded?: Excluded[];
 }): Promise<Estimate> {
