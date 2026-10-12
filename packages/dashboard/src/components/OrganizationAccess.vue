@@ -13,7 +13,9 @@ const link = procedureLink();
 // Event-driven refresh (packaging design §5): forwarders connected, and where one is not possible.
 const forwarders = computed(() => forwardersLine(props.report.forwarders));
 const allImpossible = ref(false);
-const impossible = computed(() => (allImpossible.value ? props.report.forwarders?.impossible ?? [] : (props.report.forwarders?.impossible ?? []).slice(0, 5)));
+// The accounts where a forwarder is not possible, then those whose connect or disconnect failed, each with the reason.
+const notConnected = computed(() => [...(props.report.forwarders?.failed ?? []).map((f) => ({ ...f, reason: `failed: ${f.reason}` })), ...(props.report.forwarders?.impossible ?? [])]);
+const impossible = computed(() => (allImpossible.value ? notConnected.value : notConnected.value.slice(0, 5)));
 </script>
 
 <template>
@@ -35,8 +37,8 @@ const impossible = computed(() => (allImpossible.value ? props.report.forwarders
         <ul v-if="impossible.length" class="mt-2 pl-4">
           <li v-for="f in impossible" :key="f.account" class="text-body-medium">{{ f.name }} ({{ f.account }}): {{ f.reason }}</li>
         </ul>
-        <v-btn v-if="(report.forwarders?.impossible.length ?? 0) > impossible.length" variant="text" size="small" @click="allImpossible = true">
-          {{ (report.forwarders?.impossible.length ?? 0) - impossible.length }} more</v-btn>
+        <v-btn v-if="notConnected.length > impossible.length" variant="text" size="small" @click="allImpossible = true">
+          {{ notConnected.length - impossible.length }} more</v-btn>
       </template>
     </v-card-text>
     <v-card-actions v-if="notReady">

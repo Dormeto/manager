@@ -24,13 +24,15 @@ export interface Forwarders {
   connected: number;
   connecting: number;
   impossible: { account: string; name: string; reason: string }[];
+  failed?: { account: string; name: string; reason: string }[];
 }
 
 const accounts = (n: number) => `${n} account${n === 1 ? '' : 's'}`;
 // Null: event-driven refresh is off.
 export function forwardersLine(f: Forwarders | undefined): string | null {
   if (!f) return null;
-  const parts = [`${accounts(f.connected)} connected`, ...(f.connecting ? [`${f.connecting} being connected`] : []), ...(f.impossible.length ? [`${f.impossible.length} not possible (refreshed daily)`] : [])];
+  const parts = [`${accounts(f.connected)} connected`, ...(f.connecting ? [`${f.connecting} being connected`] : []), ...(f.impossible.length ? [`${f.impossible.length} not possible (refreshed daily)`] : []),
+    ...(f.failed?.length ? [`${f.failed.length} failed (tried again within a day)`] : [])];
   return `Event-driven refresh: ${parts.join(', ')}.`;
 }
 

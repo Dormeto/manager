@@ -10,7 +10,7 @@ import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
 import { loadInventory, type OrganizationsPort } from './org.js';
 import type { DiscoveryStore } from './store.js';
 import { SYNTHETIC_REGIONS, isSynthetic, syntheticInventory, syntheticRules } from './synthetic.js';
-import type { AccessRow, AccessState, AccessSummary, AccountResult, AccountScan, Candidate, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
+import type { AccessRow, AccessState, AccessSummary, AccountResult, AccountScan, Candidate, Connection, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
 
 const HOUR_MS = 3_600_000;
 // A region without any rule in EMPTY_RUNS successive scans is scanned once every SKIP_RUNS + 1 runs.
@@ -384,10 +384,24 @@ export async function refreshAccounts(deps: RunDeps, events: { id?: string; acco
 
 // The connections a run decides (packaging design §5): on, the ready accounts with a trail (all, or those listed),
 // connected where they are not yet or in fewer regions; the connected accounts left, unlisted, or all when off.
-async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPlan, scans: AccountScan[], inventory: OrgInventory) {
+const CONNECTION_BACKOFF = 24 * 3_600_000;
+async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPlan, scans: AccountScan[], inventory: OrgInventory, at: number) {
   const setting = config.eventRefresh;
   const wanted = (account: string) => Boolean(setting?.enabled && (!setting.accounts || setting.accounts.includes(account)));
-  const connected = new Map((await deps.store.listConnections()).map((c) => [c.account, c]));
+  const connected = new Map<string, Connection>();
+  for (const c of await deps.store.listConnections()) {
+    // Gone from the organization: nothing can reach its forwarder any more, and the bus refuses its events (R5c review I5).
+    if (!inventory.accounts.some((a) => a.id === c.account)) {
+      await deps.store.deleteConnection(c.account);
+      (deps.log ?? silent).info('ConnectionForgotten', { account: c.account, reason: 'not in the organization' });
+      continue;
+    }
+    connected.set(c.account, c);
+  }
+  // A connect or disconnect that failed is not created again for a day (it would fail at every run, unseen).
+  const failing = (c: Connection | undefined) => Boolean(c?.failedAt && at - Date.parse(c.failedAt) < CONNECTION_BACKOFF);
+  const nameOf = (account: string) => inventory.accounts.find((a) => a.id === account)?.name ?? account;
+  const failed = [...connected.values()].filter(failing).map((c) => ({ account: c.account, name: nameOf(c.account), reason: c.lastError ?? 'failed' }));
   const inRun = new Set(plan.accounts);
   const connect: { account: string; regions: string[] }[] = [];
   const impossible: { account: string; name: string; reason: string }[] = [];
@@ -397,14 +411,15 @@ async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPl
     const name = inventory.accounts.find((a) => a.id === s.account)?.name ?? s.account;
     const regions = Object.entries(s.access?.trails ?? {}).filter(([, on]) => on).map(([r]) => r).sort();
     const current = connected.get(s.account);
+    if (failing(current)) continue;
     if (!s.access?.command.ok) impossible.push({ account: s.account, name, reason: 'no command role' });
     else if (s.access.trailsError) impossible.push({ account: s.account, name, reason: s.access.trailsError });
     else if (!regions.length) impossible.push({ account: s.account, name, reason: 'no CloudTrail trail logging management events in its regions' });
-    else if (!current || regions.some((r) => !current.regions.includes(r))) connect.push({ account: s.account, regions: [...new Set([...(current?.regions ?? []), ...regions])].sort() });
+    else if (!current || current.status === 'connecting' || regions.some((r) => !current.regions.includes(r))) connect.push({ account: s.account, regions: [...new Set([...(current?.regions ?? []), ...regions])].sort() });
     else connectedCount += 1;
   }
-  const disconnect = [...connected.keys()].filter((account) => !wanted(account) || !inRun.has(account)).sort();
-  return { connections: { connect, disconnect }, forwarders: setting?.enabled ? { connected: connectedCount, connecting: connect.length, impossible } : undefined };
+  const disconnect = [...connected.values()].filter((c) => (!wanted(c.account) || !inRun.has(c.account)) && !failing(c)).map((c) => c.account).sort();
+  return { connections: { connect, disconnect }, forwarders: setting?.enabled || failed.length ? { connected: connectedCount, connecting: connect.length, impossible, ...(failed.length ? { failed } : {}) } : undefined };
 }
 
 // Organization access of a run's accounts (packaging design §3): counted, those not ready listed; an account without a
@@ -479,7 +494,7 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const errors = targets.filter((t) => t.status === 'error').length;
     const status = errors === 0 ? 'ok' : errors === targets.length + emptyPairs ? 'failed' : 'partial';
     const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
-    const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory);
+    const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory, now());
     const record: RunRecord = {
       startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,
       counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),

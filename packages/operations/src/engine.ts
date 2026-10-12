@@ -358,17 +358,26 @@ export function createEngine(deps: EngineDeps) {
       return inst.uninstall(name.slice('uninstall '.length) as UninstallStep, blueprint);
     }
     switch (name) {
-      case 'forwarder role':
+      case 'forwarder role': {
+        // Recorded before anything is created: a connect failing part-way is still disconnected (R5c review I4).
+        const current = await deps.discovery!.getConnection(op.target.account!);
+        await deps.discovery!.putConnection({
+          ...(current ?? { connectedAt: iso(now()) }), account: op.target.account!, regions: [...new Set([...(current?.regions ?? []), ...regionsOf(op)])].sort(),
+          status: current?.status === 'connected' ? 'connected' : 'connecting',
+        });
         return (await regionInstaller(op, regionsOf(op)[0] ?? 'us-east-1')).forwarder.role(await forwarderOf(op));
+      }
       case 'forwarder rules': {
         const f = await forwarderOf(op);
         const results: StepResult[] = [];
         for (const region of regionsOf(op)) results.push(await (await regionInstaller(op, region)).forwarder.rule(f));
         return stepsOf(results);
       }
-      case 'connected':
-        await deps.discovery!.putConnection({ account: op.target.account!, regions: regionsOf(op), connectedAt: iso(now()) });
+      case 'connected': {
+        const current = await deps.discovery!.getConnection(op.target.account!);
+        await deps.discovery!.putConnection({ account: op.target.account!, regions: [...new Set([...(current?.regions ?? []), ...regionsOf(op)])].sort(), status: 'connected', connectedAt: iso(now()) });
         return { status: 'done' };
+      }
       case 'remove forwarder rules': {
         // Every region connected, whatever the operation names.
         const connected = (await deps.discovery!.getConnection(op.target.account!))?.regions ?? [];
@@ -540,6 +549,14 @@ export function createEngine(deps: EngineDeps) {
   // --- Workflow tasks --------------------------------------------------------------------------------------------------
 
   async function finish(op: Operation, status: 'succeeded' | 'failed', error?: string) {
+    // A connect or disconnect that failed: its error on the connection, so that the next runs show it and wait before
+    // trying again (R5c review I5).
+    if (status === 'failed' && (op.type === 'connect-account' || op.type === 'disconnect-account') && deps.discovery) {
+      const current = await deps.discovery.getConnection(op.target.account!).catch(() => null);
+      const regions = [...new Set([...(current?.regions ?? []), ...regionsOf(op)])].sort();
+      await deps.discovery.putConnection({ connectedAt: iso(now()), status: 'connecting', ...current, account: op.target.account!, regions, lastError: error ?? 'failed', failedAt: iso(now()) })
+        .catch((err) => deps.log.warn('ConnectionNotUpdated', { account: op.target.account, error: (err as Error).message }));
+    }
     for (const key of op.holds.locks) await records.releaseLock(key, op.id);
     for (const key of op.holds.slots) await records.releaseSlot(key, op.id);
     await records.releaseActive(op.activeKey, op.id);

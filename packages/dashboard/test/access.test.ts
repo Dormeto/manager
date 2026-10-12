@@ -19,6 +19,9 @@ describe('organization access', () => {
     expect(forwardersLine({ connected: 2, connecting: 1, impossible: [] })).toBe('Event-driven refresh: 2 accounts connected, 1 being connected.');
     expect(forwardersLine({ connected: 0, connecting: 0, impossible: [{ account: '222222222222', name: 'shop', reason: 'no command role' }] }))
       .toBe('Event-driven refresh: 0 accounts connected, 1 not possible (refreshed daily).');
+    // A connect or disconnect that failed: tried again a day later, its error shown (R5c review I5).
+    expect(forwardersLine({ connected: 1, connecting: 0, impossible: [], failed: [{ account: '222222222222', name: 'shop', reason: 'AccessDenied' }] }))
+      .toBe('Event-driven refresh: 1 account connected, 1 failed (tried again within a day).');
   });
 
   it('links to the procedure page (a static page: the panel lists the accounts to set up)', () => {

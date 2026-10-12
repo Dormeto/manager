@@ -177,8 +177,11 @@ export interface AccessCounts {
 // An account connected to event-driven refresh (packaging design §5): its forwarder role and a rule in each region.
 export interface Connection {
   account: string;
-  regions: string[];
+  regions: string[]; // every region a connect attempted: a disconnect removes them all
   connectedAt: string;
+  status?: 'connecting' | 'connected'; // connecting: a connect started and not finished (R5c review I4)
+  lastError?: string; // the last connect or disconnect that failed, and when (R5c review I5)
+  failedAt?: string;
 }
 
 export interface AccessSummary {
@@ -188,7 +191,8 @@ export interface AccessSummary {
   checkedAt: string | null;
   // Event refresh on (packaging design §5): the forwarders connected, being connected by this run, and the accounts where
   // one is not possible, with the reason.
-  forwarders?: { connected: number; connecting: number; impossible: { account: string; name: string; reason: string }[] };
+  // failed: a connect or disconnect that failed within the last day (not created again until then), with its error.
+  forwarders?: { connected: number; connecting: number; impossible: { account: string; name: string; reason: string }[]; failed?: { account: string; name: string; reason: string }[] };
 }
 
 export interface AccessReport extends AccessSummary {

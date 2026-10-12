@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { trailCovers } from '../src/aws.js';
 import { refreshAccounts, runDiscovery, runSummary } from '../src/run.js';
 import { A, B, C, config, filter } from './fixtures.js';
-import { setup } from './run-fakes.js';
+import { T0, setup } from './run-fakes.js';
 
 const ON = config({ regions: ['eu-west-1', 'eu-west-3'], filters: [filter('all', [{}])], eventRefresh: { enabled: true } });
 
@@ -71,13 +71,47 @@ describe('the connections a run decides', () => {
     await s.store.putConnection({ account: '444444444444', regions: ['eu-west-1'], connectedAt: '2026-10-06T10:00:00.000Z' });
     s.advance(60_000);
     const run = await runDiscovery(s.deps, { source: 'manual' });
-    expect(run.connections).toEqual({ connect: [{ account: B.id, regions: ['eu-west-1', 'eu-west-3'] }], disconnect: ['444444444444'] });
+    expect(run.connections).toEqual({ connect: [{ account: B.id, regions: ['eu-west-1', 'eu-west-3'] }], disconnect: [] });
     await s.store.putConfig({ ...ON, eventRefresh: { enabled: true, accounts: [A.id] } }, 'admin@example.com');
     s.advance(60_000);
-    expect((await runDiscovery(s.deps, { source: 'manual' })).connections?.disconnect).toEqual([B.id, '444444444444']);
+    expect((await runDiscovery(s.deps, { source: 'manual' })).connections?.disconnect).toEqual([B.id]);
     await s.store.putConfig({ ...ON, eventRefresh: { enabled: false } }, 'admin@example.com');
     s.advance(60_000);
-    expect((await runDiscovery(s.deps, { source: 'manual' })).connections).toEqual({ connect: [], disconnect: [A.id, B.id, '444444444444'] });
+    expect((await runDiscovery(s.deps, { source: 'manual' })).connections).toEqual({ connect: [], disconnect: [A.id, B.id] });
+  });
+});
+
+describe('connections that failed or were left half-done (R5c review I4, I5)', () => {
+  const failed = (at: string) => ({ status: 'connecting' as const, lastError: 'AccessDenied: not authorized to perform: iam:CreateRole', failedAt: at });
+
+  it('a failed connect is not created again for a day, and shows with its error; after a day it is', async () => {
+    const s = setup({ cfg: ON, regions: ['eu-west-1', 'eu-west-3'], trails: { [A.id]: ['eu-west-1'] } });
+    await s.ready;
+    await s.store.putConnection({ account: A.id, regions: ['eu-west-1'], connectedAt: '2026-10-04T12:00:00.000Z', ...failed(new Date(T0).toISOString()) });
+    s.advance(60_000);
+    const run = await runDiscovery(s.deps, { source: 'manual' });
+    expect(run.connections).toEqual({ connect: [], disconnect: [] });
+    expect((await s.store.getAccess())!.forwarders?.failed).toEqual([{ account: A.id, name: A.name, reason: 'AccessDenied: not authorized to perform: iam:CreateRole' }]);
+    s.advance(24 * 3_600_000);
+    expect((await runDiscovery(s.deps, { source: 'manual' })).connections?.connect).toEqual([{ account: A.id, regions: ['eu-west-1'] }]);
+  });
+
+  it('a half-done connect is disconnected when the setting is off; a failed disconnect waits a day too', async () => {
+    const s = setup({ cfg: { ...ON, eventRefresh: { enabled: false } }, regions: ['eu-west-1', 'eu-west-3'] });
+    await s.ready;
+    await s.store.putConnection({ account: A.id, regions: ['eu-west-1', 'eu-west-3'], connectedAt: '2026-10-04T12:00:00.000Z', status: 'connecting' });
+    await s.store.putConnection({ account: B.id, regions: ['eu-west-1'], connectedAt: '2026-10-04T12:00:00.000Z', status: 'connected', lastError: 'AccessDenied', failedAt: new Date(T0).toISOString() });
+    s.advance(60_000);
+    expect((await runDiscovery(s.deps, { source: 'manual' })).connections).toEqual({ connect: [], disconnect: [A.id] });
+  });
+
+  it('an account gone from the organization has its connection forgotten (nothing can reach it; the bus refuses its events)', async () => {
+    const s = setup({ cfg: ON, regions: ['eu-west-1'] });
+    await s.ready;
+    await s.store.putConnection({ account: '444444444444', regions: ['eu-west-1'], connectedAt: '2026-10-04T12:00:00.000Z', status: 'connected' });
+    s.advance(60_000);
+    expect((await runDiscovery(s.deps, { source: 'manual' })).connections?.disconnect).toEqual([]);
+    expect(await s.store.getConnection('444444444444')).toBeNull();
   });
 });
 

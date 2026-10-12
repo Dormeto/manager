@@ -71,7 +71,7 @@ describe('connect and disconnect an account', () => {
       expect(rule.targets).toEqual([{ Id: 'manager', Arn: BUS, RoleArn: `arn:aws:iam::${ACCOUNT}:role/dormeto/router/dmtr-dev-forwarder` }]);
     }
     expect(s.regions['us-east-1']!.state.eventRules.size).toBe(0);
-    expect(s.connections.get(ACCOUNT)).toEqual({ account: ACCOUNT, regions: ['eu-west-1', 'eu-west-3'], connectedAt: expect.any(String) });
+    expect(s.connections.get(ACCOUNT)).toEqual({ account: ACCOUNT, regions: ['eu-west-1', 'eu-west-3'], status: 'connected', connectedAt: expect.any(String) });
     // Again: every step finds what it wants.
     const writes = () => [s.iam, ...Object.values(s.regions)].flatMap((a) => a.state.calls).filter((c) => /^(create|put|update|delete|remove)/.test(c)).length;
     const before = writes();
@@ -132,5 +132,28 @@ describe('the forwarder\'s calls', () => {
       expect(actions, `${call} has its IAM actions`).toBeDefined();
       for (const [action, context] of actions!) expect(allows(action, action.startsWith('iam:') ? role : rule, context), `${call}: ${action}`).toBe(true);
     }
+  });
+});
+
+describe('a connect failing part-way (R5c review I4, I5)', () => {
+  it('records the regions it attempted and its error; a disconnect then removes what it created', async () => {
+    const s = setup();
+    // The command role without PassRole to EventBridge (or another refusal) in the second region.
+    s.regions['eu-west-3']!.ports.events.putTargets = async () => { throw Object.assign(new Error('not authorized to perform: iam:PassRole'), { name: 'AccessDeniedException' }); };
+    const op = await s.engine.create('connect-account', { account: ACCOUNT, regions: ['eu-west-1', 'eu-west-3'] }, 'discovery');
+    expect(await s.drive(op.id)).toBe('failed');
+    expect(s.connections.get(ACCOUNT)).toEqual({ account: ACCOUNT, regions: ['eu-west-1', 'eu-west-3'], status: 'connecting', connectedAt: expect.any(String), lastError: expect.stringMatching(/iam:PassRole/), failedAt: expect.any(String) });
+    expect(s.regions['eu-west-1']!.state.eventRules.has('dmtr-dev-discovery')).toBe(true);
+    expect(await s.drive((await s.engine.create('disconnect-account', { account: ACCOUNT, regions: [] }, 'discovery')).id)).toBe('succeeded');
+    for (const region of ['eu-west-1', 'eu-west-3']) expect(s.regions[region]!.state.eventRules.has('dmtr-dev-discovery')).toBe(false);
+    expect(s.iam.state.roles.has('dmtr-dev-forwarder')).toBe(false);
+    expect(s.connections.has(ACCOUNT)).toBe(false);
+  });
+
+  it('a successful connect clears an earlier failure', async () => {
+    const s = setup();
+    s.connections.set(ACCOUNT, { account: ACCOUNT, regions: ['eu-west-1'], status: 'connecting', connectedAt: '2026-10-05T12:00:00.000Z', lastError: 'x', failedAt: '2026-10-05T12:00:00.000Z' } as never);
+    expect(await s.drive((await s.engine.create('connect-account', { account: ACCOUNT, regions: ['eu-west-1'] }, 'discovery')).id)).toBe('succeeded');
+    expect(s.connections.get(ACCOUNT)).toEqual({ account: ACCOUNT, regions: ['eu-west-1'], status: 'connected', connectedAt: expect.any(String) });
   });
 });
