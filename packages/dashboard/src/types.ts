@@ -100,7 +100,24 @@ export interface WorkloadStatus {
 
 export interface Problem {
   level: 'warning' | 'error';
+  code?: string; // routers 0.24.0
   text: string;
+}
+
+// Health alarms (R6a): the watchdog's open alarms, and where the alert topic sends them.
+export interface AlarmInfo {
+  id: string;
+  kind: 'router' | 'list';
+  name: string;
+  account?: string;
+  region?: string;
+  level: 'warning' | 'error';
+  since: string;
+  problems: (Problem & { code: string; since: string; hint?: string })[];
+}
+export interface AlertsInfo {
+  alarms: AlarmInfo[];
+  notifications: { topicArn: string; confirmed: number; pending: number; endpoints?: { protocol: string; endpoint: string; pending: boolean }[] } | null;
 }
 
 // One row of the Routers view (health, pauses and workload states from routers 0.16 and later).

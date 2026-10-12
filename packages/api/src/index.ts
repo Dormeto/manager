@@ -7,10 +7,12 @@ import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@a
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
+import { ListSubscriptionsByTopicCommand, SNSClient, type Subscription } from '@aws-sdk/client-sns';
 import { createStore } from '@dormeto/discovery';
 import { createFleetStore } from '@dormeto/fleet';
 import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
+import { createAlarmStore } from './alarms.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
 const routers: Router[] = JSON.parse(process.env.ROUTERS ?? '[]');
@@ -124,6 +126,24 @@ const operations = {
   installedRouters: () => records.listRouters(),
 };
 
+// Health alarms (R6a): written by the watchdog; the topic's subscriptions, an email pending until its owner confirms.
+const sns = new SNSClient({});
+const alarmStore = createAlarmStore({ dynamo, table });
+const alerts = process.env.ALERTS_TOPIC ? {
+  open: () => alarmStore.open(),
+  async subscriptions() {
+    const topicArn = process.env.ALERTS_TOPIC!;
+    const all: Subscription[] = [];
+    let token: string | undefined;
+    do {
+      const page = await sns.send(new ListSubscriptionsByTopicCommand({ TopicArn: topicArn, NextToken: token }));
+      all.push(...(page.Subscriptions ?? []));
+      token = page.NextToken;
+    } while (token);
+    return { topicArn, subscriptions: all.map((x) => ({ protocol: x.Protocol ?? '', endpoint: x.Endpoint ?? '', pending: x.SubscriptionArn === 'PendingConfirmation' })) };
+  },
+} : undefined;
+
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
@@ -135,4 +155,5 @@ export const handler = createApi({
   // Routers and workloads as the routers report them (scale design §4).
   fleet: createFleetStore({ dynamo, table }),
   routerVersion: process.env.ROUTER_VERSION,
+  alerts,
 });

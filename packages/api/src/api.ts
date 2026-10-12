@@ -6,15 +6,10 @@ import {
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 import { reporting, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
+import { fleetRouters, type FleetRouter } from './routers.js';
+import type { Alarm } from './watchdog.js';
 
-export interface Router {
-  name: string;
-  region: string;
-  controller: string;
-  account?: string; // the manager's account until routers run in other accounts (onboarding, R4)
-  source?: 'terraform' | 'manager'; // written in Terraform, or installed by the manager (operations)
-  installed?: { version: string; build: string; at: string }; // what the manager's last install or upgrade put there
-}
+export type Router = FleetRouter;
 
 // Operations (onboarding, R4b): created by the API, run by the workflow.
 export interface OperationsApi {
@@ -150,6 +145,25 @@ export interface ApiOptions {
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
   callConcurrency?: number; // at most this many such calls at once (10)
   callDeadlineMs?: number; // and all of them within (20 s: API Gateway answers within 29 s); the others are not called
+  // Health alarms (R6a): the watchdog's open alarms, and where the alert topic sends them.
+  alerts?: {
+    open(): Promise<Alarm[]>;
+    subscriptions(): Promise<{ topicArn: string; subscriptions: { protocol: string; endpoint: string; pending: boolean }[] }>;
+  };
+}
+
+// An alert endpoint as administrators see it: an address reduced to its first letter and domain, an ARN to its name.
+export function maskEndpoint(protocol: string, endpoint: string): string {
+  if (protocol === 'email' || protocol === 'email-json') {
+    const [local = '', domain = ''] = endpoint.split('@');
+    return `${local.slice(0, 1)}…@${domain}`;
+  }
+  if (endpoint.startsWith('arn:')) return endpoint.split(':').at(-1)!;
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return '…';
+  }
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -220,21 +234,14 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts,
   fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
   let routers: Router[] = terraformRouters;
   async function refreshRouters() {
-    const installed = (await operations?.installedRouters()) ?? [];
-    routers = [
-      ...terraformRouters.map((r) => ({ ...r, source: 'terraform' as const })),
-      ...installed.filter((i) => !terraformRouters.some((t) => (t.account ?? managerAccount) === i.account && t.region === i.region)).map((i) => ({
-        name: `${i.name}${i.account === managerAccount ? '' : `-${i.account}`}-${i.region}`, region: i.region, controller: i.controller, account: i.account, source: 'manager' as const,
-        installed: { version: i.version, build: i.build, at: i.installedAt },
-      })),
-    ];
+    routers = fleetRouters(terraformRouters, (await operations?.installedRouters()) ?? [], managerAccount);
   }
   // What the caller may see (everything until R11): anything else answers as unknown.
   const sees = (identity: Identity, account: string | undefined, region: string | undefined) => visible(identity, { account, region: region ?? '' });
@@ -490,6 +497,20 @@ export function createApi({
         await preferences.put(identity.sub, saved);
         return reply(200, saved);
       }
+    }
+
+    if (method === 'GET' && resource === 'alerts' && !a) {
+      if (!alerts) return reply(200, { alarms: [], notifications: null });
+      const [open, { topicArn, subscriptions }] = await Promise.all([alerts.open(), alerts.subscriptions()]);
+      const shown = open.filter((alarm) => alarm.subject.kind !== 'router' || visible(identity, { account: alarm.subject.account, region: alarm.subject.region ?? '' }));
+      const confirmed = subscriptions.filter((x) => !x.pending).length;
+      return reply(200, {
+        alarms: shown.map(({ subject, level, since, problems }) => ({ ...subject, level, since, problems })),
+        notifications: {
+          topicArn, confirmed, pending: subscriptions.length - confirmed,
+          ...(RANK[identity.role] >= RANK.admin ? { endpoints: subscriptions.map((x) => ({ protocol: x.protocol, endpoint: maskEndpoint(x.protocol, x.endpoint), pending: x.pending })) } : {}),
+        },
+      });
     }
 
     if (method === 'GET' && resource === 'routers' && !a) {

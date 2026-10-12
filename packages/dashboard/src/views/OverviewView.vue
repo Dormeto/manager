@@ -4,12 +4,13 @@ import { computed, ref } from 'vue';
 import { mdiAlertCircleOutline, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { attentionMore, checkHealth, relative } from '../format';
+import { attentionMore, relative } from '../format';
 import { routerStatus } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
-import type { RouterInfo, WorkloadSummary } from '../types';
+import AlertsCard from '../components/AlertsCard.vue';
+import type { AlertsInfo, RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
 // Counts, 7-day totals and the workloads that need attention, from the API (never every workload).
@@ -19,9 +20,14 @@ const stats7d = ref({ wakes: 0, ignored: 0, deferred: 0 });
 const loaded = ref(false);
 const attentionTotal = ref(0);
 const routers = ref<RouterInfo[]>([]);
-// One request (its routers too): a router that does not report is called once per poll.
+const alerts = ref<AlertsInfo | null>(null);
+// The workloads with their routers (a router that does not report is called once per poll), and the open alarms.
 const { error, loading, nextAt, run } = usePoll(async () => {
-  const w = await api<{ workloads: WorkloadSummary[]; total: number; byState: Record<string, number>; stats7d: { wakes: number; ignored: number; deferred: number }; routers: RouterInfo[] }>('/workloads?attention=1&limit=20&routers=1');
+  const [w, a] = await Promise.all([
+    api<{ workloads: WorkloadSummary[]; total: number; byState: Record<string, number>; stats7d: { wakes: number; ignored: number; deferred: number }; routers: RouterInfo[] }>('/workloads?attention=1&limit=20&routers=1'),
+    api<AlertsInfo>('/alerts'),
+  ]);
+  alerts.value = a;
   attention.value = w.workloads;
   attentionTotal.value = w.total ?? w.workloads.length;
   byState.value = w.byState ?? {};
@@ -38,7 +44,6 @@ const cards = computed(() => [
   { title: 'Napping or waking', value: count('NAPPING', 'WAKING'), icon: mdiServerNetwork, color: 'warning' },
   { title: 'Failed', value: count('FAILED'), icon: mdiAlertCircleOutline, color: 'error' },
 ]);
-const late = computed(() => routers.value.filter((r) => !r.error && checkHealth(r, now.value).late));
 const total = (key: 'ignored' | 'deferred' | 'wakes') => stats7d.value[key];
 const weekly = computed(() => [
   { title: 'Wakes (7 days)', value: total('wakes'), icon: mdiWeatherSunsetUp, color: 'primary' },
@@ -53,8 +58,7 @@ const weekly = computed(() => [
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
-  <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`"
-    :text="`${checkHealth(r, now).text}. The scheduled idle check of the router is not running: check its schedule and the dmt-<env>-check-failures queue.`" />
+  <AlertsCard v-if="alerts?.notifications" :alerts="alerts" :now="now" class="mb-4" />
   <v-row>
     <v-col v-for="card in cards" :key="card.title" cols="6" md="3">
       <v-card :loading="loading && !loaded">

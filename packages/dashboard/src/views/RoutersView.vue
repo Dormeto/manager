@@ -19,7 +19,7 @@ import PauseDialog from '../components/PauseDialog.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import RouterDetails from '../components/RouterDetails.vue';
-import type { RouterInfo, RouterOperationType } from '../types';
+import type { AlarmInfo, AlertsInfo, RouterInfo, RouterOperationType } from '../types';
 
 const now = useNow();
 const session = useSession();
@@ -35,8 +35,15 @@ const install = ref({ account: '', region: '' });
 const removing = ref<RouterInfo | null>(null);
 // Router operations running at the last refresh: a toast says how each one ended.
 const watch = operationWatch((n) => { notice.value = n; });
+// Open alarms of the watchdog (R6a), by router: dated in the health cell.
+const alarms = ref<AlarmInfo[]>([]);
+const alarmOf = (r: RouterInfo) => alarms.value.find((a) => a.kind === 'router' && a.name === r.name);
 const { error, loading, nextAt, run } = usePoll(async () => {
-  const result = await api<{ routers: RouterInfo[]; available?: { version: string } }>('/routers');
+  const [result, alerts] = await Promise.all([
+    api<{ routers: RouterInfo[]; available?: { version: string } }>('/routers'),
+    api<AlertsInfo>('/alerts').catch(() => null),
+  ]);
+  alarms.value = alerts?.alarms ?? [];
   routers.value = result.routers;
   available.value = result.available?.version ?? null;
   watch.refreshed(result.routers.flatMap((r) => (r.operation ? [{ ...r.operation, subject: r.name }] : [])));
@@ -167,6 +174,7 @@ const headers = [
           <div v-for="p in item.health.problems" :key="p.text" class="text-body-medium">{{ p.level }}: {{ p.text }}</div>
         </v-tooltip>
         <span v-else class="text-body-small text-medium-emphasis">upgrade to 0.16 for health</span>
+        <div v-if="alarmOf(item)" class="text-body-small" :class="`text-${alarmOf(item)!.level}`">alert since {{ relative(alarmOf(item)!.since, now) }}</div>
         <div v-if="item.error" class="text-body-small text-error">{{ item.error }}</div>
         <v-tooltip v-if="item.reporting === false && !item.error" location="top" max-width="380"
           text="The manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager's event bus).">

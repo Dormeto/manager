@@ -22,6 +22,12 @@ vi.mock('../src/api', () => ({
     }
     if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'upgrade-router', target: { account: '111122223333', region: 'eu-west-3' }, ...server.ended };
     if (path.startsWith('/workloads?')) return { workloads: [{ workloadId: 'a4dffc5bf369a297', router: 'dmtr-dev-eu-west-3', state: 'ASLEEP' }], total: 1 };
+    if (path === '/alerts') {
+      return {
+        alarms: [{ id: 'router#111122223333#eu-west-1', kind: 'router', name: 'dmtr-dev-eu-west-1', account: '111122223333', region: 'eu-west-1', level: 'warning', since: new Date(Date.now() - 3 * 3_600_000).toISOString(), problems: [] }],
+        notifications: { topicArn: 'arn', confirmed: 1, pending: 0 },
+      };
+    }
     return {
       available: { version: '0.23.0' },
       routers: [
@@ -223,6 +229,13 @@ describe('Routers view', () => {
     expect(hint.exists()).toBe(true);
     await hover(hint);
     expect(document.body.textContent).toMatch(/dmt-dev is written in Terraform.*apply its Terraform/);
+    wrapper.unmount();
+  });
+
+  it('dates an open alarm in the router\'s health cell', async () => {
+    const wrapper = await mountView();
+    expect(rowOf(wrapper, 'dmtr-dev-eu-west-1').text()).toContain('alert since 3 h ago');
+    expect(rowOf(wrapper, 'dmt-dev').text()).not.toContain('alert since');
     wrapper.unmount();
   });
 });
