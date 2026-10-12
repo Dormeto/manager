@@ -13,6 +13,13 @@ const BUSY_MAX = 30 * MINUTE;
 // A step pending longer than this (a resource never settling) fails instead of looping until the workflow timeout.
 const PENDING_MAX = 30 * MINUTE;
 const SLOTS = 3;
+// At most this many operations work at once across the organization (scale design §6); one waiting for the slot of its
+// account and region gives its place back meanwhile.
+const ORG_SLOT = 'ORG';
+const ORG_SLOTS = 50;
+const slotMax = (key: string) => (key === ORG_SLOT ? ORG_SLOTS : SLOTS);
+// Waiting for a slot lasts as long as it takes (the holders of dead operations expire), polling less often: 10 s to 60 s.
+const slotWait = (attempts: number) => Math.min(60, 10 * 2 ** Math.max(0, attempts - 1));
 const RETRY_MAX = 30;
 // AWS errors that pass: the step waits and runs again (a resource being updated, a throttled API).
 const TRANSIENT = new Set([
@@ -62,6 +69,7 @@ export class Conflict extends Error {
 
 // A lock or slot is held by another operation: the step waits.
 class Busy extends Error {}
+class SlotBusy extends Busy {}
 
 type Outcome = StepResult | { status: 'wait'; seconds: number; detail?: string };
 
@@ -399,7 +407,11 @@ export function createEngine(deps: EngineDeps) {
       }
       case 'slot': {
         const key = `${op.target.account}#${op.target.region}`;
-        if (!(await records.acquireSlot(key, op.id, SLOTS, LOCK_LEASE))) throw new Busy(`${SLOTS} operations already run in ${op.target.account}/${op.target.region}`);
+        if (!(await records.acquireSlot(key, op.id, SLOTS, LOCK_LEASE))) {
+          await records.releaseSlot(ORG_SLOT, op.id);
+          op.holds.slots = op.holds.slots.filter((k) => k !== ORG_SLOT);
+          throw new SlotBusy(`${SLOTS} operations already run in ${op.target.account}/${op.target.region}`);
+        }
         if (!op.holds.slots.includes(key)) op.holds.slots.push(key);
         // An uninstall marked after this operation found the router: stop (it waits for the slots to be released).
         const current = await routerOf(op);
@@ -487,12 +499,16 @@ export function createEngine(deps: EngineDeps) {
     }
     // Leases of what it holds are renewed at each step: a long wait never lets another operation in.
     for (const key of op.holds.locks) await records.acquireLock(key, op.id, LOCK_LEASE);
-    for (const key of op.holds.slots) await records.acquireSlot(key, op.id, SLOTS, LOCK_LEASE);
+    for (const key of op.holds.slots) await records.acquireSlot(key, op.id, slotMax(key), LOCK_LEASE);
     step.status = 'running';
     step.startedAt ??= iso(now());
     step.attempts = (step.attempts ?? 0) + 1;
     op.updatedAt = iso(now());
     try {
+      if (!op.holds.slots.includes(ORG_SLOT)) {
+        if (!(await records.acquireSlot(ORG_SLOT, op.id, ORG_SLOTS, LOCK_LEASE))) throw new SlotBusy(`${ORG_SLOTS} operations already run across the organization: waiting for one to end`);
+        op.holds.slots.push(ORG_SLOT);
+      }
       const outcome = await run(op, step.name);
       if (outcome.status === 'pending' || outcome.status === 'wait') {
         if (outcome.status === 'pending' && outcome.changed) step.changed = true;
@@ -515,6 +531,11 @@ export function createEngine(deps: EngineDeps) {
       return { done: false, waitSeconds: 0 };
     } catch (err) {
       const waited = now() - Date.parse(step.startedAt);
+      if (err instanceof SlotBusy) {
+        step.detail = err.message;
+        await records.putOperation(op);
+        return { done: false, waitSeconds: slotWait(step.attempts) };
+      }
       if (err instanceof Busy && waited <= BUSY_MAX) {
         step.detail = err.message;
         await records.putOperation(op);

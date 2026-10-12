@@ -127,7 +127,7 @@ describe('operations engine', () => {
     expect(stored.steps.find((x) => x.name === 'install functions')!.attempts).toBeGreaterThan(1);
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toMatchObject({
       name: 'dmtr-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`,
-      version: '0.22.1', build: '1bae9ce74559', installedBy: 'ops@example.com',
+      version: published.router.version, build: published.router.build, installedBy: 'ops@example.com',
     });
     expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
     // The router sends its state to the manager's event bus (scale design §3).
@@ -168,6 +168,37 @@ describe('operations engine', () => {
     const stored = (await s.records.getOperation(op.id))!;
     expect(waits).toBeGreaterThan(10);
     expect([stored.status, stored.error]).toEqual(['failed', 'lock load balancer: another operation holds the load balancer since more than 30 minutes']);
+  });
+
+  it('an operation waiting for a slot of its account and region keeps waiting past 30 minutes, at growing intervals', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    for (const holder of ['a', 'b', 'c']) await s.records.acquireSlot(`${ACCOUNT}#eu-west-3`, holder, 3, 24 * 60 * 60_000);
+    const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
+    const waits: number[] = [];
+    while (s.now() - Date.parse(op.createdAt) < 2 * 60 * 60_000) {
+      const r = await s.engine.next(op.id);
+      expect(r.done).toBe(false);
+      if ((await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'slot')!.status === 'running') waits.push(r.waitSeconds!);
+      s.advance((r.waitSeconds ?? 0) * 1000);
+    }
+    // A burst of onboardings waits its turn: intervals grow to a minute, never a failure.
+    expect(waits.slice(0, 4)).toEqual([10, 20, 40, 60]);
+    expect(Math.max(...waits)).toBe(60);
+    await s.records.releaseSlot(`${ACCOUNT}#eu-west-3`, 'a');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+  });
+
+  it('at most 50 operations run at once across the organization: the 51st waits until one ends', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    for (let i = 0; i < 50; i += 1) await s.records.acquireSlot('ORG', `op-${i}`, 50, 24 * 60 * 60_000);
+    const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
+    const r = await s.engine.next(op.id);
+    expect(r.done).toBe(false);
+    expect((await s.records.getOperation(op.id))!.steps[0]!.detail).toBe('50 operations already run across the organization: waiting for one to end');
+    await s.records.releaseSlot('ORG', 'op-7');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    // Its place is given back when it ends.
+    expect(await s.records.slotHolders('ORG')).toHaveLength(49);
   });
 
   it('offboards: wakes the workload, waits until awake, offboards, and the candidate is onboardable again', async () => {
