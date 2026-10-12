@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionMore, backendArn, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { attentionMore, backendArn, backendService, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -79,6 +79,18 @@ describe('backendArn', () => {
     expect(backendArn({ kind: 'instance', id: 'i-1' }, { account: '1', region: 'cn-north-1' })).toBe('arn:aws-cn:ec2:cn-north-1:1:instance/i-1');
     expect(backendArn({ kind: 'ecs', id: 'arn:aws:ecs:eu-west-1:121014831971:service/main/api' }, where)).toBe('arn:aws:ecs:eu-west-1:121014831971:service/main/api');
     expect(backendArn({ kind: 'asg', id: 'web-asg' }, where)).toBeNull();
+  });
+  it('builds a database\'s ARN from its identifier, and names each backend\'s service', () => {
+    expect(backendArn({ kind: 'rds-instance', id: 'shop-db' }, where)).toBe('arn:aws:rds:eu-west-1:121014831971:db:shop-db');
+    expect(backendArn({ kind: 'rds-cluster', id: 'shop' }, where)).toBe('arn:aws:rds:eu-west-1:121014831971:cluster:shop');
+    expect(backendArn({ kind: 'rds-instance', id: 'shop-db' }, { account: '', region: 'eu-west-1' })).toBeNull();
+    expect(['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster'].map(backendService)).toEqual(['Amazon EC2', 'Amazon EC2 Auto Scaling', 'Amazon ECS', 'Amazon RDS', 'Amazon Aurora']);
+  });
+  it('tells a target\'s service and ARN from its id: an instance, an ECS task\'s address, an address, a function', () => {
+    expect(targetInfo('i-0abc', where, [])).toEqual({ service: 'Amazon EC2 instance', arn: 'arn:aws:ec2:eu-west-1:121014831971:instance/i-0abc' });
+    expect(targetInfo('10.0.1.12', where, [{ kind: 'ecs' }])).toEqual({ service: 'Amazon ECS task (its IP address)', arn: null });
+    expect(targetInfo('10.0.1.12', where, [{ kind: 'instance' }])).toEqual({ service: 'IP address', arn: null });
+    expect(targetInfo('arn:aws:lambda:eu-west-1:121014831971:function:api', where, [])).toEqual({ service: 'AWS Lambda function', arn: 'arn:aws:lambda:eu-west-1:121014831971:function:api' });
   });
 });
 

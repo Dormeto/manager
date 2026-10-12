@@ -762,7 +762,8 @@ export function createApi({
           discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
         ]);
         return reply(200, {
-          ...(status as object), url: (summary?.url as string | null | undefined) ?? null, ...(states7d ? { states7d } : {}),
+          // Its account and region: the ARNs of its backends and targets.
+          ...(status as object), ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...(states7d ? { states7d } : {}),
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
         });
       }

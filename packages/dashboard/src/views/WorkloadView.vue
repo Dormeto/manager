@@ -6,12 +6,13 @@ import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendLabel, duration, listSourceHref, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
+import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
+import ResourceTooltip from '../components/ResourceTooltip.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateBar from '../components/StateBar.vue';
@@ -80,6 +81,8 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
 const pauses = computed(() => status.value?.pauses ?? []);
 const ownPause = computed(() => pauses.value.find((p) => p.scope === 'workload' && !p.exclusionId));
 const excluded = computed(() => pauses.value.some((p) => p.exclusionId));
+// Where the workload is: the ARNs of its backends and targets.
+const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
 const excludeOptions = computed<TargetOption[]>(() => (status.value?.targetGroupArn
   ? [{ kind: 'target-group', arn: status.value.targetGroupArn, label: `Target group ${shortId(status.value.targetGroupArn.replace(/\/[0-9a-f]+$/, ''))} (this workload)` }]
   : []));
@@ -216,17 +219,21 @@ const summary = computed(() => {
     <v-col cols="12" md="7">
       <v-card title="Backends" class="mb-4">
         <v-list density="comfortable">
-          <v-list-item v-for="b in status.backends" :key="b.id" :title="shortId(b.id)" :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '')">
-            <template v-if="backendIcon(b.kind)" #prepend>
-              <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
+          <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)">
+            <template #default="{ tip }">
+              <v-list-item v-bind="tip" data-test="backend" :title="shortId(b.id)" :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '')">
+                <template v-if="backendIcon(b.kind)" #prepend>
+                  <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
+                </template>
+                <template #append>
+                  <div class="d-flex align-center ga-2">
+                    <span v-if="b.kind === 'asg'" class="text-body-small text-medium-emphasis">min {{ b.min }} · desired {{ b.desired }} · max {{ b.max }}<template v-if="b.warmPool"> · warm pool {{ b.warmPool.state }} ({{ b.warmPool.size }})</template></span>
+                    <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
+                  </div>
+                </template>
+              </v-list-item>
             </template>
-            <template #append>
-              <div class="d-flex align-center ga-2">
-                <span v-if="b.kind === 'asg'" class="text-body-small text-medium-emphasis">min {{ b.min }} · desired {{ b.desired }} · max {{ b.max }}<template v-if="b.warmPool"> · warm pool {{ b.warmPool.state }} ({{ b.warmPool.size }})</template></span>
-                <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
-              </div>
-            </template>
-          </v-list-item>
+          </ResourceTooltip>
         </v-list>
         <v-card-text v-if="status.ignoredTargets.length" class="pt-0 text-body-small">Ignored: {{ status.ignoredTargets.map((t) => `${t.id} (${t.reason})`).join(', ') }}</v-card-text>
       </v-card>
@@ -254,9 +261,13 @@ const summary = computed(() => {
       <v-card title="Targets">
         <v-card-text>
           <span v-if="!status.targets.length" class="text-medium-emphasis">No registered target.</span>
-          <v-chip v-for="t in status.targets" :key="t.id" class="mr-2 mb-2" :color="t.state === 'healthy' ? 'success' : 'warning'" variant="tonal" label>
-            <span class="mono">{{ t.id }}</span>&nbsp;{{ t.state }}
-          </v-chip>
+          <ResourceTooltip v-for="t in status.targets" :id="t.id" :key="t.id" :arn="targetInfo(t.id, where, status.backends).arn" :service="targetInfo(t.id, where, status.backends).service">
+            <template #default="{ tip }">
+              <v-chip v-bind="tip" data-test="target" class="mr-2 mb-2" :color="t.state === 'healthy' ? 'success' : 'warning'" variant="tonal" label tabindex="0">
+                <span class="mono">{{ t.id }}</span>&nbsp;{{ t.state }}
+              </v-chip>
+            </template>
+          </ResourceTooltip>
         </v-card-text>
       </v-card>
     </v-col>

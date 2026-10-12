@@ -70,6 +70,8 @@ describe('time in each state over 7 days', () => {
     const body = json(await s.api(event('/api/workloads/dmt-dev/a')));
     expect(body.states7d.totals).toEqual({ AWAKE: WEEK - 3_600, ASLEEP: 3_600 });
     expect([body.idleHours7d, body.requests7d]).toEqual([150, 12]);
+    // Its account and region (the ARNs of its backends and targets).
+    expect([body.account, body.region]).toEqual([ACCOUNT, 'eu-west-1']);
     expect((await page(s))[0]!.states7d).toEqual(body.states7d);
   });
 

@@ -95,6 +95,8 @@ export interface WorkloadStatus {
   pauses?: Pause[];
   targetGroupArn?: string;
   source?: 'terraform' | 'manager'; // routers 0.18.2 and later
+  account?: string; // the manager's: where the workload is (the ARNs of its backends and targets)
+  region?: string;
   states7d?: StatesWeek; // the manager's: as on its Workloads row
   idleHours7d?: number;
   requests7d?: number | null;

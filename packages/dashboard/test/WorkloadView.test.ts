@@ -38,6 +38,26 @@ async function mountView(role: 'admin' | 'operator' | 'viewer' = 'viewer') {
 const ACTIONS = ['Pause', 'Resume', 'Exclude', 'Offboard', 'Nap', 'Wake'];
 
 describe('Workload view', () => {
+  it('gives each backend and target its id, ARN and service in a tooltip (user request)', async () => {
+    current = {
+      ...status, account: '111122223333', region: 'eu-west-3',
+      backends: [{ kind: 'ecs', id: 'arn:aws:ecs:eu-west-3:111122223333:service/main/shop', status: 'running' }, { kind: 'rds-instance', id: 'shop-db', status: 'running', companion: true }],
+      targets: [{ id: '10.0.1.12', state: 'healthy' }],
+    };
+    const wrapper = await mountView();
+    const tip = async (el: { trigger: (e: string) => Promise<void> }) => {
+      await el.trigger('mouseenter');
+      await flushPromises();
+      await new Promise((r) => setTimeout(r, 300));
+      return [...document.querySelectorAll('.v-tooltip .resource')].map((t) => t.textContent).join(' | ');
+    };
+    const [, database] = wrapper.findAll('[data-test="backend"]');
+    expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS/);
+    expect(await tip(wrapper.find('[data-test="target"]'))).toMatch(/Id10\.0\.1\.12.*ARN—.*ServiceAmazon ECS task/);
+    wrapper.unmount();
+    current = status;
+  });
+
   it('groups its actions in one menu on the right of its header: wake, nap, pause, rename, exclude, offboard (user request)', async () => {
     current = { ...status, source: 'manager', targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-3:111122223333:targetgroup/shop/0123456789abcdef' };
     const wrapper = await mountView('operator');

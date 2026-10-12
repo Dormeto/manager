@@ -48,7 +48,23 @@ export const backendHelp = (kind: string): string => `${backendLabel(kind)}${BAC
 export function backendArn(backend: { kind: string; id: string; arn?: string }, where: { account: string; region: string }): string | null {
   if (backend.arn) return backend.arn;
   if (backend.id.startsWith('arn:')) return backend.id;
-  return backend.kind === 'instance' ? `arn:${partitionOf(where.region)}:ec2:${where.region}:${where.account}:instance/${backend.id}` : null;
+  if (!where.account || !where.region) return null;
+  // An Auto Scaling group's ARN holds an id AWS gives it: not known from its name.
+  const resource = { instance: `ec2:${where.region}:${where.account}:instance/`, 'rds-instance': `rds:${where.region}:${where.account}:db:`, 'rds-cluster': `rds:${where.region}:${where.account}:cluster:` }[backend.kind];
+  return resource ? `arn:${partitionOf(where.region)}:${resource}${backend.id}` : null;
+}
+
+const BACKEND_SERVICES: Record<string, string> = {
+  instance: 'Amazon EC2', asg: 'Amazon EC2 Auto Scaling', ecs: 'Amazon ECS', 'rds-instance': 'Amazon RDS', 'rds-cluster': 'Amazon Aurora',
+};
+// The AWS service of a kind of backend, for its tooltip.
+export const backendService = (kind: string): string => BACKEND_SERVICES[kind] ?? kind;
+
+// A load balancer target, from its id: an instance, an IP address (an ECS task's, with an ECS backend), or a function.
+export function targetInfo(id: string, where: { account: string; region: string }, backends: { kind: string }[]): { service: string; arn: string | null } {
+  if (id.startsWith('i-')) return { service: 'Amazon EC2 instance', arn: backendArn({ kind: 'instance', id }, where) };
+  if (id.startsWith('arn:')) return { service: id.split(':')[2] === 'lambda' ? 'AWS Lambda function' : id.split(':')[2] ?? 'AWS', arn: id };
+  return { service: backends.some((b) => b.kind === 'ecs') ? 'Amazon ECS task (its IP address)' : 'IP address', arn: null };
 }
 
 // A workload name (routers 0.20.0 and later): for people only, at most 64 characters without control characters; empty
