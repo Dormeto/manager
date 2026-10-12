@@ -6,7 +6,7 @@ import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
+import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
@@ -19,6 +19,8 @@ import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import { stateSince } from '../state';
+import { backendCost } from '../costs';
+import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
 import type { Counts, WorkloadStatus } from '../types';
@@ -81,6 +83,21 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
 const pauses = computed(() => status.value?.pauses ?? []);
 const ownPause = computed(() => pauses.value.find((p) => p.scope === 'workload' && !p.exclusionId));
 const excluded = computed(() => pauses.value.some((p) => p.exclusionId));
+// A backend's costs in its tooltip (user request): its list price an hour and a month, its saving a month at the rate of
+// the last 30 days, what is not priced.
+function costRows(b: Backend): { label: string; value: string }[] {
+  const cost = backendCost(b, status.value?.backends ?? [], status.value?.costs);
+  if (!status.value?.costs) return [];
+  if (!cost) return [{ label: 'Cost', value: 'known from its next nap (router 0.27.0 or later)' }];
+  const shared = cost.shared > 1 ? ` (its ${cost.shared} backends of this kind together)` : '';
+  return [
+    ...(cost.hourly === null ? [] : [{ label: 'Base cost', value: `${usdHourly(cost.hourly)} an hour · ${usd(cost.monthly!)} a month${shared}` }]),
+    ...(cost.savedMonthly === null ? [] : [{ label: 'Saved', value: `about ${usd(cost.savedMonthly)} a month at the last 30 days' rate` }]),
+    ...(cost.unpriced.length ? [{ label: 'Not priced', value: cost.unpriced.join(', ') }] : []),
+  ];
+}
+const COST_NOTE = 'AWS on-demand list prices of what its last nap stopped; a month is 730 hours.';
+
 // Where the workload is: the ARNs of its backends and targets.
 const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
 const excludeOptions = computed<TargetOption[]>(() => (status.value?.targetGroupArn
@@ -162,7 +179,7 @@ const summary = computed(() => {
     <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
     <h1 class="text-headline-small">{{ title }}</h1>
     <StateChip v-if="status" :state="status.state" :failure="status.failure" />
-    <StateBar v-if="status" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :width="140" />
+    <StateBar v-if="status" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :costs="status.costs" :width="140" />
     <PauseChip :pauses="pauses" />
     <router-link :to="`/routers/${encodeURIComponent(router)}`" class="text-medium-emphasis">{{ router }}</router-link>
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
@@ -219,7 +236,8 @@ const summary = computed(() => {
     <v-col cols="12" md="7">
       <v-card title="Backends" class="mb-4">
         <v-list density="comfortable">
-          <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)">
+          <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)" :rows="costRows(b)"
+            :note="costRows(b).some((r) => r.label === 'Base cost') ? COST_NOTE : null">
             <template #default="{ tip }">
               <v-list-item v-bind="tip" data-test="backend" :title="shortId(b.id)" :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '')">
                 <template v-if="backendIcon(b.kind)" #prepend>

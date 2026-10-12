@@ -110,7 +110,7 @@ const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, 
       <template #[`item.router`]="{ item }"><router-link :to="`/routers/${encodeURIComponent(item.router)}`">{{ item.router }}</router-link></template>
       <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" :failure="item.failure" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.states7d`]="{ item }">
-        <StateBar class="ml-auto" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
+        <StateBar class="ml-auto" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :costs="item.costs" />
       </template>
       <template #[`item.since`]="{ item }"><span class="nowrap">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">

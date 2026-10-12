@@ -17,7 +17,7 @@ Object.defineProperty(window, 'visualViewport', {
 const SHOP = {
   router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop', account: '111122223333', region: 'eu-west-1', state: 'ASLEEP', url: null, wakeMode: 'browser',
   wakeCount: 3, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null, pendingWake: false, backends: ['asg', 'rds-instance'],
-  idleHours7d: 150, requests7d: 12, states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } },
+  idleHours7d: 150, requests7d: 12, costs: { baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: null, savedShare: 0.8, items: [], saved: { usd: 0, hours: 0, unpricedHours: 0 } }, states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } },
 };
 vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { paths.push(path); return { workloads: [SHOP], total: 1, errors: [] }; }) }));
 
@@ -92,7 +92,7 @@ describe('Workloads view', () => {
     const headers = wrapper.findAll('thead th').map((th) => th.text());
     expect(headers).not.toContain('Idle (7 days)');
     const cell = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Last 7 days')]!;
-    expect(cell.findComponent(StateBar).props()).toMatchObject({ states: SHOP.states7d, idleHours7d: 150, requests7d: 12 });
+    expect(cell.findComponent(StateBar).props()).toMatchObject({ states: SHOP.states7d, idleHours7d: 150, requests7d: 12, costs: SHOP.costs });
     wrapper.unmount();
   });
 

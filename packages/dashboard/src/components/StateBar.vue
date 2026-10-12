@@ -1,10 +1,13 @@
 <script setup lang="ts">
 // A workload's time in each state over the last 7 days, from its history (user request): the bar of its Workloads row and
 // of its view's header, in the history's colors and order. Its tooltip gives each state's share of the time with history,
-// its time and what it means, the time without history, and the hours without requests (discovery).
+// its time and what it means, the time without history, the hours without requests (discovery), what its naps saved in the
+// last 30 days and a month's saving at that rate (user request).
 import { computed } from 'vue';
 import { idleText } from '../discovery';
-import { longDuration, stateColor } from '../format';
+import { monthlySaving } from '../costs';
+import { longDuration, stateColor, usd } from '../format';
+import type { Costs } from '../types';
 import { STATE_ORDER, stateLabel } from '../history';
 import { stateBrief } from '../state';
 
@@ -12,8 +15,9 @@ const props = withDefaults(defineProps<{
   states?: { from: string; to: string; totals: Record<string, number> } | null;
   idleHours7d?: number | null;
   requests7d?: number | null;
+  costs?: Costs | null;
   width?: number;
-}>(), { states: null, idleHours7d: null, requests7d: null, width: 100 });
+}>(), { states: null, idleHours7d: null, requests7d: null, costs: null, width: 100 });
 
 // The narrowest a state is drawn, in percent of the bar: a few minutes of waking in a week stay visible.
 const MIN_WIDTH = 1;
@@ -38,6 +42,16 @@ const title = computed(() => (rows.value.length
   ? `Last 7 days${unknown.value ? ', of the time with history' : ''}`
   : 'No history yet: it starts when the manager first sees the workload.'));
 const label = computed(() => `Last 7 days: ${rows.value.length ? rows.value.map((r) => `${stateLabel(r.state).toLowerCase()} ${r.share}`).join(', ') : 'no history yet'}`);
+const saved = computed(() => {
+  const s = props.costs?.saved;
+  if (!s) return null;
+  if (!s.usd && s.unpricedHours) return 'Saved in the last 30 days: not priced yet';
+  return `Saved in the last 30 days: about ${usd(s.usd)}${s.unpricedHours ? ', part not priced' : ''}`;
+});
+const monthly = computed(() => {
+  const m = monthlySaving(props.costs);
+  return m === null ? null : `Estimated saving: about ${usd(m)} a month at that rate`;
+});
 const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }).detail}` : null));
 </script>
 
@@ -60,6 +74,9 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
       </tr>
     </table>
     <div v-if="rows.length && unknown" class="mt-1 note">No history for {{ longDuration(unknown) }} of the 7 days.</div>
+    <div v-if="saved" class="mt-1">{{ saved }}</div>
+    <div v-if="monthly">{{ monthly }}</div>
+    <div v-if="saved || monthly" class="note">Estimates: AWS on-demand list prices of what the naps stopped, for the time asleep the baseline would have run.</div>
     <div v-if="idle" class="mt-1 note">{{ idle }}</div>
   </v-tooltip>
 </template>

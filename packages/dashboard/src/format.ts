@@ -149,4 +149,6 @@ export const routeColor = (route: string): string => ROUTES[route]?.color ?? 'gr
 
 // An amount in US dollars (the estimates use AWS's USD list prices).
 export const usd = (v: number): string => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+// An hourly price: four decimals ($0.0046).
+export const usdHourly = (v: number): string => v.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 });
 

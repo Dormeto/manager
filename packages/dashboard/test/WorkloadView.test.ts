@@ -43,6 +43,10 @@ describe('Workload view', () => {
       ...status, account: '111122223333', region: 'eu-west-3',
       backends: [{ kind: 'ecs', id: 'arn:aws:ecs:eu-west-3:111122223333:service/main/shop', status: 'running' }, { kind: 'rds-instance', id: 'shop-db', status: 'running', companion: true }],
       targets: [{ id: '10.0.1.12', state: 'healthy' }],
+      costs: {
+        baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: '2026-10-09T04:51:00.000Z', savedShare: 0.9,
+        items: [{ item: { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: false }, hourly: 0.017 }], saved: { usd: 3.2, hours: 600, unpricedHours: 0 },
+      },
     };
     const wrapper = await mountView();
     const tip = async (el: { trigger: (e: string) => Promise<void> }) => {
@@ -52,7 +56,8 @@ describe('Workload view', () => {
       return [...document.querySelectorAll('.v-tooltip .resource')].map((t) => t.textContent).join(' | ');
     };
     const [, database] = wrapper.findAll('[data-test="backend"]');
-    expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS/);
+    expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS.*Base cost\$0\.0170 an hour · \$12\.41 a month.*Savedabout \$11\.17 a month/);
+    expect(wrapper.find('[data-test="header"]').findComponent(StateBar).props('costs')).toEqual(current.costs);
     expect(await tip(wrapper.find('[data-test="target"]'))).toMatch(/Id10\.0\.1\.12.*ARN—.*ServiceAmazon ECS task/);
     wrapper.unmount();
     current = status;

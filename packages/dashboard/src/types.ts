@@ -43,6 +43,7 @@ export interface WorkloadSummary {
   idleHours7d?: number; // hours without any request over the last 7 days, and the requests (from discovery)
   requests7d?: number | null;
   states7d?: StatesWeek; // seconds in each state over the last 7 days, from the history (asked with states=1)
+  costs?: Costs; // its savings over the last 30 days (asked with states=1, in a manager with prices)
   pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored: number; deferred: number; wakes: number } | null;
   settings: Settings;
@@ -50,6 +51,26 @@ export interface WorkloadSummary {
 
 // Seconds in each state over a period of 7 days (UNKNOWN: without history).
 export interface StatesWeek { from: string; to: string; totals: Record<string, number> }
+
+// What a nap stopped (router 0.27.0), as the savings price it.
+export type StoppedItem =
+  | { kind: 'ec2'; type: string; count: number; os: string }
+  | { kind: 'fargate'; vcpu: number; memoryGb: number; count: number; arch: string; os: string }
+  | { kind: 'rds'; class: string; engine: string; multiAz: boolean }
+  | { kind: 'aurora-serverless'; engine: string; acu: number }
+  | { kind: 'unknown'; backend: string; reason: string };
+
+// A workload's savings over the last 30 days (the API, with its states): what its naps saved, the share of its time with
+// history asleep within the baseline, its last nap's items at their hourly list prices (null: not priced).
+export interface Costs {
+  baseline: { kind: 'always' } | { kind: 'business-hours'; timeZone: string };
+  from: string;
+  to: string;
+  napAt: string | null;
+  savedShare: number | null;
+  items: { item: StoppedItem; hourly: number | null }[];
+  saved: { usd: number; hours: number; unpricedHours: number };
+}
 
 export interface Counts {
   ignored: Record<string, number>;
@@ -98,6 +119,7 @@ export interface WorkloadStatus {
   account?: string; // the manager's: where the workload is (the ARNs of its backends and targets)
   region?: string;
   states7d?: StatesWeek; // the manager's: as on its Workloads row
+  costs?: Costs;
   idleHours7d?: number;
   requests7d?: number | null;
   drift?: { at: string; kind: string; detail: string; by: string }[]; // repairs of what onboarding added, newest first

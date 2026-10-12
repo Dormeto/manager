@@ -21,9 +21,11 @@ service is not priced), which also brings 0.5.0's `ec2:ModifyInstanceAttribute`.
 - Routers 0.27.0 say what each nap stopped.
 - Workloads: a bar of each workload's time in each state over the last 7 days, from its history, on the Workloads list
   (instead of the idle share) and in the workload's header; its tooltip gives each state's share, time and meaning, the
-  time without history and the hours without requests. Napping has a color of its own, the same in the state chip, the
-  history and the bar. A router written in Terraform shows a chip saying where it is changed; one the manager installed
-  shows none.
+  time without history, the hours without requests, what the naps saved in the last 30 days and a month's saving at that
+  rate. Napping has a color of its own, the same in the state chip, the history and the bar. The workload's actions are
+  in one menu; each backend and target has its id, ARN and service in a tooltip, a backend its list price an hour and a
+  month and its saving a month. A router written in Terraform shows a chip saying where it is changed; one the manager
+  installed shows none.
 
 ## 0.6.0 — 2026-10-08 (not published: in 0.7.0)
 

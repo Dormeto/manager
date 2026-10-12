@@ -50,6 +50,23 @@ describe('StateBar', () => {
     wrapper.unmount();
   });
 
+  it('says what its naps saved in the last 30 days, and a month\'s saving at that rate (user request)', async () => {
+    const costs = {
+      baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: '2026-10-09T04:51:00.000Z', savedShare: 0.9,
+      items: [{ item: { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: false }, hourly: 0.017 }], saved: { usd: 3.2, hours: 600, unpricedHours: 20 },
+    };
+    const wrapper = render({ states: STATES, costs });
+    const text = await hover(wrapper);
+    expect(text).toContain('Saved in the last 30 days: about $3.20, part not priced');
+    expect(text).toContain('Estimated saving: about $11.17 a month at that rate');
+    wrapper.unmount();
+    const unpriced = render({ states: STATES, costs: { ...costs, items: [], napAt: null, saved: { usd: 0, hours: 720, unpricedHours: 720 } } });
+    const other = await hover(unpriced);
+    expect(other).toContain('Saved in the last 30 days: not priced yet');
+    expect(other).not.toContain('Estimated saving');
+    unpriced.unmount();
+  });
+
   it('keeps each state on one line in a tooltip wide enough for its meaning (user request)', async () => {
     const wrapper = render({ states: STATES, idleHours7d: 150, requests7d: 12 });
     await hover(wrapper);
