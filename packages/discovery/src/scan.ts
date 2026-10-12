@@ -34,7 +34,11 @@ export interface ScanPorts {
     describeTargetHealth(input: { TargetGroupArn: string }): Promise<{ TargetHealthDescriptions?: { Target?: { Id?: string } }[] }>;
   };
   autoscaling?: {
-    describeAutoScalingGroups(input: { NextToken?: string }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; TargetGroupARNs?: string[] }[]; NextToken?: string }>;
+    describeAutoScalingGroups(input: { NextToken?: string }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; TargetGroupARNs?: string[]; Tags?: Tag[] }[]; NextToken?: string }>;
+  };
+  // The instances behind an instance target group, read only where the region has EKS clusters (their nodes).
+  ec2?: {
+    describeInstances(input: { InstanceIds: string[] }): Promise<{ Reservations?: { Instances?: { InstanceId?: string; Tags?: Tag[] }[] }[] }>;
   };
   ecs?: {
     listClusters(input: { nextToken?: string }): Promise<{ clusterArns?: string[]; nextToken?: string }>;
@@ -55,6 +59,8 @@ export const DISCOVERY_ACTIONS = [
   'elasticloadbalancing:DescribeLoadBalancers', 'elasticloadbalancing:DescribeListeners', 'elasticloadbalancing:DescribeRules',
   'elasticloadbalancing:DescribeTags', 'elasticloadbalancing:DescribeTargetGroups', 'elasticloadbalancing:DescribeTargetHealth',
   'autoscaling:DescribeAutoScalingGroups',
+  // A cluster's nodes behind an instance target group (R10.5): never offered as instances to nap.
+  'ec2:DescribeInstances',
   'ecs:ListClusters', 'ecs:ListServices', 'ecs:DescribeServices',
   'cloudwatch:GetMetricData',
   // Event refresh: whether a trail logs the management writes of the region (aws.ts trailCovers).
@@ -91,12 +97,26 @@ async function tagsOf(elbv2: ScanPorts['elbv2'], arns: string[]): Promise<Map<st
 }
 
 // Target group → Auto Scaling group name and ECS service ARN (the backends that register targets in it).
-async function backendOwners({ autoscaling, ecs }: ScanPorts) {
-  const groups = new Map<string, { name: string; arn?: string }>();
+// The EKS cluster a node (instance or Auto Scaling group) belongs to, from the tags EKS, node groups and Karpenter put.
+export function nodeClusterOf(tags: Tag[] = []): string | null {
+  for (const { Key = '', Value = '' } of tags) {
+    if (['eks:cluster-name', 'eks:eks-cluster-name', 'aws:eks:cluster-name'].includes(Key) && Value) return Value;
+    if (Key.startsWith('kubernetes.io/cluster/')) return Key.slice('kubernetes.io/cluster/'.length);
+  }
+  return null;
+}
+
+type Owners = { groups: Map<string, { name: string; arn?: string; cluster?: string }>; services: Map<string, string> };
+
+async function backendOwners({ autoscaling, ecs }: ScanPorts): Promise<Owners> {
+  const groups = new Map<string, { name: string; arn?: string; cluster?: string }>();
   const services = new Map<string, string>();
   if (autoscaling) {
-    const asgs = await all<{ AutoScalingGroupName?: string; AutoScalingGroupARN?: string; TargetGroupARNs?: string[] }>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
-    for (const g of asgs) for (const arn of g.TargetGroupARNs ?? []) groups.set(arn, { name: g.AutoScalingGroupName ?? '', ...(g.AutoScalingGroupARN ? { arn: g.AutoScalingGroupARN } : {}) });
+    const asgs = await all<{ AutoScalingGroupName?: string; AutoScalingGroupARN?: string; TargetGroupARNs?: string[]; Tags?: Tag[] }>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
+    for (const g of asgs) {
+      const cluster = nodeClusterOf(g.Tags);
+      for (const arn of g.TargetGroupARNs ?? []) groups.set(arn, { name: g.AutoScalingGroupName ?? '', ...(g.AutoScalingGroupARN ? { arn: g.AutoScalingGroupARN } : {}), ...(cluster ? { cluster } : {}) });
+    }
   }
   if (ecs) {
     const clusters = await all<string>((i) => ecs.listClusters(i), 'clusterArns', { in: 'nextToken', out: 'nextToken' });
@@ -261,7 +281,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
 
   const candidates: ScannedRule[] = [];
   for (const [arn, members] of byGroup) {
-    candidates.push(await groupCandidate(arn, members.sort((a, b) => rank(a.rule.Priority) - rank(b.rule.Priority)), { where, tags, weighted, elbv2, owners, clusters }));
+    candidates.push(await groupCandidate(arn, members.sort((a, b) => rank(a.rule.Priority) - rank(b.rule.Priority)), { where, tags, weighted, elbv2, ec2: ports.ec2, owners, clusters }));
   }
   for (const row of visible.filter((r) => !r.app)) candidates.push(ruleCandidate(row, where, tags, groups));
 
@@ -278,7 +298,8 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
   tags: Map<string, Record<string, string>>;
   weighted: Set<string>;
   elbv2: ScanPorts['elbv2'];
-  owners: { groups: Map<string, { name: string; arn?: string }>; services: Map<string, string> };
+  ec2?: ScanPorts['ec2'];
+  owners: Owners;
   clusters: Cluster[];
 }): Promise<ScannedRule> {
   const first = members[0]!;
@@ -315,7 +336,7 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
     : new Set(members.map((m) => m.lb.LoadBalancerArn)).size > 1 ? 'target group used by several load balancers'
     : members.length > MAX_RULES ? `more than ${MAX_RULES} rules`
     : null;
-  const backend = await backendOf(ctx.elbv2, app, ctx.owners, ctx.clusters, ctx.tags.get(arn) ?? {});
+  const backend = await backendOf(ctx.elbv2, app, ctx.owners, ctx.clusters, ctx.tags.get(arn) ?? {}, ctx.ec2);
   if (managedRules.length) {
     return { ...base, eligibility: 'managed', workloadId: managedRules[0]!.managed, backend: typeof backend === 'string' ? null : backend, ...(issue ? { reason: issue } : {}) };
   }
@@ -371,12 +392,14 @@ function tagValues(sets: (Record<string, string> | undefined)[]): Record<string,
 async function backendOf(
   elbv2: ScanPorts['elbv2'],
   group: TargetGroup,
-  owners: { groups: Map<string, { name: string; arn?: string }>; services: Map<string, string> },
+  owners: Owners,
   clusters: Cluster[],
   tags: Record<string, string>,
+  ec2?: ScanPorts['ec2'],
 ): Promise<string | { kind: BackendKind; id: string; arn?: string } | KubernetesBackend> {
   const arn = group.TargetGroupArn ?? '';
   const asg = owners.groups.get(arn);
+  if (asg?.cluster) return `the Auto Scaling group ${asg.name} holds nodes of EKS cluster ${asg.cluster}: never napped (its pods are Kubernetes workloads)`;
   if (asg) return { kind: 'asg', id: asg.name, ...(asg.arn ? { arn: asg.arn } : {}) };
   const service = owners.services.get(arn);
   if (service) return { kind: 'ecs', id: service, arn: service };
@@ -387,6 +410,19 @@ async function backendOf(
   const kubernetes = clusters.length ? await kubernetesBackend(clusters, { arn, type: group.TargetType, vpcId: group.VpcId, tags, targets: ids }) : null;
   if (kubernetes) return kubernetes;
   if (group.TargetType === 'ip') return 'IP targets without an ECS service';
+  // Instance targets in a region with clusters may be their nodes (a NodePort Service, a TargetGroupBinding in instance
+  // mode): never stopped as instances. A role that may not describe them (before 0.10.0) lists no cluster either.
+  if (clusters.length && ec2) {
+    const nodes: { id: string; cluster: string }[] = [];
+    for (const batch of chunks(ids, 100)) {
+      const { Reservations = [] } = await ec2.describeInstances({ InstanceIds: batch }).catch(() => ({ Reservations: [] }));
+      for (const i of Reservations.flatMap((r) => r.Instances ?? [])) {
+        const cluster = nodeClusterOf(i.Tags);
+        if (cluster && i.InstanceId) nodes.push({ id: i.InstanceId, cluster });
+      }
+    }
+    if (nodes.length) return `targets ${nodes.slice(0, 5).map((n) => n.id).join(', ')} are nodes of EKS cluster ${nodes[0]!.cluster} (a NodePort Service or a TargetGroupBinding in instance mode): not traced to their pods yet, never napped as instances`;
+  }
   // The instance's ARN in the target group's partition, region and account.
   const [, partition, , region, account] = arn.split(':');
   return { kind: 'instance', id: ids[0]!, arn: `arn:${partition}:ec2:${region}:${account}:instance/${ids[0]}` };

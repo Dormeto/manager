@@ -3,7 +3,7 @@ import { AutoScalingClient, DescribeAutoScalingGroupsCommand } from '@aws-sdk/cl
 import { CloudTrailClient, DescribeTrailsCommand, GetEventSelectorsCommand, GetTrailStatusCommand } from '@aws-sdk/client-cloudtrail';
 import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { GetRoleCommand, IAMClient } from '@aws-sdk/client-iam';
-import { DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
+import { DescribeInstancesCommand, DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { DescribeServicesCommand, ECSClient, ListClustersCommand, ListServicesCommand } from '@aws-sdk/client-ecs';
 import { DescribeClusterCommand, EKSClient, ListClustersCommand as ListEksClustersCommand } from '@aws-sdk/client-eks';
 import {
@@ -35,7 +35,7 @@ export interface Credentials {
   expiration?: Date;
 }
 
-export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; cloudwatch: Sender }): ScanPorts {
+export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; cloudwatch: Sender; ec2?: Sender }): ScanPorts {
   return {
     elbv2: {
       describeLoadBalancers: (input) => c.elbv2.send(new DescribeLoadBalancersCommand(input)),
@@ -46,6 +46,7 @@ export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; 
       describeTargetHealth: (input) => c.elbv2.send(new DescribeTargetHealthCommand(input)),
     },
     autoscaling: { describeAutoScalingGroups: (input) => c.autoscaling.send(new DescribeAutoScalingGroupsCommand(input)) },
+    ...(c.ec2 ? { ec2: { describeInstances: (input: { InstanceIds: string[] }) => c.ec2!.send(new DescribeInstancesCommand(input)) } } : {}),
     ecs: {
       listClusters: (input) => c.ecs.send(new ListClustersCommand(input)),
       listServices: (input) => c.ecs.send(new ListServicesCommand(input)),
@@ -76,6 +77,7 @@ export function regionalClients(credentials: Credentials, region: string) {
     autoscaling: new AutoScalingClient(config),
     ecs: new ECSClient(config),
     cloudwatch: new CloudWatchClient(config),
+    ec2: new EC2Client(config),
   };
 }
 

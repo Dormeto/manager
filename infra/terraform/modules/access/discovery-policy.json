@@ -13,6 +13,7 @@
         "elasticloadbalancing:DescribeTargetGroups",
         "elasticloadbalancing:DescribeTargetHealth",
         "autoscaling:DescribeAutoScalingGroups",
+        "ec2:DescribeInstances",
         "ecs:ListClusters",
         "ecs:ListServices",
         "ecs:DescribeServices",

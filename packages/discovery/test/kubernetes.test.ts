@@ -221,7 +221,33 @@ describe('scanRegion with the region\'s clusters', () => {
     expect(seen).toEqual([['eks-demo', null], ['eks-prod', 'the cluster does not let the profile read it (an access entry with AmazonEKSViewPolicy): Unauthorized']]);
   });
 
-  it('the discovery role may list and describe the clusters', () => {
-    expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['eks:ListClusters', 'eks:DescribeCluster']));
+  // A NodePort Service or a TargetGroupBinding in instance mode registers the cluster's nodes: never stopped as instances,
+  // nor a node group scaled to zero.
+  it('instance targets that are a cluster\'s nodes, and a node group\'s Auto Scaling group, are never offered to nap', async () => {
+    const { ports: base } = scanPorts();
+    const nodeTags = (id: string) => (id === 'i-shop' ? [{ Key: 'kubernetes.io/cluster/eks-demo', Value: 'owned' }] : id === 'i-s' ? [{ Key: 'karpenter.sh/nodepool', Value: 'demo' }, { Key: 'eks:eks-cluster-name', Value: 'eks-demo' }] : []);
+    const described: string[][] = [];
+    const ec2 = { async describeInstances({ InstanceIds }: { InstanceIds: string[] }) {
+      described.push(InstanceIds);
+      return { Reservations: [{ Instances: InstanceIds.map((InstanceId) => ({ InstanceId, Tags: nodeTags(InstanceId) })) }] };
+    } };
+    const autoscaling = { async describeAutoScalingGroups(input: { NextToken?: string }) {
+      const out = await base.autoscaling!.describeAutoScalingGroups(input);
+      return { ...out, AutoScalingGroups: (out.AutoScalingGroups ?? []).map((g) => ({ ...g, Tags: [{ Key: 'eks:cluster-name', Value: 'eks-demo' }, { Key: 'eks:nodegroup-name', Value: 'system' }] })) };
+    } };
+    const found = await scanRegion({ ...base, ec2, autoscaling, kubernetes: ports({ 'eks-demo': { cluster: CLUSTER('eks-demo'), client: cluster(demo()) } }) }, WHERE, { now: () => Date.UTC(2026, 9, 11) });
+    const reason = (name: string) => found.find((c) => c.targetGroupArn === TGS[name]!.TargetGroupArn)?.reason;
+    expect(reason('shop')).toBe('targets i-shop are nodes of EKS cluster eks-demo (a NodePort Service or a TargetGroupBinding in instance mode): not traced to their pods yet, never napped as instances');
+    expect(reason('shared')).toBe('targets i-s are nodes of EKS cluster eks-demo (a NodePort Service or a TargetGroupBinding in instance mode): not traced to their pods yet, never napped as instances');
+    expect(reason('batch')).toBe('the Auto Scaling group batch-asg holds nodes of EKS cluster eks-demo: never napped (its pods are Kubernetes workloads)');
+    expect(found.find((c) => c.targetGroupArn === TGS.demo?.TargetGroupArn)?.backend?.kind ?? 'instance').toBe('instance');
+    // Without a cluster in the region, instances are not described (nor with a discovery role older than 0.10.0).
+    described.length = 0;
+    await scanRegion({ ...base, ec2 }, WHERE, { now: () => Date.UTC(2026, 9, 11) });
+    expect(described).toEqual([]);
+  });
+
+  it('the discovery role may list and describe the clusters, and describe the instances behind a target group', () => {
+    expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['eks:ListClusters', 'eks:DescribeCluster', 'ec2:DescribeInstances']));
   });
 });

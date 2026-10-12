@@ -15,7 +15,8 @@ CLI script, of the same release).
 ## 0.10.0 — 2026-10-11
 
 Router 0.29.0. Access: apply the access module or the AWS CLI script of this release again in every member account:
-`DmtDiscoveryRole` reads the EKS clusters (`eks:ListClusters`, `eks:DescribeCluster`); `DmtCommandRole` manages the
+`DmtDiscoveryRole` reads the EKS clusters (`eks:ListClusters`, `eks:DescribeCluster`) and the instances behind a target
+group (`ec2:DescribeInstances`: a cluster's nodes are never offered to nap); `DmtCommandRole` manages the
 routers' EKS access entries (statements `EksClusters`, `EksAccessEntries`, `EksAccessEntriesRemoved`, `EksDiscoveryView`:
 the routers' roles in the Kubernetes group `dormeto:router` and `DmtDiscoveryRole` with `AmazonEKSViewPolicy`, nothing
 else); the routers' permissions boundary allows `eks:DescribeCluster`. Then upgrade the routers to 0.29.0 (the upgrade
@@ -32,7 +33,9 @@ onboardable, with the reason.
   address, the ReplicaSet, the Deployment or StatefulSet), with its Ingress or TargetGroupBinding, HPA, KEDA
   ScaledObject, GitOps owner (Argo CD, Flux), capacity (Fargate or nodes) and node autoscaler (Karpenter, Cluster
   Autoscaler). Ineligible, with the reason: a private endpoint, pods of several owners, pods of a DaemonSet or a Job, a
-  ScaledObject that already scales to zero, access missing.
+  ScaledObject that already scales to zero, access missing. A cluster's nodes behind an instance target group (a
+  NodePort Service, a TargetGroupBinding in instance mode) and a node group's Auto Scaling group are never offered as
+  instances or a group to nap.
 - Installing or upgrading a router makes the access entries of its roles in the clusters of its account and region,
   and asks the router what it may do there (the router's view lists the clusters, their reach and the rights missing);
   a cluster on `aws-auth` only, or one the router cannot reach, is left with the procedure. Removing a router deletes
