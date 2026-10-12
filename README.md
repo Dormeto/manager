@@ -53,9 +53,9 @@ Operators onboard a discovered candidate and offboard a workload; administrators
 (Discovery, workload and Routers views, `POST /api/operations`). Each operation runs in the Step Functions state machine
 `dmt-<env>-manager-operations`, one step at a time in the operations Lambda, and is listed in the Operations view with
 its steps. Routers are installed by AWS API calls from the router blueprint of the manager's router version (artifacts
-bucket), through `DmtCommandRole` in the target account: it may only create `dmt-*` roles carrying the permissions
-boundary `DmtRouterBoundary`, and change or delete only what it installed (tag `dormeto:router`), never a router written
-in Terraform. In the manager's account both are created by `infra/terraform/modules/command-role`; one operation at a
+bucket), through `DmtCommandRole` in the target account: installed routers live in their own namespace (`dmtr-<env>`,
+roles under `/dormeto/router/`), and the role may only create roles there carrying the permissions boundary
+`DmtRouterBoundary`, and change or delete only `dmtr-*` resources, never a router written in Terraform nor the manager. In the manager's account both are created by `infra/terraform/modules/command-role`; one operation at a
 time per target group, router or workload, one per load balancer (lock), three per account and region.
 
 ## Organization access (discovery)
