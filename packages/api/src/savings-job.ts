@@ -1,7 +1,7 @@
 // The daily savings job (vision docs/specs/2026-10-08-savings-design.md, R9b): each workload's previous UTC day priced
 // from its history (a day item, idempotent by key), then the summary the Overview reads in one request: the last 30
 // days, this month, the cumulative total (a day added once), the top workloads, what is not priced, Dormeto's own cost.
-import { historyView, savingsOf, type Baseline, type FleetStore, type SavingsDay, type SavingsSummary, type StoppedItem } from '@dormeto/fleet';
+import { historyView, savingsOf, type Baseline, type Discounts, type FleetStore, type SavingsDay, type SavingsSummary, type StoppedItem } from '@dormeto/fleet';
 
 const DAY_MS = 86_400_000;
 const WORKERS = 10;
@@ -14,13 +14,13 @@ const dateOf = (t: number) => new Date(t).toISOString().slice(0, 10);
 type Log = { info: (event: string, data?: object) => void; warn: (event: string, data?: object) => void; error: (event: string, data?: object) => void };
 
 export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log }: {
-  fleet: Pick<FleetStore, 'listWorkloads' | 'listHistory' | 'historyBefore' | 'putSavingsDay' | 'listSavingsDay' | 'getSavingsSummary' | 'putSavingsSummary'>;
-  prices: { hourly(region: string, item: StoppedItem): Promise<number | null> };
+  fleet: Pick<FleetStore, 'listWorkloads' | 'listHistory' | 'historyBefore' | 'putSavingsDay' | 'listSavingsDay' | 'getSavingsSummary' | 'putSavingsSummary' | 'getSavingsSettings'>;
+  prices: { hourly(region: string, item: StoppedItem, discounts?: Discounts): Promise<number | null> };
   baseline: Baseline;
   now?: () => number;
   log: Log;
 }) {
-  async function priceDay(date: string) {
+  async function priceDay(date: string, discounts: Discounts) {
     const from = `${date}T00:00:00.000Z`;
     const to = new Date(Date.parse(from) + DAY_MS).toISOString();
     const workloads = await fleet.listWorkloads();
@@ -34,7 +34,7 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
           ]);
           const view = historyView({ before, entries, from, to, now: to });
           const region = w.region;
-          const savings = await savingsOf(view.phases, { hourly: (item) => prices.hourly(region, item), baseline });
+          const savings = await savingsOf(view.phases, { hourly: (item) => prices.hourly(region, item, discounts), baseline });
           const day: SavingsDay = {
             account: w.account, region, router: w.router, workloadId: w.workloadId, ...(w.name ? { name: w.name } : {}),
             usd: savings.usd, asleepHours: (view.totals.ASLEEP ?? 0) / 3600, hours: savings.hours,
@@ -57,7 +57,10 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
     async run(input: { day?: string } = {}) {
       const t = now();
       const date = input.day && /^\d{4}-\d{2}-\d{2}$/.test(input.day) ? input.day : dateOf(t - DAY_MS);
-      const { counted, failed } = await priceDay(date);
+      // The discounts for commitments (R9.5), read once: a day computed keeps them.
+      const { compute, databases } = await fleet.getSavingsSettings();
+      const discounts = { compute, databases };
+      const { counted, failed } = await priceDay(date, discounts);
       const previous = await fleet.getSavingsSummary();
       const latest = previous && previous.day > date ? previous.day : date;
       // The 31 days to the latest one: the last 30, and this month.
@@ -96,6 +99,8 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
         unpriced: { workloads: unpricedDay.length, hours: unpricedDay.reduce((n, d) => n + d.unpriced.reduce((m, u) => m + u.hours, 0), 0) },
         workloads: latestDay.length,
         dormeto: { usdMonth: COST.manager + COST.router * routers + COST.workload * latestDay.length },
+        // Those of its latest day: an earlier day run again keeps them.
+        discounts: date === latest ? discounts : previous?.discounts ?? discounts,
       };
       await fleet.putSavingsSummary(summary);
       log.info('SavingsComputed', { day: date, workloads: counted, usd: Number(total.toFixed(2)) });

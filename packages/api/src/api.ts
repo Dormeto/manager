@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
-import { baselineHours, historyView, reporting, savingsOf, type Baseline, type HistoryEntry, type RouterSummary, type SavingsSummary, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, historyView, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 
@@ -154,9 +154,13 @@ export interface ApiOptions {
     historyBefore?(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null>;
     // What the daily savings job computed last (R9).
     getSavingsSummary?(): Promise<SavingsSummary | null>;
+    // The discounts for commitments (R9.5).
+    getSavingsSettings?(): Promise<SavingsSettings>;
+    putSavingsSettings?(discounts: Discounts, by: string): Promise<void>;
   };
-  // A period's savings (R9): AWS's list prices of what the naps stopped, within the baseline.
-  savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem): Promise<number | null> };
+  // A period's savings (R9): AWS's list prices of what the naps stopped, within the baseline; Spot prices and the
+  // discounts (R9.5).
+  savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem, discounts?: Discounts): Promise<number | null> };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
   // How long each workload's figures are kept for the bar of all workloads, whatever its state (an hour).
@@ -207,6 +211,10 @@ const HOUR_MS = 3_600_000;
 // The bar of all workloads reads at most this many workloads' histories at once.
 const STATES_CONCURRENCY = 20;
 const MONTH_HOURS = 730;
+// The discounts for commitments (R9.5): read at most once a minute.
+const DISCOUNTS_MS = 60_000;
+const DISCOUNT_MAX = 90;
+const anyDiscount = (d: Discounts) => d.compute > 0 || d.databases > 0;
 
 // Seconds per state of the phases within [from, to].
 function totalsWithin(phases: { state: string; from: string; to: string }[], from: string, to: string): Record<string, number> {
@@ -477,7 +485,17 @@ export function createApi({
   type Costs = {
     baseline: Baseline; from: string; to: string; napAt: string | null; savedShare: number | null;
     items: { item: StoppedItem; hourly: number | null }[]; saved: { usd: number; hours: number; unpricedHours: number };
+    discounts?: Discounts;
   };
+  // The discounts for commitments (R9.5), kept a minute; a change made here is seen at once.
+  let discountsKept: { at: number; value: Discounts } | null = null;
+  async function discountsOf(): Promise<Discounts> {
+    const t = now();
+    if (discountsKept && t - discountsKept.at < DISCOUNTS_MS) return discountsKept.value;
+    const stored = await fleet?.getSavingsSettings?.();
+    discountsKept = { at: t, value: { compute: stored?.compute ?? 0, databases: stored?.databases ?? 0 } };
+    return discountsKept.value;
+  }
   type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs };
   const statesKept = new Map<string, { state: unknown; at: number; value: States }>();
   // A workload's figures and when they were computed: kept maxAgeMs, and, for its own row and view, while its state stays
@@ -495,7 +513,8 @@ export function createApi({
       const { view } = await historyOf(account, region, id, from, to, async () => summary);
       const value: States = { states7d: { from: from7, to, totals: totalsWithin(view.phases, from7, to) } };
       if (savings) {
-        const hourly = (item: StoppedItem) => savings.hourly(region, item).catch(() => null);
+        const discounts = await discountsOf();
+        const hourly = (item: StoppedItem) => savings.hourly(region, item, discounts).catch(() => null);
         const known = view.phases.filter((p) => p.state !== 'UNKNOWN').reduce((n, p) => n + (Date.parse(p.to) - Date.parse(p.from)) / HOUR_MS, 0);
         const asleep = view.phases.filter((p) => p.state === 'ASLEEP').reduce((n, p) => n + baselineHours(p.from, p.to, savings.baseline), 0);
         const last = [...view.phases].reverse().find((p) => p.state === 'ASLEEP' && p.stopped);
@@ -504,6 +523,7 @@ export function createApi({
           baseline: savings.baseline, from, to, napAt: last?.from ?? null, savedShare: known ? asleep / known : null,
           items: await Promise.all((last?.stopped ?? []).map(async (item) => ({ item, hourly: await hourly(item) }))),
           saved: { usd: realized.usd, hours: realized.hours, unpricedHours: realized.unpriced.reduce((n, u) => n + u.hours, 0) },
+          ...(anyDiscount(discounts) ? { discounts } : {}),
         };
       }
       if (statesKept.size >= STATES_KEPT_MAX) statesKept.clear();
@@ -535,6 +555,7 @@ export function createApi({
     const priced = entries.map((e) => e.value.costs).filter((c): c is Costs => Boolean(c));
     const hourlyOf = (c: Costs) => c.items.reduce((n, i) => n + (i.hourly ?? 0), 0);
     const pricedOnes = priced.filter((c) => c.items.some((i) => i.hourly !== null));
+    const discounts = savings ? await discountsOf() : null;
     return {
       workloads: seen.length, computedAt: new Date(computedAt).toISOString(), cacheMinutes: statesCacheMs / 60_000,
       states7d: { from: new Date(computedAt - STATES_DAYS * DAY_MS).toISOString(), to: new Date(computedAt).toISOString(), totals },
@@ -545,6 +566,7 @@ export function createApi({
           hourly: pricedOnes.length ? pricedOnes.reduce((n, c) => n + hourlyOf(c), 0) : null,
           monthly: pricedOnes.length ? pricedOnes.reduce((n, c) => n + hourlyOf(c) * MONTH_HOURS * (c.savedShare ?? 0), 0) : null,
           priced: pricedOnes.length,
+          ...(discounts && anyDiscount(discounts) ? { discounts } : {}),
         },
       } : {}),
     };
@@ -769,7 +791,25 @@ export function createApi({
     }
 
     // The fleet's estimated savings (R9): the daily job's summary, one read.
-    if (method === 'GET' && resource === 'savings' && !a) return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null });
+    if (method === 'GET' && resource === 'savings' && !a) {
+      return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null, settings: (await fleet?.getSavingsSettings?.()) ?? null });
+    }
+    // The discounts for commitments (R9.5): administrators set them, whole percentages from 0 to 90.
+    if (method === 'PUT' && resource === 'savings' && a === 'settings' && !b) {
+      need(identity, 'admin');
+      if (!fleet?.putSavingsSettings || !fleet.getSavingsSettings) throw new HttpError(404, 'not_found', 'no savings in this manager');
+      const body = bodyOf(event);
+      const percent = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= DISCOUNT_MAX;
+      if (!percent(body.compute) || !percent(body.databases)) throw new HttpError(400, 'bad_request', `compute and databases must be whole percentages from 0 to ${DISCOUNT_MAX}`);
+      const discounts = { compute: body.compute as number, databases: body.databases as number };
+      return audited(identity, 'savings-discounts', 'savings', async () => {
+        await fleet.putSavingsSettings!(discounts, identity.email);
+        // Seen at once by this container's figures; others within a minute and their figures' own time.
+        discountsKept = { at: now(), value: discounts };
+        statesKept.clear();
+        return { result: `compute ${discounts.compute}%, databases ${discounts.databases}%`, response: reply(200, { settings: await fleet.getSavingsSettings!() }) };
+      });
+    }
 
     if (method === 'GET' && resource === 'workloads' && a === 'states' && !b) {
       const { rows } = await listAll(identity);
@@ -830,7 +870,8 @@ export function createApi({
         const { view, before, entries, truncated } = await historyOf(account, router.region, id, from, to, () => fleet.getWorkload(account, router.region, id));
         // The estimate never fails the history (review I4): without it, the card shows the history alone.
         const priced = savings
-          ? await savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item), baseline: savings.baseline }).then((r) => ({ ...r, baseline: savings.baseline })).catch(() => undefined)
+          ? await discountsOf().then((discounts) => savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item, discounts), baseline: savings.baseline })
+            .then((r) => ({ ...r, baseline: savings.baseline, ...(anyDiscount(discounts) ? { discounts } : {}) }))).catch(() => undefined)
           : undefined;
         return reply(200, { ...view, before, entries, truncated, ...(priced ? { savings: priced } : {}) });
       }

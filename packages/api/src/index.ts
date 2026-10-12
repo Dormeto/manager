@@ -13,6 +13,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { createStore } from '@dormeto/discovery';
 import { createFleetStore, createPriceBook } from '@dormeto/fleet';
+import { createSpotPort } from './spot.js';
 import { baselineOf } from './baseline.js';
 import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
@@ -171,7 +172,7 @@ const mfaMode = (['optional', 'operators', 'required'] as const).find((m) => m =
 
 const fleet = createFleetStore({ dynamo, table });
 const pricing = new PricingClient({ region: 'us-east-1' });
-const prices = createPriceBook({ pricing: { getProducts: (input) => pricing.send(new GetProductsCommand(input as GetProductsCommandInput)) }, store: fleet });
+const prices = createPriceBook({ pricing: { getProducts: (input) => pricing.send(new GetProductsCommand(input as GetProductsCommandInput)) }, spot: createSpotPort(), store: fleet });
 
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
@@ -185,8 +186,9 @@ export const handler = createApi({
   managerAccount: process.env.MANAGER_ACCOUNT,
   // Routers and workloads as the routers report them (scale design §4).
   fleet,
-  // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1), cached in the table.
-  savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item) => prices.hourly(region, item) },
+  // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1), cached in the table;
+  // Spot prices and the discounts (R9.5).
+  savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item, discounts) => prices.hourly(region, item, discounts) },
   // The bar of all workloads: each workload's figures kept states_cache_minutes (an hour by default).
   statesCacheMs: (Number(process.env.STATES_CACHE_MINUTES) || 60) * 60_000,
   routerVersion: process.env.ROUTER_VERSION,

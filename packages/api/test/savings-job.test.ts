@@ -80,4 +80,24 @@ describe('savings job', () => {
     expect((await s.fleet.listSavingsDay(DAY)).map((d) => d.workloadId)).toEqual(['a', 'c']);
     expect((await s.fleet.getSavingsSummary())!.failed).toBe(1);
   });
+
+  it('prices with the discounts set, read once per run, and records those of its latest day in the summary (R9.5)', async () => {
+    const s = await setup();
+    await s.fleet.putSavingsSettings({ compute: 20, databases: 30 }, 'admin@example.com');
+    let reads = 0;
+    const seen: unknown[] = [];
+    const fleet = { ...s.fleet, getSavingsSettings: async () => { reads += 1; return s.fleet.getSavingsSettings(); } };
+    const prices = { hourly: async (_region: string, item: { kind: string }, discounts?: { compute: number; databases: number }) => { seen.push(discounts); return item.kind === 'ec2' ? 0.0456 * (1 - (discounts?.compute ?? 0) / 100) : null; } };
+    const job = createSavingsJob({ fleet, prices, baseline: { kind: 'always' }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} } });
+    await job.run();
+    expect(reads).toBe(1);
+    expect(new Set(seen.map((d) => JSON.stringify(d)))).toEqual(new Set([JSON.stringify({ compute: 20, databases: 30 })]));
+    const day = await s.fleet.listSavingsDay(DAY);
+    expect(day.find((d) => d.workloadId === 'a')!.usd).toBeCloseTo(0.8 * 1.0944, 4);
+    expect((await s.fleet.getSavingsSummary())!.discounts).toEqual({ compute: 20, databases: 30 });
+    // An earlier day run again by hand keeps the discounts of the latest day in the summary.
+    await s.fleet.putSavingsSettings({ compute: 50, databases: 50 }, 'admin@example.com');
+    await job.run({ day: '2026-10-06' });
+    expect((await s.fleet.getSavingsSummary())!.discounts).toEqual({ compute: 20, databases: 30 });
+  });
 });

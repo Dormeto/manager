@@ -15,9 +15,9 @@ data "aws_iam_policy_document" "savings" {
     resources = [aws_dynamodb_table.manager.arn]
   }
   statement {
-    # The Price List API has no resource-level permission.
+    # The Price List API and the Spot price history (R9.5) have no resource-level permission.
     sid       = "Prices"
-    actions   = ["pricing:GetProducts"]
+    actions   = ["pricing:GetProducts", "ec2:DescribeSpotPriceHistory"]
     resources = ["*"]
   }
   statement {

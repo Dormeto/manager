@@ -65,9 +65,9 @@ resource "aws_cloudwatch_log_group" "api" {
 
 data "aws_iam_policy_document" "api" {
   statement {
-    # A workload view's savings (R9): AWS's list prices, cached in the table.
+    # A workload view's savings (R9): AWS's list prices, cached in the table; Spot prices (R9.5).
     sid       = "Prices"
-    actions   = ["pricing:GetProducts"]
+    actions   = ["pricing:GetProducts", "ec2:DescribeSpotPriceHistory"]
     resources = ["*"]
   }
   statement {

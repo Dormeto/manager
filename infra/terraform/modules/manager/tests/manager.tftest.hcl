@@ -458,3 +458,13 @@ run "savings_job_failures_alert" {
     error_message = "A failed savings run alerts (review I1): the function's errors and the runs the scheduler could not deliver."
   }
 }
+
+run "spot_prices_readable" {
+  command = plan
+
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "Prices"]), "ec2:DescribeSpotPriceHistory") && contains(flatten([for s in data.aws_iam_policy_document.savings.statement : s.actions if s.sid == "Prices"]), "ec2:DescribeSpotPriceHistory")
+    error_message = "The API and the savings job read Spot prices (R9.5): ec2:DescribeSpotPriceHistory."
+  }
+}
+

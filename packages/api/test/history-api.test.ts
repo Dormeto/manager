@@ -90,8 +90,9 @@ describe('workload history (R8)', () => {
 
   it('answers the savings summary the daily job wrote, for viewers; none yet before its first run (R9)', async () => {
     const summary = { day: '2026-10-07', last30: { usd: 12.5, asleepHours: 300, days: [] } };
-    expect(json(await setup({ savingsSummary: summary }).api(event('/api/savings')))).toEqual({ summary });
-    expect(json(await setup().api(event('/api/savings')))).toEqual({ summary: null });
+    // No discounts item in this manager: no settings (R9.5).
+    expect(json(await setup({ savingsSummary: summary }).api(event('/api/savings')))).toEqual({ summary, settings: null });
+    expect(json(await setup().api(event('/api/savings')))).toEqual({ summary: null, settings: null });
   });
 
   it('answers the history without savings when they cannot be computed (review I4)', async () => {

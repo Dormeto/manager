@@ -22,13 +22,18 @@ const entries = [{ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', wor
 const PRICES: Record<string, number> = { ec2: 0.0912, rds: 0.017 };
 const before = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to: 'AWAKE', at: iso(NOW - 10 * 86_400_000) };
 
-function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false, statesCacheMs = undefined as number | undefined, hidden = false } = {}) {
+type Discounts = { compute: number; databases: number };
+function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false, statesCacheMs = undefined as number | undefined, hidden = false, settings = { compute: 0, databases: 0 } as Discounts } = {}) {
   let t = NOW;
   const read: string[] = [];
   const list = workloads.map((w) => ({ ...w }));
+  const audits: Record<string, unknown>[] = [];
+  const discountsSeen: (Discounts | undefined)[] = [];
+  let stored = { ...settings, updatedAt: null as string | null, updatedBy: null as string | null };
+  let settingsReads = 0;
   const api = createApi({
     routers: ROUTERS, now: () => t, version: '0.7.0', managerAccount: ACCOUNT, ...(statesCacheMs ? { statesCacheMs } : {}), ...(hidden ? { visible: () => false } : {}),
-    audit: { write: async () => {}, list: async () => [] },
+    audit: { write: async (e) => { audits.push({ ...e }); }, list: async () => [] },
     invoke: async (_r, payload) => (payload.action === 'status' ? { workloadId: 'a', state: list[0]!.state } : null),
     fleet: {
       // A router reporting every few minutes: its summary stays fresh as time goes by.
@@ -41,12 +46,26 @@ function setup({ workloads = [workload('a'), workload('b')], fail = false, price
         return { entries: (id === 'a' ? entries : []) as never, truncated: false };
       },
       historyBefore: async (_a: string, _r: string, id: string) => (id === 'a' ? before : null) as never,
+      getSavingsSettings: async () => { settingsReads += 1; return { ...stored }; },
+      putSavingsSettings: async (d: Discounts, by: string) => { stored = { ...d, updatedAt: iso(t), updatedBy: by }; },
     },
-    ...(priced ? { savings: { baseline: { kind: 'always' as const }, hourly: async (_region: string, item: { kind: string }) => { if (pricesFail) throw new Error('throttled'); return PRICES[item.kind] ?? null; } } } : {}),
+    ...(priced ? { savings: { baseline: { kind: 'always' as const }, hourly: async (_region: string, item: { kind: string }, d?: Discounts) => {
+      discountsSeen.push(d);
+      if (pricesFail) throw new Error('throttled');
+      const usd = PRICES[item.kind];
+      return usd === undefined ? null : usd * (1 - ((item.kind === 'rds' ? d?.databases : d?.compute) ?? 0) / 100);
+    } } } : {}),
     discovery: { store: { getCandidate: async (arn: string) => (arn === 'arn:tg/a' ? { idleHours7d: 150, requests7d: 12 } : null) as never }, run: async () => {} } as never,
   });
-  return { api, read, list, later: (ms: number) => { t += ms; } };
+  return {
+    api, read, list, audits, discountsSeen, later: (ms: number) => { t += ms; },
+    settingsReads: () => settingsReads, setStored: (d: Discounts) => { stored = { ...d, updatedAt: iso(t), updatedBy: 'other@example.com' }; },
+  };
 }
+const request = (method: string, path: string, group: string, body?: unknown): ApiEvent => ({
+  rawPath: path, requestContext: { http: { method }, authorizer: { jwt: { claims: { email: 'admin@example.com', sub: 'u2', 'cognito:groups': `[${group}]` } } } },
+  ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+});
 const event = (path: string, query: Record<string, string> = {}): ApiEvent => ({
   rawPath: path, queryStringParameters: query, requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: { email: 'v@example.com', sub: 'u1', 'cognito:groups': '[dmt-viewer]' } } } },
 });
@@ -165,5 +184,58 @@ describe('all the workloads over 7 days (the Workloads view\'s bar)', () => {
     const hidden = await fleet(setup({ hidden: true }));
     expect([hidden.workloads, hidden.states7d.totals]).toEqual([0, {}]);
     expect('costs' in (await fleet(setup({ priced: false })))).toBe(false);
+  });
+});
+
+describe('discounts for commitments (R9.5)', () => {
+  const costsOf = async (s: ReturnType<typeof setup>) => json(await s.api(event('/api/workloads/dmt-dev/a'))).costs;
+
+  it('are given to every role with the summary, with who set them and when', async () => {
+    const s = setup();
+    expect(json(await s.api(event('/api/savings')))).toEqual({ summary: null, settings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null } });
+  });
+
+  it('are set by administrators only, as whole percentages from 0 to 90', async () => {
+    const s = setup();
+    expect((await s.api(request('PUT', '/api/savings/settings', 'dmt-operator', { compute: 20, databases: 30 }))).statusCode).toBe(403);
+    for (const body of [{ compute: '20', databases: 0 }, { compute: 20.5, databases: 0 }, { compute: -1, databases: 0 }, { compute: 91, databases: 0 }, { compute: 20 }]) {
+      expect((await s.api(request('PUT', '/api/savings/settings', 'dmt-admin', body))).statusCode, JSON.stringify(body)).toBe(400);
+    }
+    expect([s.audits, json(await s.api(event('/api/savings'))).settings.compute]).toEqual([[], 0]);
+  });
+
+  it('a change is stored, audited, and prices the workload figures at once', async () => {
+    const s = setup();
+    expect('discounts' in (await costsOf(s))).toBe(false);
+    const res = await s.api(request('PUT', '/api/savings/settings', 'dmt-admin', { compute: 20, databases: 30 }));
+    expect([res.statusCode, json(res)]).toEqual([200, { settings: { compute: 20, databases: 30, updatedAt: iso(NOW), updatedBy: 'admin@example.com' } }]);
+    expect(s.audits).toEqual([expect.objectContaining({ action: 'savings-discounts', target: 'savings', result: 'compute 20%, databases 30%' })]);
+    const costs = await costsOf(s);
+    expect(costs.discounts).toEqual({ compute: 20, databases: 30 });
+    expect(costs.items.map((i: { hourly: number | null }) => i.hourly)).toEqual([expect.closeTo(0.8 * 0.0912, 6), expect.closeTo(0.7 * 0.017, 6), null]);
+    expect(costs.saved.usd).toBeCloseTo(0.8 * 0.0912 + 0.7 * 0.017, 6);
+  });
+
+  it('are read at most once a minute: a change made by another container is seen after a minute', async () => {
+    const s = setup();
+    await costsOf(s);
+    s.setStored({ compute: 50, databases: 50 });
+    s.list[0]!.state = 'WAKING';
+    expect('discounts' in (await costsOf(s))).toBe(false);
+    expect(s.settingsReads()).toBe(1);
+    s.later(61_000);
+    s.list[0]!.state = 'ASLEEP';
+    expect((await costsOf(s)).discounts).toEqual({ compute: 50, databases: 50 });
+    expect(s.settingsReads()).toBe(2);
+  });
+
+  it('the history\'s savings, a workload\'s figures and the bar of all workloads are priced with the same discounts', async () => {
+    const s = setup({ settings: { compute: 20, databases: 30 } });
+    await s.api(event('/api/workloads/dmt-dev/a/history', { days: '7' }));
+    await costsOf(s);
+    const fleet = json(await s.api(event('/api/workloads/states')));
+    expect(fleet.costs.discounts).toEqual({ compute: 20, databases: 30 });
+    expect(s.discountsSeen.length).toBeGreaterThan(0);
+    expect(new Set(s.discountsSeen.map((d) => JSON.stringify(d)))).toEqual(new Set([JSON.stringify({ compute: 20, databases: 30 })]));
   });
 });
