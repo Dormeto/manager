@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATUSES, cursorPages, firstStatus, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
+import { STATUSES, cursorPages, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -65,6 +65,16 @@ describe('Discovery view paging', () => {
     expect(firstStatus({ ineligible: 3, 'pending-offboarding': 1 })).toBe('pending-offboarding');
     expect(firstStatus({ 'pending-onboarding': 2, ineligible: 3 })).toBe('pending-onboarding');
     expect(firstStatus({})).toBe('pending-onboarding');
+  });
+
+  it('keeps the answer of the last request only: an earlier one arriving later is dropped', async () => {
+    const latest = latestOnly();
+    let release!: (v: string) => void;
+    const slow = latest(() => new Promise<string>((r) => { release = r; }));
+    const fast = latest(async () => 'second');
+    expect(await fast).toEqual({ value: 'second' });
+    release('first');
+    expect(await slow).toBeNull();
   });
 
   it('pages with cursors: forward from each page\'s cursor, back to any page seen', () => {

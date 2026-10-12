@@ -12,7 +12,7 @@ import type { RouterInfo } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import { STATUSES, cursorPages, firstStatus, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
+import { STATUSES, cursorPages, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative } from '../format';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -42,6 +42,10 @@ const region = ref('');
 const page = ref(0);
 const pages = cursorPages();
 const hasNext = ref(false);
+// Answers of earlier page requests (a filter typed on, a page turned meanwhile) are dropped.
+const latest = latestOnly();
+// A Run now refused since the last run (another run was in progress).
+const refused = ref<RunRecord | null>(null);
 const selected = ref<string[]>([]);
 const dismissDialog = ref(false);
 const note = ref('');
@@ -60,12 +64,14 @@ async function loadPage() {
     query.set('account', account.value);
     if (/^[a-z]{2}(-[a-z]+)+-\d$/.test(region.value)) query.set('region', region.value);
   }
-  const cursor = pages.cursor(page.value);
+  const at = page.value;
+  const cursor = pages.cursor(at);
   if (cursor) query.set('cursor', cursor);
-  const result = await api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${query}`);
-  pages.loaded(page.value, result.cursor);
-  hasNext.value = pages.hasNext(page.value);
-  candidates.value = result.candidates;
+  const answer = await latest(() => api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${query}`));
+  if (!answer) return;
+  pages.loaded(at, answer.value.cursor);
+  hasNext.value = pages.hasNext(at);
+  candidates.value = answer.value.candidates;
   selected.value = [];
 }
 
@@ -73,10 +79,11 @@ async function load() {
   loading.value = true;
   try {
     const [result, excluded] = await Promise.all([
-      api<{ lastRun: RunRecord | null; counts: Partial<Record<Status, number>> }>('/discovery'),
+      api<{ lastRun: RunRecord | null; refused?: RunRecord; counts: Partial<Record<Status, number>> }>('/discovery'),
       api<{ exclusions: Exclusion[] }>('/exclusions'),
     ]);
     lastRun.value = result.lastRun;
+    refused.value = result.refused ?? null;
     counts.value = result.counts;
     exclusions.value = excluded.exclusions.sort((a, b) => b.at.localeCompare(a.at));
     badge.fromCounts(result.counts);
@@ -101,6 +108,12 @@ function restart() {
   pages.reset();
   load();
 }
+// A filter being typed: loaded once typing pauses.
+let typing: number | undefined;
+function restartSoon() {
+  window.clearTimeout(typing);
+  typing = window.setTimeout(restart, 400);
+}
 function turn(by: number) {
   page.value += by;
   load();
@@ -117,11 +130,15 @@ async function runNow() {
     running.value = false;
     return;
   }
-  const deadline = Date.now() + 15 * 60_000;
+  const refusedBefore = refused.value?.startedAt;
+  // Until a new run finished (it shows as running while its accounts are scanned), or this one was refused; a run lasts
+  // 3 hours at most.
+  const deadline = Date.now() + 3 * 3_600_000;
+  window.clearInterval(poll);
   poll = window.setInterval(async () => {
     await load();
-    // A new run, once finished (it shows as running while its accounts are scanned).
-    if ((lastRun.value?.startedAt !== before && lastRun.value?.status !== 'running') || Date.now() > deadline) {
+    const finished = lastRun.value?.startedAt !== before && lastRun.value?.status !== 'running';
+    if (finished || refused.value?.startedAt !== refusedBefore || Date.now() > deadline) {
       window.clearInterval(poll);
       running.value = false;
     }
@@ -200,7 +217,10 @@ async function offboard() {
 }
 
 onMounted(load);
-onBeforeUnmount(() => window.clearInterval(poll));
+onBeforeUnmount(() => {
+  window.clearInterval(poll);
+  window.clearTimeout(typing);
+});
 
 const failed = computed(() => lastRun.value?.targets.filter((t) => t.status === 'error') ?? []);
 // Account-regions scanned without any rule are counted, not listed (R4.5).
@@ -230,7 +250,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
     <h1 class="text-headline-small">Discovery</h1>
     <v-spacer />
     <v-btn v-if="session.isAdmin" :prepend-icon="mdiCogOutline" variant="text" to="/discovery/settings">Perimeter</v-btn>
-    <v-btn v-if="session.canOperate" :prepend-icon="mdiPlay" variant="tonal" :loading="running" @click="runNow">Run now</v-btn>
+    <v-btn v-if="session.canOperate" :prepend-icon="mdiPlay" variant="tonal" :loading="running" :disabled="lastRun?.status === 'running'" @click="runNow">Run now</v-btn>
   </div>
   <p class="text-medium-emphasis mb-4">Load balancer rules of every account and region of the perimeter, read with the read-only
     <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</p>
@@ -247,6 +267,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
       </div>
       <v-alert v-if="lastRun.error" type="error" variant="tonal" density="compact" class="mt-3" :text="lastRun.error" />
       <p v-if="lastRun.skippedReason" class="text-medium-emphasis mt-2">Skipped: {{ lastRun.skippedReason }}.</p>
+      <p v-if="refused" class="text-medium-emphasis mt-2">Run now {{ relative(refused.startedAt, now) }}<template v-if="refused.by"> by {{ refused.by }}</template> was refused: {{ refused.skippedReason }}.</p>
       <ul v-if="failed.length" class="mt-3 pl-4">
         <li v-for="t in failed" :key="`${t.account}/${t.region}`" class="text-body-medium text-error">{{ targetText(t) }}</li>
       </ul>
@@ -275,8 +296,8 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
   </div>
 
   <div class="d-flex flex-wrap ga-2 mb-2">
-    <v-text-field v-model="account" label="Account" placeholder="12 digits" density="compact" hide-details clearable max-width="220" @update:model-value="restart" />
-    <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" :disabled="!filtered" @update:model-value="restart" />
+    <v-text-field v-model="account" label="Account" placeholder="12 digits" density="compact" hide-details clearable max-width="220" @update:model-value="restartSoon" />
+    <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" :disabled="!filtered" @update:model-value="restartSoon" />
   </div>
 
   <v-card>

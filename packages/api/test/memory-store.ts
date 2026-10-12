@@ -3,7 +3,7 @@ import { InvalidCursor, type Candidate, type DiscoveryConfig, type DiscoveryStor
 
 export const NOW = Date.UTC(2026, 9, 4, 12, 0);
 
-export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null = null): DiscoveryStore & { config: StoredConfig | null; exclusions: Map<string, Exclusion> } {
+export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null = null): DiscoveryStore & { config: StoredConfig | null; exclusions: Map<string, Exclusion>; runs: RunRecord[] } {
   const items = new Map(candidates.map((c) => [c.id, c]));
   const store = {
     config: null as StoredConfig | null,
@@ -11,8 +11,12 @@ export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null 
     async putConfig(config: DiscoveryConfig, by: string) { store.config = { config, updatedAt: new Date(NOW).toISOString(), updatedBy: by }; },
     async acquireLock() { return true; },
     async releaseLock() {},
-    async lastRun() { return run; },
-    async putRun() {},
+    // Runs by start time; the last one, or the last one not skipped.
+    runs: (run ? [run] : []) as RunRecord[],
+    async lastRun({ completed = false }: { completed?: boolean } = {}) {
+      return [...store.runs].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).find((r) => !completed || r.status !== 'skipped') ?? null;
+    },
+    async putRun(r: RunRecord) { store.runs = [...store.runs.filter((x) => x.startedAt !== r.startedAt), r]; },
     async listCandidates() { return [...items.values()]; },
     async getCandidate(id: string) { return items.get(id) ?? null; },
     async putCandidates(list: Candidate[]) { for (const c of list) items.set(c.id, c); },

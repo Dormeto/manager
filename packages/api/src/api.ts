@@ -604,8 +604,11 @@ export function createApi({
     // The last run and the counts per status (scale design §5); the candidates come by page.
     if (method === 'GET' && !sub) {
       await settleExpired(d);
-      const [lastRun, counts] = await Promise.all([d.store.lastRun(), d.store.getCounts()]);
-      return reply(200, { lastRun, counts: counts?.counts ?? (await d.store.lastRun({ completed: true }))?.counts ?? {} });
+      // The last run that ran (or runs); a Run now refused since (another run was in progress) is given apart, so that it
+      // never hides that run and its result.
+      const [newest, lastRun, counts] = await Promise.all([d.store.lastRun(), d.store.lastRun({ completed: true }), d.store.getCounts()]);
+      const refused = newest?.status === 'skipped' && (!lastRun || newest.startedAt > lastRun.startedAt) ? newest : null;
+      return reply(200, { lastRun, ...(refused ? { refused } : {}), counts: counts?.counts ?? lastRun?.counts ?? {} });
     }
     if (method === 'GET' && sub === 'candidates') {
       const q = event.queryStringParameters ?? {};

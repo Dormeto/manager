@@ -84,6 +84,17 @@ export function firstStatus(counts: Partial<Record<Status, number>>): Status {
   return STATUSES.find((s) => (counts[s] ?? 0) > 0) ?? 'pending-onboarding';
 }
 
+// The answer of the last request only: an earlier request answered later (a filter typed on, a page turned meanwhile) is
+// dropped (null).
+export function latestOnly() {
+  let last = 0;
+  return async <T>(request: () => Promise<T>): Promise<{ value: T } | null> => {
+    const mine = ++last;
+    const value = await request();
+    return mine === last ? { value } : null;
+  };
+}
+
 // Pages of a cursor-paged list: page n starts at the cursor page n - 1 gave; any page seen can be shown again.
 export function cursorPages() {
   const cursors: (string | null)[] = [null];

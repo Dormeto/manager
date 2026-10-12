@@ -49,6 +49,15 @@ describe('discovery routes', () => {
     expect(json(await api(event('GET', '/api/discovery'))).counts).toEqual({ 'pending-onboarding': 1, ineligible: 1 });
   });
 
+  it('a Run now refused while a run is in progress never hides that run: it is given apart', async () => {
+    const { api, store } = setup();
+    const running: RunRecord = { ...RUN, startedAt: '2026-10-04T11:30:00.000Z', finishedAt: '2026-10-04T11:30:00.000Z', status: 'running', counts: {} };
+    const refused: RunRecord = { ...RUN, startedAt: '2026-10-04T11:31:00.000Z', finishedAt: '2026-10-04T11:31:00.000Z', trigger: 'manual', status: 'skipped', skippedReason: 'another run is in progress', counts: {} };
+    store.runs.push(running, refused);
+    const body = json(await api(event('GET', '/api/discovery')));
+    expect([body.lastRun.startedAt, body.lastRun.status, body.refused?.skippedReason]).toEqual([running.startedAt, 'running', 'another run is in progress']);
+  });
+
   it('pages the candidates of a status, within an account or an account and region: 50 by default, at most 200', async () => {
     const many = Array.from({ length: 250 }, (_, i) => candidate(`c${String(i).padStart(3, '0')}`));
     const { api } = setup([...many, R2]);
