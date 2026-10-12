@@ -30,10 +30,11 @@ describe('computeStatus', () => {
     expect(computeStatus(input).status).toBe(status);
   });
 
-  it('gives the decision reason to a pending offboarding and the backend to a pending onboarding', () => {
+  it('gives the decision reason to a pending offboarding, and a pending onboarding is just eligible', () => {
     expect(computeStatus({ ...base, eligibility: 'managed', reason: 'redirect action' }).statusReason).toBe('ineligible: redirect action');
     expect(computeStatus({ ...base, eligibility: 'managed', scope: 'excluded', scopeReason: 'excluded: filter "a", exclude 1' }).statusReason).toBe('excluded: filter "a", exclude 1');
-    expect(computeStatus({ ...base, backend: { kind: 'asg', id: 'web-asg' } }).statusReason).toBe('eligible: asg web-asg');
+    // The backend has its own column: the reason is just "eligible".
+    expect(computeStatus({ ...base, backend: { kind: 'asg', id: 'web-asg' } }).statusReason).toBe('eligible');
   });
 });
 
@@ -41,7 +42,7 @@ describe('nextCandidates', () => {
   it('creates candidates with the account name and OU path, first and last seen, and one history entry', () => {
     const [c] = run([ok([rule()])]);
     expect(c).toMatchObject({ accountName: 'tools', ouPath: A.ouPath, status: 'pending-onboarding', firstSeenAt: iso(T0), lastSeenAt: iso(T0) });
-    expect(c!.history).toEqual([{ at: iso(T0), status: 'pending-onboarding', reason: 'eligible: instance i-1' }]);
+    expect(c!.history).toEqual([{ at: iso(T0), status: 'pending-onboarding', reason: 'eligible' }]);
   });
 
   it('keeps firstSeenAt, updates lastSeenAt, and appends history only on a change', () => {

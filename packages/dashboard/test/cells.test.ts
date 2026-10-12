@@ -32,13 +32,20 @@ async function tooltipOf(w: VueWrapper, selector: string) {
 }
 
 describe('discovery cells', () => {
-  it('shows a region as its flag and code, its location and country in the tooltip', async () => {
+  it('shows a region as its flag only, its location, country and code in the tooltip', async () => {
     const w = render(RegionLabel, { region: 'eu-west-1' });
-    expect(w.text()).toBe('eu-west-1');
+    expect(w.text()).toBe('');
     expect(w.find('img').attributes('src')).toMatch(/\.svg|^data:image\/svg/);
+    expect(w.find('.region-label').attributes('aria-label')).toBe('eu-west-1, Europe (Ireland)');
     const tip = await tooltipOf(w, '.region-label');
     expect(tip).toContain('Europe (Ireland)');
-    expect(tip).toContain('Ireland');
+    expect(tip).toContain('Ireland · eu-west-1');
+  });
+
+  it('shows an unknown region as a globe, its code in the tooltip', async () => {
+    const w = render(RegionLabel, { region: 'xx-moon-1' });
+    expect(w.find('img').exists()).toBe(false);
+    expect(await tooltipOf(w, '.region-label')).toContain('xx-moon-1');
   });
 
   it('shows a backend as its icon and id, its service and ARN in the tooltip', async () => {

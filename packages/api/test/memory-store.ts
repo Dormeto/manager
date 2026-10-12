@@ -33,8 +33,8 @@ export const candidate = (id: string, over: Partial<Candidate> = {}): Candidate 
   conditions: 'host a.example.com', hosts: ['a.example.com'], targetGroup: 'a', targetGroupArn: 'tg', suggestedId: 'a',
   backend: { kind: 'instance', id: 'i-1' }, tags: {}, rules: [], eligibility: 'eligible', idleHours7d: 160, requests7d: 3,
   accountName: 'dormeto', ouPath: ['r-1u0b'], scope: 'in', scopeReason: 'in scope: filter "a", include 1',
-  status: 'pending-onboarding', statusReason: 'eligible: instance i-1', firstSeenAt: '2026-10-04T11:00:00.000Z', lastSeenAt: '2026-10-04T11:00:00.000Z',
-  history: [{ at: '2026-10-04T11:00:00.000Z', status: 'pending-onboarding', reason: 'eligible: instance i-1' }],
+  status: 'pending-onboarding', statusReason: 'eligible', firstSeenAt: '2026-10-04T11:00:00.000Z', lastSeenAt: '2026-10-04T11:00:00.000Z',
+  history: [{ at: '2026-10-04T11:00:00.000Z', status: 'pending-onboarding', reason: 'eligible' }],
   ...over,
 });
 

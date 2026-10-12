@@ -257,7 +257,6 @@ const headers = [
       </template>
       <template #[`item.statusReason`]="{ item }">
         <span class="text-medium-emphasis">{{ item.statusReason }}</span>
-        <div v-if="item.status === 'pending-onboarding' && item.suggestedId" class="text-body-small text-medium-emphasis">suggested id <span class="mono">{{ item.suggestedId }}</span></div>
       </template>
       <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap">{{ relative(item.firstSeenAt, now) }}</span></template>
     </v-data-table>

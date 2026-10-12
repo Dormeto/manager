@@ -20,7 +20,7 @@ export function computeStatus(c: StatusInput): { status: Status; statusReason: s
   if (c.scope === 'excluded') return { status: 'excluded', statusReason: c.scopeReason };
   if (c.scope === 'out') return { status: 'out-of-scope', statusReason: c.scopeReason };
   if (c.eligibility === 'ineligible') return { status: 'ineligible', statusReason: c.reason ?? 'ineligible' };
-  return { status: 'pending-onboarding', statusReason: c.backend ? `eligible: ${c.backend.kind} ${c.backend.id}` : 'eligible' };
+  return { status: 'pending-onboarding', statusReason: 'eligible' };
 }
 
 // Status, reason and history from the previous version of the candidate.

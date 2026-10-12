@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// A region as its country's flag and its code; its AWS location and country in a tooltip.
+// A region as its country's flag; its AWS location, country and code in a tooltip.
 import { computed } from 'vue';
 import { mdiEarth } from '@mdi/js';
 import { regionInfo } from '../regions';
@@ -11,10 +11,9 @@ const info = computed(() => regionInfo(props.region));
 <template>
   <v-tooltip location="top">
     <template #activator="{ props: tip }">
-      <span v-bind="tip" class="region-label d-inline-flex align-center ga-2 nowrap" tabindex="0">
+      <span v-bind="tip" class="region-label d-inline-flex align-center" tabindex="0" :aria-label="[region, info.location].filter(Boolean).join(', ')">
         <img v-if="info.flag" :src="info.flag" alt="" class="flag">
         <v-icon v-else :icon="mdiEarth" size="1.2em" />
-        <span>{{ region }}</span>
       </span>
     </template>
     <div v-if="info.location" class="font-weight-bold">{{ info.location }}</div>
