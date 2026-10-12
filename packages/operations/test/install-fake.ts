@@ -17,6 +17,10 @@ export function fakeInstallAccount() {
     schedules: new Map<string, Record<string, unknown>>(),
     eventRules: new Map<string, { pattern: string; state: string; targets: { Id: string; Arn: string }[] }>(),
     newRoles: new Set<string>(), // roles Lambda cannot assume yet (one failed CreateFunction each)
+    // Event source mappings by UUID; unreadableQueues: CreateEventSourceMapping calls refused first (a role just given its
+    // queue permissions).
+    mappings: new Map<string, { UUID: string; FunctionName: string; EventSourceArn: string; BatchSize: number; MaximumBatchingWindowInSeconds: number; FunctionResponseTypes: string[]; ScalingConfig: { MaximumConcurrency: number }; State: string }>(),
+    unreadableQueues: 0,
     calls: [] as string[],
   };
   const call = (name: string) => state.calls.push(name);
@@ -96,6 +100,18 @@ export function fakeInstallAccount() {
         return { QueueUrl: `https://sqs/${QueueName}` };
       },
       async createQueue({ QueueName, Attributes = {}, tags = {} }) { call('createQueue'); state.queues.set(QueueName, { attributes: Attributes, tags }); return { QueueUrl: `https://sqs/${QueueName}` }; },
+      // As SQS gives them: every attribute (defaults included), numbers and JSON documents as strings.
+      async getQueueAttributes({ QueueUrl }) {
+        call('getQueueAttributes');
+        const q = state.queues.get(QueueUrl.split('/').at(-1)!)!;
+        return { Attributes: { DelaySeconds: '0', VisibilityTimeout: '30', ...q.attributes } };
+      },
+      async setQueueAttributes({ QueueUrl, Attributes }) {
+        call('setQueueAttributes');
+        const q = state.queues.get(QueueUrl.split('/').at(-1)!)!;
+        q.attributes = { ...q.attributes, ...Attributes };
+        return {};
+      },
       async deleteQueue({ QueueUrl }) { call('deleteQueue'); state.queues.delete(QueueUrl.split('/').at(-1)!); return {}; },
     },
     logs: {
@@ -182,6 +198,33 @@ export function fakeInstallAccount() {
       async deleteFunction({ FunctionName }) {
         call('deleteFunction');
         if (!state.functions.delete(FunctionName)) throw error('ResourceNotFoundException');
+        return {};
+      },
+      // As Lambda answers: the function's ARN, not the name it was given.
+      async listEventSourceMappings({ FunctionName, EventSourceArn }) {
+        call('listEventSourceMappings');
+        return { EventSourceMappings: [...state.mappings.values()].filter((m) => m.FunctionName === FunctionName && (!EventSourceArn || m.EventSourceArn === EventSourceArn))
+          .map(({ FunctionName: name, ...m }) => ({ ...structuredClone(m), FunctionArn: `arn:aws:lambda:eu-west-3:121014831971:function:${name}` })) };
+      },
+      async createEventSourceMapping(input) {
+        call('createEventSourceMapping');
+        if (state.unreadableQueues > 0) {
+          state.unreadableQueues -= 1;
+          throw error('InvalidParameterValueException', 'The function execution role does not have permissions to call ReceiveMessage on SQS');
+        }
+        const UUID = `uuid-${state.mappings.size + 1}`;
+        state.mappings.set(UUID, { UUID, FunctionName: input.FunctionName, EventSourceArn: input.EventSourceArn, BatchSize: input.BatchSize, MaximumBatchingWindowInSeconds: input.MaximumBatchingWindowInSeconds,
+          FunctionResponseTypes: input.FunctionResponseTypes, ScalingConfig: input.ScalingConfig, State: 'Enabled' });
+        return { UUID };
+      },
+      async updateEventSourceMapping({ UUID, ...input }) {
+        call('updateEventSourceMapping');
+        Object.assign(state.mappings.get(UUID)!, input);
+        return {};
+      },
+      async deleteEventSourceMapping({ UUID }) {
+        call('deleteEventSourceMapping');
+        if (!state.mappings.delete(UUID)) throw error('ResourceNotFoundException');
         return {};
       },
     },

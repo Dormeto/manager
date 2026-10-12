@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.21.0",
-    "build": "774e766c20de"
+    "version": "0.22.1",
+    "build": "1bae9ce74559"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -175,7 +175,20 @@
               "sqs:SendMessage"
             ],
             "Resource": [
-              "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures"
+              "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures",
+              "arn:${partition}:sqs:${region}:${account}:${name}-work"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "sqs:ReceiveMessage",
+              "sqs:DeleteMessage",
+              "sqs:GetQueueAttributes",
+              "sqs:ChangeMessageVisibility"
+            ],
+            "Resource": [
+              "arn:${partition}:sqs:${region}:${account}:${name}-work"
             ]
           },
           {
@@ -484,6 +497,18 @@
           {
             "Effect": "Allow",
             "Action": [
+              "sqs:ReceiveMessage",
+              "sqs:DeleteMessage",
+              "sqs:GetQueueAttributes",
+              "sqs:ChangeMessageVisibility"
+            ],
+            "Resource": [
+              "arn:${partition}:sqs:${region}:${account}:${name}-drift"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
               "logs:CreateLogStream",
               "logs:PutLogEvents"
             ],
@@ -514,6 +539,46 @@
       "name": "${name}-controller-failures",
       "retentionSeconds": 1209600,
       "managedEncryption": true
+    },
+    {
+      "key": "work",
+      "name": "${name}-work",
+      "retentionSeconds": 3600,
+      "managedEncryption": true,
+      "visibilityTimeoutSeconds": 960,
+      "deadLetter": {
+        "queue": "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures",
+        "maxReceiveCount": 3
+      }
+    },
+    {
+      "key": "drift",
+      "name": "${name}-drift",
+      "retentionSeconds": 86400,
+      "managedEncryption": true,
+      "visibilityTimeoutSeconds": 360,
+      "deadLetter": {
+        "queue": "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures",
+        "maxReceiveCount": 3
+      },
+      "policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "events.amazonaws.com"
+            },
+            "Action": "sqs:SendMessage",
+            "Resource": "arn:${partition}:sqs:${region}:${account}:${name}-drift",
+            "Condition": {
+              "ArnEquals": {
+                "aws:SourceArn": "arn:${partition}:events:${region}:${account}:rule/${name}-drift"
+              }
+            }
+          }
+        ]
+      }
     }
   ],
   "logGroups": [
@@ -541,8 +606,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.21.0",
-        "DMT_BUILD": "774e766c20de",
+        "DMT_VERSION": "0.22.1",
+        "DMT_BUILD": "1bae9ce74559",
         "DMT_IP_LISTS": "${ipLists}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_CHECK_SCHEDULE": "${checkSchedule}",
@@ -550,7 +615,8 @@
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_FAILURE_QUEUES": "{\"check\":\"https://sqs.${region}.amazonaws.com/${account}/${name}-check-failures\",\"controller\":\"https://sqs.${region}.amazonaws.com/${account}/${name}-controller-failures\"}",
         "DMT_ONBOARDER": "${name}-onboarder",
-        "DMT_MANAGER_BUS": "${managerBus}"
+        "DMT_MANAGER_BUS": "${managerBus}",
+        "DMT_WORK_QUEUE": "https://sqs.${region}.amazonaws.com/${account}/${name}-work"
       },
       "asyncInvoke": {
         "maximumRetryAttempts": 0,
@@ -573,8 +639,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.21.0",
-        "DMT_BUILD": "774e766c20de",
+        "DMT_VERSION": "0.22.1",
+        "DMT_BUILD": "1bae9ce74559",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
@@ -597,8 +663,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.21.0",
-        "DMT_BUILD": "774e766c20de",
+        "DMT_VERSION": "0.22.1",
+        "DMT_BUILD": "1bae9ce74559",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },
@@ -618,9 +684,29 @@
   "eventRule": {
     "name": "${name}-drift",
     "pattern": "{\"detail-type\":[\"AWS API Call via CloudTrail\"],\"$or\":[{\"source\":[\"aws.elasticloadbalancing\"],\"detail\":{\"eventName\":[\"ModifyRule\",\"CreateRule\",\"DeleteRule\",\"SetRulePriorities\",\"DeleteTargetGroup\"],\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.elasticloadbalancing\"],\"detail\":{\"eventName\":[\"RemoveTags\"],\"requestParameters\":{\"tagKeys\":[\"dormeto:workload\"]},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.ec2\"],\"detail\":{\"eventName\":[\"DeleteTags\"],\"requestParameters\":{\"tagSet\":{\"items\":{\"key\":[\"dormeto:workload\"]}}},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.autoscaling\"],\"detail\":{\"eventName\":[\"DeleteTags\"],\"requestParameters\":{\"tags\":{\"key\":[\"dormeto:workload\"]}},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.ecs\",\"aws.rds\"],\"detail\":{\"eventName\":[\"UntagResource\",\"RemoveTagsFromResource\"],\"requestParameters\":{\"tagKeys\":[\"dormeto:workload\"]},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}}]}",
-    "target": "arn:${partition}:lambda:${region}:${account}:function:${name}-onboarder",
+    "target": "arn:${partition}:sqs:${region}:${account}:${name}-drift",
     "description": "Dormeto: rules, target groups and workload tags changed outside the router"
   },
+  "eventSourceMappings": [
+    {
+      "key": "work",
+      "function": "${name}-controller",
+      "queue": "arn:${partition}:sqs:${region}:${account}:${name}-work",
+      "batchSize": 1,
+      "maximumBatchingWindowSeconds": 0,
+      "maximumConcurrency": 10,
+      "reportBatchItemFailures": true
+    },
+    {
+      "key": "drift",
+      "function": "${name}-onboarder",
+      "queue": "arn:${partition}:sqs:${region}:${account}:${name}-drift",
+      "batchSize": 100,
+      "maximumBatchingWindowSeconds": 60,
+      "maximumConcurrency": 2,
+      "reportBatchItemFailures": true
+    }
+  ],
   "schedule": {
     "name": "${name}-check",
     "expression": "${checkSchedule}",

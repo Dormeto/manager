@@ -58,8 +58,16 @@ describe('installer', () => {
     }
     expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-onboarder')!.policies.get('onboarder')!)).toEqual(b.roles[3]!.policy);
     expect(s.state.tables.get('dmtr-dev-router')).toMatchObject({ status: 'ACTIVE', ttl: 'expiresAt', pitr: true, tags: { 'dormeto:router': 'dmtr-dev' } });
-    expect([...s.state.queues.keys()]).toEqual(['dmtr-dev-check-failures', 'dmtr-dev-controller-failures']);
+    expect([...s.state.queues.keys()]).toEqual(['dmtr-dev-check-failures', 'dmtr-dev-controller-failures', 'dmtr-dev-work', 'dmtr-dev-drift']);
     expect(s.state.queues.get('dmtr-dev-check-failures')!.attributes).toEqual({ MessageRetentionPeriod: '1209600', SqsManagedSseEnabled: 'true' });
+    const failures = 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-controller-failures';
+    expect(s.state.queues.get('dmtr-dev-work')!.attributes).toEqual({
+      MessageRetentionPeriod: '3600', SqsManagedSseEnabled: 'true', VisibilityTimeout: '960', RedrivePolicy: JSON.stringify({ deadLetterTargetArn: failures, maxReceiveCount: 3 }),
+    });
+    expect(JSON.parse(s.state.queues.get('dmtr-dev-drift')!.attributes.Policy!).Statement[0].Condition).toEqual({ ArnEquals: { 'aws:SourceArn': 'arn:aws:events:eu-west-3:121014831971:rule/dmtr-dev-drift' } });
+    expect([...s.state.mappings.values()].map((m) => [m.FunctionName, m.EventSourceArn.split(':').at(-1), m.BatchSize, m.MaximumBatchingWindowInSeconds, m.ScalingConfig.MaximumConcurrency, m.FunctionResponseTypes])).toEqual([
+      ['dmtr-dev-controller', 'dmtr-dev-work', 1, 0, 10, ['ReportBatchItemFailures']], ['dmtr-dev-onboarder', 'dmtr-dev-drift', 100, 60, 2, ['ReportBatchItemFailures']],
+    ]);
     expect([...s.state.logGroups].map(([n, g]) => [n, g.retention])).toEqual([
       ['/aws/lambda/dmtr-dev-controller', 14], ['/aws/lambda/dmtr-dev-waker', 14], ['/aws/lambda/dmtr-dev-onboarder', 14],
     ]);
@@ -69,11 +77,12 @@ describe('installer', () => {
     });
     expect(s.state.functions.get('dmtr-dev-controller')!.asyncInvoke).toMatchObject({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 120, DestinationConfig: { OnFailure: { Destination: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-controller-failures' } } });
     expect([...s.state.functions.get('dmtr-dev-controller')!.permissions.values()]).toEqual(PRINCIPALS);
-    expect([...s.state.functions.get('dmtr-dev-onboarder')!.permissions.values()]).toEqual([...PRINCIPALS, 'events.amazonaws.com arn:aws:events:eu-west-3:121014831971:rule/dmtr-dev-drift']);
+    // Drift events reach the onboarder through its queue: no invoke permission for EventBridge.
+    expect([...s.state.functions.get('dmtr-dev-onboarder')!.permissions.values()]).toEqual(PRINCIPALS);
     const drift = s.state.eventRules.get('dmtr-dev-drift')!;
     expect(drift.state).toBe('ENABLED');
     expect(JSON.parse(drift.pattern).$or[0].detail.userIdentity.arn).toEqual([{ 'anything-but': { prefix: 'arn:aws:sts::121014831971:assumed-role/dmtr-dev-' } }]);
-    expect(drift.targets).toEqual([{ Id: 'onboarder', Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-onboarder' }]);
+    expect(drift.targets).toEqual([{ Id: 'onboarder', Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-drift' }]);
     // One permission for every waker target group of the router (routers 0.20.0 and later).
     expect([...s.state.functions.get('dmtr-dev-waker')!.permissions]).toEqual([
       ['dormeto-alb', 'elasticloadbalancing.amazonaws.com arn:aws:elasticloadbalancing:eu-west-3:121014831971:targetgroup/dmtr-dev-*/*'],
@@ -82,6 +91,35 @@ describe('installer', () => {
       ScheduleExpression: 'rate(5 minutes)', FlexibleTimeWindow: { Mode: 'OFF' },
       Target: { Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-controller', RetryPolicy: { MaximumRetryAttempts: 0 }, DeadLetterConfig: { Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-check-failures' } },
     });
+  });
+
+  it('creates each event source mapping once, updates one that differs, and waits while a new role cannot read its queue yet', async () => {
+    const s = setup();
+    const b = blueprintOf();
+    await installAll(s, b);
+    expect(await s.installer.install('event source mappings', b)).toEqual({ status: 'skipped' });
+    expect(s.state.calls.filter((c) => c === 'createEventSourceMapping')).toHaveLength(2);
+    // Changed by hand: put back as the blueprint has it, without a new mapping.
+    const [work] = [...s.state.mappings.values()];
+    work!.ScalingConfig = { MaximumConcurrency: 50 };
+    expect(await s.installer.install('event source mappings', b)).toEqual({ status: 'done', detail: 'event source mapping of dmtr-dev-controller' });
+    expect([[...s.state.mappings.values()][0]!.ScalingConfig, s.state.mappings.size]).toEqual([{ MaximumConcurrency: 10 }, 2]);
+    // A role just given its queue permissions: Lambda refuses the mapping for a while.
+    const fresh = setup();
+    await installAll(fresh, { ...b, eventSourceMappings: [] });
+    fresh.state.unreadableQueues = 1;
+    await expect(fresh.installer.install('event source mappings', b)).rejects.toBeInstanceOf(RetryLater);
+    expect(await fresh.installer.install('event source mappings', b)).toEqual({ status: 'done', detail: 'event source mapping of dmtr-dev-controller, event source mapping of dmtr-dev-onboarder' });
+  });
+
+  it('upgrades a queue created by an earlier version: visibility, dead-letter queue and policy set', async () => {
+    const s = setup();
+    const b = blueprintOf();
+    await installAll(s, b);
+    s.state.queues.get('dmtr-dev-work')!.attributes = { MessageRetentionPeriod: '3600', SqsManagedSseEnabled: 'true' };
+    expect(await s.installer.install('queues', b)).toEqual({ status: 'done', detail: 'attributes of dmtr-dev-work' });
+    expect(s.state.queues.get('dmtr-dev-work')!.attributes).toMatchObject({ VisibilityTimeout: '960' });
+    expect(await s.installer.install('queues', b)).toEqual({ status: 'skipped' });
   });
 
   it('retries the waker permission on a conflict (a function being updated) and never skips it while it is missing', async () => {
@@ -145,9 +183,9 @@ describe('installer', () => {
     const upgraded = setup(new Uint8Array([9, 9]));
     upgraded.state.roles = s.state.roles; upgraded.state.tables = s.state.tables; upgraded.state.queues = s.state.queues;
     upgraded.state.logGroups = s.state.logGroups; upgraded.state.functions = s.state.functions; upgraded.state.schedules = s.state.schedules;
-    upgraded.state.eventRules = s.state.eventRules;
-    expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped', 'skipped']);
-    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(15);
+    upgraded.state.eventRules = s.state.eventRules; upgraded.state.mappings = s.state.mappings;
+    expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
+    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(16);
     const controller = s.state.functions.get('dmtr-dev-controller')!;
     expect((controller.config.Environment as { Variables: Record<string, string> }).Variables).toMatchObject({ DMT_VERSION: '0.18.0', DMT_METRICS: 'true' });
     expect(controller.codeSha256).toBe(createHash('sha256').update(new Uint8Array([9, 9])).digest('base64'));

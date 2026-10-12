@@ -9,7 +9,11 @@ export interface Blueprint {
   tags: Record<string, string>;
   roles: { key: string; path: string; name: string; trust: Policy; policyName: string; policy: Policy }[];
   table: { name: string; hashKey: string; rangeKey: string; ttlAttribute: string; pointInTimeRecovery: boolean };
-  queues: { key: string; name: string; retentionSeconds: number; managedEncryption: boolean }[];
+  queues: {
+    key: string; name: string; retentionSeconds: number; managedEncryption: boolean;
+    // Routers 0.22.0 and later: the work and drift queues.
+    visibilityTimeoutSeconds?: number; deadLetter?: { queue: string; maxReceiveCount: number }; policy?: Policy;
+  }[];
   logGroups: { name: string; retentionDays: number }[];
   functions: {
     key: string; name: string; role: string; roleArn: string; handler: string; timeout: number; memory: number; runtime: string; architectures: string[];
@@ -20,6 +24,8 @@ export interface Blueprint {
   // Routers 0.20.0 and later: one permission for every waker target group of the router.
   wakerPermission?: { function: string; statementId: string; principal: string; sourceArn: string };
   schedule: { name: string; expression: string; target: string; roleArn: string; input: string; deadLetter: string; maximumRetryAttempts: number };
+  // Routers 0.22.0 and later: the readers of the work and drift queues.
+  eventSourceMappings?: { key: string; function: string; queue: string; batchSize: number; maximumBatchingWindowSeconds: number; maximumConcurrency: number; reportBatchItemFailures: boolean }[];
 }
 
 // Replace every ${key} of the string values.

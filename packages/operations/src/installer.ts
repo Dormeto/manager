@@ -9,9 +9,10 @@ type Call = (input: any) => Promise<any>;
 export interface InstallerPorts {
   iam: Record<'getRole' | 'createRole' | 'updateAssumeRolePolicy' | 'getRolePolicy' | 'putRolePolicy' | 'listRolePolicies' | 'deleteRolePolicy' | 'deleteRole', Call>;
   dynamodb: Record<'describeTable' | 'createTable' | 'describeTimeToLive' | 'updateTimeToLive' | 'describeContinuousBackups' | 'updateContinuousBackups' | 'deleteTable', Call>;
-  sqs: Record<'getQueueUrl' | 'createQueue' | 'deleteQueue', Call>;
+  sqs: Record<'getQueueUrl' | 'createQueue' | 'getQueueAttributes' | 'setQueueAttributes' | 'deleteQueue', Call>;
   logs: Record<'describeLogGroups' | 'createLogGroup' | 'putRetentionPolicy' | 'deleteLogGroup', Call>;
-  lambda: Record<'getFunction' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'getFunctionEventInvokeConfig' | 'putFunctionEventInvokeConfig' | 'getPolicy' | 'addPermission' | 'removePermission' | 'deleteFunction', Call>;
+  lambda: Record<'getFunction' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'getFunctionEventInvokeConfig' | 'putFunctionEventInvokeConfig' | 'getPolicy' | 'addPermission' | 'removePermission' | 'deleteFunction'
+    | 'listEventSourceMappings' | 'createEventSourceMapping' | 'updateEventSourceMapping' | 'deleteEventSourceMapping', Call>;
   scheduler: Record<'getSchedule' | 'createSchedule' | 'updateSchedule' | 'deleteSchedule', Call>;
   events: Record<'describeRule' | 'putRule' | 'listTargetsByRule' | 'putTargets' | 'removeTargets' | 'deleteRule', Call>;
 }
@@ -31,8 +32,8 @@ export class RetryLater extends Error {
   }
 }
 
-export const INSTALL_STEPS = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'permissions', 'event rule', 'schedule'] as const;
-export const UNINSTALL_STEPS = ['event rule', 'schedule', 'functions', 'queues', 'log groups', 'table', 'roles'] as const;
+export const INSTALL_STEPS = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'] as const;
+export const UNINSTALL_STEPS = ['event rule', 'schedule', 'event source mappings', 'functions', 'queues', 'log groups', 'table', 'roles'] as const;
 export type InstallStep = (typeof INSTALL_STEPS)[number];
 export type UninstallStep = (typeof UNINSTALL_STEPS)[number];
 
@@ -116,13 +117,66 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
     return changed.length ? { status: 'done', detail: `table ${t.name}: ${changed.join(', ')}` } : { status: 'skipped' };
   }
 
+  // Queues with their attributes: retention, encryption and, from routers 0.22.0, visibility, dead-letter queue and
+  // policy (set again on a queue an earlier version created). The dead-letter queues come first in the blueprint.
+  const queueAttributes = (q: Blueprint['queues'][number]): Record<string, string> => ({
+    MessageRetentionPeriod: String(q.retentionSeconds), SqsManagedSseEnabled: String(q.managedEncryption),
+    ...(q.visibilityTimeoutSeconds !== undefined ? { VisibilityTimeout: String(q.visibilityTimeoutSeconds) } : {}),
+    ...(q.deadLetter ? { RedrivePolicy: JSON.stringify({ deadLetterTargetArn: q.deadLetter.queue, maxReceiveCount: q.deadLetter.maxReceiveCount }) } : {}),
+    ...(q.policy ? { Policy: JSON.stringify(q.policy) } : {}),
+  });
+  const JSON_ATTRIBUTES = new Set(['RedrivePolicy', 'Policy']);
   async function queues(b: Blueprint): Promise<StepResult> {
     const changed: string[] = [];
     for (const q of b.queues) {
-      if (await find(() => sqs.getQueueUrl({ QueueName: q.name }))) continue;
-      await sqs.createQueue({ QueueName: q.name, Attributes: { MessageRetentionPeriod: String(q.retentionSeconds), SqsManagedSseEnabled: String(q.managedEncryption) }, tags: b.tags });
-      changed.push(`queue ${q.name}`);
+      const wanted = queueAttributes(q);
+      const url = (await find(() => sqs.getQueueUrl({ QueueName: q.name })))?.QueueUrl as string | undefined;
+      if (!url) {
+        await sqs.createQueue({ QueueName: q.name, Attributes: wanted, tags: b.tags });
+        changed.push(`queue ${q.name}`);
+        continue;
+      }
+      const current = ((await sqs.getQueueAttributes({ QueueUrl: url, AttributeNames: ['All'] })).Attributes ?? {}) as Record<string, string>;
+      const differ = Object.fromEntries(Object.entries(wanted).filter(([k, v]) => (JSON_ATTRIBUTES.has(k) ? !current[k] || !same(JSON.parse(current[k]!), JSON.parse(v)) : current[k] !== v)));
+      if (Object.keys(differ).length) {
+        await sqs.setQueueAttributes({ QueueUrl: url, Attributes: differ });
+        changed.push(`attributes of ${q.name}`);
+      }
     }
+    return result(changed);
+  }
+
+  // The readers of the queues (routers 0.22.0 and later): created once, put back as the blueprint has them. Lambda refuses
+  // a mapping while the function's role cannot read the queue yet (IAM propagation): retried later.
+  async function eventSourceMappings(b: Blueprint): Promise<StepResult> {
+    const changed: string[] = [];
+    let pending = false;
+    for (const m of b.eventSourceMappings ?? []) {
+      const wanted = {
+        BatchSize: m.batchSize, MaximumBatchingWindowInSeconds: m.maximumBatchingWindowSeconds,
+        FunctionResponseTypes: m.reportBatchItemFailures ? ['ReportBatchItemFailures'] : [], ScalingConfig: { MaximumConcurrency: m.maximumConcurrency },
+      };
+      const [current] = ((await lambda.listEventSourceMappings({ FunctionName: m.function, EventSourceArn: m.queue })).EventSourceMappings ?? []) as Record<string, any>[];
+      if (!current) {
+        try {
+          await lambda.createEventSourceMapping({ FunctionName: m.function, EventSourceArn: m.queue, Enabled: true, ...wanted });
+        } catch (err) {
+          if ((err as Error).name === 'InvalidParameterValueException' && /permission/i.test((err as Error).message)) throw new RetryLater(`role of ${m.function} cannot read ${m.queue} yet`);
+          throw err;
+        }
+        changed.push(`event source mapping of ${m.function}`);
+        continue;
+      }
+      if (['Creating', 'Updating', 'Enabling'].includes(current.State)) {
+        pending = true;
+        continue;
+      }
+      if (!covers(current, wanted)) {
+        await lambda.updateEventSourceMapping({ UUID: current.UUID, Enabled: true, ...wanted });
+        changed.push(`event source mapping of ${m.function}`);
+      }
+    }
+    if (pending) return { status: 'pending', detail: changed.join(', ') || 'event source mapping in progress', changed: changed.length > 0 };
     return result(changed);
   }
 
@@ -266,6 +320,9 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
       await events.putTargets({ Rule: r.name, Targets: [{ Id: 'onboarder', Arn: r.target }] });
       changed.push(`target of ${r.name}`);
     }
+    // Routers 0.22.0 and later send the events to the drift queue (its policy admits the rule); earlier ones invoke the
+    // onboarder, which needs EventBridge's permission.
+    if (!r.target.includes(':lambda:')) return result(changed);
     const onboarder = r.target.split(':').at(-1)!;
     const policy = await find(() => lambda.getPolicy({ FunctionName: onboarder }));
     const sids = new Set(((policy ? JSON.parse(policy.Policy) : { Statement: [] }).Statement as { Sid: string }[]).map((st) => st.Sid));
@@ -294,7 +351,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
   }
 
   const installSteps: Record<InstallStep, (b: Blueprint) => Promise<StepResult>> = {
-    roles, table, queues, 'log groups': logGroups, functions, 'async invoke': asyncInvoke, permissions, 'event rule': eventRule, schedule,
+    roles, table, queues, 'log groups': logGroups, functions, 'async invoke': asyncInvoke, 'event source mappings': eventSourceMappings, permissions, 'event rule': eventRule, schedule,
   };
 
   // Uninstall: each step deletes what exists.
@@ -307,6 +364,14 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
       return { status: 'done', detail: `event rule ${b.eventRule.name}` };
     },
     schedule: async (b) => result((await deleted(() => scheduler.deleteSchedule({ Name: b.schedule.name }))) ? [`schedule ${b.schedule.name}`] : []),
+    'event source mappings': async (b) => {
+      const changed: string[] = [];
+      for (const m of b.eventSourceMappings ?? []) {
+        const found = ((await find(() => lambda.listEventSourceMappings({ FunctionName: m.function, EventSourceArn: m.queue })))?.EventSourceMappings ?? []) as { UUID: string }[];
+        for (const { UUID } of found) if (await deleted(() => lambda.deleteEventSourceMapping({ UUID }))) changed.push(`event source mapping of ${m.function}`);
+      }
+      return result(changed);
+    },
     functions: async (b) => {
       const changed: string[] = [];
       for (const f of b.functions) if (await deleted(() => lambda.deleteFunction({ FunctionName: f.name }))) changed.push(`function ${f.name}`);

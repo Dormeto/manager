@@ -8,12 +8,13 @@ import {
   CreateRoleCommand, DeleteRoleCommand, DeleteRolePolicyCommand, GetRoleCommand, GetRolePolicyCommand, IAMClient, ListRolePoliciesCommand, PutRolePolicyCommand, UpdateAssumeRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import {
-  AddPermissionCommand, CreateFunctionCommand, RemovePermissionCommand, DeleteFunctionCommand, GetFunctionCommand, GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient,
-  PutFunctionEventInvokeConfigCommand, UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
+  AddPermissionCommand, CreateEventSourceMappingCommand, CreateFunctionCommand, RemovePermissionCommand, DeleteEventSourceMappingCommand, DeleteFunctionCommand, GetFunctionCommand,
+  GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient, ListEventSourceMappingsCommand, PutFunctionEventInvokeConfigCommand, UpdateEventSourceMappingCommand,
+  UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { CreateScheduleCommand, DeleteScheduleCommand, GetScheduleCommand, SchedulerClient, UpdateScheduleCommand } from '@aws-sdk/client-scheduler';
-import { CreateQueueCommand, DeleteQueueCommand, GetQueueUrlCommand, SQSClient } from '@aws-sdk/client-sqs';
+import { CreateQueueCommand, DeleteQueueCommand, GetQueueAttributesCommand, GetQueueUrlCommand, SetQueueAttributesCommand, SQSClient } from '@aws-sdk/client-sqs';
 import {
   DeleteRuleCommand, DescribeRuleCommand, EventBridgeClient, ListTargetsByRuleCommand, PutRuleCommand, PutTargetsCommand, RemoveTargetsCommand,
 } from '@aws-sdk/client-eventbridge';
@@ -39,7 +40,9 @@ export function installerPorts(credentials: Credentials, region: string): Instal
       describeTable: DescribeTableCommand, createTable: CreateTableCommand, describeTimeToLive: DescribeTimeToLiveCommand, updateTimeToLive: UpdateTimeToLiveCommand,
       describeContinuousBackups: DescribeContinuousBackupsCommand, updateContinuousBackups: UpdateContinuousBackupsCommand, deleteTable: DeleteTableCommand,
     }),
-    sqs: port(new SQSClient(opts), { getQueueUrl: GetQueueUrlCommand, createQueue: CreateQueueCommand, deleteQueue: DeleteQueueCommand }),
+    sqs: port(new SQSClient(opts), {
+      getQueueUrl: GetQueueUrlCommand, createQueue: CreateQueueCommand, getQueueAttributes: GetQueueAttributesCommand, setQueueAttributes: SetQueueAttributesCommand, deleteQueue: DeleteQueueCommand,
+    }),
     logs: port(new CloudWatchLogsClient(opts), {
       describeLogGroups: DescribeLogGroupsCommand, createLogGroup: CreateLogGroupCommand, putRetentionPolicy: PutRetentionPolicyCommand, deleteLogGroup: DeleteLogGroupCommand,
     }),
@@ -47,6 +50,8 @@ export function installerPorts(credentials: Credentials, region: string): Instal
       getFunction: GetFunctionCommand, createFunction: CreateFunctionCommand, updateFunctionConfiguration: UpdateFunctionConfigurationCommand, updateFunctionCode: UpdateFunctionCodeCommand,
       getFunctionEventInvokeConfig: GetFunctionEventInvokeConfigCommand, putFunctionEventInvokeConfig: PutFunctionEventInvokeConfigCommand, getPolicy: GetPolicyCommand,
       addPermission: AddPermissionCommand, removePermission: RemovePermissionCommand, deleteFunction: DeleteFunctionCommand,
+      listEventSourceMappings: ListEventSourceMappingsCommand, createEventSourceMapping: CreateEventSourceMappingCommand,
+      updateEventSourceMapping: UpdateEventSourceMappingCommand, deleteEventSourceMapping: DeleteEventSourceMappingCommand,
     }),
     scheduler: port(new SchedulerClient(opts), { getSchedule: GetScheduleCommand, createSchedule: CreateScheduleCommand, updateSchedule: UpdateScheduleCommand, deleteSchedule: DeleteScheduleCommand }),
     events: port(new EventBridgeClient(opts), {

@@ -105,8 +105,24 @@ data "aws_iam_policy_document" "command" {
   }
   statement {
     sid       = "RouterQueues"
-    actions   = ["sqs:CreateQueue", "sqs:TagQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:DeleteQueue"]
+    actions   = ["sqs:CreateQueue", "sqs:TagQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:DeleteQueue"]
     resources = ["${local.arn}:sqs:*:${local.account}:dmtr-*"]
+  }
+  statement {
+    # The readers of a router's work and drift queues (routers 0.22.0 and later): its functions only.
+    sid       = "RouterEventSources"
+    actions   = ["lambda:CreateEventSourceMapping", "lambda:UpdateEventSourceMapping", "lambda:DeleteEventSourceMapping", "lambda:GetEventSourceMapping"]
+    resources = ["*"]
+    condition {
+      test     = "ArnLike"
+      variable = "lambda:FunctionArn"
+      values   = ["${local.arn}:lambda:*:${local.account}:function:dmtr-*"]
+    }
+  }
+  statement {
+    sid       = "ListEventSources"
+    actions   = ["lambda:ListEventSourceMappings"]
+    resources = ["*"]
   }
   statement {
     sid       = "RouterLogs"
