@@ -50,6 +50,10 @@ async function find<T>(call: () => Promise<T>): Promise<T | null> {
 const canonical = (value: unknown): unknown => (Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value);
 const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+// Every field Dormeto sets has its value in the current resource (AWS adds defaults that were not sent).
+const covers = (current: unknown, wanted: unknown): boolean => (wanted && typeof wanted === 'object' && !Array.isArray(wanted)
+  ? Boolean(current && typeof current === 'object') && Object.entries(wanted).every(([k, v]) => covers((current as Record<string, unknown>)[k], v))
+  : same(current, wanted));
 const policyOf = (document: string) => JSON.parse(decodeURIComponent(document)) as unknown;
 const tagList = (tags: Record<string, string>) => Object.entries(tags).map(([Key, Value]) => ({ Key, Value }));
 const result = (changed: string[]): StepResult => (changed.length ? { status: 'done', detail: changed.join(', ') } : { status: 'skipped' });
@@ -220,7 +224,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
       Target: { Arn: s.target, RoleArn: s.roleArn, Input: s.input, RetryPolicy: { MaximumRetryAttempts: s.maximumRetryAttempts }, DeadLetterConfig: { Arn: s.deadLetter } },
     };
     const current = await find(() => scheduler.getSchedule({ Name: s.name }));
-    if (current && current.ScheduleExpression === wanted.ScheduleExpression && same(current.Target, wanted.Target)) return { status: 'skipped' };
+    if (current && current.ScheduleExpression === wanted.ScheduleExpression && covers(current.Target, wanted.Target)) return { status: 'skipped' };
     try {
       await (current ? scheduler.updateSchedule(wanted) : scheduler.createSchedule(wanted));
     } catch (err) {

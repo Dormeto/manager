@@ -174,7 +174,9 @@ export function fakeInstallAccount() {
         call('getSchedule');
         const s = state.schedules.get(Name);
         if (!s) throw error('ResourceNotFoundException');
-        return s;
+        // EventBridge Scheduler answers defaults that were not sent.
+        const target = s.Target as Record<string, any>;
+        return { ...s, State: 'ENABLED', Target: { ...target, RetryPolicy: { MaximumEventAgeInSeconds: 86400, ...target.RetryPolicy } } };
       },
       async createSchedule(input) { call('createSchedule'); state.schedules.set(String(input.Name), input); return {}; },
       async updateSchedule(input) { call('updateSchedule'); state.schedules.set(String(input.Name), input); return {}; },
