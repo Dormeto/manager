@@ -5,7 +5,7 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.3.0 — 2026-10-06
 
 Router 0.23.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
 discovery role reads CloudTrail trails and its own role's tags; the command role passes the forwarder's role to
