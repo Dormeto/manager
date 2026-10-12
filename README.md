@@ -1,328 +1,196 @@
+<div align="center">
+
+<a href="https://dormeto.com"><img src="https://dormeto.com/img/og.png" alt="Dormeto: your idle web apps nap, the first visitor wakes them" width="760"></a>
+
 # Dormeto manager
 
-Management plane of **Dormeto** ("nap" in Esperanto), which puts idle web workloads to sleep and wakes them
-just-in-time. The MVP operates the routers already deployed: dashboard and API with the workloads, their live status,
-nap and wake, and the discovery of the load balancer rules that Dormeto could manage.
+**Find, onboard and operate idle web workloads across your AWS organization, from one dashboard.**
 
-- Design: [Dormeto/vision · docs/specs/2026-10-04-manager-mvp-design.md](https://github.com/Dormeto/vision/blob/main/docs/specs/2026-10-04-manager-mvp-design.md)
-- Target architecture: [Dormeto/vision · docs/architecture/manager.md](https://github.com/Dormeto/vision/blob/main/docs/architecture/manager.md)
+[Website](https://dormeto.com) · [Get started](https://dormeto.com/get-started.html) · [Product](https://dormeto.com/product.html) · [Security](https://dormeto.com/security.html) · [Releases](https://dormeto.com/releases.html) · [Router](https://github.com/Dormeto/router)
+
+[![Release](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Freleases.dormeto.com%2Fmanager%2Flatest.json&query=%24.version&label=release&color=3546c4)](https://dormeto.com/releases.html)
+[![Router](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Freleases.dormeto.com%2Fmanager%2Flatest.json&query=%24.router&label=router&color=3546c4)](https://github.com/Dormeto/router)
+![AWS](https://img.shields.io/badge/AWS-Application_Load_Balancer-FF9900?logo=amazonwebservices&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-no_CloudFormation-7B42BC?logo=terraform&logoColor=white)
+
+</div>
+
+Dormeto stops the workloads behind your Application Load Balancer when nobody uses them, and starts them again when a
+real visitor arrives. Awake, traffic goes straight to your application: Dormeto is out of the request path.
+
+This repository is the **manager**, which runs in one account of your organization: a dashboard, an API, and the
+discovery and operations it runs in your other accounts through roles you create. It finds what could nap in every
+account and region, onboards it in a click, and installs and upgrades the [routers](https://github.com/Dormeto/router)
+that nap and wake each workload.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/overview-dark.webp">
+  <img src="https://dormeto.com/img/overview-light.webp" alt="The Dormeto dashboard: workloads by state, wakes and ignored requests over 7 days, and the routers with their health">
+</picture>
+
+## How it works
+
+```mermaid
+flowchart TB
+    manager[Manager<br>this repository] -->|discovers, onboards, installs routers| router[Router<br>one per account and region]
+    router -->|naps and wakes, switches the rules| path
+    subgraph path [Request path]
+        direction LR
+        visitor([Visitor]) --> alb[Application Load Balancer]
+        alb -->|awake| app[Your workload<br>EC2, Auto Scaling, ECS, EKS, RDS]
+        alb -.->|asleep| waker[Waker]
+        waker -.->|starts| app
+    end
+```
+
+1. **Detect idle.** The router watches the request count of each workload on your load balancer. After an idle window
+   (15 minutes by default), the workload is due for a nap.
+2. **Nap.** The load balancer's rules switch to a small Lambda function, the waker, and the backends stop. A request
+   during the switch cancels the nap, so nobody is caught half-way.
+3. **Wake just in time.** The first real request starts the backends. The visitor is held while they start and
+   redirected as soon as the application answers, or sees a page that reloads by itself. The rules then switch back to
+   your application.
+
+## From discovery to the first nap
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/discovery-dark.webp">
+  <img src="https://dormeto.com/img/discovery-light.webp" alt="Discovery: the last run, the Organization access panel, and the candidates by status with their idle share">
+</picture>
+<p><b>Finds what could nap.</b> Discovery reads the load balancer rules of every account and region of your
+organization with a read-only role, and shows each candidate with its idle share over the last 7 days.</p>
+</td>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/workload-dark.webp">
+  <img src="https://dormeto.com/img/workload-light.webp" alt="A workload onboarded from the manager: asleep, its backend stopped, its two rules covered, and the drift the router repaired">
+</picture>
+<p><b>Onboards in one click, after a preview.</b> The preview shows what would change and checks the load balancer's
+quotas. Your rules and your infrastructure as code stay untouched.</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/routers-dark.webp">
+  <img src="https://dormeto.com/img/routers-light.webp" alt="Routers: version, health, last idle check, workloads, an upgrade offered, pause and uninstall">
+</picture>
+<p><b>Installs and upgrades the routers.</b> By AWS API calls, through the command role you created. Each router
+reports its health, and failed wakes say why.</p>
+</td>
+<td width="50%" valign="top">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/operations-dark.webp">
+  <img src="https://dormeto.com/img/operations-light.webp" alt="Operations: connections, router upgrades and an offboarding, each with its steps and status">
+</picture>
+<p><b>Every change, step by step.</b> Onboardings, offboardings and router upgrades run as operations in the target
+account, one change per load balancer at a time.</p>
+</td>
+</tr>
+</table>
+
+## Highlights
+
+- **Only real visitors wake it.** Bots, crawlers, monitors and internet scanners get a waiting page, never a wake. In
+  browser wake mode, only a page that runs its script wakes the workload.
+- **EC2, Auto Scaling, ECS, EKS, RDS.** Instances stop; Auto Scaling groups, ECS services and Kubernetes Deployments
+  scale to zero; databases stop after their application and start before it.
+- **Savings you can check.** AWS list prices of what each nap stopped, Spot capacity at Spot prices, less the discounts
+  you set, net of Dormeto's own cost. Each workload's idle window card replays its last 14 days of requests to choose
+  the window.
+- **Alerts where you work.** Failed wakes and router health reach your email and chat channels (Amazon Q Developer in
+  Slack or Microsoft Teams) within 5 minutes.
+- **Runs in your account.** The manager and the routers run in your AWS accounts, through least-privilege roles you
+  create. Nothing is sent to Dormeto, and there is no CloudFormation anywhere.
+- **People and audit.** Viewers, operators and administrators, Amazon Cognito sign-in with MFA, and every change
+  recorded with its author, its target and its result.
+
+## Measured, not promised
+
+| 67 s | 30 to 50 s | 0 |
+|:---:|:---:|:---:|
+| for discovery to process a synthetic organization of 1,002 accounts and 17,033 account-regions | to wake an EC2 instance, an Auto Scaling group or a Fargate service | requests through Dormeto once a workload is awake |
+
+Figures from our test environment in eu-west-1 and eu-west-3, and how each was measured: [Scale](https://dormeto.com/scale.html).
+
+## Get started
+
+**Estimate first.** What Dormeto would save on an AWS account or organization, before anything is installed, from a
+laptop with read access (Node.js 24 or later; the router checkout sits next to the manager):
+
+```bash
+git clone https://github.com/Dormeto/manager.git && git clone https://github.com/Dormeto/router.git
+cd manager && npm ci
+npm run estimate -- --profile <your-aws-profile> --uptime
+```
+
+It writes a summary and a Markdown and JSON report: [options, phases and permissions](docs/estimate.md).
+
+**Install** the manager in one account with Terraform, from a versioned release:
+
+```hcl
+module "dormeto" {
+  source          = "https://releases.dormeto.com/manager/0.10.0/terraform-aws-dormeto-0.10.0.zip//modules/manager"
+  env             = "prod"
+  organization_id = "o-exampleorgid"
+  admin_emails    = ["you@example.com"]
+}
+
+output "dashboard_url" {
+  value = module.dormeto.dashboard_url
+}
+```
+
+```bash
+terraform init
+terraform plan -out=dormeto.tfplan
+terraform apply dormeto.tfplan
+```
+
+The other accounts get two roles, from a Terraform module or an AWS CLI script
+([Organization access](https://dormeto.com/organization-access.html)); the manager then installs the routers itself.
+The whole guide: [Get started](https://dormeto.com/get-started.html). Every input:
+[Configuration](https://dormeto.com/configuration.html) and
+[the module's README](infra/terraform/modules/manager/README.md).
+
+## Documentation
+
+| Topic | What it covers |
+|---|---|
+| [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, health alerts, IP lists, MFA, failed wakes, state history |
+| [Savings](docs/savings.md) | What is priced, Spot, discounts, the daily job, the idle window advisor |
+| [Savings estimate](docs/estimate.md) | The estimate command: accounts, filters, uptime, companion databases, cache, permissions |
+| [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules |
+| [Development](docs/development.md) | Build, test, a development environment, screenshots, releases |
+
+## Repository layout
 
 | Path | Content |
 |---|---|
 | `packages/api` | API Lambda (TypeScript, HTTP API payload 2.0): identity and roles, routers, workloads, actions, discovery, users, audit |
 | `packages/dashboard` | Vue 3 + Vuetify 4 single-page application, sign-in with the Cognito managed login (PKCE) |
+| `packages/discovery` | Discovery: the organization's accounts and regions, the load balancer rules that could nap, the organization access checks |
+| `packages/operations` | Operations, one step at a time in Step Functions: onboarding, offboarding, router installs and upgrades |
+| `packages/fleet` | The routers' events: workload states, history, savings and prices, the idle window replay |
+| `packages/estimate` | The savings estimate before install (`npm run estimate`) |
 | `infra/terraform/modules/manager` | The manager module (what a release installs): DynamoDB, the Lambdas, HTTP API + JWT authorizer, Step Functions, EventBridge, Cognito, CloudFront + S3, optional custom domain and SES |
 | `infra/terraform/modules/access`, `organization` | The organization roles of an account, the delegation policy of the management account |
 | `infra/terraform/platform` | Dev: the manager module with the local build, its certificate and DNS |
 | `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots), `release/` (the module's artifacts from the builds, a release and its publication) |
 
 The manager never reads the router tables or the workload resources itself: each router controller answers the `list`,
-`status`, `force-wake`, `nap` and `discover` actions (router ≥ 0.11.0).
-
-## Environments
-
-| Environment | Dashboard | Sign-in | Routers |
-|---|---|---|---|
-| `dev` | `https://app.dev.dormeto.com` | `https://auth.app.dev.dormeto.com` | `dmt-dev` |
-
-Roles come from the Cognito groups: `dmt-viewer` (read), `dmt-operator` (nap, wake), `dmt-admin` (users, audit).
-Users are invited by administrators; the first administrators are listed in `env/<env>.local.tfvars` (not committed).
-
-## Install
-
-Customers install a release with the manager module (https://dormeto.com/get-started.html):
-
-```hcl
-module "dormeto" {
-  source          = "https://releases.dormeto.com/manager/0.4.0/terraform-aws-dormeto-0.4.0.zip//modules/manager"
-  env             = "prod"
-  organization_id = "o-exampleorgid"
-  admin_emails    = ["you@example.com"]
-}
-```
-
-The module's inputs: `infra/terraform/modules/manager/README.md`. Dev runs the same module from the local build
-(`infra/terraform/platform`).
-
-## Release
-
-A release is built from a commit whose `package.json` names the new version (and `dormeto.router` the router it
-carries, built in the sibling repository), with its section in `CHANGELOG.md`:
+`status`, `force-wake`, `nap` and `discover` actions.
 
 ```bash
-(cd ../router && npm run package)
-AWS_PROFILE=kloudy-dormeto-prd node scripts/release/release.mjs --publish --bucket dmt-releases-121014831971
-```
-
-It builds, assembles `dist/release/<version>/` (the module archive with its artifacts, the access and organization
-modules, the AWS CLI script, the organization policy, `SHA256SUMS`, the changelog section), refuses a version already
-published, uploads it to `releases.dormeto.com/manager/<version>/`, moves `latest.json` forward and tags `v<version>`
-(pushed with the commits). Then update the website's pages to the new version.
-
-## Usage
-
-Requirements: Node.js ≥ 24, Terraform 1.16.5 (tfenv reads `.terraform-version`), AWS CLI v2, profile
-`kloudy-dormeto-prd`.
-
-```bash
-npm install
+npm ci
 npm test && npm run typecheck
-npm run build                                   # API, discovery and operations bundles, dashboard (published by Terraform)
-(cd ../router && npm run package)               # the router bundle the manager installs (sibling repository)
-npm run artifacts                               # dist/artifacts: the module's layout, as a release carries it
-cd infra/terraform/platform
-echo 'admin_emails = ["you@example.com"]' > env/dev.local.tfvars
-tfenv exec init -backend-config=env/dev.backend.hcl
-tfenv exec plan -var-file=env/dev.tfvars -var-file=env/dev.local.tfvars -out=dev.tfplan
-tfenv exec apply dev.tfplan
-cd ../../.. && node scripts/smoke.mjs --env dev  # API checks as the smoke user
-npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://localhost:5173 against the dev API
 ```
 
-Screenshots of the dashboard (the website's, for example), signed in as the smoke user, with example values in place of
-real identifiers (account ids, email addresses, organization ids, and the names listed in a mask file kept outside the
-repository: `{ "replacements": [["real name", "Example"]] }`); an image where one remains is not written:
+---
 
-```bash
-node scripts/screenshots.mjs --env dev --width 1280 --height 800 --scale 2 --format webp --theme dark \
-  --mask ~/dormeto-mask.json --out /tmp/shots --route / --route /discovery
-```
-
-While SES is in the sandbox, an invited address must be a verified SES identity: inviting from the dashboard creates
-the identity (AWS sends a verification email), and the administrator resends the invitation once it is verified.
-
-## Operations (onboarding)
-
-Operators onboard a discovered candidate, giving it a name for people (the target group name by default, renamed from
-the workload view; the router derives the workload id from the target group), and offboard a workload; administrators
-install, upgrade and uninstall routers
-(Discovery, workload and Routers views, `POST /api/operations`). Each operation runs in the Step Functions state machine
-`dmt-<env>-manager-operations`, one step at a time in the operations Lambda, and is listed in the Operations view with
-its steps. Routers are installed by AWS API calls from the router blueprint of the manager's router version (artifacts
-bucket), through `DmtCommandRole` in the target account: installed routers live in their own namespace (`dmtr-<env>`,
-roles under `/dormeto/router/`), and the role may only create roles there carrying the permissions boundary
-`DmtRouterBoundary`, and change or delete only `dmtr-*` resources, never a router written in Terraform nor the manager. In the manager's account both are created by the `access` module (see below); one operation at a
-time per target group, router or workload, one per load balancer (lock), three per account and region.
-
-## Health alerts, IP lists and MFA (R6)
-
-- **Health alerts:** the watchdog (`dmt-<env>-manager-watchdog`, every 5 minutes, a second bundle of the API package)
-  compares the routers the manager knows with what they report: a router silent for 3 periods of its schedule, or
-  reporting problems (stable codes from router 0.24.0, its texts before), opens an alarm item (`ALARM#<subject>`); each
-  opening, raise or resolution is published to `dmt-<env>-manager-alerts` (6-hour damping, 10 messages and a digest per
-  run). `alert_emails` subscribes addresses; the Overview lists the open alarms (`GET /api/alerts`). CloudWatch alarms
-  watch the watchdog (errors, silence), the router events' dead-letter queue and the list function.
-- **IP lists:** `ip_lists` is written as `catalog.json` in `dmt-<env>-manager-ip-lists-<account>`; the list function
-  (`dmt-<env>-manager-ip-lists`, the router bundle's `lists.handler`, hourly) publishes each list's data and manifest and
-  `status.json`. Routers 0.24.0 read them (installed routers get the catalog in their blueprint, routers written in
-  Terraform `ip_lists_catalog`); the Routers view shows them (`GET /api/ip-lists`), the watchdog alarms on a list that
-  failed or grew old.
-- **MFA:** `mfa` sets the user pool's MFA (`ON` only for `required`) and the API's policy (`MFA_MODE`): the API reads each
-  user's MFA with `AdminGetUser` (cached 5 minutes when on, 30 seconds when off, `/api/me?fresh=1`), and lowers an
-  administrator or operator without it to viewer under `operators`. The Account page sets up TOTP with the user's access
-  token; Users resets another user's. The smoke user is enrolled by `scripts/smoke.mjs` at its first run (secret in SSM
-  `/dmt-<env>/manager/smoke-totp`). No client may write a user's email (with the scope the Account page needs, a stolen
-  access token could otherwise move the account to another address).
-- **Lost authenticator:** another administrator resets it from Users (keep at least two administrators with one). The
-  last administrator, with AWS credentials of the manager's account:
-  `aws cognito-idp admin-set-user-mfa-preference --user-pool-id <user_pool_id> --username <email>
-  --software-token-mfa-settings Enabled=false,PreferredMfa=false`, and under `required` also
-  `aws cognito-idp admin-delete-software-token --user-pool-id <user_pool_id> --username <email>` (a recent AWS CLI); they
-  set up a new one at their next sign-in.
-
-## Failed wakes (R7)
-
-- **Failure index:** the fleet ingestion writes `WF#<account>#<region>#<workloadId>` from a `FAILED` state change (the
-  router's `failure` from 0.25.0: kind, step, backend, AWS's message; "no reason" before) or from a check summary that has
-  a failure the index lacks; a successful wake (an `AWAKE` change or a summary without failure) deletes it, and so does
-  the workload leaving its router. Nothing is written while workloads wake well.
-- **Alerts:** the watchdog makes each entry an alarm subject (`workload#<account>#<region>#<workloadId>`, problem
-  `wake-failed:<kind>`): one alert per kind across retries, "woke again" when the entry leaves; failing again more than
-  15 minutes after waking is a new alert (routers and lists are damped 6 hours). Each message is published
-  with `MessageStructure: json`: the text for `email` (and `default`), an Amazon Q Developer custom notification for
-  `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`), `account`,
-  `region`, `router` and `workload` for subscription filter policies (for example `{"kind": ["workload"], "account":
-  ["123456789012"]}` for one team's channel).
-- **Chat:** an Amazon Q Developer in chat applications channel (Slack or Microsoft Teams) subscribed to
-  `dmt-<env>-manager-alerts` (Terraform `aws_chatbot_slack_channel_configuration` or
-  `aws_chatbot_teams_channel_configuration` with `sns_topic_arns`, or the console) receives the chat body.
-- **Dashboard and API:** the workload view shows the last failure, the failures in a row, the next attempt and the
-  fallback instance types in use; the state chip's tooltip the last failure; the Alerts card links to the workload.
-  Onboarding takes `fallbackInstanceTypes` (at most 5) and `failedRetrySeconds` (10 to 600), checked by the API.
-- **Access:** fallback instance types need `ec2:ModifyInstanceAttribute` in DmtRouterBoundary (router 0.25.0's
-  `router-boundary.json`): apply the access module or the AWS CLI script of 0.5.0 again in every member account.
-
-## State history (R8)
-
-- **Store:** each `Workload state changed` event is kept as `HIST#<account>#<region>#<workloadId>` / `<at>#<to>` (a
-  duplicate is the same item), with its cause, wake id and duration, failure and who asked it from the manager; the
-  table's TTL removes it `history_days` (default 400) after it. A check whose state differs from the stored summary's
-  writes an inferred transition dated by the router's `stateAt` (0.26.0: the event's instant, so the late event replaces
-  it), else the check's time; a workload's first entry is written when the manager first sees it (`historySince`).
-  Nothing is written for a check that changes nothing.
-- **API and dashboard:** `GET /api/workloads/{router}/{id}/history?days=1..31` answers the period's entries, phases,
-  time per state and wakes (at most 5,000 entries, then `truncated`); the workload view's History card draws them.
-
-## Savings (R9, R9.5)
-
-- **What is priced:** what each nap stopped, as router 0.27.0 says in its `ASLEEP` event (`stopped`, kept in the
-  history): EC2 instances and Auto Scaling capacity by type and OS, Fargate tasks by size, RDS and Aurora instances by
-  class, engine and deployment, Aurora Serverless v2 at its minimum capacity. Prices: the Price List API's on-demand list
-  prices (`pricing:GetProducts`, us-east-1), cached as `PRICE#<region>#<item>` for 30 days (a missing one for a day)
-  and an hour in each function's memory. A price is asked again at the first lookup after it expires; a day already
-  computed keeps the prices it was computed with. To take a price change at once, delete its `PRICE#` items
-  (`pk = T#default`) and run the job again for the days to price again.
-- **Spot (R9.5):** routers 0.28.0 say what ran on Spot (`spot: true`: an instance's Spot lifecycle, a Fargate service's
-  share on `FARGATE_SPOT` from its capacity provider strategy). EC2 Spot is priced from `DescribeSpotPriceHistory` in
-  the item's region (the latest price of each zone averaged; cached a day as `PRICE#<region>#ec2-spot#<type>#<os>`); a
-  region the manager's account has not enabled is not priced. Fargate Spot, which no AWS API prices, at 30% of
-  on-demand (AWS's largest announced discount: the smallest saving).
-- **Discounts (R9.5):** administrators set, on the Overview's Savings card, what Savings Plans, Reserved Instances or an
-  AWS agreement take off the list prices: `compute` (EC2, Fargate) and `databases` (RDS, Aurora), whole percentages
-  from 0 to 90, never off Spot (`PUT /api/savings/settings`, audited `savings-discounts`; item `T#default` /
-  `SAVINGS#SETTINGS`). An average rate: a nap saves the list price of what goes beyond a commitment and nothing within.
-  The job reads them once per run (a day computed keeps them; the summary records those of its latest day); the API's
-  figures at most once a minute (a read in progress shared; a change seen from another function prices the figures it
-  keeps again; while the reads fail, the last ones known, else no costs), and the Savings card with the summary.
-- **Estimates, not bills:** AWS bills are not read (a bill cannot show what a nap did not spend, and comes a day late).
-- **Baseline:** `savings_baseline` = `always` (24/7) or `business-hours` (weekdays 08:00 to 20:00 in `savings_timezone`).
-- **The 7-day bar:** a Workloads row and a workload's header read the workload's last 30 days of history (its time in
-  each state over 7 days, what its naps saved, its last nap priced), kept 5 minutes while its state stays the same. The
-  bar of all workloads (`GET /api/workloads/states`) adds up each workload's figures kept `states_cache_minutes` (60 by
-  default) whatever its state: a refresh reads every workload's history, 20 at a time.
-- **Daily job:** `dmt-<env>-manager-savings` (00:30 UTC; run it by hand with `{"day": "YYYY-MM-DD"}`) puts each
-  workload's day as `SAV#<date>` / `<account>#<region>#<workloadId>` (kept `history_days`) and the summary
-  (`T#default` / `SAVINGS`): the last 30 days, this month, the cumulative total (each day added once), the top workloads,
-  the workloads not priced, Dormeto's estimated cost. `GET /api/savings` answers it; a workload's history adds its
-  period's `savings`.
-
-## Idle window advisor (R10)
-
-- **What it does:** a workload's Idle window card replays its last 14 days of requests (CloudWatch `RequestCount` per
-  minute, kept 15 days) against idle windows of 5, 10, 15, 20, 30, 45, 60, 90 and 120 minutes and its own, with the
-  router's rules (a nap at a check once the window has passed since the last request and since the wake; a request
-  while asleep, a wake of the median measured duration). Each window: savings a month (the asleep time priced as the
-  savings above: what its latest nap stopped, the baseline, Spot prices and discounts), wakes and visitors' wait a day.
-  Recommended: the shortest window that already avoids 90% of the wakes the 120-minute window avoids.
-- **Every request counts:** the application and waker target groups' requests are added up, as activity and as wakes;
-  the waker's filters (scanners, no-wake rules, IP lists) are not known per minute, so the card compares the replay of
-  the current window with the wakes the history recorded and says when it counts clearly more.
-- **How it reads:** `GET /api/workloads/{router}/{id}/idle-window` (viewers too) invokes the discovery function's step
-  `requests` under `DmtDiscoveryRole` (the load balancer and the waker target group from the rules, then
-  `GetMetricData`): nothing more to apply in the member accounts. The answer is kept a day as `T#default` /
-  `IDLE#<account>#<region>#<workloadId>` (TTL), or until the workload's idle window changes. A discovery run may take
-  the function's reserved executions: the card then says to try again.
-- **Changing the window:** the workload module's `idle_minutes`, or offboarding and onboarding again; not from the
-  manager yet.
-
-## Savings estimate before install
-
-`npm run estimate -- --profile <profile>` estimates what Dormeto would save on an AWS account or organization before
-anything is installed, from a laptop with read access (vision docs/specs/2026-10-10-savings-estimate-design.md; from the
-vision repository: `tools/estimate/bin/dormeto-estimate`, the same options).
-
-```
-npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
-  [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime | --rds-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
-  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--max-wakes-rds 2|none] [--parallel 5] [--out <dir>]
-```
-
-- **Accounts:** the organization's active accounts when the profile may list them (the management account or a
-  delegated administrator), else its own account only, and the report says why. Member accounts through `--role`, else
-  `OrganizationAccountAccessRole` (accounts created by AWS Organizations have it; invited ones do not): an account whose
-  role cannot be assumed is listed with AWS's reason and how to include it. The profile's own account uses its own
-  credentials. `--accounts` restricts the estimate to some of the organization's accounts: an id it does not have is
-  listed apart, and none of them is refused (exit code 2). Several profiles, comma-separated, such as one SSO profile
-  per account when none may list the organization: each reaches its accounts, merged into one estimate; an account a
-  profile logs in to directly is read with it, never through another's role; `--accounts` restricts the merged accounts.
-- **Excluded tags:** `--exclude-tags` leaves out the workloads with these tags on their load balancer, target group or
-  listener rule, as discovery's `resourceTags`: in one value, every comma-separated key must match (and), each with one
-  of its `|`-separated values (or), a key alone with any value; repeated, any of them excludes (or). For example
-  `--exclude-tags 'env=dev|test,team=web' --exclude-tags dormeto:ignore`. They are left out before their requests are
-  read and listed apart in the report, with the criterion that matched.
-- **EC2 uptime:** `--ec2-uptime` measures when each EC2 instance without an Auto Scaling group ran over the 14 days
-  (its `CPUUtilization`, which EC2 publishes every 5 minutes while an instance runs): its actual cost counts the hours
-  it ran, its savings only the hours Dormeto would nap it while it ran (an instance stopped at night by a schedule saves
-  less). An instance found stopped is estimated from the hours it ran (without the option, it is left out). Instances
-  Dormeto already manages and Auto Scaling groups are not measured.
-- **ECS uptime:** `--ecs-uptime` measures when each ECS service had a task over the 14 days (its `CPUUtilization`, which
-  ECS publishes every minute while the service has a task, and not at 0 tasks): its actual cost and its savings count
-  only those hours, at its desired count when discovered (a service scaled to 0 at night saves less). A service found at
-  0 tasks is estimated as one task from the hours it ran (without the option, it is left out). When it had a task is
-  measured, not how many: a service scaled from 4 tasks to 1 at night stays priced at its count when discovered.
-  Services Dormeto already manages are not measured. `--uptime` sets `--ec2-uptime`, `--ecs-uptime` and `--rds-uptime`.
-- **Busy and small workloads:** judged at each workload's recommended window (the one a customer would set),
-  `--max-wakes` (3 by default) leaves out a workload that would wake more than that many times a day (its visitors would
-  wait more than it saves), and `--min-saving` ($1 by default) one that would save less than that a month (not worth
-  installing Dormeto for). Each is listed apart in the report with its window, wakes a day and the saving left out;
-  `none` keeps them all.
-- **Companion databases:** an RDS instance or an Aurora provisioned cluster (not yet Aurora Serverless) whose security
-  group lets in a workload's (an instance's, its Auto Scaling group's instances', an ECS service's; not yet Kubernetes)
-  naps with it, once the wakes filter has kept the workload: its saving is added to the workload's (before
-  `--min-saving`) and listed apart. Left out, with why: excluded by its own tags (`--exclude-tags`), reached by another
-  workload of the region (even an excluded one), a read replica or one with replicas, or its workload waking more than
-  `--max-wakes-rds` times a day (2 by default: a database takes minutes to start; `none` keeps them). With
-  `--rds-uptime` (in `--uptime`), each one's `CPUUtilization` says when it was available, and its saving and cost count
-  only those hours: one stopped when discovered (a schedule may start it) is estimated from them, else left out. The
-  table by account counts them (RDS); the summary counts those left out by reason.
-- **Three phases:** discovery (`--parallel` accounts at a time, 5 by default, each scanning its regions one after the
-  other; in a terminal, one progress line with a bar, the accounts done, the regions, workloads, failures and the time,
-  else a line per account; discovery's scan of each enabled region, or `--regions`; what each eligible workload's
-  backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
-  five metrics per `GetMetricData` call, `--parallel` regions at a time, as the uptime; in a terminal each on one
-  progress line, as discovery), estimate (R10's replay priced by the product's price book, at `--window`
-  (an hour by default) and at each workload's recommended one, net of Dormeto's cost). A workload Dormeto already manages is
-  estimated with its waker target group's requests added.
-- **Cache:** `~/.cache/dormeto/estimate/<organization or account>/` (`$XDG_CACHE_HOME` when set): discovery and each
-  account's regions for a day, requests while their 14 days end on the same UTC day, prices as the product's. An
-  interrupted run resumes; `--refresh discovery` reads discovery and requests again, `--refresh metrics` the requests.
-- **Output:** the terminal summary, and `estimate-<date>.md` and `.json` in `--out` (the current directory by default).
-  The table by account counts each account's excluded workloads, whatever the reason (tags, left out, too many wakes,
-  too small a saving); the workloads table gives each one's uptime (measured, else 100% assumed), its recommended window,
-  saving and wakes a day. In a terminal, discovery redraws its progress every second and names the last accounts still
-  read; a region's workloads are described eight at a time.
-- **Needs the router checkout** next to the manager (`../router`, as the release does): the estimate bundles its
-  description of what a nap stops.
-- **Read-only:** `sts:GetCallerIdentity`, `sts:AssumeRole`, `organizations:DescribeOrganization`, `ListRoots`,
-  `ListOrganizationalUnitsForParent`, `ListAccountsForParent`, `ec2:DescribeRegions`, `DescribeInstances`,
-  `DescribeSpotPriceHistory`, `elasticloadbalancing:Describe*`, `autoscaling:DescribeAutoScalingGroups`,
-  `ecs:ListClusters`, `ListServices`, `DescribeServices`, `DescribeTaskDefinition`, `cloudwatch:GetMetricData`,
-  `pricing:GetProducts`, `eks:ListClusters`, `DescribeCluster`, `rds:DescribeDBInstances`, `DescribeDBClusters`,
-  `ec2:DescribeSecurityGroups` (the `ReadOnlyAccess` managed policy covers them).
-  An EKS cluster's workloads are read through its Kubernetes API, which needs the profile's own access entry (the
-  view policy is enough); a cluster it cannot read is listed with the reason. CloudWatch costs about $0.01 per 1,000
-  workloads.
-- **Conservative:** every request counts as activity and as a wake (no waker yet to set scanners apart), a wake lasts 60
-  seconds, no visitors' wait, databases not counted (not attached to load balancers).
-
-## Organization access (discovery)
-
-Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a
-read-only role, `DmtDiscoveryRole`; operations act through `DmtCommandRole` (vision
-`docs/architecture/organization-iam.md`). Dormeto never deploys these roles (no CloudFormation): they are created with the
-Terraform modules of `infra/terraform/modules`, published with each release, and the manager supposes them there:
-
-- `access`, in each member account: `DmtDiscoveryRole`, `DmtCommandRole` and `DmtRouterBoundary`, trusted by the manager
-  roles of every environment listed in `envs` (several environments may share an account's roles). In the manager's own
-  account the platform stack creates them (`create_organization_roles`); a second environment of that account sets it to
-  `false` and is listed in the first one's `organization_role_envs`.
-- `organization`, in the management account: the Organizations delegation policy.
-
-Each release also publishes `dormeto-access-commands-<version>.sh`, the same with the AWS CLI (settings at its top;
-`scripts/release/access-script.mjs`). Each discovery run checks both roles in every account (the command role through the access check function
-`dmt-<env>-manager-access-check`, which only assumes it) and the Discovery view's Organization access panel lists what is
-missing: onboarding and router installs are refused where the command role is missing.
-
-Dev: the org stack applies `organization` in the management account and `access` in `command_account_id`
-(038606077307), through that account's administrator profile `command_profile` (an account invited into the
-organization has no `OrganizationAccountAccessRole`):
-
-```bash
-cd infra/terraform/org                         # acts in the management account (kloudy-master) and command_account_id
-tfenv exec init -backend-config=env/dev.backend.hcl
-tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
-tfenv exec apply dev.tfplan
-```
-
-Apply it again after a router version that changes `dist/router-boundary.json`. The modules' tests run offline with a
-mocked provider: `cd infra/terraform/modules/<module> && tfenv exec init -backend=false && tfenv exec test`.
+<div align="center">
+<sub>Dormeto means “nap” in Esperanto · <a href="https://dormeto.com">dormeto.com</a> · <a href="mailto:contact@dormeto.com">contact@dormeto.com</a></sub>
+</div>
