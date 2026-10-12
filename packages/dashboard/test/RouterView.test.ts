@@ -1,5 +1,6 @@
 // A router's own view (user request): its version, health, workloads, configuration with where each setting is changed,
 // and its actions, reached from the Routers list as a workload is from Workloads.
+import { nextTick } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
@@ -18,9 +19,15 @@ const DETAILS = {
   health: { checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: null, lambda: { controller: { errors: 2, throttles: 0 } }, queues: { check: 0, controller: 0 }, concurrency: null, ipLists: [] },
   configuration: { checkSchedule: { value: 'rate(5 minutes)', source: 'manager' }, metrics: { value: false, source: 'manager' }, ipLists: { value: [], source: 'manager' }, noWakeRules: { value: [], source: 'manager' } },
 };
+const TERRAFORM_DETAILS = {
+  ...DETAILS,
+  configuration: { checkSchedule: { value: 'rate(5 minutes)', source: 'terraform' }, metrics: { value: true, source: 'terraform' }, ipLists: { value: [], source: 'terraform' },
+    ipListsCatalog: { value: { lists: [] }, source: 'manager' }, noWakeRules: { value: [], source: 'terraform' } },
+};
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string) => {
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
+    if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
     if (path.startsWith('/routers/')) return DETAILS;
     if (path === '/alerts') return { alarms: [{ id: 'router#111122223333#eu-west-3', kind: 'router', name: 'dmtr-dev-eu-west-3', level: 'warning', since: new Date(Date.now() - 600_000).toISOString(), problems: [] }], notifications: null };
     return {};
@@ -43,13 +50,13 @@ async function mountView(name: string, role: 'admin' | 'viewer' = 'admin') {
   await flushPromises();
   return wrapper;
 }
+const chips = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.findAll('.v-chip').map((c) => c.text());
 
 describe('Router view', () => {
   it('shows a router: version and upgrade, health with its alert, workloads by state, and its account and region', async () => {
     const wrapper = await mountView('dmtr-dev-eu-west-3');
     const text = wrapper.text();
     expect(wrapper.find('h1').text()).toBe('dmtr-dev-eu-west-3');
-    expect(text).toContain('installed by the manager');
     expect(text).toContain('0.25.0');
     expect(wrapper.find('[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.26.0"]').exists()).toBe(true);
     expect(text).toContain('controller: 2 errors in 24 hours');
@@ -65,6 +72,28 @@ describe('Router view', () => {
     installed.unmount();
     const terraform = await mountView('dmt-dev');
     expect(terraform.text()).toMatch(/Set in this router's Terraform/);
+    terraform.unmount();
+  });
+
+  it('shows the Terraform deployment mode, explained in a tooltip, and says nothing of the manager\'s, the standard way', async () => {
+    const installed = await mountView('dmtr-dev-eu-west-3');
+    expect(installed.text()).not.toContain('installed by the manager');
+    expect(chips(installed)).not.toContain('Terraform');
+    expect(chips(installed)).not.toContain('manager');
+    installed.unmount();
+    const terraform = await mountView('dmt-dev');
+    // The router's own chip, and one per setting set in its Terraform; none for the manager's IP lists.
+    expect(chips(terraform).filter((c) => c === 'Terraform')).toHaveLength(5);
+    expect(chips(terraform)).not.toContain('manager');
+    const [header, setting] = terraform.findAll('.v-chip').filter((c) => c.text() === 'Terraform');
+    await header!.trigger('mouseenter');
+    await nextTick();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.body.textContent).toMatch(/dmt-dev is written in Terraform: change its settings, upgrade or uninstall it there/);
+    await setting!.trigger('mouseenter');
+    await nextTick();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.body.textContent).toMatch(/Set in this router's Terraform: change it there and apply/);
     terraform.unmount();
   });
 

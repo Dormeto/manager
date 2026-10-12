@@ -8,7 +8,7 @@ import { usePoll } from '../poll';
 import { relative, stateColor } from '../format';
 import { healthColor, pauseLine } from '../pause';
 import { useNow } from '../now';
-import { workloadsHelp } from '../router-actions';
+import { terraformHelp, workloadsHelp } from '../router-actions';
 import { useRouterOperations } from '../router-operations';
 import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
@@ -18,6 +18,7 @@ import RegionLabel from '../components/RegionLabel.vue';
 import RouterActions from '../components/RouterActions.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import RouterVersion from '../components/RouterVersion.vue';
+import TerraformChip from '../components/TerraformChip.vue';
 import type { AlarmInfo, AlertsInfo, RouterInfo } from '../types';
 
 const props = defineProps<{ name: string }>();
@@ -50,7 +51,7 @@ const { watch, operation, pause, resume, openWorkloads } = useRouterOperations(n
     <h1 class="text-headline-small">{{ name }}</h1>
     <template v-if="router">
       <v-chip v-if="router.health" :color="healthColor(router.health.status)" variant="tonal" label>{{ router.health.status }}</v-chip>
-      <v-chip variant="outlined" size="small" label>{{ router.source === 'manager' ? 'installed by the manager' : 'Terraform' }}</v-chip>
+      <TerraformChip v-if="router.source !== 'manager'" :text="terraformHelp(router.name)" />
       <PauseChip :pauses="router.pauses" />
       <span class="text-medium-emphasis d-inline-flex align-center ga-1"><span v-if="router.account" class="mono">{{ router.account }}</span><span v-if="router.account">·</span><RegionLabel :region="router.region" /></span>
     </template>

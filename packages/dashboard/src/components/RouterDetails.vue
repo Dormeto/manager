@@ -4,6 +4,8 @@ import { onMounted, ref } from 'vue';
 import { api } from '../api';
 import { concurrencyText, listSourceHref, relative, ruleText } from '../format';
 import { useNow } from '../now';
+import { terraformSettingHelp } from '../router-actions';
+import TerraformChip from './TerraformChip.vue';
 import type { RouterDetails } from '../types';
 
 // source: who installed the router, so where its configuration is changed.
@@ -19,8 +21,6 @@ onMounted(async () => {
     error.value = (err as Error).message;
   }
 });
-
-const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
 </script>
 
 <template>
@@ -61,9 +61,9 @@ const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
         <v-table density="compact">
           <tbody>
             <tr><th class="font-weight-regular text-medium-emphasis">Idle check schedule</th><td>{{ details.configuration.checkSchedule.value ?? '—' }}</td>
-              <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.checkSchedule.source] }}</v-chip></td></tr>
+              <td><TerraformChip v-if="details.configuration.checkSchedule.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
             <tr><th class="font-weight-regular text-medium-emphasis">Wake statistics metrics</th><td>{{ details.configuration.metrics.value === null ? '—' : details.configuration.metrics.value ? 'published' : 'off' }}</td>
-              <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.metrics.source] }}</v-chip></td></tr>
+              <td><TerraformChip v-if="details.configuration.metrics.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
             <tr><th class="font-weight-regular text-medium-emphasis">IP lists</th>
               <td>
                 <div v-for="l in details.configuration.ipLists.value" :key="l.name">
@@ -72,19 +72,19 @@ const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
                 </div>
                 <span v-if="!details.configuration.ipLists.value.length" class="text-medium-emphasis">none</span>
               </td>
-              <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.ipLists.source] }}</v-chip></td></tr>
+              <td><TerraformChip v-if="details.configuration.ipLists.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
             <tr v-if="details.configuration.ipListsCatalog"><th class="font-weight-regular text-medium-emphasis">The manager's IP lists</th>
               <td>
                 <div v-for="l in details.configuration.ipListsCatalog.value.lists" :key="l.name">{{ l.name }} ({{ l.action }}, every {{ l.refreshHours }} h)</div>
                 <span v-if="!details.configuration.ipListsCatalog.value.lists.length" class="text-medium-emphasis">none</span>
               </td>
-              <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.ipListsCatalog.source] }}</v-chip></td></tr>
+              <td><TerraformChip v-if="details.configuration.ipListsCatalog.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
             <tr><th class="font-weight-regular text-medium-emphasis">Router no-wake rules</th>
               <td>
                 <div v-for="r in details.configuration.noWakeRules.value" :key="r.name"><strong>{{ r.name }}</strong>: {{ r.invalid ? `invalid, ${r.invalid}` : ruleText(r.conditions) }}</div>
                 <span v-if="!details.configuration.noWakeRules.value.length" class="text-medium-emphasis">none</span>
               </td>
-              <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.noWakeRules.source] }}</v-chip></td></tr>
+              <td><TerraformChip v-if="details.configuration.noWakeRules.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
           </tbody>
         </v-table>
       </v-col>
