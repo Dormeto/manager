@@ -59,9 +59,9 @@ data "aws_iam_policy_document" "api" {
     resources = [for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"]
   }
   statement {
-    # Audit, preferences and discovery items (configuration, dismissals).
+    # Audit, preferences and discovery items (configuration, dismissals, manual exclusions: DeleteItem lifts one).
     sid       = "ManagerItems"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:BatchWriteItem", "dynamodb:DeleteItem"]
     resources = [aws_dynamodb_table.manager.arn]
   }
   statement {
@@ -111,7 +111,8 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      ROUTERS            = jsonencode(var.routers)
+      # Routers run in the manager account until onboarding deploys them elsewhere (R4).
+      ROUTERS            = jsonencode([for r in var.routers : merge(r, { account = var.account_id })])
       TABLE              = aws_dynamodb_table.manager.name
       VERSION            = local.version
       USER_POOL_ID       = aws_cognito_user_pool.main.id

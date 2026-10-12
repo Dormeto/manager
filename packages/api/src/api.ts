@@ -1,11 +1,15 @@
 // Manager API: HTTP API (payload 2.0) behind the Cognito JWT authorizer. The routers answer through their controller;
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
-import { DEFAULT_CONFIG, lint, restatus, validateConfig, type Candidate, type DiscoveryStore } from '@dormeto/discovery';
+import {
+  DEFAULT_CONFIG, EXCLUSION_KINDS, activeExclusions, exclusionCriterion, lint, matches, rescope, restatus, validateConfig, withExclusions,
+  type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind,
+} from '@dormeto/discovery';
 
 export interface Router {
   name: string;
   region: string;
   controller: string;
+  account?: string; // the manager's account until routers run in other accounts (onboarding, R4)
 }
 
 export interface ApiEvent {
@@ -125,6 +129,16 @@ export interface ApiOptions {
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const DAY_MS = 86_400_000;
+const REASON_MAX = 256;
+// Pause until and exclusion expiry: at most this far ahead.
+const AHEAD_MAX_MS = 366 * DAY_MS;
+const ACCOUNT = /^\d{12}$/;
+const ARNS: Record<Exclude<ExclusionKind, 'account'>, RegExp> = {
+  'target-group': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):targetgroup\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
+  'load-balancer': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):loadbalancer\/app\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
+};
+const KIND_TEXT: Record<ExclusionKind, string> = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' };
 const ROLES = new Set<Role>(['viewer', 'operator', 'admin']);
 
 function bodyOf(event: ApiEvent): Record<string, unknown> {
@@ -135,6 +149,21 @@ function bodyOf(event: ApiEvent): Record<string, unknown> {
     // Reported below.
   }
   throw new HttpError(400, 'bad_request', 'JSON object body expected');
+}
+
+function reasonIn(body: Record<string, unknown>): string {
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (!reason || reason.length > REASON_MAX) throw new HttpError(400, 'bad_request', `reason required (1 to ${REASON_MAX} characters)`);
+  return reason;
+}
+
+// An optional date in the future, at most 366 days ahead (ISO 8601).
+function aheadIn(body: Record<string, unknown>, name: string, now: number): string | undefined {
+  const value = body[name];
+  if (value === undefined || value === null) return undefined;
+  const at = typeof value === 'string' ? Date.parse(value) : NaN;
+  if (!(at > now && at <= now + AHEAD_MAX_MS)) throw new HttpError(400, 'bad_request', `${name} must be a date in the future, within 366 days`);
+  return new Date(at).toISOString();
 }
 
 function roleIn(body: Record<string, unknown>): Role {
@@ -176,6 +205,80 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
     return results.map((result, i) => ({ router: routers[i]!, result }));
   }
 
+  // A router older than the action (0.15 and earlier for router, pause, resume, request-nap).
+  const unknownAction = (err: unknown, action: string) => err instanceof RouterError && err.message === `unknown action: ${action}`;
+  async function invokeNew(router: Router, payload: Record<string, unknown>, what: string) {
+    try {
+      return await invoke(router, payload);
+    } catch (err) {
+      if (unknownAction(err, payload.action as string)) throw new RouterError(`router ${router.name} does not support ${what}: upgrade it to 0.16.0 or later`);
+      throw err;
+    }
+  }
+  const where = (router: Router) => ({ name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}) });
+
+  type RouterInfo = {
+    router: { version?: string; build?: string };
+    pauses: unknown[];
+    workloads: { total: number; byState: Record<string, number>; paused: number; lastActivityAt: string | null };
+    health: { status: string; problems: unknown[]; checkSchedule: string | null; lastScheduledCheckAt: string | null };
+  };
+  type Listed = { router?: { version?: string; build?: string; checkSchedule?: string; lastScheduledCheckAt?: string }; workloads?: unknown[] };
+
+  // One row of the Routers view: the router action, or the list of a router older than 0.16.
+  async function routerRow(router: Router) {
+    try {
+      const info = await invoke(router, { action: 'router' }) as RouterInfo;
+      return {
+        ...where(router), version: info.router.version ?? null, build: info.router.build ?? null, workloads: info.workloads.total,
+        checkSchedule: info.health.checkSchedule, lastScheduledCheckAt: info.health.lastScheduledCheckAt,
+        health: { status: info.health.status, problems: info.health.problems }, pauses: info.pauses,
+        workloadStates: info.workloads.byState, paused: info.workloads.paused, lastActivityAt: info.workloads.lastActivityAt,
+      };
+    } catch (err) {
+      if (!unknownAction(err, 'router')) return { ...where(router), error: (err as Error).message };
+    }
+    try {
+      const listed = await invoke(router, { action: 'list' }) as Listed;
+      return {
+        ...where(router), version: listed.router?.version ?? null, build: listed.router?.build ?? null, workloads: (listed.workloads ?? []).length,
+        // Health of the automatic naps: when the schedule last ran the idle check.
+        checkSchedule: listed.router?.checkSchedule ?? null, lastScheduledCheckAt: listed.router?.lastScheduledCheckAt ?? null,
+      };
+    } catch (err) {
+      return { ...where(router), error: (err as Error).message };
+    }
+  }
+
+  // Pause of a router (no workload id) or a workload: the body checked here, the router enforces it.
+  function pauseRequest(event: ApiEvent, identity: Identity, workloadId?: string) {
+    const body = bodyOf(event);
+    const reason = reasonIn(body);
+    const until = aheadIn(body, 'until', now());
+    if (body.keepAsleep !== undefined && typeof body.keepAsleep !== 'boolean') throw new HttpError(400, 'bad_request', 'keepAsleep must be true or false');
+    const keepAsleep = body.keepAsleep === true;
+    const payload = { action: 'pause', ...(workloadId ? { workloadId } : {}), by: identity.email, reason, ...(until ? { until } : {}), keepAsleep };
+    const text = (woken: string[]) => [reason, ...(until ? [`until ${until}`] : []), ...(keepAsleep ? ['keep asleep'] : []), ...(woken.length ? [`woken ${woken.join(', ')}`] : [])].join('; ');
+    return { payload, text };
+  }
+
+  async function pauseRoute(identity: Identity, event: ApiEvent, router: Router, action: string, workloadId?: string) {
+    need(identity, 'operator');
+    const target = workloadId ? `${router.name}/${workloadId}` : router.name;
+    const prefix = workloadId ? '' : 'router-';
+    if (action === 'pause') {
+      const { payload, text } = pauseRequest(event, identity, workloadId);
+      return audited(identity, `${prefix}pause`, target, async () => {
+        const result = await invokeNew(router, payload, 'pause') as { woken?: string[] };
+        return { result: text(result?.woken ?? []), response: reply(200, result) };
+      });
+    }
+    return audited(identity, `${prefix}resume`, target, async () => {
+      const result = await invokeNew(router, { action: 'resume', ...(workloadId ? { workloadId } : {}), by: identity.email }, 'resume') as { resumed?: boolean };
+      return { result: result?.resumed ? 'resumed' : 'not paused', response: reply(200, result) };
+    });
+  }
+
   async function route(method: string, parts: string[], identity: Identity, event: ApiEvent): Promise<ApiResponse> {
     const [resource, a, b, action] = parts;
     if (method === 'GET' && resource === 'me' && !a) return reply(200, { email: identity.email, groups: identity.groups, role: identity.role });
@@ -193,22 +296,11 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
       }
     }
 
-    if (method === 'GET' && resource === 'routers' && !a) {
-      const all = await listAll();
-      type Listed = { router?: { version?: string; build?: string; checkSchedule?: string; lastScheduledCheckAt?: string }; workloads?: unknown[] };
-      return reply(200, {
-        routers: all.map(({ router, result }) => (result.status === 'fulfilled'
-          ? {
-            name: router.name, region: router.region,
-            version: (result.value as Listed).router?.version ?? null,
-            build: (result.value as Listed).router?.build ?? null,
-            workloads: ((result.value as Listed).workloads ?? []).length,
-            // Health of the automatic naps: when the schedule last ran the idle check.
-            checkSchedule: (result.value as Listed).router?.checkSchedule ?? null,
-            lastScheduledCheckAt: (result.value as Listed).router?.lastScheduledCheckAt ?? null,
-          }
-          : { name: router.name, region: router.region, error: (result.reason as Error).message })),
-      });
+    if (method === 'GET' && resource === 'routers' && !a) return reply(200, { routers: await Promise.all(routers.map(routerRow)) });
+    if (resource === 'routers' && a) {
+      const router = routerOf(a);
+      if (method === 'GET' && !b) return reply(200, { ...where(router), ...(await invokeNew(router, { action: 'router' }, 'router details') as object) });
+      if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
     }
 
     if (method === 'GET' && resource === 'workloads' && !a) {
@@ -228,10 +320,20 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
       if (method === 'POST' && action === 'nap' && !parts[4]) {
         need(identity, 'operator');
         return audited(identity, 'nap', `${router.name}/${id}`, async () => {
-          await invoke(router, { action: 'nap', workloadId: id }, { async: true });
+          // The router refuses at once a nap it would skip (paused, not awake); an older router naps asynchronously.
+          let answer: { requested?: boolean; reason?: string } | null;
+          try {
+            answer = await invoke(router, { action: 'request-nap', workloadId: id, by: identity.email }) as typeof answer;
+          } catch (err) {
+            if (!unknownAction(err, 'request-nap')) throw err;
+            await invoke(router, { action: 'nap', workloadId: id }, { async: true });
+            answer = { requested: true };
+          }
+          if (!answer?.requested) throw new HttpError(409, 'conflict', answer?.reason ?? 'nap refused');
           return { result: 'requested', response: reply(202, { accepted: true }) };
         });
       }
+      if (method === 'POST' && (action === 'pause' || action === 'resume') && !parts[4]) return pauseRoute(identity, event, router, action, id);
       if (method === 'POST' && action === 'wake' && !parts[4]) {
         need(identity, 'operator');
         return audited(identity, 'wake', `${router.name}/${id}`, async () => {
@@ -239,6 +341,11 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
           return { result: result?.state ?? 'done', response: reply(200, result) };
         });
       }
+    }
+
+    if (resource === 'exclusions' && discovery && !b) {
+      const response = await exclusionsRoute(method, a, identity, event, discovery);
+      if (response) return response;
     }
 
     if (resource === 'discovery' && discovery && !b) {
@@ -311,10 +418,13 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
     }
     if (sub === 'config') {
       const inventory = (await d.store.getInventory()) ?? { accounts: [], ous: {} };
+      // The lint counts the active manual exclusions, as runs do.
+      const exclusions = await d.store.listExclusions();
+      const linted = (config: typeof DEFAULT_CONFIG) => lint(withExclusions(config, exclusions, now()), inventory);
       if (method === 'GET') {
         const stored = await d.store.getConfig();
         const config = stored?.config ?? DEFAULT_CONFIG;
-        return reply(200, { config, updatedAt: stored?.updatedAt ?? null, updatedBy: stored?.updatedBy ?? null, lint: lint(config, inventory) });
+        return reply(200, { config, updatedAt: stored?.updatedAt ?? null, updatedBy: stored?.updatedBy ?? null, lint: linted(config) });
       }
       if (method === 'PUT') {
         need(identity, 'admin');
@@ -323,7 +433,7 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
         const summary = `${plural(config.filters.length, 'filter')}, ${plural(config.globalExcludes.length, 'global exclude')}, regions ${config.regions.join(' ')}`;
         return audited(identity, 'discovery-config', 'discovery', async () => {
           await d.store.putConfig(config, identity.email);
-          return { result: summary, response: reply(200, { config, lint: lint(config, inventory) }) };
+          return { result: summary, response: reply(200, { config, lint: linted(config) }) };
         });
       }
     }
@@ -346,6 +456,124 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
         });
         await d.store.putCandidates(updated);
         return { result: plural(updated.length, 'candidate'), response: reply(200, { candidates: updated }) };
+      });
+    }
+    return null;
+  }
+
+  // --- Manual exclusions: global excludes with a reason, author and expiry; the managed workloads they match are paused --
+
+  function exclusionTarget(body: Record<string, unknown>, inventoryName: (account: string) => string): Exclusion['target'] {
+    const target = body.target as Record<string, unknown> | undefined;
+    const kind = target?.kind as ExclusionKind;
+    if (!target || !EXCLUSION_KINDS.includes(kind)) throw new HttpError(400, 'bad_request', `target.kind must be ${EXCLUSION_KINDS.join(', ')}`);
+    if (kind === 'account') {
+      const account = String(target.account ?? '');
+      if (!ACCOUNT.test(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID');
+      return { kind, account, name: inventoryName(account) };
+    }
+    const arn = String(target.arn ?? '');
+    const parsed = ARNS[kind].exec(arn);
+    if (!parsed) throw new HttpError(400, 'bad_request', `target.arn must be the ARN of an application ${KIND_TEXT[kind]}`);
+    return { kind, arn, account: parsed[2]!, region: parsed[1]!, name: parsed[3]! };
+  }
+
+  const targetText = (t: Exclusion['target']) => `${KIND_TEXT[t.kind]} ${t.name}${t.kind === 'account' && t.name !== t.account ? ` (${t.account})` : ''}`;
+  const pairText = (list: { router: string; workloadId: string }[]) => list.map((p) => `${p.router}/${p.workloadId}`).join(', ');
+
+  // The stored candidates decided again with the current exclusions.
+  async function rescoped(d: DiscoveryApi) {
+    const [stored, exclusions, inventory, candidates] = await Promise.all([d.store.getConfig(), d.store.listExclusions(), d.store.getInventory(), d.store.listCandidates()]);
+    const changed = rescope(candidates, withExclusions(stored?.config ?? DEFAULT_CONFIG, exclusions, now()), inventory ?? { accounts: [], ous: {} }, now());
+    await d.store.putCandidates(changed);
+    return changed.length;
+  }
+
+  // Pause the managed workloads of the stored candidates the exclusion matches (and the workload it was created from) in a
+  // registered router of their account and region that has them.
+  async function pauseMatched(d: DiscoveryApi, e: Exclusion, identity: Identity, hint?: { router: Router; id: string }) {
+    const inventory = (await d.store.getInventory()) ?? { accounts: [], ous: {} };
+    const criterion = exclusionCriterion(e);
+    const accountOf = (c: Candidate) => inventory.accounts.find((a) => a.id === c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
+    const wanted = new Map<string, Router[]>();
+    for (const c of await d.store.listCandidates()) {
+      if (!c.workloadId || c.goneAt || !matches(criterion, accountOf(c), c, inventory)) continue;
+      wanted.set(c.workloadId, routers.filter((r) => r.region === c.region && (!r.account || r.account === c.account)));
+    }
+    if (hint) wanted.set(hint.id, [hint.router]);
+    const paused: { router: string; workloadId: string }[] = [];
+    const unpaused: string[] = [];
+    for (const [workloadId, candidates] of wanted) {
+      let done = false;
+      for (const router of candidates) {
+        try {
+          await invoke(router, { action: 'pause', workloadId, by: identity.email, reason: `excluded: ${e.reason}`, ...(e.expiresAt ? { until: e.expiresAt } : {}), exclusionId: e.id });
+          paused.push({ router: router.name, workloadId });
+          done = true;
+          break;
+        } catch (err) {
+          if (!(err instanceof RouterError && err.message.startsWith('workload not configured'))) throw err;
+        }
+      }
+      if (!done) unpaused.push(workloadId);
+    }
+    return { paused, unpaused };
+  }
+
+  async function exclusionsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, d: DiscoveryApi): Promise<ApiResponse | null> {
+    if (method === 'GET' && !id) {
+      const active = new Set(activeExclusions(await d.store.listExclusions(), now()).map((e) => e.id));
+      const exclusions = (await d.store.listExclusions()).map((e) => ({ ...e, expired: !active.has(e.id) }));
+      return reply(200, { exclusions });
+    }
+    if (method === 'POST' && !id) {
+      need(identity, 'operator');
+      const body = bodyOf(event);
+      const inventory = await d.store.getInventory();
+      const target = exclusionTarget(body, (account) => inventory?.accounts.find((a) => a.id === account)?.name ?? account);
+      const reason = reasonIn(body);
+      const expiresAt = aheadIn(body, 'expiresAt', now());
+      const workload = body.workload as { router?: string; id?: string } | undefined;
+      let hint: { router: Router; id: string } | undefined;
+      if (workload !== undefined) {
+        const router = routers.find((r) => r.name === workload?.router);
+        if (!router || !ID.test(String(workload?.id ?? ''))) throw new HttpError(400, 'bad_request', 'workload must name a registered router and a workload id');
+        hint = { router, id: String(workload.id) };
+      }
+      const exclusion: Exclusion = { id: newId(), target, reason, by: identity.email, at: new Date(now()).toISOString(), ...(expiresAt ? { expiresAt } : {}) };
+      return audited(identity, 'exclude', targetText(target), async () => {
+        // Stored first: the exclusion stands even if a router cannot be reached.
+        await d.store.putExclusion(exclusion);
+        const candidates = await rescoped(d);
+        const { paused, unpaused } = await pauseMatched(d, exclusion, identity, hint);
+        const saved = { ...exclusion, ...(paused.length ? { paused } : {}) };
+        if (paused.length) await d.store.putExclusion(saved);
+        const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), ...(paused.length ? [`paused ${pairText(paused)}`] : []),
+          ...(unpaused.length ? [`not paused, no registered router manages ${unpaused.join(', ')}`] : [])].join('; ');
+        return { result, response: reply(201, { exclusion: saved, candidates, paused, unpaused }) };
+      });
+    }
+    if (method === 'DELETE' && id) {
+      need(identity, 'operator');
+      const exclusion = await d.store.getExclusion(decodeURIComponent(id));
+      if (!exclusion) throw new HttpError(404, 'not_found', `unknown exclusion: ${id}`);
+      return audited(identity, 'exclusion-lift', targetText(exclusion.target), async () => {
+        await d.store.deleteExclusion(exclusion.id);
+        const candidates = await rescoped(d);
+        const resumed: { router: string; workloadId: string }[] = [];
+        const errors: string[] = [];
+        for (const p of exclusion.paused ?? []) {
+          const router = routers.find((r) => r.name === p.router);
+          try {
+            if (!router) throw new Error(`router ${p.router} is no longer registered`);
+            await invoke(router, { action: 'resume', workloadId: p.workloadId, by: identity.email, exclusionId: exclusion.id });
+            resumed.push(p);
+          } catch (err) {
+            errors.push(`${p.router}/${p.workloadId}: ${(err as Error).message}`);
+          }
+        }
+        const result = [exclusion.reason, ...(resumed.length ? [`resumed ${pairText(resumed)}`] : []), ...errors.map((e) => `not resumed ${e}`)].join('; ');
+        return { result, response: reply(200, { candidates, resumed, errors }) };
       });
     }
     return null;

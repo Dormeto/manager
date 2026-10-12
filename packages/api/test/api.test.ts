@@ -68,11 +68,14 @@ describe('workloads', () => {
     });
   });
 
-  it('lists the routers with their version', async () => {
-    const { api } = setup(async (router) => ({
-      router: { name: router.name, version: '0.11.2', build: 'abc', checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z' },
-      workloads: [{}, {}],
-    }));
+  it('lists the routers with their version (routers older than 0.16, through list)', async () => {
+    const { api } = setup(async (router, payload) => {
+      if (payload.action === 'router') throw new RouterError('unknown action: router');
+      return {
+        router: { name: router.name, version: '0.11.2', build: 'abc', checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z' },
+        workloads: [{}, {}],
+      };
+    });
     expect(json(await api(event('GET', '/api/routers'))).routers[0]).toEqual({
       name: 'dmt-dev', region: 'eu-west-1', version: '0.11.2', build: 'abc', workloads: 2,
       checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z',
@@ -109,12 +112,16 @@ describe('actions', () => {
     expect(audit).toEqual([]);
   });
 
-  it('nap is requested asynchronously and audited', async () => {
+  it('nap is requested asynchronously from a router older than 0.16, and audited', async () => {
     const calls: unknown[] = [];
-    const { api, audit } = setup(async (router, payload, options) => { calls.push([payload, options]); return null; });
+    const { api, audit } = setup(async (router, payload, options) => {
+      calls.push([payload, options]);
+      if (payload.action === 'request-nap') throw new RouterError('unknown action: request-nap');
+      return null;
+    });
     const res = await api(event('POST', '/api/workloads/dmt-dev/demo/nap', 'dmt-operator'));
     expect(res.statusCode).toBe(202);
-    expect(calls).toEqual([[{ action: 'nap', workloadId: 'demo' }, { async: true }]]);
+    expect(calls).toEqual([[{ action: 'request-nap', workloadId: 'demo', by: 'ops@example.com' }, undefined], [{ action: 'nap', workloadId: 'demo' }, { async: true }]]);
     expect(audit).toEqual([{ id: 'id-1', at: '2026-10-04T12:00:00.000Z', who: 'ops@example.com', role: 'operator', action: 'nap', target: 'dmt-dev/demo', result: 'requested' }]);
   });
 
