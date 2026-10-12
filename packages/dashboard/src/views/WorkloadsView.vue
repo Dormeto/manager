@@ -7,6 +7,7 @@ import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
+import BackendKinds from '../components/BackendKinds.vue';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -57,7 +58,9 @@ function allWorkloads() {
 }
 
 const headers = [
+  { title: 'AWS account', key: 'account', sortable: false },
   { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId, sortable: false },
+  { title: 'Backend', key: 'backends', sortable: false },
   { title: 'Router', key: 'router', sortable: false },
   { title: 'State', key: 'state', sortable: false },
   { title: 'Since', key: 'since', sortable: false },
@@ -95,9 +98,11 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
   <v-card>
     <v-data-table-server :mobile="smAndDown" :headers="headers" :items="workloads" :items-length="total" :loading="loading && !workloads.length"
       :item-value="(w: WorkloadSummary) => `${w.router}/${w.workloadId}`" :page="page" :items-per-page="perPage" :sort-by="[]" :must-sort="false" @update:options="options">
+      <template #[`item.account`]="{ item }"><span class="mono">{{ item.account }}</span></template>
       <template #[`item.name`]="{ item }">
         <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="font-weight-medium">{{ item.name ?? item.workloadId }}</router-link>
       </template>
+      <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" /></template>
       <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.since`]="{ item }"><span class="nowrap">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">

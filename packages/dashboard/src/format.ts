@@ -25,6 +25,15 @@ const BACKEND_LABELS: Record<string, string> = {
   instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster',
 };
 export const backendLabel = (kind: string): string => BACKEND_LABELS[kind] ?? kind;
+const BACKEND_HELP: Record<string, string> = {
+  instance: 'started and stopped by Dormeto',
+  asg: 'its instances are started and stopped through the group',
+  ecs: 'scaled to zero tasks when it naps, and back when it wakes',
+  'rds-instance': 'a companion database, stopped after the application and started before it',
+  'rds-cluster': 'a companion database, stopped after the application and started before it',
+};
+// What Dormeto does with a kind of backend, for its tooltip.
+export const backendHelp = (kind: string): string => `${backendLabel(kind)}${BACKEND_HELP[kind] ? `: ${BACKEND_HELP[kind]}` : ''}`;
 
 // The ARN of a candidate's backend: recorded by discovery (scans since 2026-10-05), or rebuilt for an instance or an ECS
 // service of an older scan; an Auto Scaling group's needs its id (null).

@@ -21,6 +21,7 @@ export interface Pause {
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
+  account?: string; // the router's account (from its summary)
   name?: string; // routers 0.20.0 and later: for people, the id otherwise
   state: string;
   url: string | null;
@@ -31,6 +32,7 @@ export interface WorkloadSummary {
   failedAt: string | null;
   updatedAt: string | null;
   pendingWake: boolean;
+  backends?: string[]; // the kinds of its backends, databases last (routers 0.23.3 and later)
   pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored: number; deferred: number; wakes: number } | null;
   settings: Settings;

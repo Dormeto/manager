@@ -45,6 +45,10 @@ const pauseOf = (p: unknown) => (isObject(p)
   : null);
 export const pausesOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, PAUSES_MAX).map(pauseOf).filter(Boolean) : []);
 
+// The kinds of a workload's backends (routers 0.23.3): the known ones, once each.
+const BACKEND_KINDS = new Set(['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster']);
+const backendsOf = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((k): k is string => typeof k === 'string' && BACKEND_KINDS.has(k)))] : undefined);
+
 // A workload of a check, or null when it has no valid id.
 export function workloadOf(w: unknown): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
@@ -62,6 +66,7 @@ export function workloadOf(w: unknown): Json | null {
     failedAt: time(w.failedAt),
     updatedAt: time(w.updatedAt),
     pendingWake: w.pendingWake === true,
+    backends: backendsOf(w.backends),
     pauses: pausesOf(w.pauses),
     stats7d: numbers(w.stats7d, new Set(['wakes', 'ignored', 'deferred'])) ?? null,
     settings: numbers(w.settings, new Set(['waitSeconds', 'idleMinutes', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders'])),

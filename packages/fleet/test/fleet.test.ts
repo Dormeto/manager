@@ -206,6 +206,17 @@ describe('fleet', () => {
     expect(await s.ids()).toEqual(['a', 'b']);
   });
 
+  it('keeps the kinds of a workload\'s backends a router names (routers 0.23.3), the known ones only, once each', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [
+      workload('a', 'AWAKE', { backends: ['asg', 'rds-instance', 'asg', 'evil'.repeat(100), 7] }),
+      workload('b', 'AWAKE', { backends: 'instance' }),
+      workload('c'),
+    ]));
+    const [a, b, c] = await s.store.listWorkloads();
+    expect([a!.backends, b!.backends, c!.backends]).toEqual([['asg', 'rds-instance'], undefined, undefined]);
+  });
+
   it('writes the workloads of a chunk ten at a time: a backlog drains within the Lambda timeout', async () => {
     const s = setup();
     let running = 0;
