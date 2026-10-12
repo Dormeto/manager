@@ -59,8 +59,9 @@ data "aws_iam_policy_document" "api" {
     resources = [for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"]
   }
   statement {
-    sid       = "Audit"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]
+    # Audit, preferences and discovery items (configuration, dismissals).
+    sid       = "ManagerItems"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
     resources = [aws_dynamodb_table.manager.arn]
   }
   statement {
@@ -77,6 +78,12 @@ data "aws_iam_policy_document" "api" {
     sid       = "SesSandbox"
     actions   = ["ses:GetAccount", "ses:GetEmailIdentity", "ses:CreateEmailIdentity"]
     resources = ["*"]
+  }
+  statement {
+    # Discovery: run on demand (asynchronous invoke).
+    sid       = "Discovery"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.discovery.arn]
   }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -104,11 +111,12 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      ROUTERS       = jsonencode(var.routers)
-      TABLE         = aws_dynamodb_table.manager.name
-      VERSION       = local.version
-      USER_POOL_ID  = aws_cognito_user_pool.main.id
-      DASHBOARD_URL = "https://${var.dashboard_domain}/"
+      ROUTERS            = jsonencode(var.routers)
+      TABLE              = aws_dynamodb_table.manager.name
+      VERSION            = local.version
+      USER_POOL_ID       = aws_cognito_user_pool.main.id
+      DASHBOARD_URL      = "https://${var.dashboard_domain}/"
+      DISCOVERY_FUNCTION = aws_lambda_function.discovery.function_name
     }
   }
 
