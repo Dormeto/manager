@@ -72,6 +72,26 @@ describe('a region\'s discovery', () => {
     expect([napped.ecsDesired, napped.stopped]).toEqual([undefined, []]);
   });
 
+  // A region of hundreds of workloads described one after the other kept the last accounts long after the others (the
+  // user, 2026-10-11: 99% for minutes).
+  it('describes a region\'s workloads eight at a time, in their order', async () => {
+    const services = Array.from({ length: 20 }, (_, i) => `arn:aws:ecs:${R}:${A}:service/prod/svc${i}`);
+    const { ports } = regionPorts(services.map((svc, i) => rule(`svc${i}`, { backend: { kind: 'ecs', id: svc, arn: svc } })));
+    let active = 0;
+    let most = 0;
+    const describe = ports.ecs.describeServices;
+    ports.ecs = { ...ports.ecs, describeServices: async (input) => {
+      active += 1;
+      most = Math.max(most, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active -= 1;
+      return describe(input);
+    } };
+    const found = await discoverRegion(ports, { account: A, region: R });
+    expect(found.workloads.map((w) => w.targetGroup)).toEqual(services.map((_, i) => `svc${i}`));
+    expect(most).toBe(8);
+  });
+
   it('keeps each workload\'s tags: every value of each tag on its load balancer, target group or rule, as discovery reads them', async () => {
     const { ports } = regionPorts([rule('web', { tags: { env: ['dev'], team: ['web', 'shop'] } })]);
     expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.tags).toEqual({ env: ['dev'], team: ['web', 'shop'] });

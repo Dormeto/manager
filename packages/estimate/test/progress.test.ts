@@ -17,13 +17,57 @@ function terminal(accounts = 2) {
   return { view, updates, ends, logs, tick: (ms: number) => { t += ms; } };
 }
 
+// A scheduler that runs when told: the view's timer, advanced by hand.
+function clock() {
+  let t = 0;
+  const timers: { ms: number; fn: () => void }[] = [];
+  return {
+    now: () => t,
+    every: (ms: number, fn: () => void) => { const timer = { ms, fn }; timers.push(timer); return () => { timers.splice(timers.indexOf(timer), 1); }; },
+    advance: (ms: number) => { t += ms; for (const timer of [...timers]) timer.fn(); },
+    timers,
+  };
+}
+
+describe('the discovery phase\'s progress while it waits (the user, 2026-10-11: it seemed stuck at 99%)', () => {
+  it('in a terminal: redrawn every second (the clock goes on), and the last accounts still read named with how long they take', () => {
+    const c = clock();
+    const updates: string[] = [];
+    const view = discoveryView({ accounts: 3, now: c.now, every: c.every, log: () => {}, status: { update: (l) => updates.push(l), end: () => {} } });
+    expect(c.timers.map((t) => t.ms)).toEqual([1000]);
+    view.account({ account: A, state: 'started', regions: 1 });
+    view.region(region(A, 'eu-west-1', 2));
+    view.account({ account: A, state: 'done', regions: 1 });
+    c.advance(20_000);
+    view.account({ account: B, state: 'started', regions: 1 });
+    c.advance(40_000);
+    view.account({ account: '333333333333', state: 'started', regions: 1 });
+    c.advance(5_000);
+    expect(updates.at(-1)).toBe(`  Discovery [███████░░░░░░░░░░░░░]  33% · 1/3 accounts · 1 region · 2 workloads · 1:05 · waiting for ${B} (0:45), 333333333333 (0:05)`);
+    view.end();
+    expect(c.timers).toEqual([]);
+  });
+
+  it('elsewhere: every minute, the accounts still read with how long they take (at most five named)', () => {
+    const c = clock();
+    const logs: string[] = [];
+    const view = discoveryView({ accounts: 8, now: c.now, every: c.every, log: (l) => logs.push(l) });
+    expect(c.timers.map((t) => t.ms)).toEqual([60_000]);
+    for (let i = 1; i <= 7; i += 1) view.account({ account: String(i).repeat(12), state: 'started', regions: 1 });
+    c.advance(60_000);
+    expect(logs).toEqual([`  discovery: still reading 7 accounts: ${'1'.repeat(12)} (1:00), ${'2'.repeat(12)} (1:00), ${'3'.repeat(12)} (1:00), ${'4'.repeat(12)} (1:00), ${'5'.repeat(12)} (1:00) and 2 more`]);
+    view.end();
+    expect(c.timers).toEqual([]);
+  });
+});
+
 describe('the discovery phase\'s progress', () => {
   it('in a terminal: one line, a bar by the regions scanned of each account, the accounts done, the regions, workloads, failures and time', () => {
     const s = terminal();
     s.view.account({ account: A, state: 'started', regions: 2 });
     s.tick(5_000);
     s.view.region(region(A, 'eu-west-1', 3));
-    expect(s.updates.at(-1)).toBe('  Discovery [█████░░░░░░░░░░░░░░░]  25% · 0/2 accounts · 1 region · 3 workloads · 0:05');
+    expect(s.updates.at(-1)).toBe(`  Discovery [█████░░░░░░░░░░░░░░░]  25% · 0/2 accounts · 1 region · 3 workloads · 0:05 · waiting for ${A} (0:05)`);
     s.view.region(region(A, 'eu-west-3', 0, { error: 'opt-in region not enabled' }));
     s.view.account({ account: A, state: 'done', regions: 2 });
     s.view.account({ account: B, state: 'started', regions: 1 });

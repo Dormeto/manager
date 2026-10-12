@@ -1,8 +1,8 @@
 // Phase 1 of the estimate (vision docs/specs/2026-10-10-savings-estimate-design.md §4): each reached account's regions,
 // discovery's scan of each (the product's eligibility), and what each eligible workload's backend would stop (the
 // router's description, priced later). Kept per account and region: a run reuses what is fresh and resumes the rest; a
-// region that fails is said and tried again next time. Four accounts at a time, an account's regions one by one; an
-// account's role is assumed only when one of its regions is not kept.
+// region that fails is said and tried again next time. --parallel accounts at a time (5 by default), an account's regions
+// one by one, a region's workloads eight at a time; an account's role is assumed only when one of its regions is not kept.
 import type { Rule, ScannedRule } from '@dormeto/discovery';
 import type { Credentials } from '@dormeto/discovery/aws';
 import type { StoppedItem } from '@dormeto/fleet';
@@ -212,41 +212,55 @@ async function databasesOf(ports: RegionPorts, groups: Set<string>): Promise<{ d
   }
 }
 
+// A region's workloads described this many at a time (an account's own calls: AWS throttles per account), in their order.
+const WORKLOADS_AT_ONCE = 8;
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]!);
+  }));
+  return out;
+}
+
 export async function discoverRegion(ports: RegionPorts, { account, region }: { account: string; region: string }): Promise<RegionDiscovery> {
-  const workloads: Workload[] = [];
-  const ineligible: Ineligible[] = [];
-  for (const rule of await ports.scan()) {
-    if (rule.eligibility === 'ineligible' || !rule.backend || !rule.targetGroupArn) {
-      ineligible.push({ loadBalancer: rule.loadBalancer, targetGroup: rule.targetGroup, hosts: rule.hosts, reason: rule.reason ?? 'no backend' });
-      continue;
-    }
-    const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
-    let stopped: StoppedItem[];
-    let instanceState: string | undefined;
-    let ecsDesired: number | undefined;
-    let running: RouterBackend | null = null;
-    try {
-      const found = await routerBackend(ports, rule.backend, managed !== null);
-      instanceState = found.instanceState;
-      ecsDesired = found.ecsDesired;
-      running = found.running;
-      stopped = found.running ? await describeStopped(ports, [found.running]) : [];
-    } catch (err) {
-      // Never guessed: an item that cannot be priced, said in the estimate.
-      stopped = [{ kind: 'unknown', backend: `${rule.backend.kind}:${rule.backend.id}`, reason: (err as Error).message.slice(0, 200) } as unknown as StoppedItem];
-    }
-    workloads.push({
-      account, region, loadBalancer: rule.loadBalancer, loadBalancerArn: rule.loadBalancerArn, targetGroup: rule.targetGroup ?? '',
-      targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped, tags: rule.tags,
-      ...(instanceState ? { instanceState } : {}),
-      ...(ecsDesired !== undefined ? { ecsDesired } : {}),
-      ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
-      securityGroups: await securityGroupsOf(ports, rule.backend, running),
-    });
-  }
+  const described = await mapLimit(await ports.scan(), WORKLOADS_AT_ONCE, (rule) => describeRule(ports, rule, { account, region }));
+  const workloads = described.flatMap((d) => ('workload' in d ? [d.workload] : []));
+  const ineligible = described.flatMap((d) => ('ineligible' in d ? [d.ineligible] : []));
   const clusters = ports.unreadableClusters?.() ?? [];
   const { databases, error: databasesError } = await databasesOf(ports, new Set(workloads.flatMap((w) => w.securityGroups ?? [])));
   return { account, region, workloads, ineligible, ...(clusters.length ? { clusters } : {}), databases, ...(databasesError ? { databasesError } : {}) };
+}
+
+// One rule of the scan: an eligible workload described as the router would (what it stops, its security groups), else why not.
+async function describeRule(ports: RegionPorts, rule: ScannedRule, { account, region }: { account: string; region: string }): Promise<{ workload: Workload } | { ineligible: Ineligible }> {
+  if (rule.eligibility === 'ineligible' || !rule.backend || !rule.targetGroupArn) {
+    return { ineligible: { loadBalancer: rule.loadBalancer, targetGroup: rule.targetGroup, hosts: rule.hosts, reason: rule.reason ?? 'no backend' } };
+  }
+  const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
+  let stopped: StoppedItem[];
+  let instanceState: string | undefined;
+  let ecsDesired: number | undefined;
+  let running: RouterBackend | null = null;
+  try {
+    const found = await routerBackend(ports, rule.backend, managed !== null);
+    instanceState = found.instanceState;
+    ecsDesired = found.ecsDesired;
+    running = found.running;
+    stopped = found.running ? await describeStopped(ports, [found.running]) : [];
+  } catch (err) {
+    // Never guessed: an item that cannot be priced, said in the estimate.
+    stopped = [{ kind: 'unknown', backend: `${rule.backend.kind}:${rule.backend.id}`, reason: (err as Error).message.slice(0, 200) } as unknown as StoppedItem];
+  }
+  return { workload: {
+    account, region, loadBalancer: rule.loadBalancer, loadBalancerArn: rule.loadBalancerArn, targetGroup: rule.targetGroup ?? '',
+    targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped, tags: rule.tags,
+    ...(instanceState ? { instanceState } : {}),
+    ...(ecsDesired !== undefined ? { ecsDesired } : {}),
+    ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
+    securityGroups: await securityGroupsOf(ports, rule.backend, running),
+  } };
 }
 
 // regions: --regions, used as given (never cached as an account's enabled regions); null: each account's enabled ones.
