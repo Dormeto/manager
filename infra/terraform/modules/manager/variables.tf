@@ -32,6 +32,16 @@ variable "admin_emails" {
   default     = []
 }
 
+variable "history_days" {
+  description = "How long each workload's state history is kept (R8: the timeline of the workload view, and the base of the savings): from 7 days to 10 years. A change applies to transitions written afterwards."
+  type        = number
+  default     = 400
+  validation {
+    condition     = var.history_days >= 7 && var.history_days <= 3650 && floor(var.history_days) == var.history_days
+    error_message = "history_days must be a whole number of days from 7 to 3650."
+  }
+}
+
 variable "alert_emails" {
   description = "Addresses the health alerts are sent to (router alarms, the watchdog's own failures), each subscribed to the alert topic and pending until its owner confirms the email AWS sends. Other subscriptions: the alerts_topic_arn output."
   type        = list(string)

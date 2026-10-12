@@ -152,6 +152,17 @@ time per target group, router or workload, one per load balancer (lock), three p
 - **Access:** fallback instance types need `ec2:ModifyInstanceAttribute` in DmtRouterBoundary (router 0.25.0's
   `router-boundary.json`): apply the access module or the AWS CLI script of 0.5.0 again in every member account.
 
+## State history (R8)
+
+- **Store:** each `Workload state changed` event is kept as `HIST#<account>#<region>#<workloadId>` / `<at>#<to>` (a
+  duplicate is the same item), with its cause, wake id and duration, failure and who asked it from the manager; the
+  table's TTL removes it `history_days` (default 400) after it. A check whose state differs from the stored summary's
+  writes an inferred transition dated by the router's `stateAt` (0.26.0: the event's instant, so the late event replaces
+  it), else the check's time; a workload's first entry is written when the manager first sees it (`historySince`).
+  Nothing is written for a check that changes nothing.
+- **API and dashboard:** `GET /api/workloads/{router}/{id}/history?days=1..31` answers the period's entries, phases,
+  time per state and wakes (at most 5,000 entries, then `truncated`); the workload view's History card draws them.
+
 ## Organization access (discovery)
 
 Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a

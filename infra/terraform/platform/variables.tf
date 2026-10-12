@@ -73,6 +73,12 @@ variable "ip_lists" {
   default = []
 }
 
+variable "history_days" {
+  description = "How long the state history is kept (manager module history_days)."
+  type        = number
+  default     = 400
+}
+
 variable "mfa" {
   description = "The MFA policy (manager module mfa)."
   type        = string

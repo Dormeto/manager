@@ -124,7 +124,8 @@ resource "aws_lambda_function" "fleet" {
 
   environment {
     variables = {
-      TABLE = aws_dynamodb_table.manager.name
+      TABLE        = aws_dynamodb_table.manager.name
+      HISTORY_DAYS = tostring(var.history_days)
     }
   }
 

@@ -5,7 +5,20 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## 0.5.0 — 2026-10-08
+## 0.6.0 — 2026-10-08
+
+Router 0.26.0. Access: as 0.5.0 (0.5.0 was not published: its Access note and changes below ship in this version). Then
+upgrade the routers to 0.26.0; older routers' history is kept too, dated less exactly when an event is lost.
+
+- State history: every state change of every workload is kept (`history_days`, 400 days by default), from the events
+  the routers send; a lost event is made good from the next check, and the history starts when the manager first sees a
+  workload (for those already known, at the upgrade).
+- The workload view's History card: over 24 hours, 7 or 30 days, the asleep share, the awake time and the wakes (median
+  and longest), a row per day of the phases, what started each one (a request, the idle check, a manager user, a
+  failure), and the transitions.
+- Routers 0.26.0 date each state change and say who asked a nap or a wake from the manager.
+
+## 0.5.0 — 2026-10-08 (not published: in 0.6.0)
 
 Router 0.25.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
 routers' permissions boundary allows `ec2:ModifyInstanceAttribute`, for fallback instance types; from 0.3.0, it also

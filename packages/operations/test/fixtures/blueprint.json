@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.25.0",
-    "build": "88a06c5afcb1"
+    "version": "0.26.0",
+    "build": "40371ffa76e2"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -681,8 +681,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.25.0",
-        "DMT_BUILD": "88a06c5afcb1",
+        "DMT_VERSION": "0.26.0",
+        "DMT_BUILD": "40371ffa76e2",
         "DMT_IP_LISTS": "${ipLists}",
         "DMT_IP_LISTS_CATALOG": "${ipListsCatalog}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
@@ -716,8 +716,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.25.0",
-        "DMT_BUILD": "88a06c5afcb1",
+        "DMT_VERSION": "0.26.0",
+        "DMT_BUILD": "40371ffa76e2",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
@@ -741,8 +741,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.25.0",
-        "DMT_BUILD": "88a06c5afcb1",
+        "DMT_VERSION": "0.26.0",
+        "DMT_BUILD": "40371ffa76e2",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },

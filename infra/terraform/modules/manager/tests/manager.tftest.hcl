@@ -341,3 +341,33 @@ run "mfa_is_validated" {
   }
   expect_failures = [var.mfa]
 }
+
+run "history_kept_400_days_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.fleet.environment[0].variables.HISTORY_DAYS == "400"
+    error_message = "The state history (R8) is kept 400 days by default."
+  }
+}
+
+run "history_days_set" {
+  command = plan
+
+  variables {
+    history_days = 90
+  }
+  assert {
+    condition     = aws_lambda_function.fleet.environment[0].variables.HISTORY_DAYS == "90"
+    error_message = "history_days reaches the fleet function."
+  }
+}
+
+run "history_days_is_validated" {
+  command = plan
+
+  variables {
+    history_days = 3
+  }
+  expect_failures = [var.history_days]
+}
