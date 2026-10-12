@@ -42,7 +42,10 @@ export interface RegionPorts extends StoppedPorts {
   autoscaling: { describeAutoScalingGroups(input: { AutoScalingGroupNames: string[] }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; DesiredCapacity?: number; Instances?: { InstanceId?: string }[] }[] }> };
   elbv2: { describeRules(input: { RuleArns: string[] }): Promise<{ Rules?: Rule[] }> };
 }
-export type Progress = (event: { phase: 'discovery' | 'requests' | 'uptime'; account: string; region: string; from: 'cache' | 'aws'; workloads: number; error?: string }) => void;
+export type ProgressEvent = { phase: 'discovery' | 'requests' | 'uptime'; account: string; region: string; from: 'cache' | 'aws'; workloads: number; error?: string };
+export type Progress = (event: ProgressEvent) => void;
+// An account of the discovery phase: started once its regions are known, done after the last (error: none could be read).
+export type AccountEvent = { account: string; state: 'started' | 'done'; regions: number; error?: string };
 
 // An ECS service ARN names its cluster (arn:aws:ecs:<region>:<account>:service/<cluster>/<service>); the old format
 // (service/<service>) is in the default cluster.
@@ -125,7 +128,7 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
 }
 
 // regions: --regions, used as given (never cached as an account's enabled regions); null: each account's enabled ones.
-export async function discoverAll({ reached, regions: given, regionsOf, portsOf, cache, refresh, now, progress = () => {}, concurrency = 4 }: {
+export async function discoverAll({ reached, regions: given, regionsOf, portsOf, cache, refresh, now, progress = () => {}, accountProgress = () => {}, concurrency = 5 }: {
   reached: Reached;
   regions: string[] | null;
   regionsOf: (account: string, credentials: Credentials | null) => Promise<string[]>;
@@ -134,6 +137,8 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
   refresh: 'discovery' | 'metrics' | null;
   now: () => number;
   progress?: Progress;
+  accountProgress?: (event: AccountEvent) => void;
+  // Accounts discovered at once (--parallel).
   concurrency?: number;
 }): Promise<{ regions: RegionDiscovery[] }> {
   const byAccount = new Map<string, RegionDiscovery[]>();
@@ -144,6 +149,7 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
       const { account, credentials } = next;
       const found: RegionDiscovery[] = [];
       byAccount.set(account, found);
+      let listed = 0;
       try {
         const regionsPath = `regions/${account}.json`;
         let regions = given ?? (again ? null : await cache.get<string[]>(regionsPath, freshDiscovery(now())));
@@ -151,6 +157,8 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
           regions = await regionsOf(account, await credentials());
           await cache.put(regionsPath, regions);
         }
+        listed = regions.length;
+        accountProgress({ account, state: 'started', regions: listed });
         for (const region of regions) {
           const path = `discovery/${account}-${region}.json`;
           const kept = again ? null : await cache.get<RegionDiscovery>(path, freshDiscovery(now()));
@@ -173,10 +181,12 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
         }
       } catch (err) {
         // A refused role is already in reached.unreachable; any other failure of the account is said, never dropped.
-        if (!reached.unreachable.some((u) => u.account === account)) {
-          found.push({ account, region: '*', workloads: [], ineligible: [], error: `${(err as Error).name}: ${(err as Error).message}` });
-        }
+        const error = `${(err as Error).name}: ${(err as Error).message}`;
+        if (!reached.unreachable.some((u) => u.account === account)) found.push({ account, region: '*', workloads: [], ineligible: [], error });
+        accountProgress({ account, state: 'done', regions: listed, error });
+        continue;
       }
+      accountProgress({ account, state: 'done', regions: listed });
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, reached.accounts.length) }, work));

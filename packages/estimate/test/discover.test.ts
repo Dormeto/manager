@@ -6,10 +6,11 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ScannedRule } from '@dormeto/discovery';
 import { createCache } from '../src/cache.js';
-import { discoverAll, discoverRegion, type RegionPorts } from '../src/discover.js';
+import { discoverAll, discoverRegion, type AccountEvent, type RegionPorts } from '../src/discover.js';
 import type { Reached } from '../src/accounts.js';
 
 const A = '111111111111';
+const B = '222222222222';
 const R = 'eu-west-1';
 const T = Date.parse('2026-10-10T12:00:00.000Z');
 const LB = `arn:aws:elasticloadbalancing:${R}:${A}:loadbalancer/app/web/0123456789abcdef`;
@@ -132,8 +133,10 @@ describe('the discovery of every account and region', () => {
   function setup({ accounts = [account(A)], regions = [R, 'eu-west-3'], failing = new Set<string>(), delay = 0, unreachable = [] as Reached['unreachable'] } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
     const calls = { scans: [] as string[], regions: 0, active: 0, most: 0 };
-    const run = (over: { refresh?: 'discovery' | 'metrics' | null; regions?: string[] | null } = {}) => discoverAll({
+    const events: AccountEvent[] = [];
+    const run = (over: { refresh?: 'discovery' | 'metrics' | null; regions?: string[] | null; concurrency?: number } = {}) => discoverAll({
       reached: { ...reachedOf(accounts), unreachable }, cache: createCache({ dir, now: () => T }), refresh: over.refresh ?? null, now: () => T, regions: over.regions ?? null,
+      ...(over.concurrency ? { concurrency: over.concurrency } : {}), accountProgress: (e) => events.push(e),
       regionsOf: async () => { calls.regions += 1; return regions; },
       portsOf: (acct, region) => ({
         ...regionPorts([rule(`${acct}-${region}`)]).ports,
@@ -148,7 +151,7 @@ describe('the discovery of every account and region', () => {
         },
       }),
     });
-    return { run, calls, dir };
+    return { run, calls, dir, events };
   }
 
   it('every account\'s regions; a region that fails is said and the others go on', async () => {
@@ -234,11 +237,33 @@ describe('the discovery of every account and region', () => {
     expect(out.regions).toEqual([{ account: A, region: '*', workloads: [], ineligible: [], error: 'UnauthorizedOperation: You are not authorized to perform this operation.' }]);
   });
 
-  it('four accounts at a time at most', async () => {
-    const s = setup({ accounts: ['1', '2', '3', '4', '5', '6'].map((n) => account(n.repeat(12))), regions: [R], delay: 20 });
+  it('five accounts at a time by default, as many as asked (--parallel)', async () => {
+    const accounts = ['1', '2', '3', '4', '5', '6', '7', '8'].map((n) => account(n.repeat(12)));
+    const s = setup({ accounts, regions: [R], delay: 20 });
     await s.run();
-    expect(s.calls.scans).toHaveLength(6);
-    expect(s.calls.most).toBe(4);
+    expect(s.calls.scans).toHaveLength(8);
+    expect(s.calls.most).toBe(5);
+    for (const concurrency of [1, 2]) {
+      const t = setup({ accounts, regions: [R], delay: 10 });
+      await t.run({ concurrency });
+      expect(t.calls.most).toBe(concurrency);
+    }
+  });
+
+  it('says when each account starts, with its regions, and when it is done (the phase\'s progress)', async () => {
+    const s = setup({ accounts: [account(A), account(B)], failing: new Set(['eu-west-3']) });
+    await s.run({ concurrency: 1 });
+    expect(s.events).toEqual([
+      { account: A, state: 'started', regions: 2 }, { account: A, state: 'done', regions: 2 },
+      { account: B, state: 'started', regions: 2 }, { account: B, state: 'done', regions: 2 },
+    ]);
+    const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+    const events: AccountEvent[] = [];
+    await discoverAll({
+      reached: reachedOf([account(A)]), cache: createCache({ dir, now: () => T }), refresh: null, now: () => T, regions: null, accountProgress: (e) => events.push(e),
+      regionsOf: async () => { throw Object.assign(new Error('not authorized'), { name: 'UnauthorizedOperation' }); }, portsOf: () => { throw new Error('not asked'); },
+    });
+    expect(events).toEqual([{ account: A, state: 'done', regions: 0, error: 'UnauthorizedOperation: not authorized' }]);
   });
 });
 

@@ -79,5 +79,7 @@ function awsOf(_options: Options, name: string): EstimateAws {
 
 const code = await main(process.argv.slice(2), {
   now: Date.now, cacheRoot: cacheDir(), log: (line) => console.log(line), error: (line) => console.error(line), aws: awsOf,
+  // In a terminal, the discovery phase's progress line is rewritten in place.
+  ...(process.stdout.isTTY ? { status: { update: (line: string) => process.stdout.write(`\r\x1b[2K${line}`), end: (line: string) => process.stdout.write(`\r\x1b[2K${line}\n`) } } : {}),
 });
 process.exit(code);

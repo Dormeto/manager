@@ -88,6 +88,20 @@ describe('the estimate command', () => {
     expect([calls.scans, calls.metrics, calls.regions, calls.assumed]).toEqual([before.scans, before.metrics, before.regions, before.assumed]);
   });
 
+  it('the discovery phase\'s progress: a line per account without a terminal, one line rewritten in a terminal; --parallel', async () => {
+    const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
+    const d = deps(fakeAws().aws);
+    expect(await main(['--profile', 'p', '--out', out], d.deps)).toBe(0);
+    expect(d.out).toContain(`  discovery ${A} (1/1): 1 region, 1 workload`);
+    const t = deps(fakeAws().aws);
+    const updates: string[] = [];
+    const ends: string[] = [];
+    expect(await main(['--profile', 'p', '--parallel', '2', '--out', out], { ...t.deps, status: { update: (l: string) => updates.push(l), end: (l: string) => ends.push(l) } })).toBe(0);
+    expect(updates.length).toBeGreaterThan(0);
+    expect(ends).toEqual(['  Discovery [████████████████████] 100% · 1/1 account · 1 region · 1 workload · 0:00']);
+    expect(t.out.some((l) => l.startsWith('  discovery '))).toBe(false);
+  });
+
   it('restricted to accounts of the organization (--accounts): only those, and how many of its accounts', async () => {
     const { aws, calls } = fakeAws({ organization: 'o-abc123' });
     const d = deps(aws);

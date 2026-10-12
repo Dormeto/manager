@@ -224,7 +224,7 @@ vision repository: `tools/estimate/bin/dormeto-estimate`, the same options).
 ```
 npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
   [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
-  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--out <dir>]
+  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--parallel 5] [--out <dir>]
 ```
 
 - **Accounts:** the organization's active accounts when the profile may list them (the management account or a
@@ -256,7 +256,9 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   wait more than it saves), and `--min-saving` ($1 by default) one that would save less than that a month (not worth
   installing Dormeto for). Each is listed apart in the report with its window, wakes a day and the saving left out;
   `none` keeps them all.
-- **Three phases:** discovery (discovery's scan of each enabled region, or `--regions`; what each eligible workload's
+- **Three phases:** discovery (`--parallel` accounts at a time, 5 by default, each scanning its regions one after the
+  other; in a terminal, one progress line with a bar, the accounts done, the regions, workloads, failures and the time,
+  else a line per account; discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
   five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`
   (an hour by default) and at each workload's recommended one, net of Dormeto's cost). A workload Dormeto already manages is

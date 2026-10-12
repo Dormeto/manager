@@ -9,7 +9,7 @@ const workload = (name: string, usd15: number, recommended = 30) => ({
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1 },
+  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5 },
   accounts: 2, accountsListed: 2, accountNames: { '111111111111': 'prod', '333333333333': 'sandbox' },
   dormeto: {
     manager: { count: 1, unitMonth: 5, usdMonth: 5 },

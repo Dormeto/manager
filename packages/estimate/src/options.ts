@@ -27,6 +27,8 @@ export interface Options {
   // none), and those saving less than this a month there (--min-saving, $1 by default; null: none).
   maxWakes: number | null;
   minSaving: number | null;
+  // How many accounts are discovered at once (--parallel, 5 by default).
+  parallel: number;
 }
 
 export class UsageError extends Error {}
@@ -35,7 +37,7 @@ export const USAGE = `Usage: npm run estimate -- --profile <profile>[,<profile>.
   [--regions eu-west-1,eu-west-3] [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 0-90] [--discount-databases 0-90]
   [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none]
-  [--min-saving 1|none] [--out <dir>]`;
+  [--min-saving 1|none] [--parallel 5] [--out <dir>]`;
 
 // Accounts created by AWS Organizations have it; the role is supposed to be there (decision 4).
 const DEFAULT_ROLE = 'OrganizationAccountAccessRole';
@@ -43,13 +45,15 @@ const REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
 const ACCOUNT = /^\d{12}$/;
 // Options without a value; --uptime is every uptime option.
 const FLAGS = ['uptime', 'ec2-uptime', 'ecs-uptime'];
-const NAMES = ['profile', 'accounts', 'regions', 'exclude-tags', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window', 'max-wakes', 'min-saving'];
+const NAMES = ['profile', 'accounts', 'regions', 'exclude-tags', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window', 'max-wakes', 'min-saving', 'parallel'];
 // The router's limits of idleMinutes.
 const WINDOW = { min: 5, max: 1440, default: 60 };
 // More wakes a day than this keep visitors waiting more than they save; less than this a month is not worth installing
 // Dormeto for (the user, 2026-10-11).
 const MAX_WAKES = 3;
 const MIN_SAVING = 1;
+// Accounts discovered at once: each scans its regions one after the other (AWS throttles a caller well before 50).
+const PARALLEL = { min: 1, max: 50, default: 5 };
 
 const percent = (name: string, value: string | undefined) => {
   if (value === undefined) return 0;
@@ -124,11 +128,15 @@ export function parseOptions(argv: string[]): Options {
   if (maxWakes !== 'none' && !/^\d+(\.\d+)?$/.test(maxWakes)) throw new UsageError('--max-wakes: a number of wakes a day, such as 3 or 0.5, or none');
   const minSaving = given.get('min-saving') ?? String(MIN_SAVING);
   if (minSaving !== 'none' && !/^\d+(\.\d+)?$/.test(minSaving)) throw new UsageError('--min-saving: dollars a month, such as 1 or 0.5, or none');
+  const parallel = Number(given.get('parallel') ?? PARALLEL.default);
+  if (!/^\d+$/.test(given.get('parallel') ?? String(PARALLEL.default)) || parallel < PARALLEL.min || parallel > PARALLEL.max) {
+    throw new UsageError(`--parallel: accounts discovered at once, ${PARALLEL.min} to ${PARALLEL.max}`);
+  }
   return {
     profiles, accounts, regions, excludeTags, ec2Uptime: flags.has('uptime') || flags.has('ec2-uptime'), ecsUptime: flags.has('uptime') || flags.has('ecs-uptime'), role: given.get('role') ?? DEFAULT_ROLE,
     baseline: kind === 'always' ? { kind } : { kind, timeZone },
     discounts: { compute: percent('discount-compute', given.get('discount-compute')), databases: percent('discount-databases', given.get('discount-databases')) },
     refresh, out: given.get('out') ?? process.cwd(), window, maxWakes: maxWakes === 'none' ? null : Number(maxWakes),
-    minSaving: minSaving === 'none' ? null : Number(minSaving),
+    minSaving: minSaving === 'none' ? null : Number(minSaving), parallel,
   };
 }

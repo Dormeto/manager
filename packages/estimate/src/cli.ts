@@ -10,6 +10,7 @@ import { createCache, type PriceCache } from './cache.js';
 import { discoverAll, type Progress, type RegionPorts } from './discover.js';
 import { estimateAll } from './estimate.js';
 import { USAGE, UsageError, parseOptions, type Options } from './options.js';
+import { discoveryView, type Status } from './progress.js';
 import { jsonReport, markdownReport, summaryLines } from './report.js';
 import { requestsAll, type CloudWatchPort } from './requests.js';
 import { excludeByTags } from './tags.js';
@@ -31,6 +32,8 @@ export interface CliDeps {
   // The AWS of each profile given: an account is read with the profile reaching it.
   aws: (options: Options, profile: string) => EstimateAws;
   writeFile?: (path: string, text: string) => Promise<void>;
+  // A terminal: the discovery phase's progress on one line rewritten in place (else a line per account).
+  status?: Status;
 }
 
 const save = async (path: string, text: string) => {
@@ -66,8 +69,13 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     deps.log(`Estimating ${what}; cache ${join(deps.cacheRoot, key)}`);
     if (reached.why) deps.log(reached.why);
     const progress: Progress = (p) => deps.log(`  ${p.phase} ${p.account} ${p.region}: ${p.error ? `failed (${p.error})` : `${p.workloads} workload${p.workloads === 1 ? '' : 's'}`}${p.from === 'cache' ? ' (cache)' : ''}`);
-    deps.log('Phase 1: discovery');
-    const discovered = await discoverAll({ reached, regions: options.regions, regionsOf: aws.regionsOf, portsOf: aws.portsOf, cache, refresh: options.refresh, now: deps.now, progress });
+    deps.log(`Phase 1: discovery (${options.parallel} account${options.parallel === 1 ? '' : 's'} at a time)`);
+    const view = discoveryView({ accounts: reached.accounts.length, now: deps.now, log: deps.log, ...(deps.status ? { status: deps.status } : {}) });
+    const discovered = await discoverAll({
+      reached, regions: options.regions, regionsOf: aws.regionsOf, portsOf: aws.portsOf, cache, refresh: options.refresh, now: deps.now,
+      progress: view.region, accountProgress: view.account, concurrency: options.parallel,
+    });
+    view.end();
     // Excluded by their tags before their requests are read.
     const { regions, excluded } = excludeByTags(discovered.regions, options.excludeTags);
     const credentialsOf = async (account: string) => (await reached.accounts.find((a) => a.account === account)?.credentials()) ?? null;
