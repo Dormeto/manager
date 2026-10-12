@@ -1,0 +1,124 @@
+import { createHash } from 'node:crypto';
+import { describe, expect, it } from 'vitest';
+import published from './fixtures/blueprint.json' with { type: 'json' };
+import { fill, type Blueprint } from '../src/blueprint.js';
+import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, createInstaller } from '../src/installer.js';
+import { fakeInstallAccount } from './install-fake.js';
+
+const VALUES = { name: 'dmt-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false' };
+const BOUNDARY = 'arn:aws:iam::121014831971:policy/DmtRouterBoundary';
+const PRINCIPALS = ['arn:aws:iam::121014831971:role/dmt-dev-manager-api'];
+const ZIP = new Uint8Array([1, 2, 3]);
+
+const blueprintOf = (over: Partial<typeof VALUES> = {}) => fill(published as unknown as Blueprint, { ...VALUES, ...over });
+
+function setup(zip = ZIP) {
+  const account = fakeInstallAccount();
+  const installer = createInstaller(account.ports, { boundaryArn: BOUNDARY, principals: PRINCIPALS, zip: async () => zip, codeSha256: createHash('sha256').update(zip).digest('base64') });
+  return { ...account, installer };
+}
+
+// Each step until it is no longer pending or asked to retry (the workflow waits between attempts).
+async function installAll(s: ReturnType<typeof setup>, blueprint: Blueprint) {
+  const statuses: string[] = [];
+  for (const step of INSTALL_STEPS) {
+    let changed = false;
+    for (let attempt = 0; ; attempt += 1) {
+      if (attempt > 6) throw new Error(`${step} never settled`);
+      try {
+        const result = await s.installer.install(step, blueprint);
+        changed ||= result.changed === true;
+        if (result.status !== 'pending') {
+          statuses.push(changed ? 'done' : result.status);
+          break;
+        }
+      } catch (err) {
+        if (!(err instanceof RetryLater)) throw err;
+      }
+    }
+  }
+  return statuses;
+}
+
+describe('installer', () => {
+  it('installs every resource of the blueprint, roles within the boundary, waiting for the table and the IAM propagation', async () => {
+    const s = setup();
+    const b = blueprintOf();
+    expect(await s.installer.install('table', b)).toEqual({ status: 'pending', detail: 'table dmt-dev-router CREATING', changed: true });
+    expect(await installAll(s, b)).toEqual(INSTALL_STEPS.map(() => 'done'));
+    expect([...s.state.roles.keys()]).toEqual(['dmt-dev-eu-west-3-controller', 'dmt-dev-eu-west-3-waker', 'dmt-dev-eu-west-3-scheduler', 'dmt-dev-eu-west-3-onboarder']);
+    for (const role of s.state.roles.values()) {
+      expect(role.boundary).toBe(BOUNDARY);
+      expect(role.tags).toEqual({ 'dormeto:router': 'dmt-dev' });
+      expect(role.policies.size).toBe(1);
+    }
+    expect(JSON.parse(s.state.roles.get('dmt-dev-eu-west-3-onboarder')!.policies.get('onboarder')!)).toEqual(b.roles[3]!.policy);
+    expect(s.state.tables.get('dmt-dev-router')).toMatchObject({ status: 'ACTIVE', ttl: 'expiresAt', pitr: true, tags: { 'dormeto:router': 'dmt-dev' } });
+    expect([...s.state.queues.keys()]).toEqual(['dmt-dev-check-failures', 'dmt-dev-controller-failures']);
+    expect(s.state.queues.get('dmt-dev-check-failures')!.attributes).toEqual({ MessageRetentionPeriod: '1209600', SqsManagedSseEnabled: 'true' });
+    expect([...s.state.logGroups].map(([n, g]) => [n, g.retention])).toEqual([
+      ['/aws/lambda/dmt-dev-controller', 14], ['/aws/lambda/dmt-dev-waker', 14], ['/aws/lambda/dmt-dev-onboarder', 14],
+    ]);
+    expect([...s.state.functions.keys()]).toEqual(['dmt-dev-controller', 'dmt-dev-waker', 'dmt-dev-onboarder']);
+    expect(s.state.functions.get('dmt-dev-controller')!.config).toMatchObject({
+      Role: 'arn:aws:iam::121014831971:role/dmt-dev-eu-west-3-controller', Handler: 'controller.handler', Runtime: 'nodejs24.x', Timeout: 900, MemorySize: 256, Architectures: ['arm64'],
+    });
+    expect(s.state.functions.get('dmt-dev-controller')!.asyncInvoke).toMatchObject({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 120, DestinationConfig: { OnFailure: { Destination: 'arn:aws:sqs:eu-west-3:121014831971:dmt-dev-controller-failures' } } });
+    for (const f of ['dmt-dev-controller', 'dmt-dev-onboarder']) expect([...s.state.functions.get(f)!.permissions.values()]).toEqual(PRINCIPALS);
+    expect(s.state.functions.get('dmt-dev-waker')!.permissions.size).toBe(0);
+    expect(s.state.schedules.get('dmt-dev-check')).toMatchObject({
+      ScheduleExpression: 'rate(5 minutes)', FlexibleTimeWindow: { Mode: 'OFF' },
+      Target: { Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmt-dev-controller', RetryPolicy: { MaximumRetryAttempts: 0 }, DeadLetterConfig: { Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmt-dev-check-failures' } },
+    });
+  });
+
+  it('asks to retry when Lambda cannot assume a new role yet', async () => {
+    const s = setup();
+    const b = blueprintOf();
+    for (const step of INSTALL_STEPS.slice(0, 4)) while ((await s.installer.install(step, b)).status === 'pending');
+    await expect(s.installer.install('functions', b)).rejects.toThrow(RetryLater);
+  });
+
+  it('installs again without changing anything', async () => {
+    const s = setup();
+    await installAll(s, blueprintOf());
+    s.state.calls.length = 0;
+    expect(await installAll(s, blueprintOf())).toEqual(INSTALL_STEPS.map(() => 'skipped'));
+    expect(s.state.calls.filter((c) => /^(create|update|put|add|delete)/.test(c))).toEqual([]);
+  });
+
+  it('upgrades to a new version: policies, configuration and code', async () => {
+    const s = setup();
+    await installAll(s, blueprintOf());
+    const next = blueprintOf({ metrics: 'true' });
+    next.roles[0]!.policy.Statement.push({ Effect: 'Allow', Action: ['xray:PutTraceSegments'], Resource: ['*'] });
+    for (const f of next.functions) f.environment.DMT_VERSION = '0.18.0';
+    const upgraded = setup(new Uint8Array([9, 9]));
+    upgraded.state.roles = s.state.roles; upgraded.state.tables = s.state.tables; upgraded.state.queues = s.state.queues;
+    upgraded.state.logGroups = s.state.logGroups; upgraded.state.functions = s.state.functions; upgraded.state.schedules = s.state.schedules;
+    expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped']);
+    expect(JSON.parse(s.state.roles.get('dmt-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(14);
+    const controller = s.state.functions.get('dmt-dev-controller')!;
+    expect((controller.config.Environment as { Variables: Record<string, string> }).Variables).toMatchObject({ DMT_VERSION: '0.18.0', DMT_METRICS: 'true' });
+    expect(controller.codeSha256).toBe(createHash('sha256').update(new Uint8Array([9, 9])).digest('base64'));
+  });
+
+  it('refuses to adopt a role that exists without the permissions boundary', async () => {
+    const s = setup();
+    await s.ports.iam.createRole({ RoleName: 'dmt-dev-eu-west-3-controller', AssumeRolePolicyDocument: '{}' });
+    await expect(s.installer.install('roles', blueprintOf())).rejects.toThrow('role dmt-dev-eu-west-3-controller exists without the permissions boundary DmtRouterBoundary: not created by Dormeto');
+  });
+
+  it('uninstalls every resource in reverse order, then finds nothing to do', async () => {
+    const s = setup();
+    const b = blueprintOf();
+    await installAll(s, b);
+    const statuses = [];
+    for (const step of UNINSTALL_STEPS) statuses.push((await s.installer.uninstall(step, b)).status);
+    expect(statuses).toEqual(UNINSTALL_STEPS.map(() => 'done'));
+    expect([s.state.roles.size, s.state.tables.size, s.state.queues.size, s.state.logGroups.size, s.state.functions.size, s.state.schedules.size]).toEqual([0, 0, 0, 0, 0, 0]);
+    const again = [];
+    for (const step of UNINSTALL_STEPS) again.push((await s.installer.uninstall(step, b)).status);
+    expect(again).toEqual(UNINSTALL_STEPS.map(() => 'skipped'));
+  });
+});

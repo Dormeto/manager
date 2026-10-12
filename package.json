@@ -9,6 +9,7 @@
   "workspaces": [
     "packages/discovery",
     "packages/api",
+    "packages/operations",
     "packages/dashboard"
   ],
   "scripts": {

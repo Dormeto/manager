@@ -1,0 +1,568 @@
+{
+  "router": {
+    "name": "${name}",
+    "region": "${region}",
+    "account": "${account}",
+    "version": "0.17.0",
+    "build": "1d50494cac65"
+  },
+  "tags": {
+    "dormeto:router": "${name}"
+  },
+  "roles": [
+    {
+      "key": "controller",
+      "name": "${name}-${region}-controller",
+      "trust": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "lambda.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "policyName": "controller",
+      "policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "dynamodb:GetItem",
+              "dynamodb:UpdateItem",
+              "dynamodb:Scan",
+              "dynamodb:Query",
+              "dynamodb:DeleteItem"
+            ],
+            "Resource": [
+              "arn:${partition}:dynamodb:${region}:${account}:table/${name}-router"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ec2:DescribeInstances",
+              "elasticloadbalancing:DescribeRules",
+              "elasticloadbalancing:DescribeTargetHealth",
+              "elasticloadbalancing:DescribeTargetGroups",
+              "elasticloadbalancing:DescribeListeners",
+              "elasticloadbalancing:DescribeTags",
+              "cloudwatch:GetMetricData"
+            ],
+            "Resource": [
+              "*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ec2:StartInstances",
+              "ec2:StopInstances"
+            ],
+            "Resource": [
+              "arn:${partition}:ec2:${region}:${account}:instance/*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "elasticloadbalancing:ModifyRule"
+            ],
+            "Resource": [
+              "arn:${partition}:elasticloadbalancing:${region}:${account}:listener-rule/app/*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "autoscaling:DescribeAutoScalingGroups",
+              "tag:GetResources",
+              "ecs:DescribeServices",
+              "application-autoscaling:DescribeScalableTargets",
+              "rds:DescribeDBInstances",
+              "rds:DescribeDBClusters"
+            ],
+            "Resource": [
+              "*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "rds:StartDBInstance",
+              "rds:StopDBInstance",
+              "rds:StartDBCluster",
+              "rds:StopDBCluster"
+            ],
+            "Resource": [
+              "arn:${partition}:rds:${region}:${account}:db:*",
+              "arn:${partition}:rds:${region}:${account}:cluster:*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ecs:UpdateService"
+            ],
+            "Resource": [
+              "arn:${partition}:ecs:${region}:${account}:service/*/*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "application-autoscaling:RegisterScalableTarget"
+            ],
+            "Resource": [
+              "arn:${partition}:application-autoscaling:${region}:${account}:scalable-target/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "autoscaling:UpdateAutoScalingGroup",
+              "autoscaling:SuspendProcesses",
+              "autoscaling:ResumeProcesses"
+            ],
+            "Resource": [
+              "arn:${partition}:autoscaling:${region}:${account}:autoScalingGroup:*:autoScalingGroupName/*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "lambda:InvokeFunction"
+            ],
+            "Resource": [
+              "arn:${partition}:lambda:${region}:${account}:function:${name}-controller"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "sqs:SendMessage"
+            ],
+            "Resource": [
+              "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "sqs:GetQueueAttributes"
+            ],
+            "Resource": [
+              "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures",
+              "arn:${partition}:sqs:${region}:${account}:${name}-check-failures"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "logs:CreateLogStream",
+              "logs:PutLogEvents"
+            ],
+            "Resource": [
+              "arn:${partition}:logs:${region}:${account}:log-group:/aws/lambda/${name}-controller:*"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "key": "waker",
+      "name": "${name}-${region}-waker",
+      "trust": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "lambda.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "policyName": "waker",
+      "policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "dynamodb:GetItem",
+              "dynamodb:UpdateItem",
+              "dynamodb:Query"
+            ],
+            "Resource": [
+              "arn:${partition}:dynamodb:${region}:${account}:table/${name}-router"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "lambda:InvokeFunction"
+            ],
+            "Resource": [
+              "arn:${partition}:lambda:${region}:${account}:function:${name}-controller"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "logs:CreateLogStream",
+              "logs:PutLogEvents"
+            ],
+            "Resource": [
+              "arn:${partition}:logs:${region}:${account}:log-group:/aws/lambda/${name}-waker:*"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "key": "scheduler",
+      "name": "${name}-${region}-scheduler",
+      "trust": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "scheduler.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+              "StringEquals": {
+                "aws:SourceAccount": "${account}"
+              },
+              "ArnEquals": {
+                "aws:SourceArn": "arn:${partition}:scheduler:${region}:${account}:schedule-group/default"
+              }
+            }
+          }
+        ]
+      },
+      "policyName": "scheduler",
+      "policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "lambda:InvokeFunction"
+            ],
+            "Resource": [
+              "arn:${partition}:lambda:${region}:${account}:function:${name}-controller"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "sqs:SendMessage"
+            ],
+            "Resource": [
+              "arn:${partition}:sqs:${region}:${account}:${name}-check-failures"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "key": "onboarder",
+      "name": "${name}-${region}-onboarder",
+      "trust": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "lambda.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      },
+      "policyName": "onboarder",
+      "policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "dynamodb:GetItem",
+              "dynamodb:UpdateItem",
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:DeleteItem"
+            ],
+            "Resource": [
+              "arn:${partition}:dynamodb:${region}:${account}:table/${name}-router"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "elasticloadbalancing:DescribeTargetGroups",
+              "elasticloadbalancing:DescribeListeners",
+              "elasticloadbalancing:DescribeRules",
+              "elasticloadbalancing:DescribeTags",
+              "elasticloadbalancing:DescribeTargetHealth",
+              "ec2:DescribeInstances",
+              "autoscaling:DescribeAutoScalingGroups",
+              "ecs:ListClusters",
+              "ecs:ListServices",
+              "ecs:DescribeServices",
+              "rds:DescribeDBInstances",
+              "rds:DescribeDBClusters"
+            ],
+            "Resource": [
+              "*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "elasticloadbalancing:CreateTargetGroup",
+              "elasticloadbalancing:ModifyTargetGroupAttributes",
+              "elasticloadbalancing:DeleteTargetGroup",
+              "elasticloadbalancing:RegisterTargets",
+              "elasticloadbalancing:DeregisterTargets"
+            ],
+            "Resource": [
+              "arn:${partition}:elasticloadbalancing:${region}:${account}:targetgroup/${name}-*/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "elasticloadbalancing:ModifyRule"
+            ],
+            "Resource": [
+              "arn:${partition}:elasticloadbalancing:${region}:${account}:listener-rule/app/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "elasticloadbalancing:AddTags",
+              "elasticloadbalancing:RemoveTags"
+            ],
+            "Resource": [
+              "arn:${partition}:elasticloadbalancing:${region}:${account}:listener-rule/app/*",
+              "arn:${partition}:elasticloadbalancing:${region}:${account}:targetgroup/${name}-*/*"
+            ],
+            "Condition": {
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "dormeto:workload",
+                  "dormeto:tagged",
+                  "dormeto:router"
+                ]
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ec2:CreateTags",
+              "ec2:DeleteTags",
+              "autoscaling:CreateOrUpdateTags",
+              "autoscaling:DeleteTags",
+              "ecs:TagResource",
+              "ecs:UntagResource",
+              "rds:AddTagsToResource",
+              "rds:RemoveTagsFromResource"
+            ],
+            "Resource": [
+              "arn:${partition}:ec2:${region}:${account}:instance/*",
+              "arn:${partition}:autoscaling:${region}:${account}:autoScalingGroup:*:autoScalingGroupName/*",
+              "arn:${partition}:ecs:${region}:${account}:service/*/*",
+              "arn:${partition}:rds:${region}:${account}:db:*",
+              "arn:${partition}:rds:${region}:${account}:cluster:*"
+            ],
+            "Condition": {
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "dormeto:workload",
+                  "dormeto:tagged",
+                  "dormeto:router"
+                ]
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "lambda:AddPermission",
+              "lambda:RemovePermission"
+            ],
+            "Resource": [
+              "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "logs:CreateLogStream",
+              "logs:PutLogEvents"
+            ],
+            "Resource": [
+              "arn:${partition}:logs:${region}:${account}:log-group:/aws/lambda/${name}-onboarder:*"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "table": {
+    "name": "${name}-router",
+    "hashKey": "pk",
+    "rangeKey": "sk",
+    "ttlAttribute": "expiresAt",
+    "pointInTimeRecovery": true
+  },
+  "queues": [
+    {
+      "key": "check-failures",
+      "name": "${name}-check-failures",
+      "retentionSeconds": 1209600,
+      "managedEncryption": true
+    },
+    {
+      "key": "controller-failures",
+      "name": "${name}-controller-failures",
+      "retentionSeconds": 1209600,
+      "managedEncryption": true
+    }
+  ],
+  "logGroups": [
+    {
+      "name": "/aws/lambda/${name}-controller",
+      "retentionDays": 14
+    },
+    {
+      "name": "/aws/lambda/${name}-waker",
+      "retentionDays": 14
+    },
+    {
+      "name": "/aws/lambda/${name}-onboarder",
+      "retentionDays": 14
+    }
+  ],
+  "functions": [
+    {
+      "key": "controller",
+      "name": "${name}-controller",
+      "role": "${name}-${region}-controller",
+      "handler": "controller.handler",
+      "timeout": 900,
+      "memory": 256,
+      "environment": {
+        "DMT_TABLE": "${name}-router",
+        "DMT_TG_PREFIX": "${name}-",
+        "DMT_VERSION": "0.17.0",
+        "DMT_BUILD": "1d50494cac65",
+        "DMT_IP_LISTS": "${ipLists}",
+        "DMT_NO_WAKE_RULES": "${noWakeRules}",
+        "DMT_CHECK_SCHEDULE": "${checkSchedule}",
+        "DMT_METRICS": "${metrics}",
+        "DMT_WAKER_FUNCTION": "${name}-waker",
+        "DMT_FAILURE_QUEUES": "{\"check\":\"https://sqs.${region}.amazonaws.com/${account}/${name}-check-failures\",\"controller\":\"https://sqs.${region}.amazonaws.com/${account}/${name}-controller-failures\"}"
+      },
+      "asyncInvoke": {
+        "maximumRetryAttempts": 0,
+        "maximumEventAgeInSeconds": 120,
+        "onFailure": "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures"
+      },
+      "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-controller",
+      "runtime": "nodejs24.x",
+      "architectures": [
+        "arm64"
+      ]
+    },
+    {
+      "key": "waker",
+      "name": "${name}-waker",
+      "role": "${name}-${region}-waker",
+      "handler": "waker.handler",
+      "timeout": 70,
+      "memory": 512,
+      "environment": {
+        "DMT_TABLE": "${name}-router",
+        "DMT_TG_PREFIX": "${name}-",
+        "DMT_VERSION": "0.17.0",
+        "DMT_BUILD": "1d50494cac65",
+        "DMT_CONTROLLER": "${name}-controller",
+        "DMT_NO_WAKE_RULES": "${noWakeRules}",
+        "DMT_METRICS": "${metrics}",
+        "DMT_IP_LISTS": "${ipLists}"
+      },
+      "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-waker",
+      "runtime": "nodejs24.x",
+      "architectures": [
+        "arm64"
+      ]
+    },
+    {
+      "key": "onboarder",
+      "name": "${name}-onboarder",
+      "role": "${name}-${region}-onboarder",
+      "handler": "onboarder.handler",
+      "timeout": 300,
+      "memory": 256,
+      "environment": {
+        "DMT_TABLE": "${name}-router",
+        "DMT_TG_PREFIX": "${name}-",
+        "DMT_VERSION": "0.17.0",
+        "DMT_BUILD": "1d50494cac65",
+        "DMT_WAKER_FUNCTION": "${name}-waker",
+        "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
+      },
+      "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-onboarder",
+      "runtime": "nodejs24.x",
+      "architectures": [
+        "arm64"
+      ]
+    }
+  ],
+  "schedule": {
+    "name": "${name}-check",
+    "expression": "${checkSchedule}",
+    "target": "arn:${partition}:lambda:${region}:${account}:function:${name}-controller",
+    "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-scheduler",
+    "input": "{\"action\":\"check\",\"source\":\"schedule\"}",
+    "deadLetter": "arn:${partition}:sqs:${region}:${account}:${name}-check-failures",
+    "maximumRetryAttempts": 0
+  }
+}
