@@ -190,6 +190,17 @@ locals {
       # Hourly runs: the state holds between them (review I5: no OK every hour while it keeps failing).
       comparison = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "ignore"
     }
+    savings-errors = {
+      description = "The daily savings job failed: the Overview's savings miss a day (see its logs; run it again with {\"day\": \"YYYY-MM-DD\"})."
+      namespace   = "AWS/Lambda", metric = "Errors", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.savings.function_name }
+      # A run a day: the state holds until the next one.
+      comparison = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "ignore"
+    }
+    savings-failed = {
+      description = "Runs of the savings job the scheduler could not deliver are in the savings-failures queue: run them again by hand."
+      namespace   = "AWS/SQS", metric = "ApproximateNumberOfMessagesVisible", statistic = "Maximum", dimensions = { QueueName = aws_sqs_queue.savings_failures.name }
+      comparison  = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "notBreaching"
+    }
     router-events-failed = {
       description = "Router events the manager could not store are in the router-events-failed queue: the dashboard and the alarms miss them."
       namespace   = "AWS/SQS", metric = "ApproximateNumberOfMessagesVisible", statistic = "Maximum", dimensions = { QueueName = aws_sqs_queue.router_events_failed.name }

@@ -26,33 +26,51 @@ const OS = new Set(['Linux', 'Windows']);
 const term = (Field: string, Value: string) => ({ Type: 'TERM_MATCH', Field, Value });
 const contains = (Field: string, Value: string) => ({ Type: 'CONTAINS', Field, Value });
 
-// The first on-demand hourly price in USD of the products answered.
+// The on-demand hourly price in USD of the products answered: the SDK gives each product as a String object (or a
+// string). Several products of different prices are no price (review I2: an ambiguous answer is not guessed).
 function onDemand(list: unknown[] = []): number | null {
+  const prices = new Set<number>();
   for (const raw of list) {
-    const product = (typeof raw === 'string' ? JSON.parse(raw) : raw) as { terms?: { OnDemand?: Record<string, { priceDimensions?: Record<string, { pricePerUnit?: { USD?: string } }> }> } };
-    for (const offer of Object.values(product.terms?.OnDemand ?? {})) {
-      for (const dimension of Object.values(offer.priceDimensions ?? {})) {
-        const usd = Number(dimension.pricePerUnit?.USD);
-        if (Number.isFinite(usd) && usd > 0) return usd;
-      }
-    }
+    const product = (raw !== null && typeof raw === 'object' && 'terms' in raw ? raw : JSON.parse(String(raw))) as { terms?: { OnDemand?: Record<string, { priceDimensions?: Record<string, { pricePerUnit?: { USD?: string } }> }> } };
+    const found = Object.values(product.terms?.OnDemand ?? {}).flatMap((offer) => Object.values(offer.priceDimensions ?? {}))
+      .map((d) => Number(d.pricePerUnit?.USD)).find((usd) => Number.isFinite(usd) && usd > 0);
+    if (found !== undefined) prices.add(found);
   }
-  return null;
+  return prices.size === 1 ? [...prices][0]! : null;
 }
 
-export function createPriceBook({ pricing, store }: { pricing: PricingPort; store: PriceCache; now?: () => number }) {
-  // One price, cached; a failed call prices nothing and caches nothing.
-  async function price(key: string, ServiceCode: string, Filters: { Type: string; Field: string; Value: string }[]): Promise<number | null> {
+// In memory (review I5): a price an hour, a failure five minutes; a price being asked is shared.
+const MEMORY_MS = 3_600_000;
+const FAILURE_MS = 300_000;
+
+export function createPriceBook({ pricing, store, now = Date.now }: { pricing: PricingPort; store: PriceCache; now?: () => number }) {
+  const memory = new Map<string, { usd: number | null; until: number }>();
+  const pending = new Map<string, Promise<number | null>>();
+  // One price: from memory, the table, else the API; a failed call prices nothing, caches nothing in the table, and is not
+  // asked again for five minutes.
+  async function lookup(key: string, ServiceCode: string, Filters: { Type: string; Field: string; Value: string }[]): Promise<number | null> {
     const cached = await store.getPrice(key);
-    if (cached) return cached.usd;
+    if (cached) {
+      memory.set(key, { usd: cached.usd, until: now() + MEMORY_MS });
+      return cached.usd;
+    }
     let usd: number | null;
     try {
       usd = onDemand((await pricing.getProducts({ ServiceCode, Filters, MaxResults: 10 })).PriceList);
     } catch {
+      memory.set(key, { usd: null, until: now() + FAILURE_MS });
       return null;
     }
     await store.putPrice(key, usd);
+    memory.set(key, { usd, until: now() + MEMORY_MS });
     return usd;
+  }
+  function price(key: string, ServiceCode: string, Filters: { Type: string; Field: string; Value: string }[]): Promise<number | null> {
+    const known = memory.get(key);
+    if (known && known.until > now()) return Promise.resolve(known.usd);
+    const asked = pending.get(key) ?? lookup(key, ServiceCode, Filters).finally(() => pending.delete(key));
+    pending.set(key, asked);
+    return asked;
   }
 
   return {
@@ -62,7 +80,7 @@ export function createPriceBook({ pricing, store }: { pricing: PricingPort; stor
         case 'ec2': {
           if (!OS.has(item.os)) return null;
           const usd = await price(`${region}#ec2#${item.type}#${item.os}`, 'AmazonEC2', [
-            term('instanceType', item.type), term('regionCode', region), term('operatingSystem', item.os), term('tenancy', 'Shared'),
+            term('instanceType', item.type), term('regionCode', region), term('locationType', 'AWS Region'), term('operatingSystem', item.os), term('tenancy', 'Shared'),
             term('preInstalledSw', 'NA'), term('capacitystatus', 'Used'), term('licenseModel', 'No License required'),
           ]);
           return usd === null ? null : usd * item.count;
@@ -79,7 +97,9 @@ export function createPriceBook({ pricing, store }: { pricing: PricingPort; stor
           if (!engine) return null;
           const deployment = item.multiAz ? 'Multi-AZ' : 'Single-AZ';
           return price(`${region}#rds#${item.class}#${engine}#${deployment}`, 'AmazonRDS', [
-            term('instanceType', item.class), term('regionCode', region), term('databaseEngine', engine), term('deploymentOption', deployment),
+            term('instanceType', item.class), term('regionCode', region), term('locationType', 'AWS Region'), term('databaseEngine', engine), term('deploymentOption', deployment),
+            // Standard storage, not I/O-Optimized (InstanceUsageIOOptimized:), whose instances cost about 30% more.
+            contains('usagetype', item.multiAz ? 'Multi-AZUsage:' : 'InstanceUsage:'),
           ]);
         }
         case 'aurora-serverless': {

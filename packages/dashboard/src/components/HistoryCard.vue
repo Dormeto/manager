@@ -37,7 +37,9 @@ const summary = computed(() => {
     w.count ? `${w.count} wake${w.count === 1 ? '' : 's'}${w.medianMs !== null ? `, median ${ms(w.medianMs)}, longest ${ms(w.maxMs)}` : ''}` : 'no wake',
     ...(w.failed ? [`${w.failed} failed`] : []),
     // R9: what the naps of the period saved, at AWS's list prices.
-    ...(h.savings ? [`saved about ${usd(h.savings.usd)} (estimate)${h.savings.unpriced.length ? ', part not priced' : ''}`] : []),
+    // Nothing priced is not $0 saved (review I6): a router before 0.27.0, or what AWS's list prices do not name.
+    ...(!h.savings ? [] : h.savings.items.length ? [`saved about ${usd(h.savings.usd)} (estimate)${h.savings.unpriced.length ? ', part not priced' : ''}`]
+      : h.savings.unpriced.length ? ['savings not priced yet'] : []),
   ];
 });
 const transitions = computed(() => [...(history.value?.entries ?? [])].reverse().slice(0, 50));

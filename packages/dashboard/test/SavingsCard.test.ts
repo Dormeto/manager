@@ -55,4 +55,13 @@ describe('SavingsCard', () => {
     expect(wrapper.text()).toContain('No estimate yet: the first one is computed tonight at 00:30 UTC');
     wrapper.unmount();
   });
+
+  it('takes Dormeto\'s cost for the days computed only, in the first 30 days (review I7)', async () => {
+    const recent = { ...SUMMARY, last30: { ...SUMMARY.last30, usd: 1.5 }, cumulative: { usd: 1.5, since: '2026-10-05', lastDay: '2026-10-07' } };
+    const wrapper = await mountCard({ summary: recent });
+    // 3 days computed: $5.78 × 3 / 30 = $0.58 of Dormeto's cost.
+    expect(wrapper.text()).toContain('net about $0.92 over the 3 days computed');
+    wrapper.unmount();
+  });
 });
+

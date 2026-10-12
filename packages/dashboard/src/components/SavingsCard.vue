@@ -14,6 +14,13 @@ usePoll(async () => {
   loaded.value = true;
 });
 const day = (date: string) => new Date(`${date}T00:00:00.000Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+// The days the last 30 cover since the first one computed (review I7: Dormeto's cost for those days only).
+const covered = computed(() => {
+  const s = summary.value;
+  if (!s) return 30;
+  const days = Math.round((Date.parse(`${s.day}T00:00:00.000Z`) - Date.parse(`${s.cumulative.since}T00:00:00.000Z`)) / 86_400_000) + 1;
+  return Math.max(1, Math.min(30, days));
+});
 const peak = computed(() => Math.max(...(summary.value?.last30.days ?? []).map((d) => d.usd), 0.01));
 const baseline = computed(() => (summary.value?.baseline.kind === 'business-hours' ? `business hours (weekdays 08:00 to 20:00, ${summary.value.baseline.timeZone})` : '24/7'));
 const unpriced = computed(() => {
@@ -40,7 +47,7 @@ const unpriced = computed(() => {
         </v-tooltip>
       </div>
       <div class="text-body-medium mb-2">Dormeto costs about {{ usd(summary.dormeto.usdMonth) }} a month: net about
-        {{ usd(summary.last30.usd - summary.dormeto.usdMonth) }} over the last 30 days.</div>
+        {{ usd(summary.last30.usd - (summary.dormeto.usdMonth * covered) / 30) }} over {{ covered === 30 ? 'the last 30 days' : `the ${covered} day${covered === 1 ? '' : 's'} computed` }}.</div>
       <v-list v-if="summary.top.length" density="compact" class="py-0">
         <v-list-item v-for="w in summary.top.slice(0, 5)" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${encodeURIComponent(w.router)}/${encodeURIComponent(w.workloadId)}`"
           :title="w.name ?? w.workloadId" :subtitle="w.router">

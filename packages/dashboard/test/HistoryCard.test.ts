@@ -81,6 +81,14 @@ describe('HistoryCard', () => {
     wrapper.unmount();
   });
 
+  it('says the savings are not priced yet rather than $0 when nothing could be priced (review I6)', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0, hours: 21, items: [], unpriced: [{ reason: 'not described (a router before 0.27.0)', hours: 21 }], baseline: { kind: 'always' } } });
+    const wrapper = await mountCard();
+    expect(wrapper.text()).toContain('savings not priced yet');
+    expect(wrapper.text()).not.toContain('$0.00');
+    wrapper.unmount();
+  });
+
   it('reloads for another period', async () => {
     const wrapper = await mountCard();
     await wrapper.findAll('button').find((b) => b.text() === '30 days')!.trigger('click');

@@ -53,9 +53,13 @@ variable "savings_baseline" {
 }
 
 variable "savings_timezone" {
-  description = "The time zone of the business-hours baseline (an IANA name, for example Europe/Paris)."
+  description = "The time zone of the business-hours baseline (an IANA name, for example Europe/Paris). A name the runtime does not know is UTC, with a warning in the logs."
   type        = string
   default     = "UTC"
+  validation {
+    condition     = can(regex("^(UTC|[A-Za-z]+(/[A-Za-z0-9_+-]+)+)$", var.savings_timezone))
+    error_message = "savings_timezone must be an IANA time zone, for example Europe/Paris, or UTC."
+  }
 }
 
 variable "alert_emails" {

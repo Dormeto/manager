@@ -25,24 +25,31 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
     const to = new Date(Date.parse(from) + DAY_MS).toISOString();
     const workloads = await fleet.listWorkloads();
     const queue = [...workloads];
+    let failed = 0;
     const work = async () => {
       for (let w = queue.shift(); w; w = queue.shift()) {
-        const [{ entries }, before] = await Promise.all([
-          fleet.listHistory(w.account, w.region, w.workloadId, from, to), fleet.historyBefore(w.account, w.region, w.workloadId, from),
-        ]);
-        const view = historyView({ before, entries, from, to, now: to });
-        const region = w.region;
-        const savings = await savingsOf(view.phases, { hourly: (item) => prices.hourly(region, item), baseline });
-        const day: SavingsDay = {
-          account: w.account, region, router: w.router, workloadId: w.workloadId, ...(w.name ? { name: w.name } : {}),
-          usd: savings.usd, asleepHours: (view.totals.ASLEEP ?? 0) / 3600, hours: savings.hours,
-          unpriced: savings.unpriced.map(({ reason, hours }) => ({ reason, hours })),
-        };
-        await fleet.putSavingsDay(date, day);
+        try {
+          const [{ entries }, before] = await Promise.all([
+            fleet.listHistory(w.account, w.region, w.workloadId, from, to), fleet.historyBefore(w.account, w.region, w.workloadId, from),
+          ]);
+          const view = historyView({ before, entries, from, to, now: to });
+          const region = w.region;
+          const savings = await savingsOf(view.phases, { hourly: (item) => prices.hourly(region, item), baseline });
+          const day: SavingsDay = {
+            account: w.account, region, router: w.router, workloadId: w.workloadId, ...(w.name ? { name: w.name } : {}),
+            usd: savings.usd, asleepHours: (view.totals.ASLEEP ?? 0) / 3600, hours: savings.hours,
+            unpriced: savings.unpriced.map(({ reason, hours }) => ({ reason, hours })),
+          };
+          await fleet.putSavingsDay(date, day);
+        } catch (err) {
+          // One workload's error is said (the run counts it), never the whole day's (review I1).
+          failed += 1;
+          log.error('SavingsDayFailed', { day: date, workload: `${w.account}/${w.region}/${w.workloadId}`, error: (err as Error).message });
+        }
       }
     };
     await Promise.all(Array.from({ length: WORKERS }, work));
-    return workloads.length;
+    return { counted: workloads.length, failed };
   }
 
   return {
@@ -50,7 +57,7 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
     async run(input: { day?: string } = {}) {
       const t = now();
       const date = input.day && /^\d{4}-\d{2}-\d{2}$/.test(input.day) ? input.day : dateOf(t - DAY_MS);
-      const counted = await priceDay(date);
+      const { counted, failed } = await priceDay(date);
       const previous = await fleet.getSavingsSummary();
       const latest = previous && previous.day > date ? previous.day : date;
       // The 31 days to the latest one: the last 30, and this month.
@@ -69,7 +76,9 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
         }
       }
       const total = sum(days.get(date)!);
-      const add = !previous || previous.cumulative.lastDay < date;
+      // Each day's total, replaced when the day is run again: the cumulative total is their sum, in any order.
+      const totals = { ...(previous?.counted ?? {}), [date]: total };
+      const since = Object.keys(totals).sort()[0]!;
       const latestDay = days.get(latest)!;
       const unpricedDay = latestDay.filter((d) => d.unpriced.length);
       // A router per account and region with managed workloads (the cost model's).
@@ -80,11 +89,9 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
         baseline,
         last30: { usd: last30.reduce((n, d) => n + sum(days.get(d)!), 0), asleepHours: last30.reduce((n, d) => n + days.get(d)!.reduce((m, w) => m + w.asleepHours, 0), 0), days: last30.map((d) => ({ date: d, usd: sum(days.get(d)!) })) },
         month: { month: latest.slice(0, 7), usd: dates.filter((d) => d.startsWith(latest.slice(0, 7))).reduce((n, d) => n + sum(days.get(d)!), 0) },
-        cumulative: {
-          usd: (previous?.cumulative.usd ?? 0) + (add ? total : 0),
-          since: previous && previous.cumulative.since < date ? previous.cumulative.since : date,
-          lastDay: add ? date : previous!.cumulative.lastDay,
-        },
+        cumulative: { usd: Object.values(totals).reduce((n, v) => n + v, 0), since, lastDay: latest },
+        counted: totals,
+        failed,
         top: [...byWorkload.values()].filter((w) => w.usd > 0).sort((a, b) => b.usd - a.usd).slice(0, TOP),
         unpriced: { workloads: unpricedDay.length, hours: unpricedDay.reduce((n, d) => n + d.unpriced.reduce((m, u) => m + u.hours, 0), 0) },
         workloads: latestDay.length,

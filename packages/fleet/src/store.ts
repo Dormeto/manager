@@ -84,6 +84,8 @@ export interface SavingsSummary {
   last30: { usd: number; asleepHours: number; days: { date: string; usd: number }[] };
   month: { month: string; usd: number };
   cumulative: { usd: number; since: string; lastDay: string };
+  counted: Record<string, number>; // each day's total (review I1: a day run again replaces its amount, in any order)
+  failed?: number; // workloads whose day could not be computed, at the latest run
   top: { account: string; region: string; router: string; workloadId: string; name?: string; usd: number }[];
   unpriced: { workloads: number; hours: number };
   workloads: number;

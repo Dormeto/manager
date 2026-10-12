@@ -59,15 +59,25 @@ describe('savings job', () => {
     expect((await s.fleet.getSavingsSummary())!.cumulative.usd).toBeCloseTo(1.6416, 4);
   });
 
-  it('a later day adds to the cumulative total once, and an earlier day run again changes neither', async () => {
+  it('a day computed out of order counts in the cumulative total, and a day run again replaces its own amount (review I1)', async () => {
     const s = await setup();
-    await s.job.run({ day: '2026-10-06' });
-    const first = (await s.fleet.getSavingsSummary())!.cumulative.usd;
     await s.job.run({ day: DAY });
     await s.job.run({ day: '2026-10-06' });
-    const summary = (await s.fleet.getSavingsSummary())!;
-    expect(summary.cumulative.usd).toBeCloseTo(first + 1.6416, 4);
-    expect(summary.cumulative.since).toBe('2026-10-06');
-    expect(summary.day).toBe(DAY);
+    const both = (await s.fleet.getSavingsSummary())!;
+    // 2026-10-06: a asleep from 20:00 (4 hours of t3.medium).
+    expect(both.cumulative.usd).toBeCloseTo(1.6416 + 4 * 0.0456, 4);
+    expect([both.cumulative.since, both.day]).toEqual(['2026-10-06', DAY]);
+    await s.job.run({ day: '2026-10-06' });
+    expect((await s.fleet.getSavingsSummary())!.cumulative.usd).toBeCloseTo(1.6416 + 4 * 0.0456, 4);
+  });
+
+  it('one workload whose history cannot be read is said, and the others are priced (review I1)', async () => {
+    const s = await setup();
+    const list = s.fleet.listHistory;
+    s.fleet.listHistory = async (account, region, id, ...rest) => { if (id === 'b') throw new Error('ProvisionedThroughputExceededException'); return list(account, region, id, ...rest); };
+    const job = createSavingsJob({ fleet: s.fleet, prices: { hourly: async () => 0.0456 }, baseline: { kind: 'always' }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} } });
+    await job.run();
+    expect((await s.fleet.listSavingsDay(DAY)).map((d) => d.workloadId)).toEqual(['a', 'c']);
+    expect((await s.fleet.getSavingsSummary())!.failed).toBe(1);
   });
 });

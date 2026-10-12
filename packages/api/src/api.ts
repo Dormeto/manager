@@ -712,7 +712,10 @@ export function createApi({
           if (summary?.historySince && summary.historySince < from) initial = entries[0]?.from ?? summary.state;
         }
         const view = historyView({ before, entries, from, to, now: to, initial });
-        const priced = savings ? { ...(await savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item), baseline: savings.baseline })), baseline: savings.baseline } : undefined;
+        // The estimate never fails the history (review I4): without it, the card shows the history alone.
+        const priced = savings
+          ? await savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item), baseline: savings.baseline }).then((r) => ({ ...r, baseline: savings.baseline })).catch(() => undefined)
+          : undefined;
         return reply(200, { ...view, before, entries, truncated, ...(priced ? { savings: priced } : {}) });
       }
       if (method === 'GET' && !action) {

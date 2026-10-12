@@ -208,7 +208,7 @@ run "health_alarms" {
     error_message = "One email subscription per address of alert_emails."
   }
   assert {
-    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed", "ip-lists-errors"])
+    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed", "ip-lists-errors", "savings-errors", "savings-failed"])
     error_message = "Alarms on the watchdog's errors and silence, on the router events not stored, and on the list function's errors."
   }
   assert {
@@ -409,4 +409,22 @@ run "savings_baseline_is_validated" {
     savings_baseline = "weekends"
   }
   expect_failures = [var.savings_baseline]
+}
+
+run "savings_timezone_is_validated" {
+  command = plan
+
+  variables {
+    savings_timezone = "Paris time"
+  }
+  expect_failures = [var.savings_timezone]
+}
+
+run "savings_job_failures_alert" {
+  command = plan
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.manager["savings-errors"].dimensions.FunctionName == "dmt-test-manager-savings" && aws_cloudwatch_metric_alarm.manager["savings-failed"].namespace == "AWS/SQS"
+    error_message = "A failed savings run alerts (review I1): the function's errors and the runs the scheduler could not deliver."
+  }
 }

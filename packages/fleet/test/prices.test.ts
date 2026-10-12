@@ -77,4 +77,43 @@ describe('price book', () => {
     expect(calls).toBe(1);
     expect(s.cache.size).toBe(0);
   });
+
+  it('reads the SDK\'s answer, whose products are String objects, not strings (found live)', async () => {
+    const s = setup((f) => (f.instanceType === 't4g.nano' ? [new String(product({ instanceType: 't4g.nano' }, '0.0046000000')) as unknown as string] : []));
+    expect(await s.book.hourly('eu-west-1', { kind: 'ec2', type: 't4g.nano', count: 1, os: 'Linux' })).toBeCloseTo(0.0046, 6);
+  });
+
+  it('asks for AWS regions only, and RDS by its usage type (not I/O-Optimized); several products of different prices are no price (review I2)', async () => {
+    const s = setup((f) => (f.ServiceCode === 'AmazonRDS' ? [product({}, '0.2900000000'), product({}, '0.3770000000')] : [product({}, '0.0456000000'), product({}, '0.0456000000')]));
+    expect(await s.book.hourly('eu-west-1', { kind: 'rds', class: 'db.r6g.large', engine: 'aurora-postgresql', multiAz: false })).toBeNull();
+    expect(await s.book.hourly('eu-west-1', { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' })).toBeCloseTo(0.0456, 6);
+    expect(s.asked.find((a) => a.ServiceCode === 'AmazonRDS')).toMatchObject({ locationType: 'AWS Region', '~usagetype': 'InstanceUsage:' });
+    expect(s.asked.find((a) => a.ServiceCode === 'AmazonEC2')).toMatchObject({ locationType: 'AWS Region' });
+    const multi = setup(() => [product({}, '0.0350000000')]);
+    await multi.book.hourly('eu-west-1', { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: true });
+    expect(multi.asked[0]).toMatchObject({ '~usagetype': 'Multi-AZUsage:' });
+  });
+
+  it('keeps prices in memory, shares a price being asked, and remembers a failure for minutes (review I5)', async () => {
+    let calls = 0;
+    let failing = true;
+    let t = 0;
+    const reads: string[] = [];
+    const book = createPriceBook({
+      pricing: { async getProducts() { calls += 1; if (failing) throw new Error('Rate exceeded'); return { PriceList: [product({}, '0.0456000000')] }; } },
+      store: { getPrice: async (k: string) => { reads.push(k); return null; }, putPrice: async () => {} }, now: () => t,
+    });
+    const item = { kind: 'ec2' as const, type: 't3.medium', count: 1, os: 'Linux' };
+    await Promise.all([book.hourly('eu-west-1', item), book.hourly('eu-west-1', item), book.hourly('eu-west-1', item)]);
+    expect(calls).toBe(1);
+    await book.hourly('eu-west-1', item);
+    expect(calls, 'a failure remembered').toBe(1);
+    failing = false;
+    t += 6 * 60_000;
+    expect(await book.hourly('eu-west-1', item)).toBeCloseTo(0.0456, 6);
+    const before = reads.length;
+    expect(await book.hourly('eu-west-1', item)).toBeCloseTo(0.0456, 6);
+    expect(reads.length, 'from memory, not the table').toBe(before);
+  });
 });
+
