@@ -249,3 +249,25 @@ export interface Operation {
   finishedAt?: string;
   error?: string;
 }
+
+// A workload's state history over a period (R8): GET /api/workloads/{router}/{id}/history.
+export interface HistoryEntry {
+  from: string | null;
+  to: string;
+  at: string;
+  cause?: string;
+  by?: string;
+  durationMs?: number;
+  failure?: { kind: string; step: string; message: string };
+  inferred?: boolean;
+}
+export interface WorkloadHistory {
+  from: string;
+  to: string;
+  phases: import('./history').Phase[];
+  totals: Record<string, number>;
+  wakes: { count: number; failed: number; medianMs: number | null; maxMs: number | null };
+  before: HistoryEntry | null;
+  entries: HistoryEntry[];
+  truncated: boolean;
+}

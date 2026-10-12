@@ -15,6 +15,7 @@ import PauseDialog from '../components/PauseDialog.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateChip from '../components/StateChip.vue';
+import HistoryCard from '../components/HistoryCard.vue';
 import { stateSince } from '../state';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
@@ -250,6 +251,10 @@ const summary = computed(() => {
 
     <v-col v-if="status.recommendations.length" cols="12">
       <v-alert v-for="r in status.recommendations" :key="r.backend" type="info" variant="tonal" :title="`Recommendation for ${shortId(r.backend)}`" :text="r.message" />
+    </v-col>
+
+    <v-col cols="12">
+      <HistoryCard :router="router" :id="id" :now="now" />
     </v-col>
 
     <v-col cols="12" md="7">
