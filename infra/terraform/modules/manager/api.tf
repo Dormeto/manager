@@ -65,6 +65,12 @@ resource "aws_cloudwatch_log_group" "api" {
 
 data "aws_iam_policy_document" "api" {
   statement {
+    # A workload view's savings (R9): AWS's list prices, cached in the table.
+    sid       = "Prices"
+    actions   = ["pricing:GetProducts"]
+    resources = ["*"]
+  }
+  statement {
     # Routers written in Terraform, and the controllers of the routers the manager installs (their resource policy allows
     # this role in other accounts).
     sid       = "RouterControllers"
@@ -168,6 +174,8 @@ resource "aws_lambda_function" "api" {
       ALERTS_TOPIC            = aws_sns_topic.alerts.arn
       LISTS_BUCKET            = aws_s3_bucket.lists.id
       MFA_MODE                = var.mfa
+      SAVINGS_BASELINE        = var.savings_baseline
+      SAVINGS_TIMEZONE        = var.savings_timezone
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name
       COMMAND_ROLE   = var.command_role_name

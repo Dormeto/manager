@@ -13,7 +13,7 @@ test('assembles the layout the manager module reads, with the versions in the ma
   const files = assembleArtifacts(repos);
   assert.deepEqual(files, [
     'dashboard/assets/app-1a2b.js', 'dashboard/index.html',
-    'lambda/access-check.zip', 'lambda/api.zip', 'lambda/discovery.zip', 'lambda/fleet.zip', 'lambda/operations.zip', 'lambda/watchdog.zip',
+    'lambda/access-check.zip', 'lambda/api.zip', 'lambda/discovery.zip', 'lambda/fleet.zip', 'lambda/operations.zip', 'lambda/savings.zip', 'lambda/watchdog.zip',
     'manifest.json',
     'router/blueprint.json', 'router/router-boundary.json', 'router/router.zip',
   ]);
@@ -23,6 +23,7 @@ test('assembles the layout the manager module reads, with the versions in the ma
   assert.equal(entry('api.zip'), 'index.mjs');
   assert.equal(entry('access-check.zip'), 'check.mjs');
   assert.equal(entry('watchdog.zip'), 'watchdog.mjs');
+  assert.equal(entry('savings.zip'), 'savings.mjs');
   assert.equal(execFileSync('unzip', ['-p', join(repos.out, 'lambda/access-check.zip'), 'check.mjs'], { encoding: 'utf8' }), 'check');
   assert.equal(readFileSync(join(repos.out, 'router/router.zip'), 'utf8'), 'zip');
 });

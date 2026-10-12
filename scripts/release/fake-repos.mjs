@@ -10,6 +10,7 @@ export function fakeRepos({ without = [], with: extra = {}, routerVersion = '0.2
     'manager/CHANGELOG.md': '# Changelog\n\n## 0.2.0 — 2026-10-06\n\n- The manager as a Terraform module.\n\n## 0.1.0 — 2026-10-04\n\n- First version.\n',
     'manager/packages/api/dist/index.mjs': 'api',
     'manager/packages/api/dist/watchdog.mjs': 'watchdog',
+    'manager/packages/api/dist/savings.mjs': 'savings',
     'manager/packages/discovery/dist/index.mjs': 'discovery',
     'manager/packages/operations/dist/index.mjs': 'operations',
     'manager/packages/operations/dist/check.mjs': 'check',

@@ -63,5 +63,11 @@ describe('history view', () => {
     const v = historyView({ before: e('AWAKE', -10), entries: [e('ASLEEP', 10, { stopped })], from: t(0), to: t(60), now: t(60) });
     expect(v.phases[1]).toMatchObject({ state: 'ASLEEP', stopped });
   });
+
+  it('the first phase keeps what the entry before the period says: its cause, who, what it stopped (R9, review M4)', () => {
+    const stopped = [{ kind: 'ec2' as const, type: 't3.medium', count: 1, os: 'Linux' }];
+    const v = historyView({ before: e('ASLEEP', -100, { cause: 'idle', stopped }), entries: [], from: t(0), to: t(60), now: t(60) });
+    expect(v.phases).toEqual([{ state: 'ASLEEP', from: t(0), to: t(60), cause: 'idle', stopped }]);
+  });
 });
 

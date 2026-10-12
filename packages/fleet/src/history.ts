@@ -20,17 +20,19 @@ export function historyView({ before, entries, from, to, now, initial }: { befor
   const end = Math.max(start, Math.min(Date.parse(to), Date.parse(now)));
   const clamp = (at: string) => Math.min(Math.max(Date.parse(at), start), end);
   const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[] }[] = [];
-  let current: (typeof phases)[number] = { state: before?.to ?? initial ?? 'UNKNOWN', from: start, to: end };
+  // What the entry that began a phase says of it: its cause, who asked, how it is known, what its nap stopped.
+  const details = (entry: HistoryEntry) => ({
+    ...(entry.cause ? { cause: entry.cause } : {}), ...(entry.by ? { by: entry.by } : {}), ...(entry.inferred ? { inferred: true } : {}),
+    ...(entry.from === null ? { first: true } : {}), ...(entry.stopped ? { stopped: entry.stopped } : {}),
+  });
+  // The first phase: the entry before the period (its details too: review M4), else the initial state given.
+  let current: (typeof phases)[number] = before ? { state: before.to, from: start, to: end, ...details({ ...before, from: before.from ?? '' }) } : { state: initial ?? 'UNKNOWN', from: start, to: end };
   for (const entry of entries) {
     // A twin (an inferred entry after its event, or a duplicate) changes nothing.
     if (entry.to === current.state) continue;
     const at = clamp(entry.at);
     phases.push({ ...current, to: at });
-    current = {
-      state: entry.to, from: at, to: end,
-      ...(entry.cause ? { cause: entry.cause } : {}), ...(entry.by ? { by: entry.by } : {}), ...(entry.inferred ? { inferred: true } : {}),
-      ...(entry.from === null ? { first: true } : {}), ...(entry.stopped ? { stopped: entry.stopped } : {}),
-    };
+    current = { state: entry.to, from: at, to: end, ...details(entry) };
   }
   phases.push(current);
   // Phases of no length go (two changes at the same instant, a time past the end); neighbors of one state join.

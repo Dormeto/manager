@@ -68,6 +68,28 @@ export interface HistoryEntry {
 // The entries of a period read at most (a request's bound).
 export const HISTORY_MAX = 5000;
 
+// A workload's savings of one UTC day (R9): pk SAV#<date>, sk <account>#<region>#<workloadId>, kept history_days.
+export interface SavingsDay {
+  account: string; region: string; router: string; workloadId: string; name?: string;
+  usd: number;
+  asleepHours: number; // asleep, whatever the baseline
+  hours: number; // asleep within the baseline
+  unpriced: { reason: string; hours: number }[];
+}
+// What the daily job computed last (T#default / SAVINGS), read by the Overview in one request.
+export interface SavingsSummary {
+  computedAt: string;
+  day: string; // the latest day computed
+  baseline: { kind: string; timeZone?: string };
+  last30: { usd: number; asleepHours: number; days: { date: string; usd: number }[] };
+  month: { month: string; usd: number };
+  cumulative: { usd: number; since: string; lastDay: string };
+  top: { account: string; region: string; router: string; workloadId: string; name?: string; usd: number }[];
+  unpriced: { workloads: number; hours: number };
+  workloads: number;
+  dormeto: { usdMonth: number };
+}
+
 // A workload whose last wake failed (R7b): its failure until a successful wake.
 export interface FailureEntry {
   account: string;
@@ -211,6 +233,35 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
         start = page.LastEvaluatedKey;
       } while (start && entries.length <= max);
       return { entries: entries.slice(0, max).reverse(), truncated: entries.length > max };
+    },
+
+    // Savings (R9): a day item per workload, idempotent by key; the job's summary.
+    async putSavingsDay(date: string, day: SavingsDay): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: {
+          pk: { S: `SAV#${date}` }, sk: { S: `${day.account}#${day.region}#${day.workloadId}` }, data: { S: JSON.stringify(day) },
+          expiresAt: { N: String(Math.floor(Date.parse(`${date}T00:00:00.000Z`) / 1000) + historyDays * 86_400) },
+        },
+      }));
+    },
+    async listSavingsDay(date: string): Promise<SavingsDay[]> {
+      const days: SavingsDay[] = [];
+      let start: Item | undefined;
+      do {
+        const page = await dynamo.send(new QueryCommand({
+          TableName: table, KeyConditionExpression: 'pk = :pk', ExpressionAttributeValues: { ':pk': { S: `SAV#${date}` } }, ...(start ? { ExclusiveStartKey: start } : {}),
+        }));
+        days.push(...(page.Items ?? []).map((i: Item) => data<SavingsDay>(i)!).filter(Boolean));
+        start = page.LastEvaluatedKey;
+      } while (start);
+      return days;
+    },
+    async getSavingsSummary(): Promise<SavingsSummary | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key('SAVINGS') }));
+      return data<SavingsSummary>(Item);
+    },
+    async putSavingsSummary(summary: SavingsSummary): Promise<void> {
+      await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key('SAVINGS'), data: { S: JSON.stringify(summary) } } }));
     },
 
     // AWS list prices (R9), per region and item: 30 days; the absence of one a day (a new instance type appears).

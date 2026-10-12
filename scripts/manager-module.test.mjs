@@ -24,7 +24,10 @@ const NEW = ['terraform_data.artifacts', 'aws_cloudwatch_event_rule.refresh', 'a
   'aws_cloudwatch_log_group.ip_lists', 'aws_lambda_function.ip_lists', 'aws_sqs_queue.ip_lists_failures', 'aws_iam_role.ip_lists_scheduler',
   'aws_iam_role_policy.ip_lists_scheduler', 'aws_scheduler_schedule.ip_lists',
   // The MFA policy (R6c).
-  'aws_ssm_parameter.smoke_totp'];
+  'aws_ssm_parameter.smoke_totp',
+  // Savings (R9b).
+  'aws_iam_role.savings', 'aws_iam_role_policy.savings', 'aws_cloudwatch_log_group.savings', 'aws_lambda_function.savings', 'aws_sqs_queue.savings_failures',
+  'aws_iam_role.savings_scheduler', 'aws_iam_role_policy.savings_scheduler', 'aws_scheduler_schedule.savings'];
 
 test('every resource of the manager module has a moved block from its platform address', () => {
   const inModule = addresses(hcl('modules/manager'));

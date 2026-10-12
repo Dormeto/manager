@@ -42,6 +42,22 @@ variable "history_days" {
   }
 }
 
+variable "savings_baseline" {
+  description = "What the savings are counted against (R9): always (the workloads would run 24/7) or business-hours (weekdays 08:00 to 20:00 in savings_timezone)."
+  type        = string
+  default     = "always"
+  validation {
+    condition     = contains(["always", "business-hours"], var.savings_baseline)
+    error_message = "savings_baseline must be always or business-hours."
+  }
+}
+
+variable "savings_timezone" {
+  description = "The time zone of the business-hours baseline (an IANA name, for example Europe/Paris)."
+  type        = string
+  default     = "UTC"
+}
+
 variable "alert_emails" {
   description = "Addresses the health alerts are sent to (router alarms, the watchdog's own failures), each subscribed to the alert topic and pending until its owner confirms the email AWS sends. Other subscriptions: the alerts_topic_arn output."
   type        = list(string)
@@ -206,6 +222,7 @@ locals {
     access_check = "${local.artifacts_dir}/lambda/access-check.zip"
     fleet        = "${local.artifacts_dir}/lambda/fleet.zip"
     watchdog     = "${local.artifacts_dir}/lambda/watchdog.zip"
+    savings      = "${local.artifacts_dir}/lambda/savings.zip"
     dashboard    = "${local.artifacts_dir}/dashboard/index.html"
     router       = "${local.artifacts_dir}/router/router.zip"
     blueprint    = "${local.artifacts_dir}/router/blueprint.json"

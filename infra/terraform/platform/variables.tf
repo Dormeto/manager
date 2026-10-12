@@ -79,6 +79,18 @@ variable "history_days" {
   default     = 400
 }
 
+variable "savings_baseline" {
+  description = "What the savings are counted against (manager module savings_baseline)."
+  type        = string
+  default     = "always"
+}
+
+variable "savings_timezone" {
+  description = "The business-hours baseline's time zone (manager module savings_timezone)."
+  type        = string
+  default     = "UTC"
+}
+
 variable "mfa" {
   description = "The MFA policy (manager module mfa)."
   type        = string

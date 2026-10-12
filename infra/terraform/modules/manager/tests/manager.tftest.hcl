@@ -371,3 +371,42 @@ run "history_days_is_validated" {
   }
   expect_failures = [var.history_days]
 }
+
+run "savings_job_daily_always_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.savings.environment[0].variables.SAVINGS_BASELINE == "always" && aws_lambda_function.savings.environment[0].variables.SAVINGS_TIMEZONE == "UTC"
+    error_message = "The savings baseline is 24/7 by default (R9)."
+  }
+  assert {
+    condition     = aws_scheduler_schedule.savings.schedule_expression == "cron(30 0 * * ? *)"
+    error_message = "The savings job runs once a day, at 00:30 UTC."
+  }
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.savings.statement : s.actions]), "pricing:GetProducts") && contains(flatten([for s in data.aws_iam_policy_document.api.statement : s.actions]), "pricing:GetProducts")
+    error_message = "The job and the API read the Price List API."
+  }
+}
+
+run "savings_business_hours" {
+  command = plan
+
+  variables {
+    savings_baseline = "business-hours"
+    savings_timezone = "Europe/Paris"
+  }
+  assert {
+    condition     = aws_lambda_function.savings.environment[0].variables.SAVINGS_BASELINE == "business-hours" && aws_lambda_function.api.environment[0].variables.SAVINGS_TIMEZONE == "Europe/Paris"
+    error_message = "The baseline reaches the job and the API."
+  }
+}
+
+run "savings_baseline_is_validated" {
+  command = plan
+
+  variables {
+    savings_baseline = "weekends"
+  }
+  expect_failures = [var.savings_baseline]
+}
