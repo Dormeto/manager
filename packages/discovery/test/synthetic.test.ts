@@ -1,7 +1,7 @@
 // The synthetic organization of the acceptance at scale (scale design §7), enabled in dev only.
 import { describe, expect, it } from 'vitest';
 import { validateConfig } from '../src/config.js';
-import { runDiscovery } from '../src/run.js';
+import { finalizeRun, planRun, runDiscovery, scanAccount } from '../src/run.js';
 import { SYNTHETIC_OU, SYNTHETIC_REGIONS, isSynthetic, syntheticInventory, syntheticRules } from '../src/synthetic.js';
 import { A, ROOT, config, filter } from './fixtures.js';
 import { setup } from './run-fakes.js';
@@ -48,5 +48,22 @@ describe('synthetic organization', () => {
     // The real organization's candidates stay, and the counts are theirs.
     expect((await s.store.listCandidates()).map((c) => c.id).sort()).toEqual(real.map((c) => c.id).sort());
     expect(Object.values(run.counts).reduce((n, c) => n + c, 0)).toBe(real.length);
+  });
+
+  it('its cleanup leaves the counts right on an index that lags: deleted when the run starts, counted at its end', async () => {
+    const s = setup({ cfg: config({ regions: ['*'], filters: [filter('all', [{}])] }), laggingIndex: true });
+    await s.ready;
+    s.deps.synthetic = { accounts: 3 };
+    await runDiscovery(s.deps, { source: 'manual' });
+    s.dynamo.settleIndex();
+    const real = (await s.store.listCandidates()).filter((c) => !isSynthetic(c.account));
+    delete s.deps.synthetic;
+    const plan = await planRun(s.deps, { source: 'manual' });
+    for (const account of plan.accounts) await scanAccount(s.deps, { runId: plan.runId, account });
+    // The index has caught up with what the run wrote by the time its account steps end.
+    s.dynamo.settleIndex();
+    const run = await finalizeRun(s.deps, plan);
+    expect(Object.values(run.counts).reduce((n, c) => n + c, 0)).toBe(real.length);
+    expect((await s.store.getCounts())?.counts).toEqual(run.counts);
   });
 });

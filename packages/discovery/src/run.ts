@@ -98,6 +98,15 @@ function bySkipReason(entries: { account: string; reason: string; pairs: number 
   return [...out].map(([reason, e]) => ({ reason, accounts: e.accounts.size, pairs: e.pairs }));
 }
 
+// A synthetic organization turned off (dev) leaves nothing behind: its candidates and scan states are deleted when a run
+// starts, so that the index has caught up by the time the run counts the candidates at its end.
+async function deleteSynthetic(deps: RunDeps) {
+  for (const scan of (await deps.store.listAccountScans()).filter((x) => x.synthetic)) {
+    await deps.store.deleteCandidates(await deps.store.accountCandidates(scan.account));
+    await deps.store.deleteAccountScan(scan.account);
+  }
+}
+
 export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manual'; by?: string }): Promise<RunPlan> {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? silent;
@@ -128,6 +137,7 @@ export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manu
     return ended('skipped', skipped);
   }
   try {
+    if (!deps.synthetic?.accounts) await deleteSynthetic(deps);
     const inventory = await inventoryOf(deps, config);
     await deps.store.putInventory(inventory);
     const plans = scanAccounts(config, inventory);
@@ -271,7 +281,7 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const inRun = new Set(plan.accounts);
     for (const left of scans.filter((s) => !inRun.has(s.account) && !s.retiredAt)) {
       const previous = new Map((await deps.store.accountCandidates(left.account)).map((c) => [c.id, c]));
-      // A synthetic account (dev) leaves nothing behind once the synthetic organization is turned off.
+      // A synthetic account the run's start deleted, still on the index: deleted again, never written back.
       if (left.synthetic) {
         await deps.store.deleteCandidates([...previous.values()]);
         await deps.store.deleteAccountScan(left.account);
