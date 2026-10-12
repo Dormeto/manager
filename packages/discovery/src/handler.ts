@@ -1,11 +1,12 @@
 // Discovery Lambda, the steps of the discovery state machine (scale design §5): { step: 'plan', input: { source, by } },
-// { step: 'account', runId, account } (one per account, in a Distributed Map), { step: 'finalize', plan }. Without a
-// step, a whole run in process (the accounts one after another).
+// { step: 'account', runId, account } (one per account, in a Distributed Map), { step: 'finalize', plan }, and
+// { step: 'abandon', plan, error } when finalize failed. Without a step, a whole run in process (the accounts one after
+// another).
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { OrganizationsClient } from '@aws-sdk/client-organizations';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { createAssumeRole, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, type Credentials } from './aws.js';
-import { finalizeRun, planRun, runDiscovery, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
+import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { createStore } from './store.js';
 
@@ -26,6 +27,7 @@ type Event =
   | { step: 'plan'; input?: { source?: string; by?: string } }
   | { step: 'account'; runId: string; account: string }
   | { step: 'finalize'; plan: RunPlan }
+  | { step: 'abandon'; plan: RunPlan; error?: string }
   | { step?: undefined; source?: string; by?: string; action?: string };
 
 const trigger = (e: { source?: string; by?: string } = {}) => ({ source: e.source === 'manual' ? 'manual' as const : 'schedule' as const, ...(e.by ? { by: e.by } : {}) });
@@ -51,7 +53,9 @@ export const handler = async (event: Event = {}) => {
     return plan;
   }
   if (event.step === 'account') return scanAccount(deps, { runId: event.runId, account: event.account });
-  const run = event.step === 'finalize' ? await finalizeRun(deps, event.plan) : await runDiscovery(deps, trigger(event));
+  const run = event.step === 'finalize' ? await finalizeRun(deps, event.plan)
+    : event.step === 'abandon' ? await abandonRun(deps, event.plan, event.error ?? 'unknown error')
+      : await runDiscovery(deps, trigger(event));
   return {
     startedAt: run.startedAt,
     status: run.status,

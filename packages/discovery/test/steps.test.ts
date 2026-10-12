@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { lint, lintCounters, sumCounters } from '../src/lint.js';
 import { restatus } from '../src/lifecycle.js';
-import { finalizeRun, planRun, runDiscovery, scanAccount } from '../src/run.js';
+import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount } from '../src/run.js';
 import { A, B, C, INVENTORY, config, filter, rule } from './fixtures.js';
 import { HOUR, setup } from './run-fakes.js';
 
@@ -98,6 +98,41 @@ describe('a run in steps', () => {
     expect((await s.store.lastRun())).toMatchObject({ startedAt: plan.runId, status: 'partial' });
     // The counts the Discovery view starts from, moved by the changes until the next run.
     expect((await s.store.getCounts())!.counts).toEqual({ 'pending-onboarding': 2 });
+    expect(await s.store.acquireLock('next')).toBe(true);
+  });
+
+  it('finalize finds the result of every account even when the index has not caught up with their last writes', async () => {
+    const s = setup({ cfg: AB, laggingIndex: true });
+    await s.ready;
+    const plan = await planRun(s.deps, { source: 'manual' });
+    for (const account of plan.accounts) await scanAccount(s.deps, { runId: plan.runId, account });
+    const run = await finalizeRun(s.deps, plan);
+    expect([run.status, run.targets.filter((t) => t.status === 'error')]).toEqual(['ok', []]);
+  });
+
+  it('a run that never finished is abandoned after 3 hours: recorded as failed, and the next scheduled run starts', async () => {
+    const s = setup({ cfg: AB });
+    await s.ready;
+    // Planned, then nothing more (the state machine timed out or was stopped).
+    const lost = await planRun(s.deps, { source: 'manual' });
+    s.advance(2 * HOUR);
+    expect((await planRun(s.deps, { source: 'schedule' })).status).toBe('skipped');
+    s.advance(2 * HOUR);
+    const next = await planRun(s.deps, { source: 'schedule' });
+    expect(next.status).toBe('planned');
+    await finalizeRun(s.deps, next);
+    expect((await s.store.lastRun({ completed: true }))!.startedAt).toBe(next.runId);
+    // The lost run is recorded as failed.
+    expect(await s.store.getRun(lost.runId)).toMatchObject({ status: 'failed', error: 'the run did not finish within 3 hours' });
+  });
+
+  it('abandoning a run whose finalize failed records it as failed with the error and releases the lock', async () => {
+    const s = setup({ cfg: AB });
+    await s.ready;
+    const plan = await planRun(s.deps, { source: 'manual' });
+    const run = await abandonRun(s.deps, plan, 'States.Timeout: finalize timed out');
+    expect([run.status, run.error]).toEqual(['failed', 'finalize failed: States.Timeout: finalize timed out']);
+    expect(await s.store.getRun(plan.runId)).toMatchObject({ status: 'failed' });
     expect(await s.store.acquireLock('next')).toBe(true);
   });
 

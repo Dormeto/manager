@@ -22,10 +22,10 @@ export function organizationsOf(inventory: OrgInventory) {
   return { port, calls };
 }
 
-export function setup({ cfg, deny = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0 }: {
-  cfg?: DiscoveryConfig; deny?: string[]; failScan?: string[]; regions?: string[]; delayMs?: number;
+export function setup({ cfg, deny = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false }: {
+  cfg?: DiscoveryConfig; deny?: string[]; failScan?: string[]; regions?: string[]; delayMs?: number; laggingIndex?: boolean;
 } = {}) {
-  const dynamo = fakeDynamo();
+  const dynamo = fakeDynamo({ laggingIndex });
   let now = T0;
   const store = createStore({ dynamo, table: 't', now: () => now });
   const org = organizationsOf(INVENTORY);

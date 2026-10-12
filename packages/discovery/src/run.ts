@@ -18,6 +18,8 @@ const EMPTY_RUNS = 3;
 const SKIP_RUNS = 6;
 const EMPTY_REASON = 'no load balancer in 3 runs: scanned every 7th run';
 const UNFINISHED = 'the account step did not finish (timed out or failed)';
+// A run still running after the state machine's time limit (and its lock's) never finishes: it is recorded as failed.
+const RUN_LIMIT_MS = 3 * HOUR_MS;
 
 export interface Logger {
   info(event: string, data?: object): void;
@@ -35,6 +37,7 @@ export interface RunDeps {
   scan(credentials: unknown, where: { account: string; region: string }): Promise<ScannedRule[]>;
   now?: () => number;
   concurrency?: number; // regions of an account scanned at once (8)
+  runLimitMs?: number; // a run not finished after this is abandoned (3 hours: the state machine's limit)
   synthetic?: { accounts: number }; // dev only: a synthetic organization added to the real one (acceptance at scale)
   log?: Logger;
 }
@@ -105,9 +108,15 @@ export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manu
   });
   const ended = (status: 'skipped' | 'failed', rec: RunRecord): RunPlan => ({ runId, status, ...who, accounts: [], skipped: [], record: rec });
   const config = await currentConfig(deps, now);
+  let last = await deps.store.lastRun({ completed: true });
+  // A run that never reached its end (state machine timed out or stopped, finalize lost): failed, so retried now.
+  if (last?.status === 'running' && now() - Date.parse(last.startedAt) >= (deps.runLimitMs ?? RUN_LIMIT_MS)) {
+    last = { ...last, status: 'failed', finishedAt: iso(now()), error: `the run did not finish within ${(deps.runLimitMs ?? RUN_LIMIT_MS) / HOUR_MS} hours` };
+    await deps.store.putRun(last);
+    log.warn('DiscoveryRunAbandoned', { runId: last.startedAt });
+  }
 
   if (event.source === 'schedule') {
-    const last = await deps.store.lastRun({ completed: true });
     // A failed run is retried at the next tick; a successful one waits for the refresh period.
     if (last && last.status !== 'failed' && now() - Date.parse(last.startedAt) < config.refreshHours * HOUR_MS) {
       return ended('skipped', record({ status: 'skipped', skippedReason: 'not due' }));
@@ -266,7 +275,7 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
       await deps.store.putAccountScan({ ...left, retiredAt: plan.runId });
     }
 
-    const results = new Map(scans.filter((s) => s.runId === plan.runId && inRun.has(s.account)).map((s) => [s.account, s.result!]));
+    const results = new Map((await deps.store.getAccountScans(plan.accounts)).filter((s) => s.runId === plan.runId && s.result).map((s) => [s.account, s.result!]));
     const targets: RunTarget[] = [];
     const skippedPairs: { account: string; reason: string; pairs: number }[] = [];
     const counters: LintCounters[] = [];
@@ -306,6 +315,22 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
   } finally {
     await deps.store.releaseLock(plan.runId);
   }
+}
+
+// A run whose finalize failed (timed out, crashed): recorded as failed with the error, its lock released.
+export async function abandonRun(deps: RunDeps, plan: RunPlan, error: string): Promise<RunRecord> {
+  const now = deps.now ?? Date.now;
+  const record: RunRecord = {
+    startedAt: plan.runId, trigger: plan.trigger, ...(plan.by ? { by: plan.by } : {}), finishedAt: iso(now()), status: 'failed',
+    error: `finalize failed: ${error}`, targets: [], skipped: plan.skipped, counts: {}, lint: [],
+  };
+  try {
+    await deps.store.putRun(record);
+  } finally {
+    await deps.store.releaseLock(plan.runId);
+  }
+  (deps.log ?? silent).error('DiscoveryRunFailed', { runId: plan.runId, error: record.error });
+  return record;
 }
 
 // The three steps in process, the accounts one after another.

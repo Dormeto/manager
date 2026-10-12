@@ -24,7 +24,7 @@ data "aws_iam_policy_document" "discovery" {
   }
   statement {
     sid       = "DiscoveryItems"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
+    actions   = ["dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
     resources = [aws_dynamodb_table.manager.arn, "${aws_dynamodb_table.manager.arn}/index/*"]
   }
   statement {
@@ -160,8 +160,12 @@ resource "aws_sfn_state_machine" "discovery" {
               Parameters     = { FunctionName = aws_lambda_function.discovery.arn, "Payload.$" = "$" }
               ResultSelector = { "ok.$" = "$.Payload.ok" }
               Retry          = local.discovery_retry
-              End            = true
+              # A step that times out or crashes ends small: finalize records the account as unfinished, and the Map's
+              # output stays far below the state size limit whatever the number of failures.
+              Catch = [{ ErrorEquals = ["States.ALL"], Next = "AccountFailed" }]
+              End   = true
             }
+            AccountFailed = { Type = "Pass", Result = { ok = false }, End = true }
           }
         }
         ResultPath = null
@@ -172,6 +176,16 @@ resource "aws_sfn_state_machine" "discovery" {
         Type       = "Task"
         Resource   = "arn:aws:states:::lambda:invoke"
         Parameters = { FunctionName = aws_lambda_function.discovery.arn, Payload = { step = "finalize", "plan.$" = "$" } }
+        OutputPath = "$.Payload"
+        Retry      = local.discovery_retry
+        # A finalize that times out or crashes: the run is recorded as failed and its lock released.
+        Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.failure", Next = "Abandon" }]
+        End   = true
+      }
+      Abandon = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::lambda:invoke"
+        Parameters = { FunctionName = aws_lambda_function.discovery.arn, Payload = { step = "abandon", "plan.$" = "$", "error.$" = "$.failure.Error" } }
         OutputPath = "$.Payload"
         Retry      = local.discovery_retry
         End        = true

@@ -1,6 +1,6 @@
 // Discovery items of the manager table (spec section 6): configuration, runs, inventory and exclusions in partition
 // T#default; candidates in the partition of their account (CAND#<account>), indexed by status on gsi1 (scale design §4).
-import { BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+import { BatchGetItemCommand, BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { CANDIDATE_STATUSES, type AccountScan, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
 
@@ -26,6 +26,7 @@ export interface DiscoveryStore {
   acquireLock(runId: string): Promise<boolean>;
   releaseLock(runId: string): Promise<void>;
   lastRun(options?: { completed?: boolean }): Promise<RunRecord | null>;
+  getRun(startedAt: string): Promise<RunRecord | null>;
   putRun(run: RunRecord): Promise<void>;
   listCandidates(): Promise<Candidate[]>;
   // A page of the candidates of a status, in account, region and id order; within an account, or an account and region.
@@ -42,6 +43,8 @@ export interface DiscoveryStore {
   getAccountScan(account: string): Promise<AccountScan | null>;
   putAccountScan(scan: AccountScan): Promise<void>;
   listAccountScans(): Promise<AccountScan[]>;
+  // The scan states of these accounts, read by key and consistent (a run's results, right after its last account).
+  getAccountScans(accounts: string[]): Promise<AccountScan[]>;
   countCandidates(): Promise<Partial<Record<Status, number>>>;
   migrateCandidates(): Promise<number>;
   getInventory(): Promise<OrgInventory | null>;
@@ -216,6 +219,9 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       const items = await query('DISC#RUN#', { forward: false, limit: 20 }, (found) => found.some(keep));
       return data<RunRecord>(items.find(keep));
     },
+    async getRun(startedAt) {
+      return data<RunRecord>(await get(`DISC#RUN#${startedAt}`));
+    },
     async putRun(run) {
       await put({ ...key(`DISC#RUN#${run.startedAt}`), status: { S: run.status }, data: packed(run), expiresAt: { N: String(seconds(Date.parse(run.startedAt)) + RETENTION_S) } });
     },
@@ -284,6 +290,19 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     // Indexed (gsi1 ACCT): the run's finalize step reads every account's result.
     async putAccountScan(scan) {
       await put({ pk: { S: `CAND#${scan.account}` }, sk: { S: ACCOUNT_SCAN }, gsi1pk: { S: 'ACCT' }, gsi1sk: { S: scan.account }, data: { S: JSON.stringify(scan) } });
+    },
+    async getAccountScans(accounts) {
+      const found: AccountScan[] = [];
+      for (let i = 0; i < accounts.length; i += 100) {
+        let keys: Item[] = accounts.slice(i, i + 100).map((account) => ({ pk: { S: `CAND#${account}` }, sk: { S: ACCOUNT_SCAN } }));
+        for (let attempt = 0; keys.length; attempt += 1) {
+          if (attempt >= 5) throw new Error(`account scans unread after ${attempt} attempts`);
+          const out = await dynamo.send(new BatchGetItemCommand({ RequestItems: { [table]: { Keys: keys, ConsistentRead: true } } }));
+          found.push(...((out.Responses?.[table] ?? []) as Item[]).map((item) => data<AccountScan>(item)!).filter(Boolean));
+          keys = (out.UnprocessedKeys?.[table]?.Keys ?? []) as Item[];
+        }
+      }
+      return found;
     },
     async listAccountScans() {
       const items = await queryAll({ IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': { S: 'ACCT' } } });

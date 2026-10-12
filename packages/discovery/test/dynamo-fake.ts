@@ -8,8 +8,12 @@ export function itemSize(item: Record<string, { S?: string; N?: string; B?: Uint
   return Object.entries(item).reduce((n, [name, v]) => n + Buffer.byteLength(name) + (v.B ? v.B.byteLength : Buffer.byteLength(v.S ?? v.N ?? '')), 0);
 }
 
-export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
+// laggingIndex: queries on gsi1 see the table as it was at the last settleIndex() (DynamoDB's indexes are eventually
+// consistent), the table itself is always current.
+export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIndex = false } = {}) {
   const items = new Map<string, Item>();
+  let indexed = new Map<string, Item>();
+  const settleIndex = () => { indexed = new Map(items); };
   const calls: string[] = [];
   let unprocessed = unprocessedOnce;
   const fail = (name: string) => Object.assign(new Error(name), { name });
@@ -45,7 +49,7 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
         const [hash, range] = index ? ['gsi1pk', 'gsi1sk'] : ['pk', 'sk'];
         const pk = (input.ExpressionAttributeValues[':pk']?.S ?? 'T#default') as string;
         const prefix = (input.ExpressionAttributeValues[':prefix']?.S ?? '') as string;
-        let found = [...items.values()].filter((i) => (i[hash]?.S ?? (hash === 'pk' ? 'T#default' : undefined)) === pk && (i[range]?.S ?? '').startsWith(prefix))
+        let found = [...(index && laggingIndex ? indexed : items).values()].filter((i) => (i[hash]?.S ?? (hash === 'pk' ? 'T#default' : undefined)) === pk && (i[range]?.S ?? '').startsWith(prefix))
           .sort((a, b) => (a[range]!.S! < b[range]!.S! ? -1 : 1));
         if (input.ScanIndexForward === false) found.reverse();
         // After the start key's position, as DynamoDB does (the item there may have moved or gone since).
@@ -66,6 +70,12 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
           : undefined;
         return { Items: page, LastEvaluatedKey: lastKey };
       }
+      case 'BatchGetItemCommand': {
+        const table = Object.keys(input.RequestItems)[0]!;
+        const keys = input.RequestItems[table].Keys as Item[];
+        if (keys.length > 100) throw fail('ValidationException');
+        return { Responses: { [table]: keys.map((k) => items.get(keyOf(k))).filter(Boolean) } };
+      }
       case 'BatchWriteItemCommand': {
         const requests = input.RequestItems[Object.keys(input.RequestItems)[0]!] as ({ PutRequest: { Item: Item } } | { DeleteRequest: { Key: Item } })[];
         if (requests.length > 25) throw fail('ValidationException');
@@ -81,5 +91,5 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
         throw new Error(`unexpected command ${name}`);
     }
   };
-  return { send, items, calls };
+  return { send, items, calls, settleIndex };
 }
