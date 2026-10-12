@@ -54,6 +54,28 @@ export function countsLine(c: AccessReport['counts']): string {
   return `${parts.join(', ')}.`;
 }
 
+// The panel's status: ok when every account is ready and no forwarder is impossible or failed; an error without the
+// delegation policy (organization mode unavailable).
+export function accessStatus(report: AccessReport): 'ok' | 'warning' | 'error' {
+  if (report.delegation === 'missing') return 'error';
+  const { discoveryMissing, commandMissing, unchecked } = report.counts;
+  const forwarders = report.forwarders;
+  return discoveryMissing || commandMissing || unchecked || forwarders?.impossible.length || forwarders?.failed?.length ? 'warning' : 'ok';
+}
+
+// The status icon's tooltip: the counts and event-driven refresh, with what they mean.
+export function accessHelp(report: AccessReport): [string, string] {
+  const refresh = forwardersLine(report.forwarders);
+  return [
+    `${countsLine(report.counts)} An account is ready when the manager assumed both roles there at the last discovery run: the discovery `
+      + 'role to read it, the command role to install its router and onboard its workloads; each discovery run checks them again.',
+    refresh
+      ? `${refresh} A connected account sends its load balancer changes to the manager, which shows them within about 5 minutes; the `
+        + 'others are refreshed by the scheduled discovery run.'
+      : 'Event-driven refresh is off: load balancer changes appear at the next discovery run (Discovery › Perimeter turns it on).',
+  ];
+}
+
 export function accessLine(row: AccessRow): string {
   const missing = [!row.discovery.ok && 'no discovery role', !row.command.ok && 'no command role'].filter(Boolean).join(', ');
   const reason = (!row.discovery.ok && row.discovery.reason) || (!row.command.ok && row.command.reason) || '';
