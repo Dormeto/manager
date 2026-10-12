@@ -69,8 +69,14 @@ describe('workloads', () => {
   });
 
   it('lists the routers with their version', async () => {
-    const { api } = setup(async (router) => ({ router: { name: router.name, version: '0.11.0', build: 'abc' }, workloads: [{}, {}] }));
-    expect(json(await api(event('GET', '/api/routers'))).routers[0]).toEqual({ name: 'dmt-dev', region: 'eu-west-1', version: '0.11.0', build: 'abc', workloads: 2 });
+    const { api } = setup(async (router) => ({
+      router: { name: router.name, version: '0.11.2', build: 'abc', checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z' },
+      workloads: [{}, {}],
+    }));
+    expect(json(await api(event('GET', '/api/routers'))).routers[0]).toEqual({
+      name: 'dmt-dev', region: 'eu-west-1', version: '0.11.2', build: 'abc', workloads: 2,
+      checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z',
+    });
   });
 
   it('reads the live status of a workload', async () => {

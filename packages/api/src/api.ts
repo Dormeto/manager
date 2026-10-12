@@ -159,13 +159,17 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
 
     if (method === 'GET' && resource === 'routers' && !a) {
       const all = await listAll();
+      type Listed = { router?: { version?: string; build?: string; checkSchedule?: string; lastScheduledCheckAt?: string }; workloads?: unknown[] };
       return reply(200, {
         routers: all.map(({ router, result }) => (result.status === 'fulfilled'
           ? {
             name: router.name, region: router.region,
-            version: (result.value as { router?: { version?: string } }).router?.version ?? null,
-            build: (result.value as { router?: { build?: string } }).router?.build ?? null,
-            workloads: ((result.value as { workloads?: unknown[] }).workloads ?? []).length,
+            version: (result.value as Listed).router?.version ?? null,
+            build: (result.value as Listed).router?.build ?? null,
+            workloads: ((result.value as Listed).workloads ?? []).length,
+            // Health of the automatic naps: when the schedule last ran the idle check.
+            checkSchedule: (result.value as Listed).router?.checkSchedule ?? null,
+            lastScheduledCheckAt: (result.value as Listed).router?.lastScheduledCheckAt ?? null,
           }
           : { name: router.name, region: router.region, error: (result.reason as Error).message })),
       });

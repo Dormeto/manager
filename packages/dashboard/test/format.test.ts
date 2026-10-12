@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { duration, percent, relative, ruleText, shortId, stateColor } from '../src/format';
+import { checkHealth, duration, percent, relative, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -23,5 +23,15 @@ describe('format', () => {
   it('describes rule conditions like the router admin page', () => {
     expect(ruleText({ headers: [{ name: 'x-dormeto-e2e', value: 'no-wake' }] })).toBe('header x-dormeto-e2e = no-wake');
     expect(ruleText({ pathPrefixes: ['/api/'], sourceIps: ['198.51.100.0/24'] })).toBe('source 198.51.100.0/24, path /api/*');
+  });
+});
+
+describe('checkHealth', () => {
+  const now = Date.parse('2026-10-04T12:00:00Z');
+  it('is late after 3 periods of the check schedule, or when no scheduled check was recorded', () => {
+    expect(checkHealth({ checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:56:00Z' }, now)).toEqual({ late: false, text: 'idle check 4 min ago' });
+    expect(checkHealth({ checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:40:00Z' }, now)).toEqual({ late: true, text: 'idle check late: last run 20 min ago' });
+    expect(checkHealth({ checkSchedule: 'rate(1 hour)', lastScheduledCheckAt: '2026-10-04T10:30:00Z' }, now).late).toBe(false);
+    expect(checkHealth({ checkSchedule: null, lastScheduledCheckAt: null }, now)).toEqual({ late: true, text: 'no scheduled idle check recorded' });
   });
 });

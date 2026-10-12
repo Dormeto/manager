@@ -42,3 +42,13 @@ export function ruleText(conditions: Record<string, unknown>): string {
     ...(c.headers ?? []).map((h) => (h.pattern ? `header ${h.name} ~ ${h.pattern}` : `header ${h.name} = ${h.value}`)),
   ].filter(Boolean).join(', ');
 }
+
+// Health of the automatic naps: the router's idle check must have run within 3 periods of its schedule.
+export function checkHealth(router: { checkSchedule?: string | null; lastScheduledCheckAt?: string | null }, now = Date.now()) {
+  if (!router.lastScheduledCheckAt) return { late: true, text: 'no scheduled idle check recorded' };
+  const rate = /rate\((\d+) (minute|minutes|hour|hours)\)/.exec(router.checkSchedule ?? '');
+  const periodMs = rate ? Number(rate[1]) * (rate[2]!.startsWith('hour') ? 3_600_000 : 60_000) : 5 * 60_000;
+  const late = now - Date.parse(router.lastScheduledCheckAt) > 3 * periodMs;
+  const ago = relative(router.lastScheduledCheckAt, now);
+  return { late, text: late ? `idle check late: last run ${ago}` : `idle check ${ago}` };
+}

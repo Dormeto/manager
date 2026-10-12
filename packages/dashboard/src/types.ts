@@ -80,6 +80,8 @@ export interface RouterInfo {
   build?: string | null;
   workloads?: number;
   error?: string;
+  checkSchedule?: string | null;
+  lastScheduledCheckAt?: string | null;
 }
 
 export interface Candidate {
