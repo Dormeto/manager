@@ -135,13 +135,13 @@ resource "aws_lambda_function" "fleet" {
   depends_on = [aws_cloudwatch_log_group.fleet, aws_iam_role_policy.fleet]
 }
 
-# Batches of up to 100 events within 5 s; a failed event comes back alone (partial batch response); at most 5 batches at
+# Batches of up to 100 events within 1 s; a failed event comes back alone (partial batch response); at most 5 batches at
 # once.
 resource "aws_lambda_event_source_mapping" "router_events" {
   event_source_arn                   = aws_sqs_queue.router_events.arn
   function_name                      = aws_lambda_function.fleet.arn
   batch_size                         = 100
-  maximum_batching_window_in_seconds = 5
+  maximum_batching_window_in_seconds = 1
   function_response_types            = ["ReportBatchItemFailures"]
   scaling_config {
     maximum_concurrency = 5

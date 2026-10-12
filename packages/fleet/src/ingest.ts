@@ -1,5 +1,7 @@
-// Router events into summaries (vision scale design §4). The envelope's account and region identify the router; the
-// payload never does. Events can arrive late, twice or out of order: a newer state always wins.
+// Router events into summaries (vision scale design §4). The envelope's account (set by EventBridge: the caller's)
+// identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
+// when a router publishes from another region), so a router can only speak for regions of its own account. Events can
+// arrive late, twice or out of order: a newer state always wins.
 import type { FleetStore, RouterSummary } from './store.js';
 
 export interface RouterEvent {
@@ -12,7 +14,8 @@ export interface RouterEvent {
 export function createIngest({ store }: { store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'getWorkload' | 'putWorkload' | 'deleteWorkload' | 'routerWorkloads'> }) {
   // One chunk of a router's state after an idle check: its workloads first, then the chunk counted; the last chunk in
   // removes the workloads the check no longer lists.
-  async function checked({ account, region, detail: d }: RouterEvent) {
+  async function checked({ account, region: envelope, detail: d }: RouterEvent) {
+    const region: string = d.router?.region ?? envelope;
     const current = await store.getRouter(account, region);
     if (current && current.summary.check.checkedAt > d.checkedAt) return;
     for (const w of d.workloads ?? []) {
@@ -46,7 +49,8 @@ export function createIngest({ store }: { store: Pick<FleetStore, 'getRouter' | 
   }
 
   // A state change, at once; ignored when the workload already shows a newer state (a later change or check).
-  async function stateChanged({ account, region, detail: d }: RouterEvent) {
+  async function stateChanged({ account, region: envelope, detail: d }: RouterEvent) {
+    const region: string = d.region ?? envelope;
     const existing = await store.getWorkload(account, region, d.workloadId);
     if ((existing?.stateAt ?? '') >= d.at || (existing?.checkedAt ?? '') > d.at) return;
     await store.putWorkload({ ...(existing ?? { account, region, router: d.router, workloadId: d.workloadId }), state: d.to, stateAt: d.at });

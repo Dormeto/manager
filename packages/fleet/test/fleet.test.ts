@@ -94,6 +94,26 @@ describe('fleet', () => {
     expect((await s.store.listWorkloads()).map((w) => w.account).sort()).toEqual(['038606077307', ACCOUNT]);
   });
 
+  it('takes the router\'s region from its event: publishing to the manager\'s region stamps the envelope with that region', async () => {
+    const s = setup();
+    // A router of eu-west-3 publishing to the bus in eu-west-1: the envelope says eu-west-1, the account is the caller's.
+    const remote = checked(T1, [workload('p')]);
+    remote.region = 'eu-west-1';
+    remote.detail.router.region = 'eu-west-3';
+    await s.ingest(remote);
+    const local = checked(T1, [workload('l')]);
+    local.region = 'eu-west-1';
+    local.detail.router.region = 'eu-west-1';
+    await s.ingest(local);
+    expect((await s.store.listRouters()).map((r) => r.region).sort()).toEqual(['eu-west-1', 'eu-west-3']);
+    expect((await s.store.listWorkloads()).map((w) => [w.region, w.workloadId]).sort()).toEqual([['eu-west-1', 'l'], ['eu-west-3', 'p']]);
+    const state = stateChanged('p', 'AWAKE', 'NAPPING', at(T1, 10));
+    state.region = 'eu-west-1';
+    state.detail.region = 'eu-west-3';
+    await s.ingest(state);
+    expect((await s.store.listWorkloads()).find((w) => w.workloadId === 'p')!.state).toBe('NAPPING');
+  });
+
   it('tells a router not reporting: its last check older than 3 periods of its schedule', () => {
     const now = Date.parse(T2);
     expect(reporting({ checkedAt: at(T2, -14 * 60), checkSchedule: 'rate(5 minutes)' }, now)).toBe(true);
