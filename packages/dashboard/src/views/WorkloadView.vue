@@ -13,6 +13,7 @@ import ExcludeDialog from '../components/ExcludeDialog.vue';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import RenameDialog from '../components/RenameDialog.vue';
+import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { Counts, WorkloadStatus } from '../types';
@@ -24,7 +25,7 @@ const status = ref<WorkloadStatus | null>(null);
 const url = ref<string | null>(null);
 const confirm = ref<'nap' | 'wake' | 'offboard' | null>(null);
 const acting = ref(false);
-const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
+const notice = ref<Notice | null>(null);
 const pauseOpen = ref(false);
 const excludeOpen = ref(false);
 const renameOpen = ref(false);
@@ -53,7 +54,7 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
   if (action === 'offboard') {
     try {
       const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: props.router, workloadId: props.id }) });
-      notice.value = { type: 'success', text: `Offboarding started (operation ${operation.id}): the workload is woken, then its instrumentation removed. Follow it in Operations.` };
+      notice.value = { type: 'success', text: `Offboarding started (operation ${operation.id}): the workload is woken, then its instrumentation removed.`, operation: operation.id };
     } catch (err) {
       notice.value = { type: 'error', text: (err as Error).message };
     }
@@ -98,7 +99,7 @@ async function exclude(body: object) {
   acting.value = true;
   try {
     const { operation } = await api<{ operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify({ ...body, workload: { router: props.router, id: props.id } }) });
-    notice.value = { type: 'success', text: `Excluded: it is being paused (operation ${operation.id}): woken and never napped, waiting for offboarding. Lift the exclusion in Discovery.` };
+    notice.value = { type: 'success', text: `Excluded: it is being paused (operation ${operation.id}): woken and never napped, waiting for offboarding. Lift the exclusion in Discovery.`, operation: operation.id };
     setTimeout(run, 3000);
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -158,7 +159,7 @@ const summary = computed(() => {
       <v-btn :prepend-icon="mdiWeatherSunny" color="primary" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state) || acting" @click="confirm = 'wake'">Wake</v-btn>
     </template>
   </div>
-  <v-alert v-if="notice" :type="notice.type" closable class="mb-4" :text="notice.text" @click:close="notice = null" />
+  <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-alert v-if="pauses.length" type="info" variant="tonal" class="mb-4" :title="excluded ? 'Excluded: never napped, waiting for offboarding' : 'Paused: never napped, requests still wake it'">
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">

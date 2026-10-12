@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Operations (onboarding, R4b): onboardings, offboardings and router installations run by the workflow, with their steps.
 import { computed, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { useDisplay } from 'vuetify';
 import { api } from '../api';
 import { relative } from '../format';
@@ -13,7 +14,9 @@ import type { Operation } from '../types';
 const now = useNow();
 const { smAndDown } = useDisplay();
 const operations = ref<Operation[]>([]);
-const expanded = ref<string[]>([]);
+// An operation a notice links to (?id=) opens with its steps.
+const route = useRoute();
+const expanded = ref<string[]>(typeof route.query.id === 'string' ? [route.query.id] : []);
 const { error, loading, nextAt, run } = usePoll(async () => {
   operations.value = (await api<{ operations: Operation[] }>('/operations')).operations;
 });

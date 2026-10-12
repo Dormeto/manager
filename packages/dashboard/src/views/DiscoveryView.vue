@@ -14,7 +14,8 @@ import OrganizationAccess from '../components/OrganizationAccess.vue';
 import { onboardRefusal, type AccessReport } from '../access';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import { STATUSES, cursorPages, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
+import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
+import { cursorPages, visibleStatuses, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative } from '../format';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -57,7 +58,7 @@ const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
 const onboardOpen = ref(false);
 const excludeOpen = ref(false);
-const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
+const notice = ref<Notice | null>(null);
 let poll: number | undefined;
 const filtered = computed(() => /^\d{12}$/.test(account.value));
 
@@ -175,7 +176,7 @@ async function exclude(body: object) {
   excludeOpen.value = false;
   try {
     const result = await api<{ candidates: number; operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify(body) });
-    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated; its managed workloads are being paused (operation ${result.operation.id}, in Operations).` };
+    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated; its managed workloads are being paused (operation ${result.operation.id}).`, operation: result.operation.id };
     selected.value = [];
     await load();
   } catch (err) {
@@ -186,7 +187,7 @@ async function exclude(body: object) {
 async function lift(e: Exclusion) {
   try {
     const result = await api<{ candidates: number; operation: { id: string } }>(`/exclusions/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
-    notice.value = { type: 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back; its workloads are being resumed (operation ${result.operation.id}, in Operations).` };
+    notice.value = { type: 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back; its workloads are being resumed (operation ${result.operation.id}).`, operation: result.operation.id };
     await load();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -204,7 +205,7 @@ const offboardable = computed(() => Boolean(single.value?.workloadId) && ['manag
 async function startOperation(body: Record<string, unknown>, what: string) {
   try {
     const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify(body) });
-    notice.value = { type: 'success', text: `${what} started (operation ${operation.id}): follow it in Operations.` };
+    notice.value = { type: 'success', text: `${what} started (operation ${operation.id}).`, operation: operation.id };
     selected.value = [];
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -266,7 +267,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
   <p class="text-medium-emphasis mb-4">Load balancer rules of every account and region of the perimeter, read with the read-only
     <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</p>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
-  <v-alert v-if="notice" :type="notice.type" closable class="mb-4" :text="notice.text" @click:close="notice = null" />
+  <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
 
   <v-card class="mb-4" :loading="loading">
     <v-card-text v-if="!lastRun" class="text-medium-emphasis">No discovery run yet.</v-card-text>
@@ -290,7 +291,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
 
   <div class="d-flex flex-wrap align-center ga-2 mb-2">
     <v-chip-group :model-value="status" mandatory column @update:model-value="show">
-      <v-tooltip v-for="s in STATUSES" :key="s" location="top" max-width="380">
+      <v-tooltip v-for="s in visibleStatuses(counts, status)" :key="s" location="top" max-width="380">
         <template #activator="{ props }">
           <v-chip v-bind="props" :value="s" :color="statusColor(s)" filter variant="tonal">{{ statusLabel(s) }} ({{ counts[s] ?? 0 }})</v-chip>
         </template>

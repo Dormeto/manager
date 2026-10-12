@@ -1,0 +1,144 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
+import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import { createVuetify } from 'vuetify';
+import * as components from 'vuetify/components';
+import * as directives from 'vuetify/directives';
+import RoutersView from '../src/views/RoutersView.vue';
+import { useSession } from '../src/stores/session';
+
+const calls: { path: string; init?: RequestInit }[] = [];
+vi.mock('../src/api', () => ({
+  api: vi.fn(async (path: string, init?: RequestInit) => {
+    calls.push({ path, init });
+    if (path === '/operations') return { operation: { id: 'op-9' } };
+    if (path.startsWith('/workloads?')) return { workloads: [{ workloadId: 'a4dffc5bf369a297', router: 'dmtr-dev-eu-west-3', state: 'ASLEEP' }], total: 1 };
+    return {
+      available: { version: '0.23.0' },
+      routers: [
+        { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] } },
+        { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0, health: { status: 'ok', problems: [] },
+          pauses: [{ scope: 'router', reason: 'load test', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z' }] },
+        { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, health: { status: 'ok', problems: [] } },
+      ],
+    };
+  }),
+}));
+
+// jsdom has no ResizeObserver nor visualViewport, which the Vuetify overlays use to position their content.
+globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+Object.defineProperty(window, 'visualViewport', {
+  configurable: true,
+  value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
+});
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function mountView() {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  useSession().role = 'admin';
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/routers', component: RoutersView }, { path: '/operations', component: { render: () => null } },
+    { path: '/workloads', component: { render: () => null } }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
+  await router.push('/routers');
+  const wrapper = mount(RoutersView, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
+  await flushPromises();
+  return Object.assign(wrapper, { router });
+}
+const rowOf = (wrapper: Awaited<ReturnType<typeof mountView>>, name: string) => wrapper.findAll('tr').find((tr) => tr.text().includes(name))!;
+const hover = async (el: { trigger: (e: string) => Promise<void> }) => {
+  await el.trigger('mouseenter');
+  await nextTick();
+  await sleep(300);
+};
+
+describe('Routers view', () => {
+  beforeEach(() => {
+    calls.length = 0;
+    document.body.innerHTML = '';
+  });
+
+  it('offers the upgrade as an icon beside the version of a router the manager installed', async () => {
+    const wrapper = await mountView();
+    const cells = rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('td');
+    const versionCell = cells.find((td) => td.text().includes('0.22.6'))!;
+    const upgrade = versionCell.find('button[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.23.0"]');
+    expect(upgrade.exists()).toBe(true);
+    expect(upgrade.text()).toBe('');
+    expect(wrapper.text()).not.toContain('Upgrade to');
+    wrapper.unmount();
+  });
+
+  it('offers no upgrade to a router at the available version, nor to one written in Terraform', async () => {
+    const wrapper = await mountView();
+    expect(rowOf(wrapper, 'dmtr-dev-eu-west-1').find('button[aria-label^="Upgrade"]').exists()).toBe(false);
+    expect(rowOf(wrapper, 'dmt-dev').find('button[aria-label^="Upgrade"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('explains the upgrade in a tooltip: from and to which version, what changes and stays, that it starts at once', async () => {
+    const wrapper = await mountView();
+    await hover(wrapper.find('button[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.23.0"]'));
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('0.22.6 to 0.23.0');
+    expect(text).toMatch(/workloads keep their state/);
+    expect(text).toMatch(/starts at once/i);
+    wrapper.unmount();
+  });
+
+  it('explains the uninstallation in a tooltip, and asks for confirmation before it', async () => {
+    const wrapper = await mountView();
+    const remove = wrapper.find('button[aria-label="Uninstall dmtr-dev-eu-west-3"]');
+    await hover(remove);
+    expect(document.body.textContent).toMatch(/asks for confirmation/i);
+    await remove.trigger('click');
+    await flushPromises();
+    expect(document.body.textContent).toContain('Uninstall dmtr-dev-eu-west-3?');
+    expect(calls.some((c) => c.path === '/operations')).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('links the upgrade it started to its steps in Operations', async () => {
+    const wrapper = await mountView();
+    await wrapper.find('button[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.23.0"]').trigger('click');
+    await flushPromises();
+    const link = wrapper.findAll('a').find((a) => a.text() === 'Follow it in Operations');
+    expect(link?.attributes('href')).toBe('/operations?id=op-9');
+    wrapper.unmount();
+  });
+
+  it('opens the workload a "1 asleep" chip counts, and explains it in a tooltip', async () => {
+    const wrapper = await mountView();
+    const chip = rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('.v-chip').find((c) => c.text() === '1 asleep')!;
+    await hover(chip);
+    expect(document.body.textContent).toContain('1 workload asleep on dmtr-dev-eu-west-3');
+    await chip.trigger('click');
+    await flushPromises();
+    await sleep(50);
+    expect(calls.some((c) => c.path === '/workloads?router=dmtr-dev-eu-west-3&state=ASLEEP&limit=1')).toBe(true);
+    expect(wrapper.router.currentRoute.value.fullPath).toBe('/workloads/dmtr-dev-eu-west-3/a4dffc5bf369a297');
+    wrapper.unmount();
+  });
+
+  it('opens the list of the workloads a "5 asleep" chip counts', async () => {
+    const wrapper = await mountView();
+    const chip = rowOf(wrapper, 'dmt-dev').findAll('.v-chip').find((c) => c.text() === '5 asleep')!;
+    await hover(chip);
+    expect(document.body.textContent).toContain('5 workloads asleep on dmt-dev');
+    await chip.trigger('click');
+    await flushPromises();
+    await sleep(50);
+    expect(wrapper.router.currentRoute.value.fullPath).toBe('/workloads?router=dmt-dev&state=ASLEEP');
+    wrapper.unmount();
+  });
+
+  it('explains Pause and Resume in tooltips', async () => {
+    const wrapper = await mountView();
+    await hover(rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('button').find((b) => b.text() === 'Pause')!);
+    expect(document.body.textContent).toMatch(/never naps its workloads/);
+    await hover(rowOf(wrapper, 'dmtr-dev-eu-west-1').findAll('button').find((b) => b.text() === 'Resume')!);
+    expect(document.body.textContent).toMatch(/nap again when idle/);
+    wrapper.unmount();
+  });
+});

@@ -22,6 +22,9 @@ const search = ref('');
 const route = useRoute();
 const router = useRouter();
 const attentionOnly = ref(route.query.attention === '1');
+// The workloads of one router in one state (a chip of the Routers view).
+const routerFilter = ref(typeof route.query.router === 'string' ? route.query.router : '');
+const stateFilter = ref(typeof route.query.state === 'string' ? route.query.state : '');
 // Pages from the API (scale design §4): the page, its size and the search are the server's.
 const page = ref(1);
 const perPage = ref(25);
@@ -33,6 +36,7 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   const query = new URLSearchParams({
     limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), ...(search.value.trim() ? { q: search.value.trim() } : {}),
     ...(attentionOnly.value ? { attention: '1' } : {}), ...(withRouters ? { routers: '1' } : {}),
+    ...(routerFilter.value ? { router: routerFilter.value } : {}), ...(stateFilter.value ? { state: stateFilter.value } : {}),
   });
   const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] }>(`/workloads?${query}`);
   workloads.value = result.workloads;
@@ -45,6 +49,8 @@ const { error, loading, nextAt, run } = usePoll(async () => {
 });
 function allWorkloads() {
   attentionOnly.value = false;
+  routerFilter.value = '';
+  stateFilter.value = '';
   page.value = 1;
   void router.replace({ query: {} });
   void run();
@@ -80,6 +86,7 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     <v-chip v-if="attentionOnly" closable label @click:close="allWorkloads">Needing attention</v-chip>
+    <v-chip v-if="routerFilter || stateFilter" closable label @click:close="allWorkloads">{{ [routerFilter, stateFilter.toLowerCase()].filter(Boolean).join(' · ') }}</v-chip>
     <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line style="min-width: 200px; max-width: 280px" />
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />

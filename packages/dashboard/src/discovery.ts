@@ -4,6 +4,10 @@ import { percent } from './format';
 
 export const STATUSES: Status[] = ['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible', 'dismissed', 'excluded', 'out-of-scope', 'gone'];
 
+// The status filters worth showing: those with candidates, and the one shown even when it has none (it stays selectable).
+export const visibleStatuses = (counts: Partial<Record<Status, number>>, shown: Status | null): Status[] =>
+  STATUSES.filter((s) => (counts[s] ?? 0) > 0 || s === shown);
+
 // What each status means, the actions that leave it (operators; the perimeter: administrators) and what changes it by
 // itself at the next discovery run.
 interface StatusMeta {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Routers (router management): version, health, idle check, workloads per state and pauses; pause and resume.
 import { ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { useDisplay } from 'vuetify';
 import { mdiArrowUpBoldCircleOutline, mdiDeleteOutline, mdiPause, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
 import { api } from '../api';
@@ -9,6 +10,8 @@ import { relative, stateColor } from '../format';
 import { healthColor } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
+import { pauseHelp, resumeHelp, uninstallHelp, upgradeHelp, workloadsHelp } from '../router-actions';
+import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -22,7 +25,8 @@ const { smAndDown } = useDisplay();
 const routers = ref<RouterInfo[]>([]);
 const expanded = ref<string[]>([]);
 const pausing = ref<RouterInfo | null>(null);
-const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
+const notice = ref<Notice | null>(null);
+const navigation = useRouter();
 const available = ref<string | null>(null);
 const installOpen = ref(false);
 const install = ref({ account: '', region: '' });
@@ -39,7 +43,7 @@ async function operation(body: Record<string, unknown>, what: string) {
   removing.value = null;
   try {
     const { operation: op } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify(body) });
-    notice.value = { type: 'success', text: `${what} started (operation ${op.id}): follow it in Operations.` };
+    notice.value = { type: 'success', text: `${what} started (operation ${op.id}).`, operation: op.id };
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
   }
@@ -66,6 +70,19 @@ async function resume(router: RouterInfo) {
   await run();
 }
 
+// A count of workloads in a state: the workload itself when there is one, else the list of those workloads.
+async function openWorkloads(router: string, state: string, count: number) {
+  if (count === 1) {
+    try {
+      const { workloads } = await api<{ workloads: { workloadId: string }[] }>(`/workloads?${new URLSearchParams({ router, state, limit: '1' })}`);
+      if (workloads[0]) return navigation.push(`/workloads/${encodeURIComponent(router)}/${encodeURIComponent(workloads[0].workloadId)}`);
+    } catch {
+      // The list below says what there is.
+    }
+  }
+  return navigation.push({ path: '/workloads', query: { router, state } });
+}
+
 const headers = [
   { title: 'Router', key: 'name' },
   { title: 'Version', key: 'version' },
@@ -87,7 +104,7 @@ const headers = [
   </div>
   <p class="text-medium-emphasis mb-4">One router per account and region naps and wakes its workloads. A paused router never naps any of
     them (requests still wake); health comes from its idle check, its Lambda functions and its failure queues.</p>
-  <v-alert v-if="notice" :type="notice.type" closable class="mb-4" :text="notice.text" @click:close="notice = null" />
+  <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-card>
     <v-data-table v-model:expanded="expanded" :mobile="smAndDown" :headers="headers" :items="routers" :loading="loading && !routers.length"
@@ -97,7 +114,18 @@ const headers = [
         <div class="text-body-small text-medium-emphasis d-flex align-center ga-1"><span v-if="item.account" class="mono">{{ item.account }}</span><span v-if="item.account">·</span><RegionLabel :region="item.region" /></div>
       </template>
       <template #[`item.version`]="{ item }">
-        <span v-if="item.version">{{ item.version }} <span class="text-body-small text-medium-emphasis mono">{{ item.build }}</span></span>
+        <div v-if="item.version" class="d-flex align-center ga-1">
+          <span>{{ item.version }}</span>
+          <v-tooltip v-if="session.isAdmin && item.source === 'manager' && available && item.version !== available" location="top" max-width="380"
+            :text="upgradeHelp(item.name, item.version, available)">
+            <template #activator="{ props }">
+              <v-btn v-bind="props" :icon="mdiArrowUpBoldCircleOutline" variant="text" size="small" density="comfortable" color="primary"
+                :aria-label="`Upgrade ${item.name} to ${available}`"
+                @click="operation({ type: 'upgrade-router', router: item.name }, `Upgrade of ${item.name} to ${available}`)" />
+            </template>
+          </v-tooltip>
+        </div>
+        <div v-if="item.version" class="text-body-small text-medium-emphasis mono">{{ item.build }}</div>
       </template>
       <template #[`item.health`]="{ item }">
         <v-chip v-if="item.error" color="error" variant="tonal" label>unreachable</v-chip>
@@ -120,7 +148,12 @@ const headers = [
       <template #[`item.lastScheduledCheckAt`]="{ item }"><span class="nowrap">{{ relative(item.lastScheduledCheckAt, now) }}</span></template>
       <template #[`item.workloads`]="{ item }">
         <div class="d-flex flex-wrap ga-1">
-          <v-chip v-for="(n, state) in item.workloadStates ?? {}" :key="state" :color="stateColor(String(state))" variant="tonal" size="small" label>{{ n }} {{ String(state).toLowerCase() }}</v-chip>
+          <v-tooltip v-for="(n, state) in item.workloadStates ?? {}" :key="state" location="top" :text="workloadsHelp(item.name, String(state), n)">
+            <template #activator="{ props }">
+              <v-chip v-bind="props" :color="stateColor(String(state))" variant="tonal" size="small" label link
+                @click="openWorkloads(item.name, String(state), n)">{{ n }} {{ String(state).toLowerCase() }}</v-chip>
+            </template>
+          </v-tooltip>
           <span v-if="!item.workloadStates && item.workloads !== undefined">{{ item.workloads }}</span>
         </div>
         <div v-if="item.paused" class="text-body-small text-medium-emphasis">{{ item.paused }} paused</div>
@@ -128,13 +161,19 @@ const headers = [
       <template #[`item.pauses`]="{ item }"><PauseChip :pauses="item.pauses" /></template>
       <template #[`item.actions`]="{ item }">
         <template v-if="session.isAdmin && item.source === 'manager'">
-          <v-btn v-if="available && item.version !== available" :prepend-icon="mdiArrowUpBoldCircleOutline" variant="tonal" size="small" class="mr-1"
-            @click="operation({ type: 'upgrade-router', router: item.name }, `Upgrade of ${item.name} to ${available}`)">Upgrade to {{ available }}</v-btn>
-          <v-btn :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Uninstall ${item.name}`" class="mr-1" @click="removing = item" />
+          <v-tooltip location="top" max-width="380" :text="uninstallHelp(item.name)">
+            <template #activator="{ props }">
+              <v-btn v-bind="props" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Uninstall ${item.name}`" class="mr-1" @click="removing = item" />
+            </template>
+          </v-tooltip>
         </template>
         <template v-if="session.canOperate && item.health">
-          <v-btn v-if="item.pauses?.length" :prepend-icon="mdiPlay" variant="tonal" size="small" @click="resume(item)">Resume</v-btn>
-          <v-btn v-else :prepend-icon="mdiPause" variant="tonal" size="small" @click="pausing = item">Pause</v-btn>
+          <v-tooltip location="top" max-width="380" :text="item.pauses?.length ? resumeHelp(item.name) : pauseHelp(item.name)">
+            <template #activator="{ props }">
+              <v-btn v-if="item.pauses?.length" v-bind="props" :prepend-icon="mdiPlay" variant="tonal" size="small" @click="resume(item)">Resume</v-btn>
+              <v-btn v-else v-bind="props" :prepend-icon="mdiPause" variant="tonal" size="small" @click="pausing = item">Pause</v-btn>
+            </template>
+          </v-tooltip>
         </template>
       </template>
       <template #expanded-row="{ columns, item }">

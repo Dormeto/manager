@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATUSES, cursorPages, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
+import { STATUSES, visibleStatuses, cursorPages, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -90,4 +90,13 @@ describe('Discovery view paging', () => {
     expect([pages.cursor(1), pages.hasNext(0)]).toEqual([null, false]);
   });
 
+});
+
+describe('Discovery status filters', () => {
+  it('lists the statuses that have candidates, in their order, and the one shown even when it has none', () => {
+    expect(visibleStatuses({ 'pending-onboarding': 1, managed: 6, ineligible: 6, gone: 10, dismissed: 0 }, 'pending-onboarding'))
+      .toEqual(['pending-onboarding', 'managed', 'ineligible', 'gone']);
+    expect(visibleStatuses({ managed: 6 }, 'dismissed')).toEqual(['managed', 'dismissed']);
+    expect(visibleStatuses({}, null)).toEqual([]);
+  });
 });
