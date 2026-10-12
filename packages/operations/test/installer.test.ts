@@ -62,7 +62,7 @@ describe('installer', () => {
     expect(s.state.queues.get('dmtr-dev-check-failures')!.attributes).toEqual({ MessageRetentionPeriod: '1209600', SqsManagedSseEnabled: 'true' });
     const failures = 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-controller-failures';
     expect(s.state.queues.get('dmtr-dev-work')!.attributes).toEqual({
-      MessageRetentionPeriod: '3600', SqsManagedSseEnabled: 'true', VisibilityTimeout: '960', RedrivePolicy: JSON.stringify({ deadLetterTargetArn: failures, maxReceiveCount: 3 }),
+      MessageRetentionPeriod: '345600', SqsManagedSseEnabled: 'true', VisibilityTimeout: '960', RedrivePolicy: JSON.stringify({ deadLetterTargetArn: failures, maxReceiveCount: 3 }),
     });
     expect(JSON.parse(s.state.queues.get('dmtr-dev-drift')!.attributes.Policy!).Statement[0].Condition).toEqual({ ArnEquals: { 'aws:SourceArn': 'arn:aws:events:eu-west-3:121014831971:rule/dmtr-dev-drift' } });
     expect([...s.state.mappings.values()].map((m) => [m.FunctionName, m.EventSourceArn.split(':').at(-1), m.BatchSize, m.MaximumBatchingWindowInSeconds, m.ScalingConfig.MaximumConcurrency, m.FunctionResponseTypes])).toEqual([

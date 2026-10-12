@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.22.2",
-    "build": "bcbc2d84d07d"
+    "version": "0.22.3",
+    "build": "4d4253bc4d1b"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -176,7 +176,8 @@
             ],
             "Resource": [
               "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures",
-              "arn:${partition}:sqs:${region}:${account}:${name}-work"
+              "arn:${partition}:sqs:${region}:${account}:${name}-work",
+              "arn:${partition}:sqs:${region}:${account}:${name}-drift"
             ]
           },
           {
@@ -544,7 +545,7 @@
     {
       "key": "work",
       "name": "${name}-work",
-      "retentionSeconds": 3600,
+      "retentionSeconds": 345600,
       "managedEncryption": true,
       "visibilityTimeoutSeconds": 960,
       "deadLetter": {
@@ -607,8 +608,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.22.2",
-        "DMT_BUILD": "bcbc2d84d07d",
+        "DMT_VERSION": "0.22.3",
+        "DMT_BUILD": "4d4253bc4d1b",
         "DMT_IP_LISTS": "${ipLists}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_CHECK_SCHEDULE": "${checkSchedule}",
@@ -617,7 +618,8 @@
         "DMT_FAILURE_QUEUES": "{\"check\":\"https://sqs.${region}.amazonaws.com/${account}/${name}-check-failures\",\"controller\":\"https://sqs.${region}.amazonaws.com/${account}/${name}-controller-failures\"}",
         "DMT_ONBOARDER": "${name}-onboarder",
         "DMT_MANAGER_BUS": "${managerBus}",
-        "DMT_WORK_QUEUE": "https://sqs.${region}.amazonaws.com/${account}/${name}-work"
+        "DMT_WORK_QUEUE": "https://sqs.${region}.amazonaws.com/${account}/${name}-work",
+        "DMT_DRIFT_QUEUE": "https://sqs.${region}.amazonaws.com/${account}/${name}-drift"
       },
       "asyncInvoke": {
         "maximumRetryAttempts": 0,
@@ -640,8 +642,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.22.2",
-        "DMT_BUILD": "bcbc2d84d07d",
+        "DMT_VERSION": "0.22.3",
+        "DMT_BUILD": "4d4253bc4d1b",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
@@ -664,8 +666,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.22.2",
-        "DMT_BUILD": "bcbc2d84d07d",
+        "DMT_VERSION": "0.22.3",
+        "DMT_BUILD": "4d4253bc4d1b",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },
