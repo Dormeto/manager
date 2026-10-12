@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+coverage/
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+.build/
+# Bootstrap admins and other personal values (not committed).
+*.local.tfvars
