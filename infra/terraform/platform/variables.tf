@@ -86,6 +86,8 @@ variable "log_retention_days" {
 
 locals {
   name = "dmt-${var.env}-manager"
+  # The environments trusted by the organization roles created here: this one first.
+  organization_role_envs = distinct(concat([var.env], var.organization_role_envs))
   # Routers (installed by the manager or written in Terraform) are named dmt-<env>.
   name_prefix = "dmt-${var.env}"
   # Routers written in Terraform, with their account (the manager's).
@@ -112,6 +114,18 @@ variable "command_role_name" {
   description = "Role the manager assumes in each account to install routers and act on their rules (DmtCommandRole, modules/command-role); a path may precede the name."
   type        = string
   default     = "DmtCommandRole"
+}
+
+variable "create_organization_roles" {
+  description = "Create the organization roles of this account (module access: DmtDiscoveryRole, DmtCommandRole, DmtRouterBoundary). False for a second environment in an account whose roles another environment creates (that one lists this one in organization_role_envs)."
+  type        = bool
+  default     = true
+}
+
+variable "organization_role_envs" {
+  description = "Other manager environments of this account that the organization roles created here trust, besides this one."
+  type        = list(string)
+  default     = []
 }
 
 variable "discovery_synthetic_accounts" {

@@ -41,14 +41,6 @@ resource "aws_s3_object" "router_bundle" {
   etag     = filemd5(each.value)
 }
 
-# DmtCommandRole and DmtRouterBoundary of the manager's account (other accounts: the organization bootstrap).
-module "command_role" {
-  source              = "../modules/command-role"
-  role_name           = var.command_role_name
-  operations_role_arn = aws_iam_role.operations.arn
-  boundary_policy     = replace(replace(file("${local.router_dir}/dist/router-boundary.json"), "$${account}", var.account_id), "$${partition}", "aws")
-}
-
 resource "aws_iam_role" "operations" {
   name               = "${local.name}-operations"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json

@@ -9,14 +9,14 @@ const read = (path) => readFileSync(new URL(path, MODULES), 'utf8');
 
 test('creates the discovery role, the boundary and the command role of an account, with the modules\' documents', () => {
   const lines = accessCommands({
-    account: '222222222222', managerAccount: '121014831971', organizationId: 'o-vvk0115ixn', env: 'prod',
+    account: '222222222222', managerAccount: '121014831971', organizationId: 'o-vvk0115ixn', envs: ['prod', 'staging'],
     boundary: readFileSync(new URL('../../router/dist/router-boundary.json', import.meta.url), 'utf8'),
   });
   const text = lines.join('\n');
   // The discovery role: trusted by the manager's discovery role within the organization, the module's policy.
   assert.match(text, /aws iam create-role --role-name DmtDiscoveryRole --max-session-duration 3600 --assume-role-policy-document '(.+)'/);
   const trust = JSON.parse(text.match(/create-role --role-name DmtDiscoveryRole --max-session-duration 3600 --assume-role-policy-document '(.+?)'/)[1]);
-  assert.deepEqual(trust.Statement[0].Condition, { ArnLike: { 'aws:PrincipalArn': ['arn:aws:iam::121014831971:role/dmt-prod-manager-discovery'] }, StringEquals: { 'aws:PrincipalOrgID': 'o-vvk0115ixn' } });
+  assert.deepEqual(trust.Statement[0].Condition, { ArnLike: { 'aws:PrincipalArn': ['arn:aws:iam::121014831971:role/dmt-prod-manager-discovery', 'arn:aws:iam::121014831971:role/dmt-staging-manager-discovery'] }, StringEquals: { 'aws:PrincipalOrgID': 'o-vvk0115ixn' } });
   const discovery = JSON.parse(text.match(/put-role-policy --role-name DmtDiscoveryRole --policy-name discovery --policy-document '(.+?)'/)[1]);
   assert.deepEqual(discovery, JSON.parse(read('access/discovery-policy.json')));
   // The boundary and the command role, its policy filled for the account.
@@ -25,5 +25,8 @@ test('creates the discovery role, the boundary and the command role of an accoun
   assert.ok(JSON.stringify(command).includes('arn:aws:iam::222222222222:role/dormeto/router/*'));
   assert.ok(!JSON.stringify(command).includes('${account}'));
   const commandTrust = JSON.parse(text.match(/create-role --role-name DmtCommandRole --max-session-duration 3600 --assume-role-policy-document '(.+?)'/)[1]);
-  assert.deepEqual(commandTrust.Statement[0].Principal, { AWS: 'arn:aws:iam::121014831971:role/dmt-prod-manager-operations' });
+  // Trusted by name within the manager's account (as the module): the role can exist before the manager, and survives a
+  // reinstallation of it (R5a review I2).
+  assert.deepEqual(commandTrust.Statement[0].Principal, { AWS: 'arn:aws:iam::121014831971:root' });
+  assert.deepEqual(commandTrust.Statement[0].Condition, { ArnLike: { 'aws:PrincipalArn': ['arn:aws:iam::121014831971:role/dmt-prod-manager-operations', 'arn:aws:iam::121014831971:role/dmt-staging-manager-operations'] } });
 });

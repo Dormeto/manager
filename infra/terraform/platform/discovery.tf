@@ -1,15 +1,29 @@
 # Organization discovery (vision docs/specs/2026-10-04-org-discovery-design.md): the discovery Lambda reads the
 # organization through its delegation policy and assumes the read-only DmtDiscoveryRole in each account of the perimeter.
 
-# The discovery role of the manager's own account (packaging design §3): the access module, without the command role
-# (module command_role, operations.tf). Other accounts get theirs from the published access module, or its procedure.
-module "discovery_role" {
+# The organization roles of the manager's own account (packaging design §3): the access module, as in any other account
+# (the published module, or its procedure): DmtDiscoveryRole, DmtCommandRole and DmtRouterBoundary. They are the
+# account's, trusted by every environment that shares them (R5a review I2): a second environment in the account sets
+# create_organization_roles = false and is listed in the first one's organization_role_envs.
+module "organization_roles" {
   source              = "../modules/access"
+  count               = var.create_organization_roles ? 1 : 0
   manager_account_id  = var.account_id
-  env                 = var.env
+  envs                = local.organization_role_envs
   organization_id     = var.organization_id
   discovery_role_name = var.discovery_role_name
-  create_command_role = false
+  command_role_name   = var.command_role_name
+  boundary_policy     = file("${local.router_dir}/dist/router-boundary.json")
+}
+
+moved {
+  from = module.discovery_role
+  to   = module.organization_roles[0]
+}
+
+moved {
+  from = module.command_role
+  to   = module.organization_roles[0].module.command_role[0]
 }
 
 resource "aws_iam_role" "discovery" {

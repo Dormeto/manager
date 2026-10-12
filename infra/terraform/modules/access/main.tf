@@ -16,9 +16,14 @@ variable "manager_account_id" {
   }
 }
 
-variable "env" {
-  description = "Environment of the manager (its roles are dmt-<env>-manager-*)."
-  type        = string
+variable "envs" {
+  description = "Environments of the manager (its roles are dmt-<env>-manager-*): several managers may share the account's roles, each trusted by its own."
+  type        = list(string)
+  validation {
+    # The manager's environment names (at most 10 characters, as its env variable).
+    condition     = length(var.envs) > 0 && alltrue([for env in var.envs : can(regex("^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$", env))])
+    error_message = "envs must list at least one environment of 1 to 10 lowercase letters, digits or inner hyphens."
+  }
 }
 
 variable "organization_id" {
@@ -52,7 +57,6 @@ variable "boundary_policy" {
 }
 
 locals {
-  manager_roles = "arn:aws:iam::${var.manager_account_id}:role/dmt-${var.env}-manager"
   parts         = split("/", var.discovery_role_name)
   boundary_file = "${path.module}/router-boundary.json"
 }
@@ -60,34 +64,26 @@ locals {
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
-data "aws_iam_policy_document" "trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:${data.aws_partition.current.partition}:iam::${var.manager_account_id}:root"]
-    }
-    condition {
-      test     = "ArnLike"
-      variable = "aws:PrincipalArn"
-      values   = ["${local.manager_roles}-discovery"]
-    }
-    dynamic "condition" {
-      for_each = var.organization_id == null ? [] : [var.organization_id]
-      content {
-        test     = "StringEquals"
-        variable = "aws:PrincipalOrgID"
-        values   = [condition.value]
-      }
-    }
-  }
+locals {
+  manager = "arn:${data.aws_partition.current.partition}:iam::${var.manager_account_id}"
 }
 
 resource "aws_iam_role" "discovery" {
-  name                 = element(local.parts, length(local.parts) - 1)
-  path                 = length(local.parts) > 1 ? "/${join("/", slice(local.parts, 0, length(local.parts) - 1))}/" : "/"
-  description          = "Dormeto discovery (read-only)"
-  assume_role_policy   = data.aws_iam_policy_document.trust.json
+  name        = element(local.parts, length(local.parts) - 1)
+  path        = length(local.parts) > 1 ? "/${join("/", slice(local.parts, 0, length(local.parts) - 1))}/" : "/"
+  description = "Dormeto discovery (read-only)"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { AWS = "${local.manager}:root" }
+      Condition = merge(
+        { ArnLike = { "aws:PrincipalArn" = [for env in var.envs : "${local.manager}:role/dmt-${env}-manager-discovery"] } },
+        var.organization_id == null ? {} : { StringEquals = { "aws:PrincipalOrgID" = var.organization_id } },
+      )
+    }]
+  })
   max_session_duration = 3600
   tags                 = { "dormeto:component" = "discovery" }
 }
@@ -99,10 +95,11 @@ resource "aws_iam_role_policy" "discovery" {
 }
 
 module "command_role" {
-  source              = "../command-role"
-  count               = var.create_command_role ? 1 : 0
-  role_name           = var.command_role_name
-  operations_role_arn = "${local.manager_roles}-operations"
+  source             = "../command-role"
+  count              = var.create_command_role ? 1 : 0
+  role_name          = var.command_role_name
+  manager_account_id = var.manager_account_id
+  envs               = var.envs
   boundary_policy = replace(replace(coalesce(var.boundary_policy, fileexists(local.boundary_file) ? file(local.boundary_file) : "missing"),
   "$${account}", data.aws_caller_identity.current.account_id), "$${partition}", data.aws_partition.current.partition)
 }

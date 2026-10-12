@@ -9,7 +9,7 @@ locals {
 module "organization" {
   source             = "../modules/organization"
   manager_account_id = var.manager_account_id
-  env                = var.env
+  envs               = [var.env]
 }
 
 moved {
@@ -24,7 +24,7 @@ module "access" {
   source             = "../modules/access"
   providers          = { aws = aws.command }
   manager_account_id = var.manager_account_id
-  env                = var.env
+  envs               = [var.env]
   organization_id    = data.aws_organizations_organization.this.id
   boundary_policy    = file("${path.module}/../../../../router/dist/router-boundary.json")
 }

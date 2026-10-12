@@ -16,9 +16,14 @@ variable "manager_account_id" {
   }
 }
 
-variable "env" {
-  description = "Environment of the manager (its discovery role is dmt-<env>-manager-discovery)."
-  type        = string
+variable "envs" {
+  description = "Environments of the manager whose discovery role (dmt-<env>-manager-discovery) reads the organization."
+  type        = list(string)
+  validation {
+    # The manager's environment names (at most 10 characters, as its env variable).
+    condition     = length(var.envs) > 0 && alltrue([for env in var.envs : can(regex("^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$", env))])
+    error_message = "envs must list at least one environment of 1 to 10 lowercase letters, digits or inner hyphens."
+  }
 }
 
 data "aws_partition" "current" {}
@@ -29,7 +34,7 @@ resource "aws_organizations_resource_policy" "dormeto" {
     Statement = [{
       Sid       = "DormetoReadOrganization"
       Effect    = "Allow"
-      Principal = { AWS = "arn:${data.aws_partition.current.partition}:iam::${var.manager_account_id}:role/dmt-${var.env}-manager-discovery" }
+      Principal = { AWS = [for env in var.envs : "arn:${data.aws_partition.current.partition}:iam::${var.manager_account_id}:role/dmt-${env}-manager-discovery"] }
       Action = [
         "organizations:DescribeOrganization",
         "organizations:DescribeOrganizationalUnit",

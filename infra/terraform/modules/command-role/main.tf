@@ -9,9 +9,23 @@ terraform {
   }
 }
 
-variable "operations_role_arn" {
-  description = "Role of the manager's operations Lambda, the only principal allowed to assume DmtCommandRole."
+variable "manager_account_id" {
+  description = "Account of the Dormeto manager."
   type        = string
+  validation {
+    condition     = can(regex("^\\d{12}$", var.manager_account_id))
+    error_message = "manager_account_id must be 12 digits."
+  }
+}
+
+variable "envs" {
+  description = "Environments of the manager whose operations role (dmt-<env>-manager-operations) may assume the role: several managers may share an account's roles."
+  type        = list(string)
+  validation {
+    # The manager's environment names (at most 10 characters, as its env variable).
+    condition     = length(var.envs) > 0 && alltrue([for env in var.envs : can(regex("^[a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?$", env))])
+    error_message = "envs must list at least one environment of 1 to 10 lowercase letters, digits or inner hyphens."
+  }
 }
 
 variable "role_name" {
@@ -43,21 +57,21 @@ resource "aws_iam_policy" "boundary" {
   policy      = var.boundary_policy
 }
 
-data "aws_iam_policy_document" "trust" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "AWS"
-      identifiers = [var.operations_role_arn]
-    }
-  }
-}
-
 resource "aws_iam_role" "command" {
-  name                 = element(local.role_parts, length(local.role_parts) - 1)
-  path                 = local.role_path
-  description          = "Dormeto manager: installs, upgrades and removes routers by API calls, onboards workloads through them."
-  assume_role_policy   = data.aws_iam_policy_document.trust.json
+  name        = element(local.role_parts, length(local.role_parts) - 1)
+  path        = local.role_path
+  description = "Dormeto manager: installs, upgrades and removes routers by API calls, onboards workloads through them."
+  # By name within the manager's account (R5a review I2): the role can exist before the manager does, and a reinstalled
+  # manager is trusted again (a role ARN as principal is bound to the role it named then).
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { AWS = "${local.arn}:iam::${var.manager_account_id}:root" }
+      Condition = { ArnLike = { "aws:PrincipalArn" = [for env in var.envs : "${local.arn}:iam::${var.manager_account_id}:role/dmt-${env}-manager-operations"] } }
+    }]
+  })
   max_session_duration = 3600
 }
 
