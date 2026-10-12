@@ -21,7 +21,7 @@ const RULE: ScannedRule = {
 const B = '222222222222';
 const member = (id: string) => ({ id, name: id === A ? 'management' : 'prod', ouPath: ['r-root'], tags: {} });
 
-function fakeAws({ whoami = async () => A, organization = null }: { whoami?: () => Promise<string>; organization?: string | null } = {}) {
+function fakeAws({ whoami = async () => A, organization = null, tags = {} }: { whoami?: () => Promise<string>; organization?: string | null; tags?: Record<string, string[]> } = {}) {
   const calls = { scans: 0, metrics: 0, regions: 0, assumed: 0, discounts: [] as Discounts[] };
   const aws: EstimateAws = {
     accounts: {
@@ -30,7 +30,7 @@ function fakeAws({ whoami = async () => A, organization = null }: { whoami?: () 
     },
     regionsOf: async () => { calls.regions += 1; return [R]; },
     portsOf: () => ({
-      scan: async () => { calls.scans += 1; return [RULE]; },
+      scan: async () => { calls.scans += 1; return [{ ...RULE, tags }]; },
       autoscaling: { describeAutoScalingGroups: async () => ({ AutoScalingGroups: [] }) },
       elbv2: { describeRules: async () => ({ Rules: [] }) },
       ec2: { describeInstances: async () => ({ Reservations: [{ Instances: [{ InstanceId: 'i-1', InstanceType: 't3.medium', PlatformDetails: 'Linux/UNIX' }] }] }) },
@@ -104,5 +104,17 @@ describe('the estimate command', () => {
     // A temporary --out: a run that went on would write nothing in the repository.
     expect(await main(['--profile', 'p', '--accounts', '999999999999', '--out', mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'))], d.deps)).toBe(2);
     expect(d.errors).toEqual(['--accounts: 999999999999: not an active account of the organization o-abc123']);
+  });
+
+  it('workloads excluded by their tags (--exclude-tags): not estimated, their requests never read, listed in the report', async () => {
+    const { aws, calls } = fakeAws({ tags: { env: ['dev'], team: ['shop'] } });
+    const d = deps(aws);
+    const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
+    expect(await main(['--profile', 'p', '--exclude-tags', 'env=prod', '--exclude-tags', 'env=dev|test,team=shop', '--out', out], d.deps)).toBe(0);
+    expect(calls.metrics).toBe(0);
+    const json = JSON.parse(readFileSync(join(out, 'estimate-2026-10-10.json'), 'utf8'));
+    expect(json.totals.workloads).toBe(0);
+    expect(json.excluded).toMatchObject([{ workload: { targetGroup: 'shop' }, criterion: 'env=dev|test, team=shop' }]);
+    expect(d.out).toContain('Excluded by tags: 1 workload (see the report)');
   });
 });

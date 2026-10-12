@@ -7,6 +7,7 @@ import type { Reached, Unreachable } from './accounts.js';
 import type { Ineligible, RegionDiscovery, Workload } from './discover.js';
 import type { Options } from './options.js';
 import type { RegionRequests } from './requests.js';
+import type { Excluded } from './tags.js';
 
 const WAKE_MS = 60_000;
 
@@ -41,6 +42,8 @@ export interface Estimate {
   byRegion: Record<string, Totals>;
   workloads: WorkloadEstimate[];
   leftOut: LeftOut[];
+  // Excluded by their tags (--exclude-tags), before their requests were read.
+  excluded: Excluded[];
   ineligible: (Ineligible & { account: string; region: string })[];
   unreachable: Unreachable[];
   failedRegions: { account: string; region: string; error: string }[];
@@ -62,7 +65,7 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
 
 const empty = (): Totals => ({ workloads: 0, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
 
-export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now }: {
+export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now, excluded = [] }: {
   reached: Reached;
   regions: RegionDiscovery[];
   requests: RegionRequests[];
@@ -72,6 +75,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   baseline: Baseline;
   options: Omit<Options, 'out' | 'profile'>;
   now: number;
+  excluded?: Excluded[];
 }): Promise<Estimate> {
   const workloads: WorkloadEstimate[] = [];
   const leftOut: LeftOut[] = [];
@@ -158,7 +162,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   return {
     generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length, accountsListed: reached.listed,
     accountNames: Object.fromEntries(reached.accounts.map((a) => [a.account, a.name])),
-    totals, dormeto, byAccount, byRegion, workloads, leftOut,
+    totals, dormeto, byAccount, byRegion, workloads, leftOut, excluded,
     ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
     unreachable: reached.unreachable,
     failedRegions: regions.filter((r) => r.error).map((r) => ({ account: r.account, region: r.region, error: r.error! })),

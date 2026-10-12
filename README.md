@@ -222,7 +222,7 @@ anything is installed, from a laptop with read access (vision docs/specs/2026-10
 
 ```
 npm run estimate -- --profile prospect [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
-  [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
+  [--exclude-tags 'env=dev|test,team=web' ...] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
   [--refresh discovery|metrics] [--window 60] [--out <dir>]
 ```
 
@@ -232,6 +232,11 @@ npm run estimate -- --profile prospect [--accounts 111111111111,222222222222] [-
   role cannot be assumed is listed with AWS's reason and how to include it. The profile's own account uses its own
   credentials. `--accounts` restricts the estimate to some of the organization's accounts: an id it does not have is
   listed apart, and none of them is refused (exit code 2).
+- **Excluded tags:** `--exclude-tags` leaves out the workloads with these tags on their load balancer, target group or
+  listener rule, as discovery's `resourceTags`: in one value, every comma-separated key must match (and), each with one
+  of its `|`-separated values (or), a key alone with any value; repeated, any of them excludes (or). For example
+  `--exclude-tags 'env=dev|test,team=web' --exclude-tags dormeto:ignore`. They are left out before their requests are
+  read and listed apart in the report, with the criterion that matched.
 - **Three phases:** discovery (discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
   five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`

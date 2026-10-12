@@ -4,12 +4,12 @@ import type { Estimate } from '../src/estimate.js';
 import { jsonReport, markdownReport, summaryLines } from '../src/report.js';
 
 const workload = (name: string, usd15: number, recommended = 30) => ({
-  workload: { account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', loadBalancerArn: 'arn:lb', targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg' as const, id: `${name}-asg` }, stopped: [] },
+  workload: { account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', loadBalancerArn: 'arn:lb', targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg' as const, id: `${name}-asg` }, stopped: [], tags: {} },
   quiet: name === 'docs', actualMonth: usd15 * 2, atWindow: { usdMonth: usd15, wakesPerDay: 2, asleepHours: 20 }, recommended: { minutes: recommended, usdMonth: usd15 - 1, wakesPerDay: 1 },
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { accounts: null, regions: ['eu-west-1'], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
+  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
   accounts: 2, accountsListed: 2, accountNames: { '111111111111': 'prod', '333333333333': 'sandbox' },
   dormeto: {
     manager: { count: 1, unitMonth: 5, usdMonth: 5 },
@@ -22,6 +22,7 @@ const E: Estimate = {
   byRegion: { 'eu-west-1': { workloads: 12, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
   workloads: Array.from({ length: 12 }, (_, i) => (i === 5 ? { ...workload('napping', 15), workload: { ...workload('napping', 15).workload, managed: true as const } } : workload(i === 3 ? 'docs' : `app${i}`, 10 + i))),
   leftOut: [{ workload: workload('gpu', 0).workload, reason: 'what it stops has no AWS list price' }],
+  excluded: [],
   ineligible: [{ account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }],
   unreachable: [{ account: '333333333333', name: 'sandbox', reason: 'not authorized to perform: sts:AssumeRole', fix: 'create a role this profile may assume, with read access, and name it with --role (tried OrganizationAccountAccessRole)' }],
   failedRegions: [{ account: '111111111111', region: 'eu-west-3', error: 'opt-in region not enabled' }],
@@ -79,6 +80,24 @@ describe('the estimate\'s reports', () => {
     ].join('\n'));
     const paris = markdownReport({ ...E, options: { ...E.options, baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' } } });
     expect(paris).toContain('| Actual cost | what naps would stop in the 12 workloads, running in business hours (Europe/Paris) | $400.00 |');
+  });
+
+  it('the workloads excluded by their tags: listed with the criterion that matched, counted in the summary; the options name the criteria', () => {
+    const tagged: Estimate = {
+      ...E, options: { ...E.options, excludeTags: [{ env: ['dev', 'test'], team: ['web'] }, { 'dormeto:ignore': [] }] },
+      excluded: [{ workload: workload('legacy', 0).workload, criterion: 'env=dev|test, team=web' }],
+    };
+    const md = markdownReport(tagged);
+    expect(md).toContain([
+      '## Excluded by tags', '',
+      '| Account | Region | Load balancer | Target group | Hosts | Tags matched |', '|---|---|---|---|---|---|',
+      '| 111111111111 | eu-west-1 | web | legacy | legacy.example.com | env=dev\\|test, team=web |',
+    ].join('\n'));
+    expect(md).toContain('- Excluded tags: env=dev|test, team=web; or dormeto:ignore');
+    expect(summaryLines(tagged)).toContain('Excluded by tags: 1 workload (see the report)');
+    expect(markdownReport(E)).not.toContain('## Excluded by tags');
+    expect(markdownReport(E)).toContain('- Excluded tags: none');
+    expect(summaryLines(E).join('\n')).not.toContain('Excluded by tags');
   });
 
   it('many routers: their count, not each account and region', () => {

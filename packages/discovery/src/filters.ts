@@ -19,7 +19,7 @@ export function tagsMatch(wanted: Record<string, string[]>, tags: Record<string,
 }
 
 // Resource tags: each key on the load balancer, the target group or the rule, with one of the values ([] = any value).
-function resourceTagsMatch(wanted: Record<string, string[]>, tags: Record<string, string[]>): boolean {
+export function resourceTagsMatch(wanted: Record<string, string[]>, tags: Record<string, string[]>): boolean {
   return Object.entries(wanted).every(([key, values]) => Object.hasOwn(tags, key) && (values.length === 0 || tags[key]!.some((v) => values.includes(v))));
 }
 

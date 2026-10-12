@@ -12,6 +12,7 @@ import { estimateAll } from './estimate.js';
 import { USAGE, UsageError, parseOptions, type Options } from './options.js';
 import { jsonReport, markdownReport, summaryLines } from './report.js';
 import { requestsAll, type CloudWatchPort } from './requests.js';
+import { excludeByTags } from './tags.js';
 
 export interface EstimateAws {
   accounts: AccountsPorts;
@@ -55,7 +56,9 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     if (reached.why) deps.log(reached.why);
     const progress: Progress = (p) => deps.log(`  ${p.phase} ${p.account} ${p.region}: ${p.error ? `failed (${p.error})` : `${p.workloads} workload${p.workloads === 1 ? '' : 's'}`}${p.from === 'cache' ? ' (cache)' : ''}`);
     deps.log('Phase 1: discovery');
-    const { regions } = await discoverAll({ reached, regions: options.regions, regionsOf: aws.regionsOf, portsOf: aws.portsOf, cache, refresh: options.refresh, now: deps.now, progress });
+    const discovered = await discoverAll({ reached, regions: options.regions, regionsOf: aws.regionsOf, portsOf: aws.portsOf, cache, refresh: options.refresh, now: deps.now, progress });
+    // Excluded by their tags before their requests are read.
+    const { regions, excluded } = excludeByTags(discovered.regions, options.excludeTags);
     const credentialsOf = async (account: string) => (await reached.accounts.find((a) => a.account === account)?.credentials()) ?? null;
     deps.log('Phase 2: requests');
     const requests = await requestsAll({ regions, cloudwatchOf: async (account, region) => aws.cloudwatchOf(account, region, await credentialsOf(account)), cache, refresh: options.refresh, now: deps.now, progress });
@@ -64,7 +67,7 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     const { out, profile: _profile, ...kept } = options;
     const estimate = await estimateAll({
       reached, regions, requests, hourly: (region, item) => book.hourly(region, item, options.discounts), priceFailure: () => book.failure?.() ?? null,
-      baseline: options.baseline, options: kept, now: deps.now(),
+      baseline: options.baseline, options: kept, now: deps.now(), excluded,
     });
     const date = new Date(deps.now()).toISOString().slice(0, 10);
     const md = join(out, `estimate-${date}.md`);

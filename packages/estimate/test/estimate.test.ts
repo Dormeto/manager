@@ -18,7 +18,7 @@ const HUGE: StoppedItem = { kind: 'ec2', type: 'x9.huge', count: 1, os: 'Linux' 
 const hourly = async (_region: string, item: StoppedItem) => (item.kind === 'ec2' && item.type === 't3.medium' ? 0.0456 : item.kind === 'fargate' ? 0.0099 : null);
 const daily: [number, number][] = Array.from({ length: 14 }, (_, d) => [600 + d * 1440, 3]);
 const w = (account: string, region: string, name: string, stopped: StoppedItem[]): Workload => ({
-  account, region, loadBalancer: 'web', loadBalancerArn: `arn:lb/${name}`, targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg', id: name }, stopped,
+  account, region, loadBalancer: 'web', loadBalancerArn: `arn:lb/${name}`, targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg', id: name }, stopped, tags: {},
 });
 const W = {
   priced: w(A, 'eu-west-1', 'shop', [T3]), quiet: w(A, 'eu-west-1', 'docs', [FARGATE]), unpriced: w(A, 'eu-west-1', 'gpu', [HUGE]),
@@ -34,7 +34,7 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
 const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60) => idleWindowAdvice({
@@ -127,6 +127,12 @@ describe('the estimate', () => {
     expect(a.actualMonth).toBeCloseTo(e.workloads.filter((x) => x.workload.account === A).reduce((n, x) => n + x.actualMonth, 0), 9);
     // An account's: its routers and workloads, the manager in the total only.
     expect(a.withDormetoMonth).toBeCloseTo(a.actualMonth - a.usdMonthWindow + DORMETO_COST.router + 2 * DORMETO_COST.workload, 9);
+  });
+
+  it('the workloads excluded by their tags, as given, apart from the estimate', async () => {
+    const excluded = [{ workload: { ...W.other, tags: { env: ['dev'] } }, criterion: 'env=dev' }];
+    expect((await run({ excluded })).excluded).toEqual(excluded);
+    expect((await run()).excluded).toEqual([]);
   });
 
   it('no workload to estimate: Dormeto costs nothing, not even the manager', async () => {

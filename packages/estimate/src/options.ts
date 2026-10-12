@@ -1,5 +1,5 @@
 // The estimate command's options (vision docs/specs/2026-10-10-savings-estimate-design.md §3): an AWS profile, the
-// accounts it is restricted to, the regions, the role assumed in member accounts, the savings' baseline and discounts as the manager's, the cache to
+// accounts it is restricted to, the regions, the tags of the workloads it leaves out, the role assumed in member accounts, the savings' baseline and discounts as the manager's, the cache to
 // refresh, where the reports go.
 import type { Baseline, Discounts } from '@dormeto/fleet';
 
@@ -8,6 +8,9 @@ export interface Options {
   // The organization's accounts the estimate is restricted to (--accounts): every account reached when null.
   accounts: string[] | null;
   regions: string[] | null;
+  // Workloads left out by their tags (--exclude-tags, repeated): any criterion excludes; in one, every key (and), each
+  // with one of its values ([] = any value), as discovery's resourceTags.
+  excludeTags: Record<string, string[]>[];
   role: string;
   baseline: Baseline;
   discounts: Discounts;
@@ -20,7 +23,7 @@ export interface Options {
 export class UsageError extends Error {}
 
 export const USAGE = `Usage: npm run estimate -- --profile <profile> [--accounts 111111111111,222222222222]
-  [--regions eu-west-1,eu-west-3] [--role <name>]
+  [--regions eu-west-1,eu-west-3] [--exclude-tags 'env=dev|test,team=web' ...] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 0-90] [--discount-databases 0-90]
   [--refresh discovery|metrics] [--window 60] [--out <dir>]`;
 
@@ -28,7 +31,7 @@ export const USAGE = `Usage: npm run estimate -- --profile <profile> [--accounts
 const DEFAULT_ROLE = 'OrganizationAccountAccessRole';
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
 const ACCOUNT = /^\d{12}$/;
-const NAMES = ['profile', 'accounts', 'regions', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window'];
+const NAMES = ['profile', 'accounts', 'regions', 'exclude-tags', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window'];
 // The router's limits of idleMinutes.
 const WINDOW = { min: 5, max: 1440, default: 60 };
 
@@ -39,15 +42,32 @@ const percent = (name: string, value: string | undefined) => {
   return n;
 };
 
+// One --exclude-tags: key=value|value or key alone, comma-separated.
+function tagCriterion(value: string): Record<string, string[]> {
+  const terms = value.split(',').map((t) => t.trim()).filter(Boolean);
+  if (!terms.length) throw new UsageError('--exclude-tags: one tag or more, such as env=dev|test,team=web');
+  const criterion: Record<string, string[]> = {};
+  for (const term of terms) {
+    const at = term.indexOf('=');
+    const key = (at < 0 ? term : term.slice(0, at)).trim();
+    if (!key) throw new UsageError(`--exclude-tags: a tag without its key: ${term}`);
+    if (Object.hasOwn(criterion, key)) throw new UsageError(`--exclude-tags: ${key} twice in one criterion: ${key}=${[...criterion[key]!, ...term.slice(at + 1).split('|')].map((v) => v.trim()).join('|')} for either`);
+    criterion[key] = at < 0 ? [] : term.slice(at + 1).split('|').map((v) => v.trim());
+  }
+  return criterion;
+}
+
 export function parseOptions(argv: string[]): Options {
   const given = new Map<string, string>();
+  const excludeTags: Record<string, string[]>[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
     const name = arg.startsWith('--') ? arg.slice(2) : '';
     if (!NAMES.includes(name)) throw new UsageError(`unknown option: ${arg}`);
     const value = argv[i + 1];
     if (value === undefined || value.startsWith('--')) throw new UsageError(`--${name} needs a value`);
-    given.set(name, value);
+    if (name === 'exclude-tags') excludeTags.push(tagCriterion(value));
+    else given.set(name, value);
     i += 1;
   }
   const profile = given.get('profile');
@@ -79,7 +99,7 @@ export function parseOptions(argv: string[]): Options {
   const window = given.has('window') ? Number(given.get('window')) : WINDOW.default;
   if (!/^\d+$/.test(given.get('window') ?? String(WINDOW.default)) || window < WINDOW.min || window > WINDOW.max) throw new UsageError(`--window: whole minutes from ${WINDOW.min} to ${WINDOW.max}`);
   return {
-    profile, accounts, regions, role: given.get('role') ?? DEFAULT_ROLE,
+    profile, accounts, regions, excludeTags, role: given.get('role') ?? DEFAULT_ROLE,
     baseline: kind === 'always' ? { kind } : { kind, timeZone },
     discounts: { compute: percent('discount-compute', given.get('discount-compute')), databases: percent('discount-databases', given.get('discount-databases')) },
     refresh, out: given.get('out') ?? process.cwd(), window,

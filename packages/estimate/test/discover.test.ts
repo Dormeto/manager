@@ -56,6 +56,11 @@ describe('a region\'s discovery', () => {
     expect(found.workloads[0]).toMatchObject({ account: A, region: R, loadBalancer: 'web', loadBalancerArn: LB, targetGroupArn: tg('web'), hosts: ['web.example.com'], backend: { kind: 'asg', id: 'web-asg' } });
   });
 
+  it('keeps each workload\'s tags: every value of each tag on its load balancer, target group or rule, as discovery reads them', async () => {
+    const { ports } = regionPorts([rule('web', { tags: { env: ['dev'], team: ['web', 'shop'] } })]);
+    expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.tags).toEqual({ env: ['dev'], team: ['web', 'shop'] });
+  });
+
   it('an instance that is already stopped stops nothing', async () => {
     const { ports } = regionPorts([rule('admin', { backend: { kind: 'instance', id: 'i-9' } })]);
     ports.ec2 = { describeInstances: async ({ InstanceIds }) => ({ Reservations: [{ Instances: InstanceIds.map((id) => ({ InstanceId: id, InstanceType: 'm5.large', PlatformDetails: 'Linux/UNIX', State: { Name: 'stopped' } })) }] }) };
@@ -138,6 +143,16 @@ describe('the discovery of every account and region', () => {
     expect(s.calls.regions).toBe(1);
     await s.run({ refresh: 'discovery' });
     expect(s.calls.scans.slice(3)).toEqual([`${A}/${R}`, `${A}/eu-west-3`]);
+  });
+
+  it('a region kept before workloads had their tags is scanned again', async () => {
+    const s = setup({ regions: [R] });
+    const { regions } = await s.run();
+    const { tags: _tags, ...untagged } = regions[0]!.workloads[0]!;
+    await createCache({ dir: s.dir, now: () => T }).put(`discovery/${A}-${R}.json`, { ...regions[0]!, workloads: [untagged] });
+    const again = await s.run();
+    expect(s.calls.scans).toEqual([`${A}/${R}`, `${A}/${R}`]);
+    expect(again.regions[0]!.workloads[0]!.tags).toEqual({});
   });
 
   it('an account whose role cannot be assumed is not scanned; an account cached entirely assumes nothing', async () => {

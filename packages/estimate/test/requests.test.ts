@@ -16,7 +16,7 @@ const FROM = TO - 14 * 86_400_000;
 const minute = (m: number) => new Date(FROM + m * 60_000);
 const LB = `arn:aws:elasticloadbalancing:${R}:${A}:loadbalancer/app/web/0123456789abcdef`;
 const tg = (i: number) => `arn:aws:elasticloadbalancing:${R}:${A}:targetgroup/app-${i}/fedcba98765432${String(i).padStart(2, '0')}`;
-const workload = (i: number): Workload => ({ account: A, region: R, loadBalancer: 'web', loadBalancerArn: LB, targetGroup: `app-${i}`, targetGroupArn: tg(i), hosts: [], backend: { kind: 'asg', id: `asg-${i}` }, stopped: [] });
+const workload = (i: number): Workload => ({ account: A, region: R, loadBalancer: 'web', loadBalancerArn: LB, targetGroup: `app-${i}`, targetGroupArn: tg(i), hosts: [], backend: { kind: 'asg', id: `asg-${i}` }, stopped: [], tags: {} });
 type Result = { Id?: string; Timestamps?: Date[]; Values?: number[]; StatusCode?: string; Messages?: { Code?: string; Value?: string }[] };
 
 // A CloudWatch fake: each query's answer by its target group, the first call in two pages.

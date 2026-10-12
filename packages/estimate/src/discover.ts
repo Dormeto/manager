@@ -20,6 +20,8 @@ export interface Workload {
   hosts: string[];
   backend: { kind: 'instance' | 'asg' | 'ecs'; id: string };
   stopped: StoppedItem[];
+  // Every value of each tag on its load balancer, target group or rule (discovery's), for --exclude-tags.
+  tags: Record<string, string[]>;
   // Already managed by Dormeto: its requests while asleep go to its waker target group, added up (as R10).
   managed?: true;
   wakerTargetGroupArn?: string;
@@ -93,7 +95,7 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     }
     workloads.push({
       account, region, loadBalancer: rule.loadBalancer, loadBalancerArn: rule.loadBalancerArn, targetGroup: rule.targetGroup ?? '',
-      targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped,
+      targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped, tags: rule.tags,
       ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
     });
   }
@@ -130,7 +132,8 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
         for (const region of regions) {
           const path = `discovery/${account}-${region}.json`;
           const kept = again ? null : await cache.get<RegionDiscovery>(path, freshDiscovery(now()));
-          if (kept) {
+          // Kept before workloads had their tags: scanned again.
+          if (kept && kept.workloads.every((w) => w.tags)) {
             found.push(kept);
             progress({ phase: 'discovery', account, region, from: 'cache', workloads: kept.workloads.length });
             continue;

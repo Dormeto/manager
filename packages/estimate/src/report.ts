@@ -1,6 +1,7 @@
 // The estimate's reports (vision docs/specs/2026-10-10-savings-estimate-design.md §8): a Markdown readable as it is (to
 // paste into a proposal), a JSON with every figure, and the terminal's summary.
 import type { Estimate, Totals } from './estimate.js';
+import { describeTags } from './tags.js';
 
 const usd = (v: number) => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 const n = (v: number, one: string, many = `${one}s`) => `${v} ${v === 1 ? one : many}`;
@@ -40,6 +41,7 @@ export function summaryLines(e: Estimate): string[] {
     }
   }
   if (e.leftOut.length) lines.push(`Left out: ${n(e.leftOut.length, 'workload')} (see the report for why)`);
+  if (e.excluded.length) lines.push(`Excluded by tags: ${n(e.excluded.length, 'workload')} (see the report)`);
   if (e.unreachable.length) lines.push(`Not reached: ${n(e.unreachable.length, 'account')} (see the report for how to include them)`);
   if (e.failedRegions.length) lines.push(`Regions that failed: ${e.failedRegions.map((r) => `${r.account}/${r.region}`).join(', ')}`);
   return lines;
@@ -172,6 +174,11 @@ export function markdownReport(e: Estimate): string {
     ...(e.leftOut.length
       ? ['| Account | Region | Load balancer | Target group | Why |', '|---|---|---|---|---|', ...e.leftOut.map((l) => `| ${l.workload.account} | ${l.workload.region} | ${cell(l.workload.loadBalancer)} | ${cell(l.workload.targetGroup)} | ${cell(l.reason)} |`)]
       : ['None.']), '',
+    ...(o.excludeTags.length
+      ? ['## Excluded by tags', '', ...(e.excluded.length
+        ? ['| Account | Region | Load balancer | Target group | Hosts | Tags matched |', '|---|---|---|---|---|---|', ...e.excluded.map((x) => `| ${x.workload.account} | ${x.workload.region} | ${cell(x.workload.loadBalancer)} | ${cell(x.workload.targetGroup)} | ${cell(x.workload.hosts.join(', '))} | ${cell(x.criterion)} |`)]
+        : ['None.']), '']
+      : []),
     '## Not eligible', '',
     ...(e.ineligible.length
       ? ['| Account | Region | Load balancer | Target group | Why |', '|---|---|---|---|---|', ...e.ineligible.map((i) => `| ${i.account} | ${i.region} | ${cell(i.loadBalancer)} | ${cell(i.targetGroup ?? '')} | ${cell(i.reason)} |`)]
@@ -185,6 +192,7 @@ export function markdownReport(e: Estimate): string {
     '## Options', '',
     `- Accounts: ${o.accounts ? `${o.accounts.join(', ')} (--accounts)` : 'every account reached'}`,
     `- Regions: ${o.regions ? o.regions.join(', ') : 'each account\'s enabled regions'}`,
+    `- Excluded tags: ${o.excludeTags.length ? o.excludeTags.map(describeTags).join('; or ') : 'none'}`,
     `- Role in member accounts: ${o.role}`,
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,
     `- Discounts: compute ${o.discounts.compute}%, databases ${o.discounts.databases}%`,
