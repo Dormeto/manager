@@ -86,7 +86,7 @@ describe('workloads', () => {
     const calls: unknown[] = [];
     const { api } = setup(async (router, payload) => { calls.push([router.name, payload]); return { workloadId: 'demo', state: 'ASLEEP' }; });
     const res = await api(event('GET', '/api/workloads/dmt-dev/demo'));
-    expect(json(res)).toEqual({ workloadId: 'demo', state: 'ASLEEP' });
+    expect(json(res)).toEqual({ workloadId: 'demo', state: 'ASLEEP', url: null });
     expect(calls).toEqual([['dmt-dev', { action: 'status', workloadId: 'demo' }]]);
   });
 

@@ -15,7 +15,7 @@ import PauseDialog from '../components/PauseDialog.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
-import type { Counts, WorkloadStatus, WorkloadSummary } from '../types';
+import type { Counts, WorkloadStatus } from '../types';
 
 const now = useNow();
 const props = defineProps<{ router: string; id: string }>();
@@ -34,10 +34,7 @@ const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${en
 
 const { error, loading, nextAt, run } = usePoll(async () => {
   status.value = await api<WorkloadStatus>(path.value);
-  if (url.value === null) {
-    const list = await api<{ workloads: WorkloadSummary[] }>('/workloads');
-    url.value = list.workloads.find((w) => w.router === props.router && w.workloadId === props.id)?.url ?? '';
-  }
+  url.value = status.value.url ?? '';
 });
 
 async function rename(name: string) {

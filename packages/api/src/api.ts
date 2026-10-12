@@ -141,7 +141,7 @@ export interface ApiOptions {
   managerAccount?: string;
   routerVersion?: string; // the router version the manager installs and upgrades to
   // Routers and workloads as the routers report them (scale design §4): read instead of calling every router.
-  fleet?: { listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]> };
+  fleet?: { listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null> };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
@@ -465,7 +465,14 @@ export function createApi({
     if (resource === 'workloads' && a && b) {
       const router = routerOf(a);
       const id = workloadId(b);
-      if (method === 'GET' && !action) return reply(200, await invoke(router, { action: 'status', workloadId: id }));
+      if (method === 'GET' && !action) {
+        // Its link comes from its summary (the router's status has none): one read, not the whole list.
+        const [status, summary] = await Promise.all([
+          invoke(router, { action: 'status', workloadId: id }),
+          fleet ? fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null,
+        ]);
+        return reply(200, { ...(status as object), url: (summary?.url as string | null | undefined) ?? null });
+      }
       if (method === 'POST' && action === 'nap' && !parts[4]) {
         need(identity, 'operator');
         return audited(identity, 'nap', `${router.name}/${id}`, async () => {

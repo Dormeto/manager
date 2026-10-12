@@ -26,6 +26,7 @@ function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt
   invoke?: (router: Router, payload: Record<string, unknown>) => Promise<unknown>; visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; callTimeoutMs?: number;
 } = {}) {
   const calls: [string, string][] = [];
+  let listed = 0;
   const api = createApi({
     routers, now: () => NOW, version: '0.2.0', managerAccount: ACCOUNT,
     audit: { write: async () => {}, list: async () => [] },
@@ -33,10 +34,14 @@ function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt
       calls.push([router.name, payload.action as string]);
       return invoke(router, payload);
     },
-    fleet: { listRouters: async () => summaries as never, listWorkloads: async () => workloads as never },
+    fleet: {
+      listRouters: async () => summaries as never,
+      listWorkloads: async () => { listed += 1; return workloads as never; },
+      getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
+    },
     ...(visible ? { visible } : {}), ...(callTimeoutMs ? { callTimeoutMs } : {}),
   });
-  return { api, calls };
+  return { api, calls, listed: () => listed };
 }
 const event = (path: string, query: Record<string, string> = {}): ApiEvent => ({
   rawPath: path, queryStringParameters: query, requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: { email: 'ops@example.com', sub: 'u1', 'cognito:groups': '[dmt-viewer]' } } } },
@@ -104,6 +109,13 @@ describe('workloads and routers from the summaries', () => {
     // A page by its offset (the dashboard's page number).
     expect(json(await s.api(event('/api/workloads', { limit: '1', offset: '1' }))).workloads.map((w: { workloadId: string }) => w.workloadId)).toEqual(['b']);
     expect((await s.api(event('/api/workloads', { offset: '-1' }))).statusCode).toBe(400);
+  });
+
+  it('gives a workload\'s status its link from its summary, without listing every workload', async () => {
+    const s = setup({ invoke: async () => ({ workloadId: 'p', state: 'ASLEEP' }) });
+    const status = json(await s.api(event('/api/workloads/dmtr-dev-eu-west-3/p')));
+    expect([status.state, status.url, s.listed()]).toEqual(['ASLEEP', 'https://p.example.com/', 0]);
+    expect(json(await s.api(event('/api/workloads/dmt-dev/nope'))).url).toBeNull();
   });
 
   it('gives the Overview its counts, 7-day totals and the workloads that need attention, without listing them all', async () => {

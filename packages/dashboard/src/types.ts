@@ -63,6 +63,7 @@ export interface Rule {
 export interface WorkloadStatus {
   workloadId: string;
   name?: string; // routers 0.20.0 and later
+  url?: string | null; // from its summary (manager 0.2 and later)
   router: { version: string; build: string };
   state: string;
   updatedAt: string | null;
