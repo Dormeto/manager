@@ -7,8 +7,10 @@ import * as components from 'vuetify/components';
 import OverviewView from '../src/views/OverviewView.vue';
 
 const late = new Date(Date.now() - 60 * 60_000).toISOString();
+const failing = { alerts: false };
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string) => {
+    if (path === '/alerts' && failing.alerts) throw new Error('SNS throttled');
     if (path === '/alerts') {
       return {
         alarms: [{ id: 'router#1#eu-west-1', kind: 'router', name: 'dmt-dev', account: '1', region: 'eu-west-1', level: 'error', since: late, problems: [{ code: 'check-late', level: 'error', text: 'idle check late', since: late }] }],
@@ -33,6 +35,20 @@ describe('Overview', () => {
     expect(wrapper.text()).toContain('Alerts');
     expect(wrapper.text()).toContain('dmt-dev (1 · eu-west-1)idle check late');
     expect(wrapper.text()).not.toContain('do not nap on their own');
+    wrapper.unmount();
+  });
+
+  it('review: still shows the workloads when the alerts cannot be read', async () => {
+    failing.alerts = true;
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+    const wrapper = mount(OverviewView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+    await flushPromises();
+    expect(wrapper.text()).toContain('Asleep');
+    expect(wrapper.text()).not.toContain('SNS throttled');
+    expect(wrapper.find('.v-card .text-headline-large').text()).toBe('0');
+    failing.alerts = false;
     wrapper.unmount();
   });
 });

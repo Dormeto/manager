@@ -556,7 +556,10 @@ export function createApi({
         catalog: ipLists.catalogUrl,
         lists: (catalog?.lists ?? []).map(({ name, url, action, refreshHours }) => {
           const l = lines.get(name);
-          const done = l && l.url === url ? { version: l.version, entries: l.entries, dropped: l.dropped, fetchedAt: l.fetchedAt, lastAttemptAt: l.lastAttemptAt, error: l.error, errorAt: l.errorAt } : {};
+          // The version published, when it comes from this URL; the last attempt, when it tried this URL.
+          const published = l && l.url === url ? { version: l.version, entries: l.entries, dropped: l.dropped, fetchedAt: l.fetchedAt } : {};
+          const attempted = l && (l.attemptUrl ?? l.url) === url ? { lastAttemptAt: l.lastAttemptAt, error: l.error, errorAt: l.errorAt } : {};
+          const done = { ...published, ...attempted };
           return { name, url, action, refreshHours, ...Object.fromEntries(Object.entries(done).filter(([, v]) => v !== undefined)) };
         }),
       });

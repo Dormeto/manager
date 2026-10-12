@@ -216,6 +216,14 @@ run "health_alarms" {
     error_message = "A watchdog never invoked is an alarm (missing data breaching)."
   }
   assert {
+    condition     = aws_cloudwatch_metric_alarm.manager["watchdog-errors"].datapoints_to_alarm == 1
+    error_message = "Review I4: one failed run in 15 minutes is an alarm (not three in a row)."
+  }
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.manager["ip-lists-errors"].treat_missing_data == "ignore"
+    error_message = "Review I5: the hourly list function's alarm holds its state between runs (no OK every hour)."
+  }
+  assert {
     condition     = alltrue([for a in aws_cloudwatch_metric_alarm.manager : a.alarm_actions == toset(["arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts"]) && a.ok_actions == toset(["arn:aws:sns:eu-west-1:111122223333:dmt-test-manager-alerts"])])
     error_message = "Every alarm goes to the alert topic, in and out of ALARM."
   }

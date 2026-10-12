@@ -29,4 +29,18 @@ describe('IP lists', () => {
   it('answers an empty list without the manager\'s lists', async () => {
     expect(json(await createApi(base)(event()))).toEqual({ catalog: null, lists: [] });
   });
+
+  it('review I2: a new URL that failed shows its error, not the old URL\'s version', async () => {
+    const api = createApi({
+      ...base,
+      ipLists: {
+        catalogUrl: 's3://b/catalog.json',
+        catalog: async () => ({ lists: [{ name: 'ipsum', url: 'https://y/ipsum', action: 'defer', refreshHours: 24 }] }),
+        status: async () => ({ lists: [{ name: 'ipsum', url: 'https://x/ipsum', attemptUrl: 'https://y/ipsum', version: '1', entries: 9, fetchedAt: '2026-10-08T11:00:00.000Z', lastAttemptAt: '2026-10-08T12:00:00.000Z', error: 'HTTP 503', errorAt: '2026-10-08T12:00:00.000Z', refreshHours: 24 }] }),
+      },
+    });
+    expect(json(await api(event())).lists).toEqual([
+      { name: 'ipsum', url: 'https://y/ipsum', action: 'defer', refreshHours: 24, lastAttemptAt: '2026-10-08T12:00:00.000Z', error: 'HTTP 503', errorAt: '2026-10-08T12:00:00.000Z' },
+    ]);
+  });
 });

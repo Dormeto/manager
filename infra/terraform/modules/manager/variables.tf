@@ -43,7 +43,7 @@ variable "alert_emails" {
 }
 
 variable "ip_lists" {
-  description = "IP reputation lists the manager downloads once for every router (R6b), hourly at each list's refresh_hours, and its routers use for every workload: name, url (http(s), or s3://bucket/key read with the S3 API), action (defer: a listed source wakes only through the waiter page's probe; ignore: never wakes), refresh_hours. A version that lost more than half its entries is refused. Empty: none."
+  description = "IP reputation lists the manager downloads once for every router (R6b), hourly at each list's refresh_hours, and its routers use for every workload: name, url (http(s), or s3://bucket/key read with the S3 API), action (defer: a listed source wakes only through the waiter page's probe; ignore: never wakes), refresh_hours. A version that lost more than half its entries is refused; to accept such a shrink, change the list's URL (a new URL is never compared with the old one's version). The URLs are readable by the organization (catalog.json) and shown to every dashboard user: never put a secret in one. Empty: none."
   type = list(object({
     name          = string
     url           = string

@@ -158,7 +158,7 @@ describe('watchdog: routers', () => {
 
   it('a failed publish is sent again at the next run', async () => {
     const s = setup({ summaries: [summary(MANAGER, 'eu-west-1', HOUR)], failPublish: true });
-    await s.watchdog.run();
+    await expect(s.watchdog.run()).rejects.toThrow('not sent');
     expect(s.alarms.items.size).toBe(0);
     s.state.failPublish = false;
     s.advance(5 * MIN);
@@ -222,5 +222,42 @@ describe('watchdog: IP lists (R6b)', () => {
     await watchdog.run();
     expect(s.sent.map((n) => [n.subject, n.attributes.kind])).toEqual([['[Dormeto dev] IP list ipsum: last download failed: HTTP 503', 'list']]);
     expect(s.sent[0]!.message).toContain('https://app.dev.dormeto.com/routers#ip-lists');
+  });
+});
+
+describe('watchdog: review fixes', () => {
+  it('I3: a failed publish fails the run (the watchdog errors alarm sees it), after writing what was sent', async () => {
+    const s = setup({
+      terraform: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'c' }, { name: 'dmt-paris', region: 'eu-west-3', controller: 'c' }],
+      summaries: [summary(MANAGER, 'eu-west-1', HOUR), summary(MANAGER, 'eu-west-3', HOUR)],
+    });
+    let calls = 0;
+    const watchdog = createWatchdog({
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'c' }, { name: 'dmt-paris', region: 'eu-west-3', controller: 'c' }],
+      fleet: { listRouters: async () => s.state.summaries }, registry: { listRouters: async () => [] }, alarms: s.alarms,
+      notify: { publish: async (n) => { calls += 1; if (calls === 1) throw new Error('AuthorizationError'); s.sent.push(n); } },
+      now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+    await expect(watchdog.run()).rejects.toThrow('1 alert not sent: AuthorizationError');
+    expect(s.alarms.items.size).toBe(1);
+  });
+
+  it('I6: unreadable list statuses keep the routers\' alarms going and the lists\' alarms as they are', async () => {
+    const s = setup({ summaries: [summary(MANAGER, 'eu-west-1', HOUR)] });
+    const line = { name: 'ipsum', url: 'https://x', version: '1', entries: 9, refreshHours: 24, fetchedAt: iso(NOW - HOUR), error: 'HTTP 503' };
+    let failing = false;
+    const watchdog = createWatchdog({
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'c' }],
+      fleet: { listRouters: async () => s.state.summaries }, registry: { listRouters: async () => [] }, alarms: s.alarms,
+      notify: { publish: async (n) => { s.sent.push(n); } }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
+      extraObservations: async () => { if (failing) throw new Error('S3 SlowDown'); return listObservations({ lists: [line] }, NOW); },
+    });
+    await watchdog.run();
+    expect([...s.alarms.items.keys()].sort()).toEqual(['list#ipsum', `router#${MANAGER}#eu-west-1`]);
+    failing = true;
+    s.state.summaries = [summary(MANAGER, 'eu-west-1', MIN)];
+    await watchdog.run();
+    expect(s.sent.at(-1)!.subject).toBe('[Dormeto dev] dmt-dev (121014831971 eu-west-1): resolved');
+    expect(s.alarms.items.has('list#ipsum'), 'kept while its status cannot be read').toBe(true);
   });
 });

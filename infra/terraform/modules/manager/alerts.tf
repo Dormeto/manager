@@ -176,22 +176,24 @@ locals {
     watchdog-errors = {
       description = "The watchdog failed: router alarms are not evaluated (see its logs)."
       namespace   = "AWS/Lambda", metric = "Errors", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.watchdog.function_name }
-      comparison  = "GreaterThanThreshold", threshold = 0, periods = 3, missing = "notBreaching"
+      # One failed run in 15 minutes (review I4: not three in a row).
+      comparison = "GreaterThanThreshold", threshold = 0, periods = 3, datapoints = 1, missing = "notBreaching"
     }
     watchdog-silent = {
       description = "The watchdog did not run for 15 minutes: router alarms are not evaluated (its schedule, or the watchdog-failures queue)."
       namespace   = "AWS/Lambda", metric = "Invocations", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.watchdog.function_name }
-      comparison  = "LessThanThreshold", threshold = 1, periods = 3, missing = "breaching"
+      comparison  = "LessThanThreshold", threshold = 1, periods = 3, datapoints = 3, missing = "breaching"
     }
     ip-lists-errors = {
       description = "The IP list function failed: the routers keep the last versions published (see its logs; a list's own download errors are router alarms of the watchdog)."
       namespace   = "AWS/Lambda", metric = "Errors", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.ip_lists.function_name }
-      comparison  = "GreaterThanThreshold", threshold = 0, periods = 1, missing = "notBreaching"
+      # Hourly runs: the state holds between them (review I5: no OK every hour while it keeps failing).
+      comparison = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "ignore"
     }
     router-events-failed = {
       description = "Router events the manager could not store are in the router-events-failed queue: the dashboard and the alarms miss them."
       namespace   = "AWS/SQS", metric = "ApproximateNumberOfMessagesVisible", statistic = "Maximum", dimensions = { QueueName = aws_sqs_queue.router_events_failed.name }
-      comparison  = "GreaterThanThreshold", threshold = 0, periods = 1, missing = "notBreaching"
+      comparison  = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "notBreaching"
     }
   }
 }
@@ -206,6 +208,7 @@ resource "aws_cloudwatch_metric_alarm" "manager" {
   dimensions          = each.value.dimensions
   period              = 300
   evaluation_periods  = each.value.periods
+  datapoints_to_alarm = each.value.datapoints
   comparison_operator = each.value.comparison
   threshold           = each.value.threshold
   treat_missing_data  = each.value.missing

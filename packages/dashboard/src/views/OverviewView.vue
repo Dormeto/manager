@@ -25,7 +25,8 @@ const alerts = ref<AlertsInfo | null>(null);
 const { error, loading, nextAt, run } = usePoll(async () => {
   const [w, a] = await Promise.all([
     api<{ workloads: WorkloadSummary[]; total: number; byState: Record<string, number>; stats7d: { wakes: number; ignored: number; deferred: number }; routers: RouterInfo[] }>('/workloads?attention=1&limit=20&routers=1'),
-    api<AlertsInfo>('/alerts'),
+    // The alerts are a part of the view: unreadable, the rest still shows.
+    api<AlertsInfo>('/alerts').catch(() => null),
   ]);
   alerts.value = a;
   attention.value = w.workloads;

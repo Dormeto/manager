@@ -91,7 +91,7 @@ export function routerObservations({ terraformRouters, installed, summaries, man
 // remove: a subject clear for 6 hours (nothing left to damp) leaves the table.
 // The manager's IP lists (R6b), from the list function's status.json: a failed download, or no new version for twice the
 // list's refresh period (an error after 7 days: the routers' copy grows old).
-export interface ListStatusLine { name: string; url?: string; version?: string; entries?: number; refreshHours?: number; fetchedAt?: string; lastAttemptAt?: string; error?: string; errorAt?: string }
+export interface ListStatusLine { name: string; url?: string; attemptUrl?: string; version?: string; entries?: number; refreshHours?: number; fetchedAt?: string; lastAttemptAt?: string; error?: string; errorAt?: string }
 export function listObservations(status: { lists?: ListStatusLine[] } | null, now: number): Observation[] {
   const hint = 'The routers keep the last version published; the list function retries every hour (its logs: dmt-<env>-manager-ip-lists).';
   return (status?.lists ?? []).map((l) => {
@@ -180,9 +180,20 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
     async run() {
       const t = now();
       const [summaries, installed, existing] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list()]);
+      // Subjects other than routers that could not be read keep their alarms as they are (never resolved nor removed).
+      let extra: Observation[] = [];
+      let extraUnread = false;
+      if (extraObservations) {
+        try {
+          extra = await extraObservations();
+        } catch (err) {
+          extraUnread = true;
+          log.error('SubjectsUnreadable', { error: (err as Error).message });
+        }
+      }
       const observations = [
         ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t }),
-        ...(extraObservations ? await extraObservations() : []),
+        ...extra,
       ];
       const known = new Map(existing.map((x) => [x.alarm.subject.id, x]));
       const changes: Change[] = [];
@@ -193,7 +204,10 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
         if (change) changes.push(change);
       }
       // Subjects no longer known (a router uninstalled, a list removed): their alarms leave without a message.
-      for (const { alarm, version } of known.values()) await alarms.remove(alarm.subject.id, version);
+      for (const { alarm, version } of known.values()) {
+        if (extraUnread && alarm.subject.kind !== 'router') continue;
+        await alarms.remove(alarm.subject.id, version);
+      }
 
       // Errors first, then warnings, then resolutions: the first 10 are sent one by one, the rest in a digest.
       const rank = (c: Change) => (c.resolved ? 0 : c.alarm.level === 'error' ? 2 : 1);
@@ -207,12 +221,14 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
         const ok = remove ? await alarms.remove(alarm.subject.id, version) : await alarms.put(alarm, version);
         if (!ok) log.warn('AlarmChangedMeanwhile', { subject: alarm.subject.id });
       };
+      const unsent: string[] = [];
       for (const { change, note } of single) {
         try {
           await notify.publish(note!);
         } catch (err) {
           // Not written: the next run finds the same change and sends it again.
           log.error('AlertNotSent', { subject: change.alarm.subject.id, error: (err as Error).message });
+          unsent.push((err as Error).message);
           continue;
         }
         await write(change);
@@ -229,11 +245,14 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
           for (const { change } of digested) await write(change);
         } catch (err) {
           log.error('AlertNotSent', { subject: 'digest', count: digested.length, error: (err as Error).message });
+          unsent.push((err as Error).message);
         }
       }
       // Changes that send nothing (a text that changed, a damped code, a clearing): written as they are.
       for (const { change } of quiet) await write(change);
-      log.info('WatchdogRan', { subjects: observations.length, changes: changes.length, sent: single.length + (digested.length ? 1 : 0), open: changes.filter((c) => c.alarm.level !== 'ok').length });
+      log.info('WatchdogRan', { subjects: observations.length, changes: changes.length, sent: single.length + (digested.length ? 1 : 0) - unsent.length, open: changes.filter((c) => c.alarm.level !== 'ok').length });
+      // A path to the topic that fails is an error of the run: the watchdog-errors alarm (CloudWatch's own path) says it.
+      if (unsent.length) throw new Error(`${unsent.length} alert${unsent.length === 1 ? '' : 's'} not sent: ${[...new Set(unsent)].join('; ')}`);
     },
   };
 }
