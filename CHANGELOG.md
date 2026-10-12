@@ -5,6 +5,12 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- `npm run estimate -- --profile <profile>` (the repository's tool, not in a release): what Dormeto would save on an AWS
+  account or organization before anything is installed, with read access only. Discovery, CloudWatch requests and the
+  estimate, each cached; a terminal summary, and Markdown and JSON reports.
+
 ## 0.9.0 — 2026-10-10
 
 Router 0.28.1. Access: nothing to apply again in the member accounts; the manager's own IAM changes with its module (the
