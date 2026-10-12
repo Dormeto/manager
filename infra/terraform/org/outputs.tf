@@ -7,5 +7,9 @@ output "discovery_principal" {
 }
 
 output "command_role_arn" {
-  value = module.command_role.role_arn
+  value = module.access.command_role_arn
+}
+
+output "discovery_role_arn" {
+  value = module.access.discovery_role_arn
 }
