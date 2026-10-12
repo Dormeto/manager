@@ -3,8 +3,10 @@
 resource "aws_dynamodb_table" "manager" {
   name         = local.name
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "pk"
-  range_key    = "sk"
+  # The registry of installed routers, operations and audit: protected with the users (deletion_protection).
+  deletion_protection_enabled = var.deletion_protection
+  hash_key                    = "pk"
+  range_key                   = "sk"
 
   attribute {
     name = "pk"
@@ -38,19 +40,6 @@ resource "aws_dynamodb_table" "manager" {
   }
   server_side_encryption {
     enabled = true
-  }
-}
-
-data "archive_file" "api" {
-  type        = "zip"
-  source_file = local.artifact.api
-  output_path = "${path.root}/.build/${local.name}-api.zip"
-
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
   }
 }
 
@@ -102,11 +91,15 @@ data "aws_iam_policy_document" "api" {
     ]
     resources = [aws_cognito_user_pool.main.arn]
   }
-  statement {
-    # Invitations while SES is in the sandbox: the invited address is verified as an SES identity first.
-    sid       = "SesSandbox"
-    actions   = ["ses:GetAccount", "ses:GetEmailIdentity", "ses:CreateEmailIdentity"]
-    resources = ["*"]
+  # With an SES identity, invitations while SES is in the sandbox: the invited address is verified as an SES identity
+  # first. Without, Cognito sends its own email to any address.
+  dynamic "statement" {
+    for_each = var.ses_identity == null ? [] : [1]
+    content {
+      sid       = "SesSandbox"
+      actions   = ["ses:GetAccount", "ses:GetEmailIdentity", "ses:CreateEmailIdentity"]
+      resources = ["*"]
+    }
   }
   statement {
     # Discovery: run on demand (the discovery state machine).
@@ -132,8 +125,8 @@ resource "aws_lambda_function" "api" {
   runtime          = "nodejs24.x"
   architectures    = ["arm64"]
   handler          = "index.handler"
-  filename         = data.archive_file.api.output_path
-  source_code_hash = data.archive_file.api.output_base64sha256
+  filename         = local.artifact.api
+  source_code_hash = filebase64sha256(local.artifact.api)
   # The HTTP API waits at most 30 s; discovery and status calls take a few seconds.
   timeout     = 29
   memory_size = 512
@@ -149,6 +142,7 @@ resource "aws_lambda_function" "api" {
       TABLE                   = aws_dynamodb_table.manager.name
       VERSION                 = local.version
       USER_POOL_ID            = aws_cognito_user_pool.main.id
+      EMAIL_SENDER            = var.ses_identity == null ? "cognito" : "ses"
       DASHBOARD_URL           = "https://${local.dashboard_host}/"
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
       # The organization roles, shown in the dashboard (packaging design §3).
@@ -157,7 +151,7 @@ resource "aws_lambda_function" "api" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.api, aws_iam_role_policy.api]
+  depends_on = [aws_cloudwatch_log_group.api, aws_iam_role_policy.api, terraform_data.artifacts]
 }
 
 resource "aws_apigatewayv2_api" "api" {

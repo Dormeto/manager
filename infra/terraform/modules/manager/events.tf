@@ -104,19 +104,6 @@ resource "aws_iam_role_policy" "fleet" {
   policy = data.aws_iam_policy_document.fleet.json
 }
 
-data "archive_file" "fleet" {
-  type        = "zip"
-  source_file = local.artifact.fleet
-  output_path = "${path.root}/.build/${local.name}-fleet.zip"
-
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
-  }
-}
-
 resource "aws_cloudwatch_log_group" "fleet" {
   name              = "/aws/lambda/${local.name}-fleet"
   retention_in_days = var.log_retention_days
@@ -128,8 +115,8 @@ resource "aws_lambda_function" "fleet" {
   runtime          = "nodejs24.x"
   architectures    = ["arm64"]
   handler          = "index.handler"
-  filename         = data.archive_file.fleet.output_path
-  source_code_hash = data.archive_file.fleet.output_base64sha256
+  filename         = local.artifact.fleet
+  source_code_hash = filebase64sha256(local.artifact.fleet)
   # A batch of 25 chunks of about 90 workloads, written 10 at a time, takes seconds; the margin is for a throttled table
   # draining a backlog.
   timeout     = 120
@@ -141,7 +128,7 @@ resource "aws_lambda_function" "fleet" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.fleet, aws_iam_role_policy.fleet]
+  depends_on = [aws_cloudwatch_log_group.fleet, aws_iam_role_policy.fleet, terraform_data.artifacts]
 }
 
 # Batches of up to 25 events within 1 s; a failed event comes back alone (partial batch response); at most 5 batches at

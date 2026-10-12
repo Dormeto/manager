@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createUsers, type CognitoPort, type SesPort } from '../src/users.js';
 import { HttpError } from '../src/api.js';
 
-function fakes({ production = false, identities = {} as Record<string, boolean> } = {}) {
+function fakes({ production = false, identities = {} as Record<string, boolean>, sender = 'ses' as 'ses' | 'cognito' } = {}) {
   const calls: unknown[] = [];
   const groups: Record<string, string[]> = { 'dmt-admin': ['u-admin'], 'dmt-operator': ['u-op'], 'dmt-viewer': [] };
   const cognito: CognitoPort = {
@@ -30,7 +30,9 @@ function fakes({ production = false, identities = {} as Record<string, boolean> 
     },
     async createEmailIdentity({ EmailIdentity }) { calls.push(['identity', EmailIdentity]); return {}; },
   };
-  return { users: createUsers({ cognito, ses, userPoolId: 'pool' }), calls };
+  // With Cognito sending its own email, SES is never called.
+  const untouched: SesPort = { getAccount: () => { throw new Error('SES called'); }, getEmailIdentity: () => { throw new Error('SES called'); }, createEmailIdentity: () => { throw new Error('SES called'); } };
+  return { users: createUsers({ cognito, ses: sender === 'cognito' ? untouched : ses, userPoolId: 'pool', sender }), calls };
 }
 
 describe('users service', () => {
@@ -67,6 +69,13 @@ describe('users service', () => {
     const { users, calls } = fakes({ identities: { 'bob@example.com': false } });
     expect(await users.invite('bob@example.com', 'viewer')).toEqual({ invitation: 'pending-verification' });
     expect(calls.filter((c) => (c as string[])[0] === 'identity')).toEqual([]);
+  });
+
+  it('with Cognito sending its own email (no SES identity), invites and resends at once and never touches SES', async () => {
+    const { users, calls } = fakes({ sender: 'cognito' });
+    expect(await users.invite('new@example.com', 'viewer')).toEqual({ invitation: 'sent' });
+    expect(await users.resend('new@example.com')).toEqual({ invitation: 'sent' });
+    expect(calls).toEqual([['create', 'new@example.com', 'invite'], ['add', 'new@example.com', 'dmt-viewer'], ['create', 'new@example.com', 'RESEND']]);
   });
 
   it('an existing user is a conflict', async () => {

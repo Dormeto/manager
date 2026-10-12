@@ -15,7 +15,6 @@ mock_provider "aws" {
     values = { region = "eu-west-1" }
   }
 }
-mock_provider "archive" {}
 mock_provider "random" {}
 mock_provider "time" {}
 
@@ -50,12 +49,16 @@ run "without_a_domain_nor_ses" {
     error_message = "Without an SES identity, Cognito sends the invitations itself."
   }
   assert {
-    condition     = aws_lambda_function.access_check.handler == "check.handler" && aws_s3_object.router_bundle["router.zip"].key == "router/0.0.0-test/router.zip"
+    condition     = aws_lambda_function.api.environment[0].variables.EMAIL_SENDER == "cognito" && length([for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SesSandbox"]) == 0
+    error_message = "Without an SES identity, the API invites through Cognito and has no SES permission."
+  }
+  assert {
+    condition     = aws_lambda_function.access_check.handler == "check.handler" && aws_lambda_function.access_check.filename == "tests/artifacts/lambda/access-check.zip" && aws_lambda_function.api.filename == "tests/artifacts/lambda/api.zip" && aws_s3_object.router_bundle["router.zip"].key == "router/0.0.0-test/router.zip"
     error_message = "The release's bundles and versions are used."
   }
   assert {
-    condition     = aws_cognito_user_pool.main.deletion_protection == "ACTIVE"
-    error_message = "The users are protected from a mistaken destroy by default."
+    condition     = aws_cognito_user_pool.main.deletion_protection == "ACTIVE" && aws_dynamodb_table.manager.deletion_protection_enabled == true
+    error_message = "The users and the table (routers installed, operations, audit) are protected from a mistaken destroy by default."
   }
 }
 
@@ -80,8 +83,8 @@ run "uninstall_lifts_the_users_protection" {
   }
 
   assert {
-    condition     = aws_cognito_user_pool.main.deletion_protection == "INACTIVE"
-    error_message = "deletion_protection = false lets terraform destroy remove the user pool."
+    condition     = aws_cognito_user_pool.main.deletion_protection == "INACTIVE" && aws_dynamodb_table.manager.deletion_protection_enabled == false
+    error_message = "deletion_protection = false lets terraform destroy remove the user pool and the table."
   }
 }
 
@@ -110,6 +113,10 @@ run "with_a_domain_and_ses" {
     condition     = aws_cognito_user_pool.main.email_configuration[0].source_arn == "arn:aws:ses:eu-west-1:111122223333:identity/example.com" && length(aws_ses_identity_policy.cognito) == 1
     error_message = "With an SES identity, Cognito sends through it."
   }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.EMAIL_SENDER == "ses" && length([for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SesSandbox"]) == 1
+    error_message = "With an SES identity, the API verifies invited addresses while SES is in the sandbox."
+  }
 }
 
 run "missing_artifacts_fail_the_plan_with_their_paths" {
@@ -117,13 +124,6 @@ run "missing_artifacts_fail_the_plan_with_their_paths" {
   variables {
     artifacts_dir = "tests/no-such-release"
   }
-  expect_failures = [
-    data.archive_file.api,
-    data.archive_file.discovery,
-    data.archive_file.operations,
-    data.archive_file.access_check,
-    data.archive_file.fleet,
-    aws_s3_object.router_bundle,
-    aws_s3_object.config,
-  ]
+  # One failure, naming every missing file; nothing that reads them is planned.
+  expect_failures = [terraform_data.artifacts]
 }

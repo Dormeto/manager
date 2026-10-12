@@ -78,12 +78,7 @@ resource "aws_s3_object" "config" {
     authDomain = local.auth_host
   })
 
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
-  }
+  depends_on = [terraform_data.artifacts]
 }
 
 resource "aws_cloudfront_origin_access_control" "dashboard" {

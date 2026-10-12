@@ -11,12 +11,14 @@ const moves = (text) => [...text.matchAll(/moved \{\s*from\s*=\s*(\S+)\s+to\s*=\
 
 // Optional in the module (count): their one instance is [0].
 const CONDITIONAL = ['aws_ses_identity_policy.cognito', 'aws_route53_record.auth'];
+// Added in the module, with no platform address (R5b review: the artifacts' check).
+const NEW = ['terraform_data.artifacts'];
 
 test('every resource of the manager module has a moved block from its platform address', () => {
   const inModule = addresses(hcl('modules/manager'));
   const moved = moves(hcl('platform'));
   assert.ok(inModule.length > 70, `${inModule.length} resources in the module`);
-  for (const address of inModule) {
+  for (const address of inModule.filter((a) => !NEW.includes(a))) {
     const to = `module.manager.${address}${CONDITIONAL.includes(address) ? '[0]' : ''}`;
     assert.ok(moved.some((m) => m.from === address && m.to === to), `moved { from = ${address} to = ${to} }`);
   }

@@ -20,7 +20,7 @@ test('a release holds the module with its artifacts, the access and organization
     'dormeto-organization-policy.json', 'terraform-aws-dormeto-0.2.0.zip',
   ]);
   const manager = entries(join(release.dir, 'terraform-aws-dormeto-0.2.0.zip'));
-  for (const file of ['modules/manager/variables.tf', 'modules/manager/README.md', 'modules/manager/artifacts/manifest.json', 'modules/manager/artifacts/lambda/operations/check.mjs',
+  for (const file of ['modules/manager/variables.tf', 'modules/manager/README.md', 'modules/manager/artifacts/manifest.json', 'modules/manager/artifacts/lambda/access-check.zip',
     'modules/manager/artifacts/dashboard/index.html', 'modules/manager/artifacts/router/router.zip', 'modules/access/main.tf', 'modules/access/router-boundary.json',
     'modules/access/command-role/main.tf', 'modules/access/command-role/command-policy.json']) {
     assert.ok(manager.includes(file), file);
@@ -41,6 +41,8 @@ test('a release holds the module with its artifacts, the access and organization
 
 test('a release holds no account-specific value', () => {
   assert.throws(() => build({ with: { 'manager/packages/dashboard/dist/assets/app-1a2b.js': 'fetch("https://x.121014831971.example")' } }), /account-specific value 121014831971 in .*dashboard\/assets\/app-1a2b\.js/);
+  // Inside a function's bundle too, zipped in the release.
+  assert.throws(() => build({ with: { 'manager/packages/api/dist/index.mjs': 'const org = "o-vvk0115ixn";' } }), /account-specific value o-vvk0115ixn in .*api\/dist\/index\.mjs/);
 });
 
 test('a missing build output or changelog section stops the release', () => {

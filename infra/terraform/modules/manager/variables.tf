@@ -56,7 +56,7 @@ variable "email_from" {
 }
 
 variable "deletion_protection" {
-  description = "Protect the user pool (the users) from a mistaken destroy. Set to false and apply before terraform destroy (uninstall)."
+  description = "Protect the user pool (the users) and the table (installed routers, operations, audit) from a mistaken destroy. Set to false and apply before terraform destroy (uninstall)."
   type        = bool
   default     = true
 }
@@ -147,16 +147,15 @@ locals {
   # Cognito attribute map). Never sent mail (SUPPRESS).
   smoke_username = "smoke@${local.custom_domain ? var.domain.dashboard : "${local.name}.invalid"}"
 
-  # The release's artifacts (scripts/release/artifacts.mjs): every reader checks them all first, so that a missing one
-  # fails the plan with its path rather than leaving the dashboard empty or a Lambda without code.
+  # The release's artifacts (scripts/release/artifacts.mjs), checked by terraform_data.artifacts.
   artifacts_dir = coalesce(var.artifacts_dir, "${path.module}/artifacts")
   artifact = {
     manifest     = "${local.artifacts_dir}/manifest.json"
-    api          = "${local.artifacts_dir}/lambda/api/index.mjs"
-    discovery    = "${local.artifacts_dir}/lambda/discovery/index.mjs"
-    operations   = "${local.artifacts_dir}/lambda/operations/index.mjs"
-    access_check = "${local.artifacts_dir}/lambda/operations/check.mjs"
-    fleet        = "${local.artifacts_dir}/lambda/fleet/index.mjs"
+    api          = "${local.artifacts_dir}/lambda/api.zip"
+    discovery    = "${local.artifacts_dir}/lambda/discovery.zip"
+    operations   = "${local.artifacts_dir}/lambda/operations.zip"
+    access_check = "${local.artifacts_dir}/lambda/access-check.zip"
+    fleet        = "${local.artifacts_dir}/lambda/fleet.zip"
     dashboard    = "${local.artifacts_dir}/dashboard/index.html"
     router       = "${local.artifacts_dir}/router/router.zip"
     blueprint    = "${local.artifacts_dir}/router/blueprint.json"
@@ -167,4 +166,17 @@ locals {
   manifest          = try(jsondecode(file(local.artifact.manifest)), { version = "missing", router = "missing" })
   version           = local.manifest.version
   router_version    = local.manifest.router
+}
+
+# Every reader of the artifacts waits for this check: a missing one fails the plan here, once, naming every missing file,
+# rather than leaving the dashboard empty or a function without code.
+resource "terraform_data" "artifacts" {
+  input = local.artifact
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }

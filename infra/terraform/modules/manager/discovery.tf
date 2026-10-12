@@ -62,19 +62,6 @@ resource "aws_iam_role_policy" "discovery" {
   policy = data.aws_iam_policy_document.discovery.json
 }
 
-data "archive_file" "discovery" {
-  type        = "zip"
-  source_file = local.artifact.discovery
-  output_path = "${path.root}/.build/${local.name}-discovery.zip"
-
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
-  }
-}
-
 resource "aws_cloudwatch_log_group" "discovery" {
   name              = "/aws/lambda/${local.name}-discovery"
   retention_in_days = var.log_retention_days
@@ -86,8 +73,8 @@ resource "aws_lambda_function" "discovery" {
   runtime          = "nodejs24.x"
   architectures    = ["arm64"]
   handler          = "index.handler"
-  filename         = data.archive_file.discovery.output_path
-  source_code_hash = data.archive_file.discovery.output_base64sha256
+  filename         = local.artifact.discovery
+  source_code_hash = filebase64sha256(local.artifact.discovery)
   timeout          = 900
   memory_size      = 512
   # 20 account steps at once (the state machine's Map), plus a plan or a finalize; one run at a time (its lock).
@@ -105,7 +92,7 @@ resource "aws_lambda_function" "discovery" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.discovery, aws_iam_role_policy.discovery]
+  depends_on = [aws_cloudwatch_log_group.discovery, aws_iam_role_policy.discovery, terraform_data.artifacts]
 }
 
 # A run (scale design §5): plan, the accounts 20 at a time in a Distributed Map (each child its own execution), finalize.

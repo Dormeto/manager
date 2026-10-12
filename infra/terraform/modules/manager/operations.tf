@@ -38,12 +38,7 @@ resource "aws_s3_object" "router_bundle" {
   source   = each.value
   etag     = filemd5(each.value)
 
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
-  }
+  depends_on = [terraform_data.artifacts]
 }
 
 resource "aws_iam_role" "operations" {
@@ -85,19 +80,6 @@ resource "aws_iam_role_policy" "operations" {
   policy = data.aws_iam_policy_document.operations.json
 }
 
-data "archive_file" "operations" {
-  type        = "zip"
-  source_file = local.artifact.operations
-  output_path = "${path.root}/.build/${local.name}-operations.zip"
-
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
-  }
-}
-
 resource "aws_cloudwatch_log_group" "operations" {
   name              = "/aws/lambda/${local.name}-operations"
   retention_in_days = var.log_retention_days
@@ -109,8 +91,8 @@ resource "aws_lambda_function" "operations" {
   runtime          = "nodejs24.x"
   architectures    = ["arm64"]
   handler          = "index.handler"
-  filename         = data.archive_file.operations.output_path
-  source_code_hash = data.archive_file.operations.output_base64sha256
+  filename         = local.artifact.operations
+  source_code_hash = filebase64sha256(local.artifact.operations)
   # One step per invocation: the longest are the onboarder's preview and onboard (300 s at most, it lists every Auto
   # Scaling group and ECS service of the region), plus a margin.
   timeout     = 360
@@ -130,25 +112,12 @@ resource "aws_lambda_function" "operations" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.operations, aws_iam_role_policy.operations]
+  depends_on = [aws_cloudwatch_log_group.operations, aws_iam_role_policy.operations, terraform_data.artifacts]
 }
 
 # The access check (packaging design §3): assumes an account's command role and answers whether it could, nothing else.
 # It runs as the operations role, the one the command role trusts; discovery may invoke it, never the operations
 # function (whose steps act under the command role).
-data "archive_file" "access_check" {
-  type        = "zip"
-  source_file = local.artifact.access_check
-  output_path = "${path.root}/.build/${local.name}-access-check.zip"
-
-  lifecycle {
-    precondition {
-      condition     = length(local.missing_artifacts) == 0
-      error_message = local.missing_message
-    }
-  }
-}
-
 resource "aws_cloudwatch_log_group" "access_check" {
   name              = "/aws/lambda/${local.name}-access-check"
   retention_in_days = var.log_retention_days
@@ -160,8 +129,8 @@ resource "aws_lambda_function" "access_check" {
   runtime          = "nodejs24.x"
   architectures    = ["arm64"]
   handler          = "check.handler"
-  filename         = data.archive_file.access_check.output_path
-  source_code_hash = data.archive_file.access_check.output_base64sha256
+  filename         = local.artifact.access_check
+  source_code_hash = filebase64sha256(local.artifact.access_check)
   # Two STS attempts of 10 s at most.
   timeout     = 30
   memory_size = 256
@@ -173,7 +142,7 @@ resource "aws_lambda_function" "access_check" {
     }
   }
 
-  depends_on = [aws_cloudwatch_log_group.access_check, aws_iam_role_policy.operations]
+  depends_on = [aws_cloudwatch_log_group.access_check, aws_iam_role_policy.operations, terraform_data.artifacts]
 }
 
 data "aws_iam_policy_document" "states_assume" {

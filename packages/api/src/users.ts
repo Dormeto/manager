@@ -1,5 +1,6 @@
-// Users of the dashboard: Cognito users and groups. While SES is in the sandbox, Cognito can only send the invitation
-// to a verified address: the invited address becomes an SES identity first, and the invitation is resent once verified.
+// Users of the dashboard: Cognito users and groups. When Cognito sends through an SES identity in the sandbox, it can only
+// send the invitation to a verified address: the invited address becomes an SES identity first, and the invitation is
+// resent once verified. When Cognito sends its own email (the manager module without ses_identity), SES is not involved.
 import { HttpError, type Role, type UserView, type UsersService } from './api.js';
 
 type Input = Record<string, unknown>;
@@ -45,9 +46,10 @@ async function mapped<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createUsers({ cognito, ses, userPoolId }: { cognito: CognitoPort; ses: SesPort; userPoolId: string }): UsersService {
+export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cognito: CognitoPort; ses: SesPort; userPoolId: string; sender?: 'ses' | 'cognito' }): UsersService {
+  // Any address receives Cognito's own email, and SES in production.
   async function inProduction() {
-    return (await ses.getAccount()).ProductionAccessEnabled === true;
+    return sender === 'cognito' || (await ses.getAccount()).ProductionAccessEnabled === true;
   }
 
   async function status(identity: string): Promise<'verified' | 'pending' | 'missing'> {

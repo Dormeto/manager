@@ -2,7 +2,8 @@
 // A release of the manager (vision docs/specs/2026-10-06-packaging-design.md, section 4): the manager module with its
 // built artifacts, the access and organization modules, the AWS CLI procedure, checksums and the changelog section,
 // published once per version under releases.dormeto.com/manager/<version>/.
-// Usage: node scripts/release/release.mjs [--no-build] [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
+// Usage: node scripts/release/release.mjs [--no-build] [--router <router checkout at the pinned version>]
+//          [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -29,8 +30,8 @@ export function changelogSection(changelog, version) {
   return `${lines.slice(start, end < 0 ? undefined : end).join('\n').trim()}\n`;
 }
 
-function assertNoAccountValues(dir) {
-  for (const file of files(dir)) {
+function assertNoAccountValues(dir, paths = files(dir)) {
+  for (const file of paths) {
     const text = readFileSync(join(dir, file), 'latin1');
     const found = FORBIDDEN.find((value) => text.includes(value));
     if (found) throw new Error(`account-specific value ${found} in ${file}`);
@@ -42,6 +43,8 @@ export function buildRelease({ manager, router, modules, out, version }) {
   const stage = mkdtempSync(join(tmpdir(), 'dmt-release-stage-'));
   // The manager archive: modules/manager with its artifacts beside, and the access module it uses (../access).
   assembleArtifacts({ manager, router, out: join(stage, 'manager/modules/manager/artifacts') });
+  // The functions' bundles are zipped in the release: checked from the builds.
+  assertNoAccountValues(manager, ['api', 'discovery', 'operations', 'fleet'].flatMap((p) => files(join(manager, 'packages', p, 'dist')).map((f) => join('packages', p, 'dist', f))));
   copyModule(join(modules, 'manager'), join(stage, 'manager/modules/manager'));
   for (const target of ['manager/modules/access', 'access']) {
     copyModule(join(modules, 'access'), join(stage, target));
@@ -114,7 +117,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (git('status', '--porcelain')) throw new Error('the working tree has changes: a release is built from a commit');
   if (git('tag', '--list', `v${pkg.version}`)) throw new Error(`tag v${pkg.version} exists: bump the version`);
   if (!args.includes('--no-build')) execFileSync('npm', ['run', 'build'], { cwd: manager, stdio: 'inherit' });
-  const release = buildRelease({ manager, router: join(manager, '../router'), modules: join(manager, 'infra/terraform/modules'), out: join(manager, 'dist/release'), version: pkg.version });
+  const release = buildRelease({ manager, router: option('router') ?? join(manager, '../router'), modules: join(manager, 'infra/terraform/modules'), out: join(manager, 'dist/release'), version: pkg.version });
   for (const file of release.files) console.log(`${String(statSync(join(release.dir, file)).size).padStart(10)}  ${file}`);
   if (args.includes('--publish')) {
     const bucket = option('bucket');

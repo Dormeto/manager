@@ -4,15 +4,30 @@
 // dormeto.router). Dev plans
 // platform from it; the release archive carries it.
 //   manifest.json                       { version, router }
-//   lambda/<api|discovery|fleet>/index.mjs, lambda/operations/{index,check}.mjs
+//   lambda/<api|discovery|operations|fleet>.zip (index.mjs), lambda/access-check.zip (check.mjs): ready to upload, so
+//                                       that nothing is written at plan time (a plan applied elsewhere works)
 //   dashboard/…                         the built dashboard
 //   router/{router.zip, blueprint.json, router-boundary.json}
 // Usage: node scripts/release/artifacts.mjs [--router <router repository>] [--out <directory>]
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const version = (dir) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version;
+
+// One file per zip, its time fixed and no extra attributes: the same build gives the same bytes, so an unchanged function
+// keeps its code hash.
+function zipOne(source, target) {
+  const dir = mkdtempSync(join(tmpdir(), 'dmt-zip-'));
+  const file = join(dir, basename(source));
+  cpSync(source, file);
+  utimesSync(file, new Date('1980-01-01T00:00:00Z'), new Date('1980-01-01T00:00:00Z'));
+  mkdirSync(dirname(target), { recursive: true });
+  execFileSync('zip', ['-X', '-q', target, basename(source)], { cwd: dir });
+  rmSync(dir, { recursive: true, force: true });
+}
 
 function list(dir, base = dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? list(join(dir, e.name), base) : [relative(base, join(dir, e.name))]));
@@ -23,22 +38,25 @@ export function assembleArtifacts({ manager, router, out }) {
   const routerVersion = version(router);
   const pinned = JSON.parse(readFileSync(join(manager, 'package.json'), 'utf8')).dormeto?.router;
   if (routerVersion !== pinned) throw new Error(`router checkout is ${routerVersion}, the manager pins ${pinned} (package.json dormeto.router)`);
+  const bundles = {
+    'lambda/api.zip': join(manager, 'packages/api/dist/index.mjs'),
+    'lambda/discovery.zip': join(manager, 'packages/discovery/dist/index.mjs'),
+    'lambda/operations.zip': join(manager, 'packages/operations/dist/index.mjs'),
+    'lambda/access-check.zip': join(manager, 'packages/operations/dist/check.mjs'),
+    'lambda/fleet.zip': join(manager, 'packages/fleet/dist/index.mjs'),
+  };
   const sources = {
-    'lambda/api/index.mjs': join(manager, 'packages/api/dist/index.mjs'),
-    'lambda/discovery/index.mjs': join(manager, 'packages/discovery/dist/index.mjs'),
-    'lambda/operations/index.mjs': join(manager, 'packages/operations/dist/index.mjs'),
-    'lambda/operations/check.mjs': join(manager, 'packages/operations/dist/check.mjs'),
-    'lambda/fleet/index.mjs': join(manager, 'packages/fleet/dist/index.mjs'),
     'dashboard': join(manager, 'packages/dashboard/dist'),
     'router/router.zip': join(router, `dist/router-${routerVersion}.zip`),
     'router/blueprint.json': join(router, `dist/blueprint-${routerVersion}.json`),
     'router/router-boundary.json': join(router, 'dist/router-boundary.json'),
   };
   // Every output is checked before anything is written: a partial layout never replaces a complete one.
-  for (const source of Object.values(sources)) {
+  for (const source of [...Object.values(bundles), ...Object.values(sources)]) {
     if (!existsSync(source)) throw new Error(`missing build output: ${source} (npm run build here, npm run package in the router)`);
   }
   rmSync(out, { recursive: true, force: true });
+  for (const [target, source] of Object.entries(bundles)) zipOne(source, join(out, target));
   for (const [target, source] of Object.entries(sources)) {
     mkdirSync(dirname(join(out, target)), { recursive: true });
     cpSync(source, join(out, target), { recursive: true });
