@@ -5,7 +5,7 @@ import { exclusionCriterion, matches, restatus, type Candidate, type DiscoverySt
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, OperationType, Records } from './records.js';
-import { ensureClusterAccess, type EksPort } from './cluster-access.js';
+import { ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
 
 const MINUTE = 60_000;
 // An operation lasts at most its slot waits (SLOT_WAIT_MAX) and the steps after them: the workflow's timeout is 25 hours
@@ -91,7 +91,7 @@ const clusterSteps = ['access entries', 'check clusters'];
 const PLANS: Record<OperationType, string[]> = {
   'install-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
-  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', ...uninstallSteps, 'unregister router'],
+  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', ...uninstallSteps, 'unregister router'],
   // The slot before the load balancer's lock: an operation waiting for a slot holds no lock others wait for.
   onboard: ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'slot', 'lock load balancer', 'preview', 'onboard', 'verify', 'candidate'],
   // Paused first (that wakes an asleep workload): no nap starts or commits while the instrumentation goes.
@@ -320,6 +320,12 @@ export function createEngine(deps: EngineDeps) {
     return { blueprint: filled, zip, codeSha256 };
   }
 
+  // The router's roles that call the clusters (their access entries).
+  async function routerRolesOf(op: Operation) {
+    const { blueprint } = await filledBlueprint(op);
+    return blueprint.roles.filter((r) => ['controller', 'waker', 'onboarder'].includes(r.key)).map((r) => `arn:aws:iam::${op.target.account}:role${r.path}${r.name}`);
+  }
+
   async function installer(op: Operation) {
     const { blueprint, zip, codeSha256 } = await filledBlueprint(op);
     const target = await access(op);
@@ -465,8 +471,7 @@ export function createEngine(deps: EngineDeps) {
           if (kubernetes) op.context.clusters = [kubernetes.cluster];
           return { status: 'skipped', detail: `router ${router.name} is written in Terraform: its access entries are the customer's (module eks-access)` };
         }
-        const { blueprint } = await filledBlueprint(op);
-        const routerRoles = blueprint.roles.filter((r) => ['controller', 'waker', 'onboarder'].includes(r.key)).map((r) => `arn:aws:iam::${op.target.account}:role${r.path}${r.name}`);
+        const routerRoles = await routerRolesOf(op);
         const discoveryRole = `arn:aws:iam::${op.target.account}:role/${deps.settings.discoveryRole ?? 'DmtDiscoveryRole'}`;
         const results = await ensureClusterAccess((await access(op)).eks, { routerRoles, discoveryRole });
         op.context.clusters = results.filter((r) => r.ready).map((r) => r.cluster);
@@ -523,6 +528,11 @@ export function createEngine(deps: EngineDeps) {
         const count = (listed?.workloads ?? []).length;
         if (count) throw new Error(`router ${(op.context.router as RouterRef).name} still has ${count} workload${count === 1 ? '' : 's'}: offboard ${count === 1 ? 'it' : 'them'} first`);
         return { status: 'done' };
+      }
+      case 'remove access entries': {
+        const results = await removeClusterAccess((await access(op)).eks, { routerRoles: await routerRolesOf(op) });
+        if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
+        return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
       }
       case 'unregister router':
         await records.deleteRouter(op.target.account!, op.target.region!);

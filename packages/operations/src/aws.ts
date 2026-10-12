@@ -13,7 +13,7 @@ import {
   UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
 import {
-  AssociateAccessPolicyCommand, CreateAccessEntryCommand, DescribeAccessEntryCommand, DescribeClusterCommand, EKSClient, ListAssociatedAccessPoliciesCommand, ListClustersCommand,
+  AssociateAccessPolicyCommand, CreateAccessEntryCommand, DeleteAccessEntryCommand, DescribeAccessEntryCommand, DescribeClusterCommand, EKSClient, ListAssociatedAccessPoliciesCommand, ListClustersCommand,
 } from '@aws-sdk/client-eks';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { CreateScheduleCommand, DeleteScheduleCommand, GetScheduleCommand, SchedulerClient, UpdateScheduleCommand } from '@aws-sdk/client-scheduler';
@@ -73,6 +73,7 @@ export function eksPort(credentials: Credentials, region: string): EksPort {
     describeCluster: (input) => client.send(new DescribeClusterCommand(input)),
     describeAccessEntry: (input) => client.send(new DescribeAccessEntryCommand(input)),
     createAccessEntry: (input) => client.send(new CreateAccessEntryCommand(input)),
+    deleteAccessEntry: (input) => client.send(new DeleteAccessEntryCommand(input)),
     listAssociatedAccessPolicies: (input) => client.send(new ListAssociatedAccessPoliciesCommand(input)),
     associateAccessPolicy: (input) => client.send(new AssociateAccessPolicyCommand(input)),
   };

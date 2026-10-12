@@ -1,7 +1,7 @@
 // The command role's policy against the calls the operations make in a member account (packaging design §5).
 import { describe, expect, it } from 'vitest';
 import { ACCOUNT, FORWARDER_CALLS, allows, role } from './command-policy.js';
-import { ensureClusterAccess } from '../src/cluster-access.js';
+import { ensureClusterAccess, removeClusterAccess, type EksPort } from '../src/cluster-access.js';
 
 describe('the command role\'s policy', () => {
   it('allows every call the forwarder\'s installation and removal make, and passes router roles to EventBridge only as such', () => {
@@ -52,10 +52,23 @@ describe('the command role\'s EKS access entries (Kubernetes workloads, R10.5)',
       describeCluster: async () => ({ cluster: { accessConfig: { authenticationMode: 'API' }, resourcesVpcConfig: { endpointPublicAccess: true, publicAccessCidrs: ['0.0.0.0/0'] } } }),
       describeAccessEntry: notFound,
       createAccessEntry: record('eks:CreateAccessEntry', () => cluster, (i) => ({ 'eks:principalArn': i.principalArn, ...(i.kubernetesGroups ? { 'eks:kubernetesGroups': i.kubernetesGroups } : {}) })),
+      deleteAccessEntry: notFound,
       listAssociatedAccessPolicies: async () => ({ associatedAccessPolicies: [] }),
       associateAccessPolicy: record('eks:AssociateAccessPolicy', (i) => entry(i.principalArn.split('/').at(-1)), (i) => ({ 'eks:policyArn': i.policyArn, 'eks:accessScope': i.accessScope.type })),
     }, { routerRoles: [routerRole], discoveryRole: discovery });
     expect(calls.length).toBe(3);
     for (const [action, resource, context] of calls) expect(allows(action, resource, context), `${action} ${JSON.stringify(context)}`).toBe(true);
+  });
+
+  // The entry's ARN names the role without its path (read on dev-eks: access-entry/<cluster>/role/<account>/<name>/<id>).
+  it('allows every call removing a router makes', async () => {
+    const calls: [string, string][] = [];
+    await removeClusterAccess({
+      listClusters: async () => ({ clusters: ['eks-demo'] }),
+      describeCluster: async () => ({ cluster: { accessConfig: { authenticationMode: 'API' } } }),
+      deleteAccessEntry: async (i: { principalArn: string }) => { calls.push(['eks:DeleteAccessEntry', entry(i.principalArn.split('/').at(-1)!)]); return {}; },
+    } as unknown as EksPort, { routerRoles: [routerRole] });
+    expect(calls).toEqual([['eks:DeleteAccessEntry', entry('dmtr-dev-eu-west-1-controller')]]);
+    for (const [action, resource] of calls) expect(allows(action, resource), action).toBe(true);
   });
 });

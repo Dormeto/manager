@@ -32,6 +32,13 @@ export function fakeEks(clusters: ReturnType<typeof cluster>[], { deny }: { deny
       entries.set(key(input), { kubernetesGroups: input.kubernetesGroups ?? [] });
       return {};
     },
+    async deleteAccessEntry(input) {
+      if (!entries.has(key(input))) throw notFound();
+      write('deleteAccessEntry', input);
+      entries.delete(key(input));
+      policies.delete(key(input));
+      return {};
+    },
     async listAssociatedAccessPolicies(input) { return { associatedAccessPolicies: (policies.get(key(input)) ?? []).map((policyArn) => ({ policyArn })) }; },
     async associateAccessPolicy(input) {
       write('associateAccessPolicy', input);

@@ -480,12 +480,26 @@ describe('cluster access', () => {
     expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
   });
 
-  it('a command role without the EKS statements fails the access entries, naming the organization module to apply again', async () => {
+  it('a command role without the EKS statements fails the access entries, naming the access module to apply again', async () => {
     const denied = Object.assign(new Error('User is not authorized to perform: eks:CreateAccessEntry'), { name: 'AccessDeniedException' });
     const s = setup({ eks: fakeEks([eksCluster('eks-demo')], { deny: denied }) });
     const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
-    expect((await s.records.getOperation(op.id))!.error).toMatch(/^access entries: the command role may not manage the access entries of cluster eks-demo: apply the organization module again \(statement EksAccessEntries\)/);
+    expect((await s.records.getOperation(op.id))!.error).toMatch(/^access entries: the command role may not manage the access entries of cluster eks-demo: apply the access module \(or the AWS CLI script\) of the manager's release again \(statement EksAccessEntries\)/);
+  });
+
+  it('uninstalling a router removes its roles\' access entries from the clusters before its roles', async () => {
+    const s = setup({ eks: fakeEks([eksCluster('eks-demo')]) });
+    expect(await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id)).toEqual({ done: true, status: 'succeeded' });
+    s.eks.writes.length = 0;
+    const op = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const stored = (await s.records.getOperation(op.id))!;
+    const names = stored.steps.map((x) => x.name);
+    expect(names.indexOf('remove access entries')).toBe(names.indexOf('check empty') + 1);
+    expect(stored.steps.find((x) => x.name === 'remove access entries')).toMatchObject({ status: 'done', detail: 'cluster eks-demo: access entries of 3 router roles removed' });
+    expect(s.eks.writes.map(([w, i]) => [w, i.principalArn])).toEqual(['controller', 'waker', 'onboarder'].map((r) => ['deleteAccessEntry', ROLE(r)]));
+    expect([...s.eks.entries.keys()]).toEqual([`eks-demo arn:aws:iam::${ACCOUNT}:role/DmtDiscoveryRole`]);
   });
 
   it('the cluster-access operation runs the access entries and the check again (after the customer applied the manifest)', async () => {
