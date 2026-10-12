@@ -1,5 +1,6 @@
 // Routers and their workloads as they report (vision scale design §4), partition T#default: RS#<account>#<region> per
-// router, WS#<account>#<region>#<workloadId> per workload. Written from the router events, read by the API.
+// router, WS#<account>#<region>#<workloadId> per workload. Written from the router events, read by the API. Each
+// workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 
 const PK = 'T#default';
@@ -41,9 +42,29 @@ export interface WorkloadSummary {
   state?: string;
   targetGroupArn?: string;
   checkedAt?: string; // the check that wrote it
-  stateAt?: string; // the last state change applied
+  stateAt?: string; // when its state began: the last state change applied, or the router's (0.26.0)
+  historySince?: string; // the time of its first history entry (R8)
   [field: string]: unknown;
 }
+
+// A state transition (R8): from the router's event, or inferred from a check when the event was lost (or not yet in).
+export interface HistoryEntry {
+  account: string;
+  region: string;
+  router: string;
+  workloadId: string;
+  from: string | null; // null: the first entry, when the manager first saw the workload
+  to: string;
+  at: string;
+  cause?: string;
+  wakeId?: string;
+  durationMs?: number; // a wake's, on AWAKE
+  failure?: { kind: string; step: string; backend?: string; message: string; at?: string };
+  by?: string; // who asked it from the manager
+  inferred?: boolean;
+}
+// The entries of a period read at most (a request's bound).
+export const HISTORY_MAX = 5000;
 
 // A workload whose last wake failed (R7b): its failure until a successful wake.
 export interface FailureEntry {
@@ -68,7 +89,8 @@ export interface DynamoSender {
 // Summaries expire this long after their last write (the table's TTL): those of a router uninstalled or gone leave.
 const SUMMARY_DAYS = 7;
 
-export function createFleetStore({ dynamo, table, now = Date.now }: { dynamo: DynamoSender; table: string; now?: () => number }) {
+export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 400 }: { dynamo: DynamoSender; table: string; now?: () => number; historyDays?: number }) {
+  const historyPk = (account: string, region: string, id: string) => ({ S: `HIST#${account}#${region}#${id}` });
   const key = (sk: string) => ({ pk: { S: PK }, sk: { S: sk } });
   const expiresAt = () => ({ N: String(Math.floor(now() / 1000) + SUMMARY_DAYS * 86_400) });
   const routerKey = (account: string, region: string) => `RS#${account}#${region}`;
@@ -157,6 +179,44 @@ export function createFleetStore({ dynamo, table, now = Date.now }: { dynamo: Dy
     },
     async listFailures(): Promise<FailureEntry[]> {
       return (await query('WF#')).map((i) => data<FailureEntry>(i)!).filter(Boolean);
+    },
+
+    // One item per transition (R8): a duplicate event writes the same item. An inferred entry never replaces another: the
+    // event's, with its cause and details, wins whenever it comes. False when an inferred entry was already there.
+    async putHistory(entry: HistoryEntry): Promise<boolean> {
+      const item = {
+        pk: historyPk(entry.account, entry.region, entry.workloadId), sk: { S: `${entry.at}#${entry.to}` }, data: { S: JSON.stringify(entry) },
+        expiresAt: { N: String(Math.floor(Date.parse(entry.at) / 1000) + historyDays * 86_400) },
+      };
+      if (!entry.inferred) {
+        await dynamo.send(new PutItemCommand({ TableName: table, Item: item }));
+        return true;
+      }
+      return conditional(() => dynamo.send(new PutItemCommand({ TableName: table, Item: item, ConditionExpression: 'attribute_not_exists(sk)' })));
+    },
+
+    // A period's entries, oldest first, at most max (then truncated).
+    async listHistory(account: string, region: string, id: string, from: string, to: string, { max = HISTORY_MAX }: { max?: number } = {}): Promise<{ entries: HistoryEntry[]; truncated: boolean }> {
+      const entries: HistoryEntry[] = [];
+      let start: Item | undefined;
+      do {
+        const page = await dynamo.send(new QueryCommand({
+          TableName: table, KeyConditionExpression: 'pk = :pk AND sk BETWEEN :from AND :to', Limit: Math.min(1000, max - entries.length + 1),
+          ExpressionAttributeValues: { ':pk': historyPk(account, region, id), ':from': { S: from }, ':to': { S: `${to}~` } }, ...(start ? { ExclusiveStartKey: start } : {}),
+        }));
+        entries.push(...(page.Items ?? []).map((i: Item) => data<HistoryEntry>(i)!).filter(Boolean));
+        start = page.LastEvaluatedKey;
+      } while (start && entries.length <= max);
+      return { entries: entries.slice(0, max), truncated: entries.length > max };
+    },
+
+    // The last entry before a time: the state a period starts in.
+    async historyBefore(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null> {
+      const { Items = [] } = await dynamo.send(new QueryCommand({
+        TableName: table, KeyConditionExpression: 'pk = :pk AND sk < :before', ScanIndexForward: false, Limit: 1,
+        ExpressionAttributeValues: { ':pk': historyPk(account, region, id), ':before': { S: at } },
+      }));
+      return data<HistoryEntry>(Items[0]);
     },
   };
 }

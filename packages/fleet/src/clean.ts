@@ -77,6 +77,19 @@ const fallbacksOf = (v: unknown): Fallback[] | undefined => (Array.isArray(v)
     .slice(0, 20).map(({ instance, from, to }) => ({ instance, from, to }))
   : undefined);
 
+// What a state change event says of its transition, for the history (R8): what started it, its wake, the wake's
+// duration, the failure, who asked it from the manager.
+export function transitionOf(d: Json, at: string) {
+  return defined({
+    from: stateOf(d.from),
+    cause: text(d.cause, 64),
+    wakeId: text(d.wakeId, 64),
+    durationMs: count(d.durationMs),
+    failure: failureOf(d.failure, at),
+    by: text(d.by, 320),
+  });
+}
+
 // A workload of a check, or null when it has no valid id.
 export function workloadOf(w: unknown): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
@@ -92,6 +105,8 @@ export function workloadOf(w: unknown): Json | null {
     awakeSince: time(w.awakeSince),
     wakeStartedAt: time(w.wakeStartedAt),
     failedAt: time(w.failedAt),
+    // When its state began (router 0.26.0): the instant of its state change event (R8).
+    stateAt: time(w.stateAt) ?? undefined,
     // Its last failure until a successful wake, the failures in a row and the next attempt (routers 0.25.0, R7a).
     failure: failureOf(w.failure),
     consecutiveFailures: count(w.consecutiveFailures),

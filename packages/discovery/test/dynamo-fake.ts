@@ -38,6 +38,7 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIn
         if (input.ConditionExpression === 'attribute_exists(sk) AND (attribute_not_exists(version) OR version = :version)'
           && (!existing || (existing.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N))) throw fail('ConditionalCheckFailedException');
         if (input.ConditionExpression === VERSIONED && existing?.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
+        if (input.ConditionExpression === 'attribute_not_exists(sk)' && existing) throw fail('ConditionalCheckFailedException');
         items.set(keyOf(input.Item), input.Item);
         return {};
       }
@@ -54,7 +55,12 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIn
         const [hash, range] = index ? ['gsi1pk', 'gsi1sk'] : ['pk', 'sk'];
         const pk = (input.ExpressionAttributeValues[':pk']?.S ?? 'T#default') as string;
         const prefix = (input.ExpressionAttributeValues[':prefix']?.S ?? '') as string;
-        let found = [...(index && laggingIndex ? indexed : items).values()].filter((i) => (i[hash]?.S ?? (hash === 'pk' ? 'T#default' : undefined)) === pk && (i[range]?.S ?? '').startsWith(prefix))
+        // Also sk BETWEEN :from AND :to, and sk < :before.
+        const from = input.ExpressionAttributeValues[':from']?.S as string | undefined;
+        const to = input.ExpressionAttributeValues[':to']?.S as string | undefined;
+        const before = input.ExpressionAttributeValues[':before']?.S as string | undefined;
+        const inRange = (sk: string) => (from === undefined || (sk >= from && sk <= to!)) && (before === undefined || sk < before);
+        let found = [...(index && laggingIndex ? indexed : items).values()].filter((i) => (i[hash]?.S ?? (hash === 'pk' ? 'T#default' : undefined)) === pk && (i[range]?.S ?? '').startsWith(prefix) && inRange(i[range]?.S ?? ''))
           .sort((a, b) => (a[range]!.S! < b[range]!.S! ? -1 : 1));
         if (input.ScanIndexForward === false) found.reverse();
         // After the start key's position, as DynamoDB does (the item there may have moved or gone since).

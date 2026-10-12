@@ -2,8 +2,8 @@
 // identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
 // arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
-import { CHUNK_WORKLOADS_MAX, chunkOf, failureOf, regionOf, routerOf, stateOf, timely, workloadIdOf, workloadOf, type Failure } from './clean.js';
-import type { FailureEntry, FleetStore, RouterSummary, WorkloadSummary } from './store.js';
+import { CHUNK_WORKLOADS_MAX, chunkOf, failureOf, regionOf, routerOf, stateOf, timely, transitionOf, workloadIdOf, workloadOf, type Failure } from './clean.js';
+import type { FailureEntry, FleetStore, HistoryEntry, RouterSummary, WorkloadSummary } from './store.js';
 
 // A router before 0.25.0 says a workload FAILED, never why.
 const NO_REASON = 'the wake failed (a router older than 0.25.0 gives no reason)';
@@ -27,7 +27,7 @@ export interface RouterEvent {
 }
 
 export function createIngest({ store, now = Date.now, log }: {
-  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'readWorkload' | 'writeWorkload' | 'deleteWorkload' | 'routerWorkloads' | 'getWorkload' | 'getFailure' | 'putFailure' | 'deleteFailure'>;
+  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'readWorkload' | 'writeWorkload' | 'deleteWorkload' | 'routerWorkloads' | 'getWorkload' | 'getFailure' | 'putFailure' | 'deleteFailure' | 'putHistory'>;
   now?: () => number;
   log?: { warn: (event: string, data: object) => void };
 }) {
@@ -51,18 +51,28 @@ export function createIngest({ store, now = Date.now, log }: {
     await eachAtOnce(workloads, WRITES, async (w) => {
       let before: WorkloadSummary | undefined;
       let written: WorkloadSummary | null = null;
+      // When its state began, as the router says (0.26.0: the instant of its event), else the check's time.
+      const reported = typeof w.stateAt === 'string' ? w.stateAt : undefined;
       await versioned(account, region, w.workloadId as string, (existing) => {
         before = existing;
         // A newer check wrote it already; a state change newer than this check is kept.
         if ((existing?.checkedAt ?? '') > checkedAt) return (written = null);
         const newer = existing?.stateAt && existing.stateAt > checkedAt;
+        const stateAt = newer ? existing.stateAt : [existing?.stateAt, reported].filter((t): t is string => !!t).sort().at(-1);
         return (written = {
           ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
-          ...(newer ? { state: existing.state, stateAt: existing.stateAt } : existing?.stateAt ? { stateAt: existing.stateAt } : {}),
+          ...(newer ? { state: existing.state } : {}), ...(stateAt ? { stateAt } : {}),
+          historySince: existing?.historySince ?? reported ?? checkedAt,
         });
       });
+      if (!written) return;
+      const summary = written as WorkloadSummary;
       // The failure index follows the summaries (a lost event made good; written on a change only).
-      if (written) await syncFailure(before, written, checkedAt);
+      await syncFailure(before, summary, checkedAt);
+      // The history (R8): its first entry, or a transition whose event was lost (or not in yet: it replaces this one).
+      const base = { account, region, router: own.name, workloadId: summary.workloadId, to: summary.state ?? 'UNKNOWN', at: reported ?? checkedAt, inferred: true };
+      if (!before?.historySince) await store.putHistory({ ...base, from: null });
+      else if (before.state && before.state !== summary.state) await store.putHistory({ ...base, from: before.state });
     });
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const stored = attempt === 0 ? current : await store.getRouter(account, region);
@@ -97,8 +107,10 @@ export function createIngest({ store, now = Date.now, log }: {
     const router = typeof d.router === 'string' ? d.router.slice(0, 64) : null;
     if (!at || !workloadId || !to || !router) return refuse(event, !at ? `change time ${String(d.at).slice(0, 40)}` : 'workload, state or router');
     const region = regionOf(d.region) ?? envelope;
+    // The history keeps every transition, also one older than the summary (R8).
+    await store.putHistory({ account, region, router, workloadId, to, at, ...transitionOf(d, at), from: stateOf(d.from) } as HistoryEntry);
     await versioned(account, region, workloadId, (existing) => ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at
-      ? null : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at }));
+      ? null : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at, historySince: existing?.historySince ?? at }));
     // A failed wake is indexed for the watchdog (R7b), whatever comes after it before the next check; a wake that
     // succeeds removes it.
     if (to === 'FAILED') {

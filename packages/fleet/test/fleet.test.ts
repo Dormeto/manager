@@ -354,3 +354,87 @@ describe('failure index (R7b)', () => {
     expect([w!.consecutiveFailures, w!.nextAttemptAt]).toEqual([2, at(T1, 120)]);
   });
 });
+
+describe('state history (R8)', () => {
+  const change = (to: string, when: string, extra: Record<string, unknown> = {}): RouterEvent => ({
+    account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed',
+    detail: { router: 'dmtr-dev', region: REGION, workloadId: 'a', to, at: when, ...extra },
+  });
+  const history = (s: ReturnType<typeof setup>, from = at(T1, -86_400), to = at(T2, 86_400)) => s.store.listHistory(ACCOUNT, REGION, 'a', from, to).then((r) => r.entries);
+
+  it('stores each state change with its cause, wake id, duration, failure and who asked; a duplicate is one item', async () => {
+    const s = setup();
+    await s.ingest(change('WAKING', at(T1, 10), { from: 'ASLEEP', cause: 'normal', wakeId: 'w1' }));
+    await s.ingest(change('WAKING', at(T1, 10), { from: 'ASLEEP', cause: 'normal', wakeId: 'w1' }));
+    await s.ingest(change('AWAKE', at(T1, 50), { from: 'WAKING', wakeId: 'w1', durationMs: 40_000 }));
+    await s.ingest(change('NAPPING', at(T1, 3_600), { from: 'AWAKE', cause: 'manager', by: 'ops@example.com' }));
+    await s.ingest(change('FAILED', at(T1, 3_700), { from: 'NAPPING', cause: 'nap-failed', failure: { kind: 'permission', step: 'nap', message: 'denied', at: at(T1, 3_700) } }));
+    const entries = await history(s);
+    expect(entries.map((e) => [e.from, e.to, e.cause ?? null])).toEqual([['ASLEEP', 'WAKING', 'normal'], ['WAKING', 'AWAKE', null], ['AWAKE', 'NAPPING', 'manager'], ['NAPPING', 'FAILED', 'nap-failed']]);
+    expect(entries[0]).toMatchObject({ account: ACCOUNT, region: REGION, router: 'dmtr-dev', workloadId: 'a', at: at(T1, 10), wakeId: 'w1' });
+    expect(entries[1]!.durationMs).toBe(40_000);
+    expect(entries[2]!.by).toBe('ops@example.com');
+    expect(entries[3]!.failure).toMatchObject({ kind: 'permission', step: 'nap', message: 'denied' });
+    expect(entries.some((e) => e.inferred)).toBe(false);
+  });
+
+  it('keeps entries history_days after their time (TTL), and a stale change too', async () => {
+    const dynamo = fakeDynamo();
+    const store = createFleetStore({ dynamo, table: 'dmt-dev-manager', now: () => NOW, historyDays: 30 });
+    const ingest = createIngest({ store, now: () => NOW, log: { warn: () => {} } });
+    await ingest(checked(T2, [workload('a', 'AWAKE')]));
+    await ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', cause: 'idle' }));
+    const item = [...dynamo.items.values()].find((i) => i.sk?.S === `${at(T1, 10)}#ASLEEP`)!;
+    expect(item.pk!.S).toBe(`HIST#${ACCOUNT}#${REGION}#a`);
+    expect(Number(item.expiresAt!.N)).toBe(Math.floor(Date.parse(at(T1, 10)) / 1000) + 30 * 86_400);
+  });
+
+  it('a check after a lost event writes one inferred transition at the router\'s stateAt; the late event replaces it; unchanged checks write nothing', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { stateAt: at(T1, -100) })]));
+    expect((await history(s)).map((e) => [e.from, e.to, e.at, e.inferred])).toEqual([[null, 'AWAKE', at(T1, -100), true]]);
+    await s.ingest(checked(T2, [workload('a', 'ASLEEP', { stateAt: at(T2, -30) })]));
+    expect((await history(s)).at(-1)).toMatchObject({ from: 'AWAKE', to: 'ASLEEP', at: at(T2, -30), inferred: true });
+    await s.ingest(change('ASLEEP', at(T2, -30), { from: 'NAPPING', cause: 'idle' }));
+    const entries = await history(s);
+    expect(entries).toHaveLength(2);
+    expect(entries.at(-1)).toEqual(expect.objectContaining({ from: 'NAPPING', to: 'ASLEEP', cause: 'idle' }));
+    expect(entries.at(-1)!.inferred).toBeUndefined();
+    await s.ingest(checked(at(T2, 300), [workload('a', 'ASLEEP', { stateAt: at(T2, -30) })]));
+    await s.ingest(checked(at(T2, 600), [workload('a', 'ASLEEP', { stateAt: at(T2, -30) })]));
+    expect(await history(s)).toHaveLength(2);
+  });
+
+  it('an inferred entry never replaces an event\'s, and a check after the event adds nothing', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP', { stateAt: at(T1, -100) })]));
+    await s.ingest(change('WAKING', at(T1, 10), { from: 'ASLEEP', cause: 'normal', wakeId: 'w1' }));
+    await s.ingest(checked(T2, [workload('a', 'WAKING', { stateAt: at(T1, 10) })]));
+    expect((await history(s)).map((e) => [e.to, e.cause ?? null, e.inferred ?? false])).toEqual([['ASLEEP', null, true], ['WAKING', 'normal', false]]);
+    await s.store.putHistory({ account: ACCOUNT, region: REGION, router: 'dmtr-dev', workloadId: 'a', from: 'ASLEEP', to: 'WAKING', at: at(T1, 10), inferred: true });
+    expect((await history(s)).at(-1)!.cause).toBe('normal');
+  });
+
+  it('the first entry once per workload, also for one known before the history; an older router dates it at the check', async () => {
+    const s = setup();
+    await s.store.writeWorkload({ account: ACCOUNT, region: REGION, router: 'dmtr-dev', workloadId: 'a', state: 'ASLEEP', checkedAt: at(T1, -300) } as never, 0);
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP')]));
+    await s.ingest(checked(T2, [workload('a', 'ASLEEP')]));
+    expect((await history(s)).map((e) => [e.from, e.to, e.at, e.inferred])).toEqual([[null, 'ASLEEP', T1, true]]);
+    expect((await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.historySince).toBe(T1);
+    // An older router changes state, its event lost: dated at the check.
+    await s.ingest(checked(at(T2, 300), [workload('a', 'AWAKE')]));
+    expect((await history(s)).at(-1)).toMatchObject({ from: 'ASLEEP', to: 'AWAKE', at: at(T2, 300), inferred: true });
+  });
+
+  it('a period is read in pages up to a cap, with the entry before it', async () => {
+    const s = setup();
+    for (let i = 0; i < 30; i += 1) await s.ingest(change(i % 2 ? 'ASLEEP' : 'AWAKE', at(T1, i * 60), { cause: 'idle' }));
+    const capped = await s.store.listHistory(ACCOUNT, REGION, 'a', T1, at(T1, 3_600), { max: 10 });
+    expect([capped.entries.length, capped.truncated]).toEqual([10, true]);
+    const all = await s.store.listHistory(ACCOUNT, REGION, 'a', at(T1, 300), at(T1, 3_600));
+    expect([all.entries.length, all.truncated]).toEqual([25, false]);
+    expect(await s.store.historyBefore(ACCOUNT, REGION, 'a', at(T1, 300))).toMatchObject({ to: 'AWAKE', at: at(T1, 240) });
+    expect(await s.store.historyBefore(ACCOUNT, REGION, 'a', T1)).toBeNull();
+  });
+});
