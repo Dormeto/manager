@@ -15,6 +15,7 @@ import PauseDialog from '../components/PauseDialog.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateChip from '../components/StateChip.vue';
+import { stateSince } from '../state';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { Counts, WorkloadStatus } from '../types';
 
@@ -125,12 +126,12 @@ const rows = (kind: keyof Counts) => {
 const summary = computed(() => {
   const s = status.value;
   if (!s) return [];
+  const since = stateSince(s);
   return [
     { label: 'Route', value: routeLabel(s.route) },
     { label: 'Nap', value: pauses.value.length ? 'never while paused' : s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' },
     { label: 'Last request', value: relative(s.lastRequestAt, now.value) },
-    { label: 'Awake since', value: relative(s.awakeSince, now.value) },
-    { label: 'Last state change', value: relative(s.updatedAt, now.value) },
+    { label: since.label, value: relative(since.at, now.value) },
     { label: 'Wakes', value: String(s.wakeCount) },
     { label: 'Held requests', value: String(s.holders) },
     { label: 'Pending wake', value: s.pendingWake ? 'yes' : 'no' },

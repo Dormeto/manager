@@ -9,6 +9,7 @@ import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
 import BackendKinds from '../components/BackendKinds.vue';
 import IdleBar from '../components/IdleBar.vue';
+import { stateSince } from '../state';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -82,7 +83,8 @@ watch(search, () => {
   clearTimeout(typing);
   typing = setTimeout(() => { page.value = 1; void run(); }, 300);
 });
-const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSince ?? w.updatedAt : w.updatedAt, now.value);
+// Since when it is in its state (the run's last write moves without a state change too).
+const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, now.value);
 </script>
 
 <template>

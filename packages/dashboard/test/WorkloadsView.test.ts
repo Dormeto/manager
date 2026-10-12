@@ -80,4 +80,19 @@ describe('Workloads view', () => {
     expect(cell.findComponent(IdleBar).props()).toEqual({ idleHours7d: 150, requests7d: 12 });
     wrapper.unmount();
   });
+
+  it('dates a failed workload from its failure, not from the last write of its run', async () => {
+    const failed = { ...SHOP, state: 'FAILED', failedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() };
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementationOnce(async () => ({ workloads: [failed], total: 1, errors: [] }) as never);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
+    await flushPromises();
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    expect(wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Since')]!.text()).toBe('2 h ago');
+    wrapper.unmount();
+  });
 });
