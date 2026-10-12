@@ -1,6 +1,7 @@
 // Organization access (packaging design §3): each account step checks both organization roles, each run the delegation
 // policy of the management account; the access report counts the accounts and lists those not ready.
 import { describe, expect, it } from 'vitest';
+import { commandCheck } from '../src/aws.js';
 import { runDiscovery } from '../src/run.js';
 import { A, B, C, config, filter } from './fixtures.js';
 import { T0, setup } from './run-fakes.js';
@@ -51,5 +52,15 @@ describe('organization access', () => {
     // Before any run: nothing known.
     const fresh = setup({ cfg: ALL });
     expect(await fresh.store.accessReport({ limit: 10 })).toEqual({ counts: { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 }, accounts: [], cursor: null, delegation: null, checkedAt: null });
+  });
+
+  it('checks the command role through the operations Lambda (the role trusts it, not discovery): its refusal is an access denied', async () => {
+    const asked: unknown[] = [];
+    let answer: unknown = { ok: true };
+    const check = commandCheck(async (payload) => { asked.push(payload); return answer; });
+    await expect(check(B.id)).resolves.toBeUndefined();
+    answer = { ok: false, name: 'AccessDenied', message: 'not authorized to perform: sts:AssumeRole' };
+    await expect(check(C.id)).rejects.toMatchObject({ name: 'AccessDenied', message: 'not authorized to perform: sts:AssumeRole' });
+    expect(asked).toEqual([{ task: 'check-command', account: B.id }, { task: 'check-command', account: C.id }]);
   });
 });

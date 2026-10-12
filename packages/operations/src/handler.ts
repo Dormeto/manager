@@ -3,7 +3,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
 import { STSClient } from '@aws-sdk/client-sts';
 import { createStore } from '@dormeto/discovery';
-import { createBundle, createTargets } from './aws.js';
+import { checkRole, createBundle, createTargets } from './aws.js';
 import { createEngine } from './engine.js';
 import { createRecords } from './records.js';
 import { routersOf } from './routers.js';
@@ -31,10 +31,15 @@ const engine = createEngine({
   log,
 });
 
-export const handler = async (event: { task: string; operationId: string; error?: { Error?: string; Cause?: string } }) => {
-  if (event.task === 'next') return engine.next(event.operationId);
+const commandRole = process.env.COMMAND_ROLE ?? 'DmtCommandRole';
+const checkCommand = checkRole({ sts: new STSClient({}), roleName: commandRole, sessionName: `dmt-${env}-access` });
+
+export const handler = async (event: { task: string; operationId?: string; account?: string; error?: { Error?: string; Cause?: string } }) => {
+  if (event.task === 'next') return engine.next(event.operationId!);
+  // Discovery's check of an account's command role (packaging design §3).
+  if (event.task === 'check-command') return checkCommand(String(event.account));
   if (event.task === 'fail') {
-    await engine.fail(event.operationId, [event.error?.Error, event.error?.Cause].filter(Boolean).join(': ') || 'workflow failed');
+    await engine.fail(event.operationId!, [event.error?.Error, event.error?.Cause].filter(Boolean).join(': ') || 'workflow failed');
     return { done: true, status: 'failed' };
   }
   throw new Error(`unknown task: ${event.task}`);

@@ -83,3 +83,12 @@ export function organizationsPort(client: Sender): OrganizationsPort {
     listTagsForResource: (input) => client.send(new ListTagsForResourceCommand(input)),
   };
 }
+
+// The command role's check (packaging design §3): the operations Lambda assumes it, since the role trusts that Lambda
+// only; its refusal comes back as the error it got.
+export function commandCheck(invoke: (payload: Record<string, unknown>) => Promise<unknown>) {
+  return async (account: string): Promise<void> => {
+    const answer = (await invoke({ task: 'check-command', account })) as { ok?: boolean; name?: string; message?: string } | null;
+    if (!answer?.ok) throw Object.assign(new Error(answer?.message ?? 'no answer from the operations Lambda'), { name: answer?.name ?? 'Error' });
+  };
+}

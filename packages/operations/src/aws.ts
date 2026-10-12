@@ -88,6 +88,19 @@ export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; 
   };
 }
 
+// The command role assumed afresh (never from the cache: a role deleted since shows at once), only to check it: discovery
+// asks, since the role trusts the operations Lambda only (packaging design §3).
+export function checkRole({ sts, roleName, sessionName }: { sts: Pick<STSClient, 'send'>; roleName: string; sessionName: string }) {
+  return async (account: string): Promise<{ ok: true } | { ok: false; name: string; message: string }> => {
+    try {
+      await sts.send(new AssumeRoleCommand({ RoleArn: `arn:aws:iam::${account}:role/${roleName}`, RoleSessionName: sessionName, DurationSeconds: 900 }));
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, name: (err as Error).name ?? 'Error', message: (err as Error).message ?? String(err) };
+    }
+  };
+}
+
 // The router bundle of the manager's router version: router/<version>/blueprint.json and router.zip, cached.
 export function createBundle({ s3, bucket, version }: { s3: S3Client; bucket: string; version: string }) {
   let cached: { blueprint: Blueprint; zip: Uint8Array; codeSha256: string } | undefined;

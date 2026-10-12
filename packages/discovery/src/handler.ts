@@ -5,15 +5,23 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { OrganizationsClient } from '@aws-sdk/client-organizations';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
-import { createAssumeRole, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, type Credentials } from './aws.js';
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import { commandCheck, createAssumeRole, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, type Credentials } from './aws.js';
 import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { createStore } from './store.js';
 
 const region = process.env.AWS_REGION ?? 'eu-west-1';
 const roleName = process.env.ROLE_NAME ?? 'DmtDiscoveryRole';
-// The command role of each account, only assumed to check it (packaging design §3).
-const commandRole = process.env.COMMAND_ROLE ?? 'DmtCommandRole';
+// The command role of each account, checked by the operations Lambda (the role trusts it only; packaging design §3).
+const lambda = new LambdaClient({ region });
+const operations = process.env.OPERATIONS_FUNCTION ?? '';
+const invokeOperations = async (payload: Record<string, unknown>) => {
+  const out = await lambda.send(new InvokeCommand({ FunctionName: operations, Payload: Buffer.from(JSON.stringify(payload)) }));
+  const text = out.Payload ? Buffer.from(out.Payload).toString('utf8') : 'null';
+  if (out.FunctionError) throw new Error((JSON.parse(text) as { errorMessage?: string }).errorMessage ?? out.FunctionError);
+  return JSON.parse(text) as unknown;
+};
 // A run holds its lock for the state machine's whole time limit (3 hours).
 const store = createStore({ dynamo: new DynamoDBClient({}), table: process.env.TABLE ?? '', lockMs: 3 * 3_600_000 });
 const sts = new STSClient({ region });
@@ -42,7 +50,7 @@ export const handler = async (event: Event = {}) => {
     managerAccount,
     roleName,
     assumeRole: createAssumeRole({ sts, roleName, sessionName: `dmt-${process.env.ENV ?? 'dev'}-discovery` }),
-    assumeCommand: createAssumeRole({ sts, roleName: commandRole, sessionName: `dmt-${process.env.ENV ?? 'dev'}-access` }),
+    ...(operations ? { assumeCommand: commandCheck(invokeOperations) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
     scan: (credentials, where) => scanRegion(scanPorts(regionalClients(credentials as Credentials, where.region)), where),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
