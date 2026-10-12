@@ -25,14 +25,22 @@ export interface RegionUptime {
 
 // What each option measures: EC2 instances without an Auto Scaling group (ec2), ECS services (ecs), never what Dormeto
 // manages.
-export interface UptimeKinds { ec2: boolean; ecs: boolean }
+export interface UptimeKinds { ec2: boolean; ecs: boolean; rds?: boolean }
 export const measured = (w: Workload, kinds: UptimeKinds = { ec2: true, ecs: false }) =>
   !w.managed && ((kinds.ec2 && w.backend.kind === 'instance') || (kinds.ecs && w.backend.kind === 'ecs'));
 
-// An instance by its id; an ECS service (arn:aws:ecs:...:service/<cluster>/<service>) by its cluster and name.
-const metricOf = (id: string) => (id.startsWith('arn:') && id.split(':')[2] === 'ecs'
-  ? { Namespace: 'AWS/ECS', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'ClusterName', Value: clusterOf(id) }, { Name: 'ServiceName', Value: id.split('/').at(-1)! }] }
-  : { Namespace: 'AWS/EC2', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'InstanceId', Value: id }] });
+// An instance by its id; an ECS service (arn:aws:ecs:...:service/<cluster>/<service>) by its cluster and name; a
+// companion database (rds-instance:<id>, rds-cluster:<id>) by its identifier (RDS publishes every minute while it is
+// available, nothing while it is stopped).
+const metricOf = (id: string) => {
+  if (id.startsWith('rds-instance:')) return { Namespace: 'AWS/RDS', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'DBInstanceIdentifier', Value: id.slice('rds-instance:'.length) }] };
+  if (id.startsWith('rds-cluster:')) return { Namespace: 'AWS/RDS', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'DBClusterIdentifier', Value: id.slice('rds-cluster:'.length) }] };
+  return id.startsWith('arn:') && id.split(':')[2] === 'ecs'
+    ? { Namespace: 'AWS/ECS', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'ClusterName', Value: clusterOf(id) }, { Name: 'ServiceName', Value: id.split('/').at(-1)! }] }
+    : { Namespace: 'AWS/EC2', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'InstanceId', Value: id }] };
+};
+// A companion database's key in the uptime: its kind and identifier.
+export const databaseKey = (d: { kind: string; id: string }) => `${d.kind}:${d.id}`;
 
 export async function readUptime(cloudwatch: CloudWatchPort, ids: string[], { from, to }: { from: string; to: string }): Promise<Pick<RegionUptime, 'running' | 'unreadable'>> {
   const start = Date.parse(from);
@@ -92,7 +100,10 @@ export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refres
 }): Promise<RegionUptime[]> {
   const out: RegionUptime[] = [];
   for (const region of regions) {
-    const ids = [...new Set(region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id))];
+    const ids = [...new Set([
+      ...region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id),
+      ...(kinds.rds ? (region.databases ?? []).filter((d) => !d.notStoppable).map(databaseKey) : []),
+    ])];
     const period = requests.find((r) => r.account === region.account && r.region === region.region);
     if (!ids.length || !period) continue;
     const where = { account: region.account, region: region.region };

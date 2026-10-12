@@ -41,6 +41,8 @@ export interface Workload {
 export interface Database {
   kind: 'rds-instance' | 'rds-cluster';
   id: string;
+  // Its status when discovered: one stopped (a schedule may start it) is a companion all the same, its uptime measured.
+  status: string;
   allowedFrom: string[];
   tags: Record<string, string[]>;
   stopped: StoppedItem[];
@@ -169,6 +171,8 @@ const tagsOf = (list: { Key?: string; Value?: string }[] = []) => {
 };
 // What a nap of the database would stop, as the router describes it (lambda/src/lib/stopped.mjs).
 const dbItem = (db: DbInstance) => ({ kind: 'rds', class: db.DBInstanceClass, engine: db.Engine, multiAz: db.MultiAZ === true }) as unknown as StoppedItem;
+// The statuses of a database a nap can stop, or one stopped (a schedule may start it again: its uptime says when).
+const NAPPABLE = new Set(['available', 'stopped', 'stopping', 'starting']);
 const activeGroups = (groups: { VpcSecurityGroupId?: string; Status?: string }[] = []) => unique(groups.filter((g) => g.Status !== 'inactive').map((g) => g.VpcSecurityGroupId));
 
 // The region's databases letting in one of `groups`, with their tags, what they stop, why they cannot be stopped.
@@ -180,21 +184,21 @@ async function databasesOf(ports: RegionPorts, groups: Set<string>): Promise<{ d
     const clusters = await pages<DbCluster>((m) => rds.describeDBClusters(m ? { Marker: m } : {}), 'DBClusters');
     const found: (Omit<Database, 'allowedFrom'> & { groups: string[] })[] = [];
     for (const db of instances.filter((i) => !i.DBClusterIdentifier)) {
-      const notStoppable = db.DBInstanceStatus !== 'available' ? `${db.DBInstanceStatus} when discovered`
+      const notStoppable = !NAPPABLE.has(db.DBInstanceStatus ?? '') ? `${db.DBInstanceStatus} when discovered`
         : db.ReadReplicaSourceDBInstanceIdentifier ? 'a read replica: cannot be stopped'
         : db.ReadReplicaDBInstanceIdentifiers?.length ? 'it has read replicas: cannot be stopped'
         : db.Engine?.startsWith('sqlserver') && db.MultiAZ ? 'SQL Server Multi-AZ: cannot be stopped'
         : undefined;
-      found.push({ kind: 'rds-instance', id: db.DBInstanceIdentifier ?? '', groups: activeGroups(db.VpcSecurityGroups), tags: tagsOf(db.TagList), stopped: notStoppable ? [] : [dbItem(db)], ...(notStoppable ? { notStoppable } : {}) });
+      found.push({ kind: 'rds-instance', id: db.DBInstanceIdentifier ?? '', status: db.DBInstanceStatus ?? '', groups: activeGroups(db.VpcSecurityGroups), tags: tagsOf(db.TagList), stopped: notStoppable ? [] : [dbItem(db)], ...(notStoppable ? { notStoppable } : {}) });
     }
     for (const cluster of clusters) {
       const members = instances.filter((i) => i.DBClusterIdentifier === cluster.DBClusterIdentifier);
       const notStoppable = cluster.EngineMode === 'serverless' || members.some((i) => i.DBInstanceClass === 'db.serverless') ? 'Aurora Serverless: not yet'
         : !cluster.Engine?.startsWith('aurora') ? 'a Multi-AZ DB cluster: not yet'
-        : cluster.Status !== 'available' ? `${cluster.Status} when discovered`
+        : !NAPPABLE.has(cluster.Status ?? '') ? `${cluster.Status} when discovered`
         : !members.length ? 'no instance'
         : undefined;
-      found.push({ kind: 'rds-cluster', id: cluster.DBClusterIdentifier ?? '', groups: activeGroups(cluster.VpcSecurityGroups), tags: tagsOf(cluster.TagList), stopped: notStoppable ? [] : members.map(dbItem), ...(notStoppable ? { notStoppable } : {}) });
+      found.push({ kind: 'rds-cluster', id: cluster.DBClusterIdentifier ?? '', status: cluster.Status ?? '', groups: activeGroups(cluster.VpcSecurityGroups), tags: tagsOf(cluster.TagList), stopped: notStoppable ? [] : members.map(dbItem), ...(notStoppable ? { notStoppable } : {}) });
     }
     // Who each database security group lets in (rules naming a security group; address ranges are not followed).
     const ingress = new Map<string, string[]>();
@@ -299,8 +303,8 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
           const path = `discovery/${account}-${region}.json`;
           const kept = again ? null : await cache.get<RegionDiscovery>(path, freshDiscovery(now()));
           // Kept before workloads had their tags and security groups, instances their state, or the region its companion
-          // databases: scanned again.
-          if (kept && kept.databases && kept.workloads.every((w) => w.tags && w.securityGroups && (w.backend.kind !== 'instance' || w.managed || w.instanceState))) {
+          // databases with their status: scanned again.
+          if (kept && kept.databases?.every((d) => d.status) && kept.workloads.every((w) => w.tags && w.securityGroups && (w.backend.kind !== 'instance' || w.managed || w.instanceState))) {
             found.push(kept);
             progress({ phase: 'discovery', account, region, from: 'cache', workloads: kept.workloads.length });
             continue;

@@ -9,7 +9,7 @@ const workload = (name: string, usd15: number, recommended = 30) => ({
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5, maxWakesRds: 2 },
+  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, rdsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5, maxWakesRds: 2 },
   accounts: 2, accountsListed: 2, accountNames: { '111111111111': 'prod', '333333333333': 'sandbox' },
   dormeto: {
     manager: { count: 1, unitMonth: 5, usdMonth: 5 },
@@ -117,8 +117,8 @@ describe('the estimate\'s reports', () => {
   it('EC2 uptime: each measured instance\'s hours a day, or why unknown; the options say whether it was measured', () => {
     const vm = (uptime: Estimate['workloads'][number]['uptime']) => ({ ...E.workloads[0]!, workload: { ...E.workloads[0]!.workload, backend: { kind: 'instance' as const, id: 'i-0abc' } }, uptime });
     const md = markdownReport({ ...E, options: { ...E.options, ec2Uptime: true }, workloads: [vm({ hoursPerDay: 11.46 }), vm({ unreadable: 'CloudWatch could not read the uptime (Forbidden)' })] });
-    expect(md).toContain('| instance i-0abc (runs 11.5 h a day, measured) |');
-    expect(md).toContain('| instance i-0abc (uptime unreadable: CloudWatch could not read the uptime (Forbidden); 24/7 assumed) |');
+    expect(md).toContain('| instance i-0abc | 48% |');
+    expect(md).toContain('| instance i-0abc | 100% assumed (uptime unreadable: CloudWatch could not read the uptime (Forbidden)) |');
     expect(md).toContain('- EC2 uptime: measured over the 14 days (--ec2-uptime)');
     expect(markdownReport(E)).toContain('- EC2 uptime: 24/7 assumed (--ec2-uptime measures it)');
   });
@@ -145,29 +145,43 @@ describe('the estimate\'s reports', () => {
   });
 
   it('companion databases: in the workload\'s backend, apart with their saving, those left out with why, the regions not read; the options say the limit', () => {
-    const shop = { ...E.workloads[0]!, workload: { ...E.workloads[0]!.workload, targetGroup: 'shop', hosts: ['shop.example.com'], backend: { kind: 'asg' as const, id: 'shop-asg' } }, databases: [{ kind: 'rds-instance' as const, id: 'shop-db', usdMonth: 30.5, recommendedUsdMonth: 31 }] };
+    const shop = { ...E.workloads[0]!, workload: { ...E.workloads[0]!.workload, targetGroup: 'shop', hosts: ['shop.example.com'], backend: { kind: 'asg' as const, id: 'shop-asg' } }, databases: [{ kind: 'rds-instance' as const, id: 'shop-db', usdMonth: 30.5, recommendedUsdMonth: 31, uptime: { hoursPerDay: 12 } }] };
     const e = {
       ...E, workloads: [shop],
-      databasesLeftOut: [{ workload: shop.workload, database: { kind: 'rds-instance' as const, id: 'prd-db' }, reason: 'excluded by its tags (env=PRD)' }],
+      databasesLeftOut: [
+        { workload: shop.workload, database: { kind: 'rds-instance' as const, id: 'prd-db' }, reason: 'excluded by its tags (env=PRD)', code: 'tags' as const },
+        { workload: shop.workload, database: { kind: 'rds-instance' as const, id: 'common-db' }, reason: 'reached by 3 workloads: stopping it with one would cut the others off', code: 'shared' as const },
+      ],
       databasesUnread: [{ account: '111111111111', region: 'eu-west-3', reason: 'AccessDenied: not authorized to perform: rds:DescribeDBInstances' }],
     };
     const md = markdownReport(e);
     expect(md).toContain('| asg shop-asg + rds-instance shop-db |');
     expect(md).toContain('## Companion databases');
-    expect(md).toContain('| 111111111111 | eu-west-1 | shop.example.com | rds-instance shop-db | $30.50 | $31.00 |');
+    expect(md).toContain('| Account | Region | Workload | Database | Uptime | Saving |');
+    expect(md).toContain('| 111111111111 | eu-west-1 | shop.example.com | rds-instance shop-db | 50% | $31.00 |');
     expect(md).toContain('| 111111111111 | eu-west-1 | shop.example.com | rds-instance prd-db | excluded by its tags (env=PRD) |');
     expect(md).toContain('- 111111111111 eu-west-3: not read (AccessDenied: not authorized to perform: rds:DescribeDBInstances)');
     expect(md).toContain('- Companion databases: found by security group, left out when their workload wakes more than 2 times a day at its recommended window (--max-wakes-rds)');
-    expect(summaryLines(e).join('\n')).toContain('Companion databases: 1 attached, 1 left out (see the report)');
+    expect(summaryLines(e).join('\n')).toContain('Companion databases: 1 attached, 2 left out: 1 shared with other workloads, 1 excluded by tags (see the report)');
     expect(markdownReport(E)).not.toContain('## Companion databases');
     expect(markdownReport({ ...E, options: { ...E.options, maxWakesRds: null } })).toContain('- Companion databases: found by security group, whatever their workload\'s wakes (--max-wakes-rds none)');
+  });
+
+  // The user, 2026-10-11: the figures at the report's window out of the workloads table, the uptime in.
+  it('the workloads table: the uptime, the recommended window, its saving and wakes, by that saving', () => {
+    const md = markdownReport(E);
+    expect(md).toContain('| Account | Region | Load balancer | Hosts | Backend | Uptime | Recommended | Saving | Wakes a day |');
+    expect(md).toContain('| 111111111111 | eu-west-1 | web | app11.example.com | asg app11-asg | 100% assumed | 30 min | $20.00 | 1 |');
+    expect(md).not.toContain('At 1 hour');
   });
 
   it('ECS uptime: each measured service\'s hours a day; the options say whether it was measured', () => {
     const service = { ...E.workloads[0]!, workload: { ...E.workloads[0]!.workload, backend: { kind: 'ecs' as const, id: 'arn:aws:ecs:eu-west-1:111111111111:service/prod/api' } }, uptime: { hoursPerDay: 9.5 } };
     const md = markdownReport({ ...E, options: { ...E.options, ecsUptime: true }, workloads: [service] });
-    expect(md).toContain('| ecs api (runs 9.5 h a day, measured) |');
+    expect(md).toContain('| ecs api | 40% |');
     expect(md).toContain('- ECS uptime: measured over the 14 days (--ecs-uptime)');
+    expect(markdownReport({ ...E, options: { ...E.options, rdsUptime: true } })).toContain('- RDS uptime: companion databases measured over the 14 days (--rds-uptime)');
+    expect(markdownReport(E)).toContain('- RDS uptime: companion databases available all the time assumed, one stopped left out (--rds-uptime measures it)');
     expect(markdownReport(E)).toContain('- ECS uptime: at the desired count when discovered, all the time (--ecs-uptime measures it)');
   });
 

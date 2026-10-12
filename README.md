@@ -223,7 +223,7 @@ vision repository: `tools/estimate/bin/dormeto-estimate`, the same options).
 
 ```
 npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
-  [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
+  [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime | --rds-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
   [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--max-wakes-rds 2|none] [--parallel 5] [--out <dir>]
 ```
 
@@ -250,7 +250,7 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   only those hours, at its desired count when discovered (a service scaled to 0 at night saves less). A service found at
   0 tasks is estimated as one task from the hours it ran (without the option, it is left out). When it had a task is
   measured, not how many: a service scaled from 4 tasks to 1 at night stays priced at its count when discovered.
-  Services Dormeto already manages are not measured. `--uptime` sets both `--ec2-uptime` and `--ecs-uptime`.
+  Services Dormeto already manages are not measured. `--uptime` sets `--ec2-uptime`, `--ecs-uptime` and `--rds-uptime`.
 - **Busy and small workloads:** judged at each workload's recommended window (the one a customer would set),
   `--max-wakes` (3 by default) leaves out a workload that would wake more than that many times a day (its visitors would
   wait more than it saves), and `--min-saving` ($1 by default) one that would save less than that a month (not worth
@@ -261,8 +261,10 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   naps with it, once the wakes filter has kept the workload: its saving is added to the workload's (before
   `--min-saving`) and listed apart. Left out, with why: excluded by its own tags (`--exclude-tags`), reached by another
   workload of the region (even an excluded one), a read replica or one with replicas, or its workload waking more than
-  `--max-wakes-rds` times a day (2 by default: a database takes minutes to start; `none` keeps them). The table by
-  account counts them (RDS).
+  `--max-wakes-rds` times a day (2 by default: a database takes minutes to start; `none` keeps them). With
+  `--rds-uptime` (in `--uptime`), each one's `CPUUtilization` says when it was available, and its saving and cost count
+  only those hours: one stopped when discovered (a schedule may start it) is estimated from them, else left out. The
+  table by account counts them (RDS); the summary counts those left out by reason.
 - **Three phases:** discovery (`--parallel` accounts at a time, 5 by default, each scanning its regions one after the
   other; in a terminal, one progress line with a bar, the accounts done, the regions, workloads, failures and the time,
   else a line per account; discovery's scan of each enabled region, or `--regions`; what each eligible workload's
@@ -275,7 +277,9 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   interrupted run resumes; `--refresh discovery` reads discovery and requests again, `--refresh metrics` the requests.
 - **Output:** the terminal summary, and `estimate-<date>.md` and `.json` in `--out` (the current directory by default).
   The table by account counts each account's excluded workloads, whatever the reason (tags, left out, too many wakes,
-  too small a saving).
+  too small a saving); the workloads table gives each one's uptime (measured, else 100% assumed), its recommended window,
+  saving and wakes a day. In a terminal, discovery redraws its progress every second and names the last accounts still
+  read; a region's workloads are described eight at a time.
 - **Needs the router checkout** next to the manager (`../router`, as the release does): the estimate bundles its
   description of what a nap stops.
 - **Read-only:** `sts:GetCallerIdentity`, `sts:AssumeRole`, `organizations:DescribeOrganization`, `ListRoots`,

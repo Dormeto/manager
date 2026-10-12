@@ -87,6 +87,25 @@ describe('the measured uptime of ECS services', () => {
   });
 });
 
+describe('the measured uptime of companion databases', () => {
+  // RDS publishes a database's CPUUtilization every minute while it is available, nothing while it is stopped.
+  it('an RDS instance by its identifier, an Aurora cluster by its cluster identifier', async () => {
+    const asked: { Namespace: string; Dimensions: { Name: string; Value: string }[] }[] = [];
+    const port: CloudWatchPort = {
+      getMetricData: async (input) => {
+        asked.push(...input.MetricDataQueries.map((q) => ({ Namespace: q.MetricStat.Metric.Namespace, Dimensions: q.MetricStat.Metric.Dimensions })));
+        return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: every5(0, 30), Values: every5(0, 30).map(() => 5), StatusCode: 'Complete' })) };
+      },
+    };
+    const read = await readUptime(port, ['rds-instance:shop-db', 'rds-cluster:aurora'], { from: FROM, to: TO });
+    expect(read.running).toEqual({ 'rds-instance:shop-db': [[0, 30]], 'rds-cluster:aurora': [[0, 30]] });
+    expect(asked).toEqual([
+      { Namespace: 'AWS/RDS', Dimensions: [{ Name: 'DBInstanceIdentifier', Value: 'shop-db' }] },
+      { Namespace: 'AWS/RDS', Dimensions: [{ Name: 'DBClusterIdentifier', Value: 'aurora' }] },
+    ]);
+  });
+});
+
 describe('the uptime of every region', () => {
   const w = (name: string, over: Partial<Workload> = {}): Workload => ({
     account: A, region: R, loadBalancer: 'web', loadBalancerArn: 'arn:lb', targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [],
@@ -127,6 +146,24 @@ describe('the uptime of every region', () => {
     expect(await measured({ ec2: false, ecs: true })).toEqual(['prod/api']);
     expect(await measured({ ec2: true, ecs: false })).toEqual(['i-web', 'i-night']);
     expect(await measured({ ec2: true, ecs: true })).toEqual(['i-web', 'i-night', 'prod/api']);
+  });
+
+  it('--rds-uptime measures the region\'s companion databases that a nap could stop (stopped ones included)', async () => {
+    const withDatabases: RegionDiscovery[] = [{ ...regions[0]!, databases: [
+      { kind: 'rds-instance', id: 'shop-db', status: 'available', allowedFrom: ['sg-a'], tags: {}, stopped: [] },
+      { kind: 'rds-instance', id: 'night-db', status: 'stopped', allowedFrom: ['sg-a'], tags: {}, stopped: [] },
+      { kind: 'rds-instance', id: 'replica', status: 'available', allowedFrom: ['sg-a'], tags: {}, stopped: [], notStoppable: 'a read replica: cannot be stopped' },
+      { kind: 'rds-cluster', id: 'aurora', status: 'available', allowedFrom: ['sg-a'], tags: {}, stopped: [] },
+    ] }];
+    const asked: string[] = [];
+    const port: CloudWatchPort = { getMetricData: async (input) => {
+      asked.push(...input.MetricDataQueries.map((q) => q.MetricStat.Metric.Dimensions.map((d) => d.Value).join('/')));
+      return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: [], Values: [], StatusCode: 'Complete' })) };
+    } };
+    const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+    const [read] = await uptimeAll({ regions: withDatabases, requests, cloudwatchOf: async () => port, cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW, kinds: { ec2: false, ecs: false, rds: true } });
+    expect(asked).toEqual(['shop-db', 'night-db', 'aurora']);
+    expect(Object.keys(read!.running)).toEqual(['rds-instance:shop-db', 'rds-instance:night-db', 'rds-cluster:aurora']);
   });
 
   it('a region whose uptime cannot be read at all: its instances unreadable with AWS\'s reason, the run goes on', async () => {

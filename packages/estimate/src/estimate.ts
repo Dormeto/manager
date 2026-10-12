@@ -9,7 +9,7 @@ import type { Database, Ineligible, RegionDiscovery, Workload } from './discover
 import type { Options } from './options.js';
 import type { RegionRequests } from './requests.js';
 import { describeTags, type Excluded } from './tags.js';
-import { measured, type RegionUptime } from './uptime.js';
+import { databaseKey, measured, type RegionUptime } from './uptime.js';
 
 const WAKE_MS = 60_000;
 
@@ -28,8 +28,11 @@ export interface WorkloadEstimate {
   // its recommended one.
   databases?: Companion[];
 }
-export interface Companion { kind: Database['kind']; id: string; usdMonth: number; recommendedUsdMonth: number }
-export interface DatabaseLeftOut { workload: Workload; database: { kind: Database['kind']; id: string }; reason: string }
+// uptime: measured (--rds-uptime), the hours it was available a day, or why unknown (then all the time).
+export interface Companion { kind: Database['kind']; id: string; usdMonth: number; recommendedUsdMonth: number; uptime?: WorkloadEstimate['uptime'] }
+// code: why, in a word (the summary counts them).
+export type LeftOutCode = 'shared' | 'tags' | 'stoppable' | 'wakes' | 'stopped' | 'idle' | 'price';
+export interface DatabaseLeftOut { workload: Workload; database: { kind: Database['kind']; id: string }; reason: string; code: LeftOutCode }
 export interface LeftOut { workload: Workload; reason: string }
 // Left out at its recommended window (minutes): waking more than --max-wakes a day (Busy), or saving less than
 // --min-saving a month (Small), with what it would add.
@@ -90,7 +93,7 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
     options.ecsUptime
       ? 'ECS services: their uptime measured over the 14 days (CloudWatch CPUUtilization of the service, published every minute while it has a task); their actual cost counts the hours they had a task, their savings only the hours Dormeto would nap them then, at their desired count when discovered (one task for a service found at 0). Services Dormeto already manages are assumed to run all the time.'
       : 'ECS services are assumed to run all the time at their desired count when discovered (--ecs-uptime measures when they had a task): one scaled to 0 at night by a schedule saves less than estimated here.',
-    'Companion databases are found by security group (a database whose security group lets a workload\'s in), RDS instances and Aurora provisioned clusters, not yet Aurora Serverless; one another workload reaches, a read replica or one with replicas is left out; their storage keeps billing, and a database takes minutes to start (its workload\'s wakes are held that long, not counted here).',
+    'Companion databases are found by security group (a database whose security group lets a workload\'s in), RDS instances and Aurora provisioned clusters, not yet Aurora Serverless; one another workload reaches, a read replica or one with replicas is left out; with --rds-uptime their CPUUtilization says when they were available (one stopped when discovered, started by a schedule, included), else they are assumed available all the time and one stopped is left out; their storage keeps billing, and a database takes minutes to start (its workload\'s wakes are held that long, not counted here).',
     ...(kubernetes ? ['Kubernetes pods: their share of their nodes (the larger of CPU and memory over the node\'s allocatable) at the node\'s price, saved only where a node autoscaler removes the nodes they free; the EKS control plane and the nodes\' DaemonSets keep running.'] : []),
     `Dormeto's cost: about $${DORMETO_COST.manager} a month for the manager, $${DORMETO_COST.router} per account and region with workloads, $${DORMETO_COST.workload} per workload.`,
   ];
@@ -119,7 +122,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   const small: Small[] = [];
   const databasesLeftOut: DatabaseLeftOut[] = [];
   for (const region of regions) {
-    const elected: { workload: Workload; quiet: boolean; days: number; running: { from: string; to: string }[]; measuredUptime: WorkloadEstimate['uptime']; advice: IdleWindowAdvice; wakesPerDay: number; replay: (items: StoppedItem[]) => Promise<IdleWindowAdvice>; companions: Database[] }[] = [];
+    const elected: { workload: Workload; read: RegionRequests; quiet: boolean; days: number; running: { from: string; to: string }[]; measuredUptime: WorkloadEstimate['uptime']; advice: IdleWindowAdvice; wakesPerDay: number; replay: (items: StoppedItem[], ran: { from: string; to: string }[] | null) => Promise<IdleWindowAdvice>; companions: Database[] }[] = [];
     const read = requests.find((r) => r.account === region.account && r.region === region.region);
     const ran = uptime?.find((u) => u.account === region.account && u.region === region.region);
     // A backend behind several target groups is estimated once, at its first, with every target group's requests: it
@@ -197,12 +200,13 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
         continue;
       }
       // Elected: its companion databases are attached once every workload of the region is known.
-      const replay = (items: StoppedItem[]) => idleWindowAdvice({
+      // The workload's replay for other items (a companion database) and when they ran (null: all the time).
+      const replay = (items: StoppedItem[], ran: { from: string; to: string }[] | null) => idleWindowAdvice({
         requests: { from: read.from, to: read.to, minutes }, current: options.window, checkMinutes: 5, wakeMs: WAKE_MS, startAsleep: false,
         actualWakes: 0, actualFrom: null, stopped: items, hourly: (item) => hourly(workload.region, item).catch(() => null), baseline,
-        wakerTargetGroup: false, now, running,
+        wakerTargetGroup: false, now, running: ran,
       });
-      elected.push({ workload, quiet: minutes.length === 0, days: (Date.parse(read.to) - Date.parse(read.from)) / 86_400_000, running: running ?? [{ from: read.from, to: read.to }], measuredUptime, advice, wakesPerDay: best.wakesPerDay, replay, companions: [] });
+      elected.push({ workload, read, days: (Date.parse(read.to) - Date.parse(read.from)) / 86_400_000, quiet: minutes.length === 0, running: running ?? [{ from: read.from, to: read.to }], measuredUptime, advice, wakesPerDay: best.wakesPerDay, replay, companions: [] });
     }
     // Companion databases (the user, 2026-10-11): a database whose security group lets in an elected workload's naps with
     // it, unless another workload of the region reaches it too (excluded ones included: it would cut them off), its tags
@@ -212,49 +216,61 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       const users = inRegion.filter((w) => database.allowedFrom.some((g) => w.securityGroups?.includes(g)));
       const owner = elected.find((e) => users.includes(e.workload));
       if (!owner) continue;
-      const leave = (reason: string) => databasesLeftOut.push({ workload: owner.workload, database: { kind: database.kind, id: database.id }, reason });
+      const leave = (code: LeftOutCode, reason: string) => databasesLeftOut.push({ workload: owner.workload, database: { kind: database.kind, id: database.id }, reason, code });
       const matched = options.excludeTags.find((c) => resourceTagsMatch(c, database.tags));
-      if (users.length > 1) leave(`reached by ${users.length} workloads: stopping it with one would cut the others off`);
-      else if (matched) leave(`excluded by its tags (${describeTags(matched)})`);
-      else if (database.notStoppable) leave(database.notStoppable);
+      // Measured (--rds-uptime): when it was available; one stopped when discovered is estimated only so.
+      const periods = options.rdsUptime ? ran?.running[databaseKey(database)] : undefined;
+      if (users.length > 1) leave('shared', `reached by ${users.length} workloads: stopping it with one would cut the others off`);
+      else if (matched) leave('tags', `excluded by its tags (${describeTags(matched)})`);
+      else if (database.notStoppable) leave('stoppable', database.notStoppable);
       else if (options.maxWakesRds !== null && owner.wakesPerDay > options.maxWakesRds) {
-        leave(`its workload wakes ${owner.wakesPerDay.toFixed(1)} times a day at its recommended window, more than --max-wakes-rds ${options.maxWakesRds} (a database takes minutes to start)`);
-      } else owner.companions.push(database);
+        leave('wakes', `its workload wakes ${owner.wakesPerDay.toFixed(1)} times a day at its recommended window, more than --max-wakes-rds ${options.maxWakesRds} (a database takes minutes to start)`);
+      } else if (!periods && (database.status === 'stopped' || database.status === 'stopping') && !ran?.unreadable[databaseKey(database)]) {
+        leave('stopped', 'stopped when discovered (--rds-uptime estimates it from the hours it ran)');
+      } else if (periods && !periods.length) leave('idle', 'it did not run in the last 14 days (its measured uptime)');
+      else owner.companions.push(database);
     }
+    const priceOf = (region: string) => (item: StoppedItem) => hourly(region, item).catch(() => null);
     for (const e of elected) {
-      const { workload } = e;
-      let { advice } = e;
-      let stopped = workload.stopped;
+      const { workload, advice } = e;
+      const row = (a: IdleWindowAdvice, m: number) => a.windows.find((w) => w.minutes === m)!;
+      const at = row(advice, options.window);
+      const best = row(advice, advice.recommended);
+      // Its cost now: asleep never (while it ran, measured), priced as the savings are (the same baseline, prices and month).
+      let actual = (await savingsOf(e.running.map((p) => ({ state: 'ASLEEP', ...p, stopped: workload.stopped })), { hourly: priceOf(workload.region), baseline })).usd;
+      let usdWindow = at.usdMonth!;
+      let usdRecommended = best.usdMonth!;
+      // Each companion replayed with the workload's requests while it was available (measured, else all the time): its
+      // saving and its cost added to the workload's.
       const databases: Companion[] = [];
-      if (e.companions.length) {
-        const together = [...workload.stopped, ...e.companions.flatMap((d) => d.stopped)];
-        const combined = await e.replay(together);
-        if (combined.priced) {
-          for (const d of e.companions) {
-            const own = await e.replay(d.stopped);
-            const usd = (m: number) => own.windows.find((w) => w.minutes === m)!.usdMonth!;
-            databases.push({ kind: d.kind, id: d.id, usdMonth: usd(options.window), recommendedUsdMonth: usd(combined.recommended) });
-          }
-          advice = combined;
-          stopped = together;
-        } else {
-          for (const d of e.companions) databasesLeftOut.push({ workload, database: { kind: d.kind, id: d.id }, reason: 'what it stops has no AWS list price' });
+      for (const d of e.companions) {
+        const key = databaseKey(d);
+        const periods = options.rdsUptime ? ran?.running[key] : undefined;
+        const toIso = (m: number) => new Date(Date.parse(e.read.from) + m * 60_000).toISOString();
+        const available = periods ? periods.map(([a, b]) => ({ from: toIso(a), to: toIso(b) })) : null;
+        const own = await e.replay(d.stopped, available);
+        if (!own.priced) {
+          databasesLeftOut.push({ workload, database: { kind: d.kind, id: d.id }, reason: 'what it stops has no AWS list price', code: 'price' });
+          continue;
         }
+        const uptime: Companion['uptime'] = periods ? { hoursPerDay: periods.reduce((total, [a, b]) => total + b - a, 0) / 60 / e.days }
+          : options.rdsUptime && ran?.unreadable[key] ? { unreadable: ran.unreadable[key]! } : undefined;
+        const usdAt = row(own, options.window).usdMonth!;
+        const usdBest = row(own, advice.recommended).usdMonth!;
+        databases.push({ kind: d.kind, id: d.id, usdMonth: usdAt, recommendedUsdMonth: usdBest, ...(uptime ? { uptime } : {}) });
+        usdWindow += usdAt;
+        usdRecommended += usdBest;
+        actual += (await savingsOf((available ?? [{ from: e.read.from, to: e.read.to }]).map((p) => ({ state: 'ASLEEP', ...p, stopped: d.stopped })), { hourly: priceOf(workload.region), baseline })).usd;
       }
-      const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
-      const at = row(options.window);
-      const best = row(advice.recommended);
       // With its databases: worth installing Dormeto for?
-      if (options.minSaving !== null && best.usdMonth! < options.minSaving) {
-        small.push({ workload, usdMonth: best.usdMonth!, minutes: advice.recommended });
+      if (options.minSaving !== null && usdRecommended < options.minSaving) {
+        small.push({ workload, usdMonth: usdRecommended, minutes: advice.recommended });
         continue;
       }
-      // Its cost now: asleep never (while it ran, measured), priced as the savings are (the same baseline, prices and month).
-      const always = await savingsOf(e.running.map((p) => ({ state: 'ASLEEP', ...p, stopped })), { hourly: (item) => hourly(workload.region, item).catch(() => null), baseline });
       workloads.push({
-        workload, quiet: e.quiet, actualMonth: (always.usd * 30) / e.days, ...(e.measuredUptime ? { uptime: e.measuredUptime } : {}),
-        atWindow: { usdMonth: at.usdMonth!, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
-        recommended: { minutes: advice.recommended, usdMonth: best.usdMonth!, wakesPerDay: best.wakesPerDay },
+        workload, quiet: e.quiet, actualMonth: (actual * 30) / e.days, ...(e.measuredUptime ? { uptime: e.measuredUptime } : {}),
+        atWindow: { usdMonth: usdWindow, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
+        recommended: { minutes: advice.recommended, usdMonth: usdRecommended, wakesPerDay: best.wakesPerDay },
         ...(databases.length ? { databases } : {}),
       });
     }

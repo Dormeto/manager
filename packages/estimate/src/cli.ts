@@ -83,8 +83,8 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     const cloudwatchOf = async (account: string, region: string) => aws.cloudwatchOf(account, region, await credentialsOf(account));
     const requests = await requestsAll({ regions, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress });
     // When the EC2 instances without an Auto Scaling group ran, and the ECS services had a task, over the same period.
-    const kinds = { ec2: options.ec2Uptime, ecs: options.ecsUptime };
-    const uptime = kinds.ec2 || kinds.ecs ? await uptimeAll({ regions, requests, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress, kinds }) : null;
+    const kinds = { ec2: options.ec2Uptime, ecs: options.ecsUptime, rds: options.rdsUptime };
+    const uptime = kinds.ec2 || kinds.ecs || kinds.rds ? await uptimeAll({ regions, requests, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress, kinds }) : null;
     deps.log('Phase 3: estimate');
     // The prices are public: any profile reads them
     const book = awsByProfile.get(options.profiles[0]!)!.prices(cache.prices);

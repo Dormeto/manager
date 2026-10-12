@@ -1,11 +1,18 @@
 // The estimate's reports (vision docs/specs/2026-10-10-savings-estimate-design.md §8): a Markdown readable as it is (to
 // paste into a proposal), a JSON with every figure, and the terminal's summary.
-import type { Estimate, Totals } from './estimate.js';
+import type { Estimate, LeftOutCode, Totals, WorkloadEstimate } from './estimate.js';
 import { describeTags } from './tags.js';
 
 const usd = (v: number) => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 const n = (v: number, one: string, many = `${one}s`) => `${v} ${v === 1 ? one : many}`;
 const day = (v: number) => (Math.round(v * 10) / 10).toString();
+// The share of the day it ran, measured; else all the time, assumed (with why when its metric could not be read).
+const uptimeCell = (u: WorkloadEstimate['uptime']) => (!u ? '100% assumed' : 'hoursPerDay' in u ? `${Math.round((u.hoursPerDay / 24) * 100)}%` : `100% assumed (uptime unreadable: ${u.unreadable})`);
+// Why companion databases were left out, in the summary's words and order.
+const LEFT_OUT: [LeftOutCode, string][] = [
+  ['shared', 'shared with other workloads'], ['tags', 'excluded by tags'], ['stoppable', 'cannot be stopped'], ['wakes', 'of a workload waking too often'],
+  ['stopped', 'stopped, not measured'], ['idle', 'idle for 14 days'], ['price', 'without a price'],
+];
 const backendCell = (w: { backend: { kind: string; id: string } }) => `${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}`;
 const cell = (s: string) => s.replace(/\|/g, '\\|');
 const net = (t: Totals) => t.usdMonthWindow - t.dormetoMonth;
@@ -46,7 +53,10 @@ export function summaryLines(e: Estimate): string[] {
   if (e.busy.length) lines.push(`More than ${e.options.maxWakes} wakes a day: ${n(e.busy.length, 'workload')} left out (see the report)`);
   if (e.small.length) lines.push(`Saving less than ${usd(e.options.minSaving ?? 0)} a month: ${n(e.small.length, 'workload')} left out (see the report)`);
   const attached = e.workloads.reduce((total, x) => total + (x.databases?.length ?? 0), 0);
-  if (attached || e.databasesLeftOut.length) lines.push(`Companion databases: ${attached} attached, ${e.databasesLeftOut.length} left out (see the report)`);
+  if (attached || e.databasesLeftOut.length) {
+    const why = LEFT_OUT.map(([code, words]) => [e.databasesLeftOut.filter((l) => l.code === code).length, words] as const).filter(([count]) => count).map(([count, words]) => `${count} ${words}`);
+    lines.push(`Companion databases: ${attached} attached, ${e.databasesLeftOut.length} left out${why.length ? `: ${why.join(', ')}` : ''} (see the report)`);
+  }
   if (e.unreachable.length) lines.push(`Not reached: ${n(e.unreachable.length, 'account')} (see the report for how to include them)`);
   if (e.failedRegions.length) lines.push(`Regions that failed: ${e.failedRegions.map((r) => `${r.account}/${r.region}`).join(', ')}`);
   return lines;
@@ -167,8 +177,8 @@ function companionLines(e: Estimate): string[] {
     '## Companion databases', '',
     'Found by security group: a database whose security group lets a workload\'s in naps with it (RDS instances and Aurora provisioned clusters, not yet Aurora Serverless); its saving is in the workload\'s.', '',
     ...(attached.length
-      ? ['| Account | Region | Workload | Database | Saving | At the recommended window |', '|---|---|---|---|---|---|',
-        ...attached.map(({ x, d }) => `${where(x.workload)} ${d.kind} ${cell(d.id)} | ${usd(d.usdMonth)} | ${usd(d.recommendedUsdMonth)} |`), '']
+      ? ['| Account | Region | Workload | Database | Uptime | Saving |', '|---|---|---|---|---|---|',
+        ...attached.map(({ x, d }) => `${where(x.workload)} ${d.kind} ${cell(d.id)} | ${cell(uptimeCell(d.uptime))} | ${usd(d.recommendedUsdMonth)} |`), '']
       : []),
     ...(e.databasesLeftOut.length
       ? ['### Left out', '', '| Account | Region | Workload | Database | Why |', '|---|---|---|---|---|',
@@ -193,13 +203,12 @@ export function markdownReport(e: Estimate): string {
     '### Dormeto\'s cost', '',
     ...markdownTable(costTable(e)), '',
     '## Workloads', '',
-    `| Account | Region | Load balancer | Hosts | Backend | At ${windowWords(o.window)} | Wakes a day | Recommended | Saving | Wakes a day |`, '|---|---|---|---|---|---|---|---|---|---|',
-    ...[...e.workloads].sort((a, b) => b.atWindow.usdMonth - a.atWindow.usdMonth).map((x) => {
+    '| Account | Region | Load balancer | Hosts | Backend | Uptime | Recommended | Saving | Wakes a day |', '|---|---|---|---|---|---|---|---|---|',
+    ...[...e.workloads].sort((a, b) => b.recommended.usdMonth - a.recommended.usdMonth).map((x) => {
       const w = x.workload;
       const hosts = `${w.hosts.join(', ') || w.targetGroup}${x.quiet ? ' (no request in 14 days)' : ''}${w.managed ? ' (managed by Dormeto)' : ''}`;
-      const ran = !x.uptime ? '' : 'hoursPerDay' in x.uptime ? ` (runs ${day(x.uptime.hoursPerDay)} h a day, measured)` : ` (uptime unreadable: ${x.uptime.unreadable}; 24/7 assumed)`;
       const databases = (x.databases ?? []).map((d) => ` + ${d.kind} ${d.id}`).join('');
-      return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}${cell(databases)}${cell(ran)} | ${usd(x.atWindow.usdMonth)} | ${day(x.atWindow.wakesPerDay)} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
+      return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}${cell(databases)} | ${cell(uptimeCell(x.uptime))} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
     }), '',
     '## Left out', '',
     ...(e.leftOut.length
@@ -239,6 +248,7 @@ export function markdownReport(e: Estimate): string {
     `- Regions: ${o.regions ? o.regions.join(', ') : 'each account\'s enabled regions'}`,
     `- EC2 uptime: ${o.ec2Uptime ? 'measured over the 14 days (--ec2-uptime)' : '24/7 assumed (--ec2-uptime measures it)'}`,
     `- ECS uptime: ${o.ecsUptime ? 'measured over the 14 days (--ecs-uptime)' : 'at the desired count when discovered, all the time (--ecs-uptime measures it)'}`,
+    `- RDS uptime: ${o.rdsUptime ? 'companion databases measured over the 14 days (--rds-uptime)' : 'companion databases available all the time assumed, one stopped left out (--rds-uptime measures it)'}`,
     `- Excluded tags: ${o.excludeTags.length ? o.excludeTags.map(describeTags).join('; or ') : 'none'}`,
     `- Role in member accounts: ${o.role}`,
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,

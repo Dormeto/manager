@@ -34,7 +34,7 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5, maxWakesRds: 2 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, rdsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5, maxWakesRds: 2 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
 const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60, running: { from: string; to: string }[] | null = null) => idleWindowAdvice({
@@ -311,7 +311,7 @@ describe('the estimate', () => {
     const shop = sg(w(A, 'eu-west-1', 'shop', [T3]), 'sg-shop');
     const blog = sg(w(A, 'eu-west-1', 'blog', [T3]), 'sg-blog');
     const calm = sg(w(A, 'eu-west-1', 'calm', [T3]), 'sg-calm');
-    const database = (id: string, allowedFrom: string[], over: Record<string, unknown> = {}) => ({ kind: 'rds-instance' as const, id, allowedFrom, tags: {}, stopped: [RDS], ...over });
+    const database = (id: string, allowedFrom: string[], over: Record<string, unknown> = {}) => ({ kind: 'rds-instance' as const, id, status: 'available', allowedFrom, tags: {}, stopped: [RDS], ...over });
     const regions = [{
       account: A, region: 'eu-west-1', workloads: [shop, blog, calm], ineligible: [],
       databases: [
@@ -346,8 +346,37 @@ describe('the estimate', () => {
         ['replica', 'shop', 'a read replica: cannot be stopped'],
       ]);
       expect(e.workloads.find((y) => y.workload.targetGroup === 'calm')!.databases ?? []).toEqual([]);
+      expect(e.databasesLeftOut.map((d) => d.code)).toEqual(['tags', 'wakes', 'shared', 'stoppable']);
       const kept = await run({ regions, requests, options: { ...options, maxWakesRds: null } });
       expect(kept.workloads.find((y) => y.workload.targetGroup === 'calm')!.databases?.map((d) => d.id)).toEqual(['calm-db']);
+    });
+
+    // The user, 2026-10-11: a database stopped when discovered may be started by a schedule; as an EC2 instance, its
+    // CPUUtilization says when it ran, and its saving counts only those hours.
+    describe('their measured uptime (--rds-uptime)', () => {
+      const HALF: [number, number][] = Array.from({ length: 14 }, (_, d) => [d * 1440, d * 1440 + 720]);
+      const night = sg(w(A, 'eu-west-1', 'night', [T3]), 'sg-night');
+      const region = (status: string) => [{ account: A, region: 'eu-west-1', workloads: [night], ineligible: [], databases: [database('night-db', ['sg-night'], { status })] }] as RegionDiscovery[];
+      const nightRequests = [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/night': daily }, unreadable: {} }] as RegionRequests[];
+      const measured = (running: [number, number][]) => [{ account: A, region: 'eu-west-1', from: FROM, to: TO, running: { 'rds-instance:night-db': running }, unreadable: {} }];
+
+      it('a database\'s saving and cost count only the hours it ran, its uptime said', async () => {
+        const always = (await run({ regions: region('available'), requests: nightRequests })).workloads[0]!;
+        const half = (await run({ regions: region('available'), requests: nightRequests, options: { ...OPTIONS, rdsUptime: true }, uptime: measured(HALF) })).workloads[0]!;
+        expect(half.databases).toMatchObject([{ id: 'night-db', uptime: { hoursPerDay: 12 } }]);
+        expect(half.databases![0]!.usdMonth).toBeLessThan(always.databases![0]!.usdMonth);
+        expect(half.actualMonth).toBeCloseTo(0.0456 * 24 * 30 + 0.068 * 12 * 30, 6);
+        expect(always.databases![0]!.uptime).toBeUndefined();
+      });
+
+      it('one stopped when discovered: estimated from the hours it ran when measured, else left out saying how; one that never ran left out', async () => {
+        const unmeasured = await run({ regions: region('stopped'), requests: nightRequests });
+        expect(unmeasured.databasesLeftOut.map((d) => [d.database.id, d.reason, d.code])).toEqual([['night-db', 'stopped when discovered (--rds-uptime estimates it from the hours it ran)', 'stopped']]);
+        const measuredRun = await run({ regions: region('stopped'), requests: nightRequests, options: { ...OPTIONS, rdsUptime: true }, uptime: measured(HALF) });
+        expect(measuredRun.workloads[0]!.databases).toMatchObject([{ id: 'night-db', uptime: { hoursPerDay: 12 } }]);
+        const idle = await run({ regions: region('stopped'), requests: nightRequests, options: { ...OPTIONS, rdsUptime: true }, uptime: measured([]) });
+        expect(idle.databasesLeftOut.map((d) => [d.reason, d.code])).toEqual([['it did not run in the last 14 days (its measured uptime)', 'idle']]);
+      });
     });
   });
 

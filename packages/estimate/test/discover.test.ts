@@ -156,6 +156,8 @@ describe('a region\'s companion databases', () => {
     db('replica', { ReadReplicaSourceDBInstanceIdentifier: 'shop-db' }),
     db('with-replicas', { ReadReplicaDBInstanceIdentifiers: ['far'], VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-db2', Status: 'active' }] }),
     db('other-db', { VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-other', Status: 'active' }] }),
+    db('night-db', { DBInstanceStatus: 'stopped' }),
+    db('new-db', { DBInstanceStatus: 'creating' }),
     db('aur-1', { DBClusterIdentifier: 'aurora', Engine: 'aurora-postgresql', DBInstanceClass: 'db.r6g.large' }),
     db('aur-2', { DBClusterIdentifier: 'aurora', Engine: 'aurora-postgresql', DBInstanceClass: 'db.r6g.large' }),
     db('sls-1', { DBClusterIdentifier: 'aurora-sls', Engine: 'aurora-postgresql', DBInstanceClass: 'db.serverless' }),
@@ -186,7 +188,7 @@ describe('a region\'s companion databases', () => {
     return base;
   }
   const RDS: RegionPorts['rds'] = {
-    describeDBInstances: async ({ Marker }) => (Marker ? { DBInstances: INSTANCES.slice(4) } : { DBInstances: INSTANCES.slice(0, 4), Marker: 'next' }),
+    describeDBInstances: async ({ Marker }) => (Marker ? { DBInstances: INSTANCES.slice(6) } : { DBInstances: INSTANCES.slice(0, 6), Marker: 'next' }),
     describeDBClusters: async () => ({ DBClusters: CLUSTERS }),
   };
 
@@ -194,12 +196,15 @@ describe('a region\'s companion databases', () => {
     const found = await discoverRegion(ports(RDS), { account: A, region: R });
     expect(found.workloads.map((w) => [w.targetGroup, w.securityGroups])).toEqual([['web', ['sg-web']], ['api', ['sg-api']], ['admin', ['sg-app']]]);
     const item = (cls: string, engine = 'mysql') => ({ kind: 'rds', class: cls, engine, multiAz: false });
+    // A database stopped when discovered (a schedule may start it) is a companion all the same: its uptime is measured.
     expect(found.databases).toEqual([
-      { kind: 'rds-instance', id: 'shop-db', allowedFrom: ['sg-web'], tags: { env: ['dev'] }, stopped: [item('db.t3.medium')] },
-      { kind: 'rds-instance', id: 'replica', allowedFrom: ['sg-web'], tags: {}, stopped: [], notStoppable: 'a read replica: cannot be stopped' },
-      { kind: 'rds-instance', id: 'with-replicas', allowedFrom: ['sg-api'], tags: {}, stopped: [], notStoppable: 'it has read replicas: cannot be stopped' },
-      { kind: 'rds-cluster', id: 'aurora', allowedFrom: ['sg-app'], tags: { team: ['shop'] }, stopped: [item('db.r6g.large', 'aurora-postgresql'), item('db.r6g.large', 'aurora-postgresql')] },
-      { kind: 'rds-cluster', id: 'aurora-sls', allowedFrom: ['sg-app'], tags: {}, stopped: [], notStoppable: 'Aurora Serverless: not yet' },
+      { kind: 'rds-instance', id: 'shop-db', status: 'available', allowedFrom: ['sg-web'], tags: { env: ['dev'] }, stopped: [item('db.t3.medium')] },
+      { kind: 'rds-instance', id: 'replica', status: 'available', allowedFrom: ['sg-web'], tags: {}, stopped: [], notStoppable: 'a read replica: cannot be stopped' },
+      { kind: 'rds-instance', id: 'with-replicas', status: 'available', allowedFrom: ['sg-api'], tags: {}, stopped: [], notStoppable: 'it has read replicas: cannot be stopped' },
+      { kind: 'rds-instance', id: 'night-db', status: 'stopped', allowedFrom: ['sg-web'], tags: {}, stopped: [item('db.t3.medium')] },
+      { kind: 'rds-instance', id: 'new-db', status: 'creating', allowedFrom: ['sg-web'], tags: {}, stopped: [], notStoppable: 'creating when discovered' },
+      { kind: 'rds-cluster', id: 'aurora', status: 'available', allowedFrom: ['sg-app'], tags: { team: ['shop'] }, stopped: [item('db.r6g.large', 'aurora-postgresql'), item('db.r6g.large', 'aurora-postgresql')] },
+      { kind: 'rds-cluster', id: 'aurora-sls', status: 'available', allowedFrom: ['sg-app'], tags: {}, stopped: [], notStoppable: 'Aurora Serverless: not yet' },
     ]);
   });
 
@@ -280,6 +285,16 @@ describe('the discovery of every account and region', () => {
     const again = await s.run();
     expect(s.calls.scans).toEqual([`${A}/${R}`, `${A}/${R}`]);
     expect(again.regions[0]!.workloads[0]!.tags).toEqual({});
+  });
+
+  // Kept before the databases had their status, a stopped one was said not stoppable (then never measured).
+  it('a region kept before its databases had their status is scanned again', async () => {
+    const s = setup({ regions: [R] });
+    const { regions } = await s.run();
+    const old = { kind: 'rds-instance', id: 'night-db', allowedFrom: ['sg-a'], tags: {}, stopped: [], notStoppable: 'stopped when discovered' };
+    await createCache({ dir: s.dir, now: () => T }).put(`discovery/${A}-${R}.json`, { ...regions[0]!, databases: [old] });
+    await s.run();
+    expect(s.calls.scans).toEqual([`${A}/${R}`, `${A}/${R}`]);
   });
 
   it('an account whose role cannot be assumed is not scanned; an account cached entirely assumes nothing', async () => {

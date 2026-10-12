@@ -16,6 +16,9 @@ export interface Options {
   ec2Uptime: boolean;
   // ECS services: when they had a task measured (--ecs-uptime or --uptime), else all the time at their desired count.
   ecsUptime: boolean;
+  // Companion databases: when they were available measured (--rds-uptime or --uptime), else all the time; one stopped
+  // when discovered is estimated only from its measured uptime.
+  rdsUptime: boolean;
   role: string;
   baseline: Baseline;
   discounts: Discounts;
@@ -37,7 +40,7 @@ export interface Options {
 export class UsageError extends Error {}
 
 export const USAGE = `Usage: npm run estimate -- --profile <profile>[,<profile>...] [--accounts 111111111111,222222222222]
-  [--regions eu-west-1,eu-west-3] [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>]
+  [--regions eu-west-1,eu-west-3] [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime | --rds-uptime] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 0-90] [--discount-databases 0-90]
   [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none]
   [--min-saving 1|none] [--max-wakes-rds 2|none] [--parallel 5] [--out <dir>]`;
@@ -47,7 +50,7 @@ const DEFAULT_ROLE = 'OrganizationAccountAccessRole';
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
 const ACCOUNT = /^\d{12}$/;
 // Options without a value; --uptime is every uptime option.
-const FLAGS = ['uptime', 'ec2-uptime', 'ecs-uptime'];
+const FLAGS = ['uptime', 'ec2-uptime', 'ecs-uptime', 'rds-uptime'];
 const NAMES = ['profile', 'accounts', 'regions', 'exclude-tags', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window', 'max-wakes', 'min-saving', 'parallel', 'max-wakes-rds'];
 // The router's limits of idleMinutes.
 const WINDOW = { min: 5, max: 1440, default: 60 };
@@ -140,7 +143,8 @@ export function parseOptions(argv: string[]): Options {
     throw new UsageError(`--parallel: accounts discovered at once, ${PARALLEL.min} to ${PARALLEL.max}`);
   }
   return {
-    profiles, accounts, regions, excludeTags, ec2Uptime: flags.has('uptime') || flags.has('ec2-uptime'), ecsUptime: flags.has('uptime') || flags.has('ecs-uptime'), role: given.get('role') ?? DEFAULT_ROLE,
+    profiles, accounts, regions, excludeTags, ec2Uptime: flags.has('uptime') || flags.has('ec2-uptime'), ecsUptime: flags.has('uptime') || flags.has('ecs-uptime'),
+    rdsUptime: flags.has('uptime') || flags.has('rds-uptime'), role: given.get('role') ?? DEFAULT_ROLE,
     baseline: kind === 'always' ? { kind } : { kind, timeZone },
     discounts: { compute: percent('discount-compute', given.get('discount-compute')), databases: percent('discount-databases', given.get('discount-databases')) },
     refresh, out: given.get('out') ?? process.cwd(), window, maxWakes: maxWakes === 'none' ? null : Number(maxWakes),

@@ -17,7 +17,8 @@ CLI script, of the same release).
   counts each account's excluded workloads, whatever the reason. Discovery reads `--parallel` accounts at a time (5 by
   default), with its progress on one line in a terminal. Companion RDS databases (instances and Aurora provisioned
   clusters) are found by security group and napped with their workload, unless shared, excluded by their tags, unstoppable,
-  or their workload wakes more than `--max-wakes-rds` (2 by default) times a day.
+  or their workload wakes more than `--max-wakes-rds` (2 by default) times a day; `--rds-uptime` (in `--uptime`) measures
+  when they were available, a stopped one included.
 
 ## 0.10.0 — 2026-10-11
 

@@ -5,7 +5,7 @@ import { UsageError, parseOptions } from '../src/options.js';
 describe('the estimate command\'s options', () => {
   it('a profile alone: every account reached, every enabled region, the supposed role, 24/7, no discount, the cache as it is, here, a 1-hour window', () => {
     expect(parseOptions(['--profile', 'prospect'])).toEqual({
-      profiles: ['prospect'], accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
+      profiles: ['prospect'], accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, rdsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
       discounts: { compute: 0, databases: 0 }, refresh: null, out: process.cwd(), window: 60, maxWakes: 3, minSaving: 1, parallel: 5, maxWakesRds: 2,
     });
   });
@@ -18,7 +18,7 @@ describe('the estimate command\'s options', () => {
     ])).toEqual({
       profiles: ['prospect'], accounts: ['222222222222', '333333333333'], regions: ['eu-west-1', 'eu-west-3'],
       // Each --exclude-tags a criterion (any of them excludes): every key in it (and), one of a key's values (or).
-      excludeTags: [{ env: ['dev', 'test'], team: ['web'] }, { 'dormeto:ignore': [] }], ec2Uptime: true, ecsUptime: false, role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
+      excludeTags: [{ env: ['dev', 'test'], team: ['web'] }, { 'dormeto:ignore': [] }], ec2Uptime: true, ecsUptime: false, rdsUptime: false, role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
       discounts: { compute: 20, databases: 30 }, refresh: 'metrics', out: '/tmp/reports', window: 30, maxWakes: 5, minSaving: 2.5, parallel: 2, maxWakesRds: 1.5,
     });
     expect(parseOptions(['--profile', 'p', '--baseline', 'business-hours']).baseline).toEqual({ kind: 'business-hours', timeZone: 'UTC' });
@@ -53,7 +53,8 @@ describe('the estimate command\'s options', () => {
 
   it('--ecs-uptime measures the ECS services, --ec2-uptime the instances, --uptime both', () => {
     expect(parseOptions(['--profile', 'p', '--ecs-uptime'])).toMatchObject({ ec2Uptime: false, ecsUptime: true });
-    expect(parseOptions(['--profile', 'p', '--uptime'])).toMatchObject({ ec2Uptime: true, ecsUptime: true });
+    expect(parseOptions(['--profile', 'p', '--uptime'])).toMatchObject({ ec2Uptime: true, ecsUptime: true, rdsUptime: true });
+    expect(parseOptions(['--profile', 'p', '--rds-uptime'])).toMatchObject({ ec2Uptime: false, ecsUptime: false, rdsUptime: true });
     expect(parseOptions(['--profile', 'p', '--uptime', '--ec2-uptime'])).toMatchObject({ ec2Uptime: true, ecsUptime: true });
   });
 
