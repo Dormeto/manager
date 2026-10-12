@@ -54,7 +54,7 @@ describe('Account', () => {
       ['VerifySoftwareToken', { AccessToken: 'access-token', UserCode: '123456', FriendlyDeviceName: 'Dormeto dev' }],
       ['SetUserMFAPreference', { AccessToken: 'access-token', SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true } }],
     ]);
-    expect(refreshed).toBe(1);
+    expect(refreshed).toBe(2);
     expect(useSession().effectiveRole).toBe('admin');
     expect(wrapper.text()).toContain('Two-step verification is on');
   });
@@ -85,5 +85,10 @@ describe('Account', () => {
     await button(wrapper, 'Set up an authenticator app').trigger('click');
     await flushPromises();
     expect(wrapper.text()).toContain('Your session predates two-step verification: sign out, sign in again, then set it up.');
+  });
+
+  it('reads the MFA fresh when it opens (the API caches it: a reset elsewhere shows at once)', async () => {
+    await mountView('operators', false);
+    expect(refreshed).toBe(1);
   });
 });

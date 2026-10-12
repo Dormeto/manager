@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The signed-in user's account (R6c): their role, and two-step verification with an authenticator app (TOTP), set up
 // with their access token directly with Cognito.
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import QRCode from 'qrcode';
 import { mdiShieldCheckOutline, mdiShieldOffOutline } from '@mdi/js';
 import { api } from '../api';
@@ -61,6 +61,15 @@ const verify = () => step(async () => {
   secret.value = '';
   code.value = '';
   session.applyMe(await api<Me>('/me?fresh=1'));
+});
+
+// The MFA as Cognito says now: the API caches it (a reset from Users would otherwise show minutes later).
+onMounted(async () => {
+  try {
+    session.applyMe(await api<Me>('/me?fresh=1'));
+  } catch {
+    // The session's last answer stays.
+  }
 });
 
 const turnOff = () => step(async () => {
