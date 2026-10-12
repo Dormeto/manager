@@ -61,7 +61,8 @@ export interface WorkloadStatus {
   lastRequestAt: string | null;
   nap: { eligibleAt: string; latestAt: string; inSeconds: number } | null;
   route: string; // over all the rules: app, waker, mixed, unknown
-  rules?: { arn: string; priority: string | null; conditions: string; route: string }[];
+  rules?: { arn: string; priority: string | null; conditions: string; route: string; issue?: string }[];
+  issues?: string[]; // rules forwarding to the target group that the router cannot switch: no nap while any
   backends: Backend[];
   ignoredTargets: { id: string; reason: string }[];
   recommendations: { backend: string; message: string }[];

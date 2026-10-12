@@ -119,11 +119,17 @@ const summary = computed(() => {
         </v-list>
         <v-card-text v-if="status.ignoredTargets.length" class="pt-0 text-body-small">Ignored: {{ status.ignoredTargets.map((t) => `${t.id} (${t.reason})`).join(', ') }}</v-card-text>
       </v-card>
-      <v-card v-if="status.rules?.length" :title="status.rules.length > 1 ? `Rules (${status.rules.length}, switched together)` : 'Rule'" class="mb-4">
+      <v-card v-if="status.rules?.length || status.issues?.length" :title="(status.rules?.length ?? 0) > 1 ? `Rules (${status.rules!.length}, found from the target group)` : 'Rule'" class="mb-4">
+        <v-alert v-if="status.issues?.length" type="warning" variant="tonal" density="compact" class="mx-4 mt-2"
+          title="Not napped: some rules cannot be switched">
+          <div v-for="issue in status.issues" :key="issue" class="text-body-small">{{ issue }}</div>
+          <div class="text-body-small mt-1">Add the waker target group and the <code>dormeto:workload</code> tag to these rules, or remove them.</div>
+        </v-alert>
         <v-list density="compact" class="py-0">
-          <v-list-item v-for="r in status.rules" :key="r.arn" :title="r.conditions" :subtitle="`priority ${r.priority ?? '—'}`">
+          <v-list-item v-for="r in status.rules" :key="r.arn" :title="r.conditions" :subtitle="r.issue ?? `priority ${r.priority ?? '—'}`">
             <template #append>
-              <v-chip :color="routeColor(r.route)" variant="tonal" label size="small">{{ r.route === 'app' ? 'application' : r.route }}</v-chip>
+              <v-chip v-if="r.issue" color="warning" variant="tonal" label size="small">not switched</v-chip>
+              <v-chip v-else :color="routeColor(r.route)" variant="tonal" label size="small">{{ r.route === 'app' ? 'application' : r.route }}</v-chip>
             </template>
           </v-list-item>
         </v-list>
