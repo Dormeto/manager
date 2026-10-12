@@ -25,6 +25,8 @@ export interface WorkloadEstimate {
   recommended: { minutes: number; usdMonth: number; wakesPerDay: number };
 }
 export interface LeftOut { workload: Workload; reason: string }
+// Waking more than --max-wakes a day at the report's window: left out, with its wakes and the saving it would add.
+export interface Busy { workload: Workload; wakesPerDay: number; usdMonth: number }
 // withDormetoMonth: the actual cost less the savings at the report's window, plus Dormeto's cost (an account's: its
 // routers and workloads; the total's: the manager too).
 // kinds: the workloads by backend (an Auto Scaling group, an EC2 instance, an ECS service, a Kubernetes owner on EKS).
@@ -50,6 +52,8 @@ export interface Estimate {
   leftOut: LeftOut[];
   // Excluded by their tags (--exclude-tags), before their requests were read.
   excluded: Excluded[];
+  // Left out for waking more than options.maxWakes a day at the report's window.
+  busy: Busy[];
   ineligible: (Ineligible & { account: string; region: string })[];
   unreachable: Unreachable[];
   failedRegions: { account: string; region: string; error: string }[];
@@ -97,6 +101,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
 }): Promise<Estimate> {
   const workloads: WorkloadEstimate[] = [];
   const leftOut: LeftOut[] = [];
+  const busy: Busy[] = [];
   for (const region of regions) {
     const read = requests.find((r) => r.account === region.account && r.region === region.region);
     const ran = uptime?.find((u) => u.account === region.account && u.region === region.region);
@@ -169,6 +174,10 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
       const at = row(options.window);
       const best = row(advice.recommended);
+      if (options.maxWakes !== null && at.wakesPerDay > options.maxWakes) {
+        busy.push({ workload, wakesPerDay: at.wakesPerDay, usdMonth: at.usdMonth! });
+        continue;
+      }
       // Its cost now: asleep never (while it ran, measured), priced as the savings are (the same baseline, prices and month).
       const always = await savingsOf((running ?? [{ from: read.from, to: read.to }]).map((p) => ({ state: 'ASLEEP', ...p, stopped: workload.stopped })), { hourly: (item) => hourly(workload.region, item).catch(() => null), baseline });
       const days = (Date.parse(read.to) - Date.parse(read.from)) / 86_400_000;
@@ -209,7 +218,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   return {
     generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length, accountsListed: reached.listed,
     accountNames: Object.fromEntries(reached.accounts.map((a) => [a.account, a.name])),
-    totals, dormeto, byAccount, byRegion, workloads, leftOut, excluded,
+    totals, dormeto, byAccount, byRegion, workloads, leftOut, excluded, busy,
     ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
     unreachable: reached.unreachable,
     failedRegions: regions.filter((r) => r.error).map((r) => ({ account: r.account, region: r.region, error: r.error! })),

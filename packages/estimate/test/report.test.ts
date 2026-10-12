@@ -9,7 +9,7 @@ const workload = (name: string, usd15: number, recommended = 30) => ({
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
+  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3 },
   accounts: 2, accountsListed: 2, accountNames: { '111111111111': 'prod', '333333333333': 'sandbox' },
   dormeto: {
     manager: { count: 1, unitMonth: 5, usdMonth: 5 },
@@ -23,6 +23,7 @@ const E: Estimate = {
   workloads: Array.from({ length: 12 }, (_, i) => (i === 5 ? { ...workload('napping', 15), workload: { ...workload('napping', 15).workload, managed: true as const } } : workload(i === 3 ? 'docs' : `app${i}`, 10 + i))),
   leftOut: [{ workload: workload('gpu', 0).workload, reason: 'what it stops has no AWS list price' }],
   excluded: [],
+  busy: [],
   ineligible: [{ account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }],
   unreachable: [{ account: '333333333333', name: 'sandbox', reason: 'not authorized to perform: sts:AssumeRole', fix: 'create a role this profile may assume, with read access, and name it with --role (tried OrganizationAccountAccessRole)' }],
   failedRegions: [{ account: '111111111111', region: 'eu-west-3', error: 'opt-in region not enabled' }],
@@ -117,6 +118,17 @@ describe('the estimate\'s reports', () => {
     expect(md).toContain('| instance i-0abc (uptime unreadable: CloudWatch could not read the uptime (Forbidden); 24/7 assumed) |');
     expect(md).toContain('- EC2 uptime: measured over the 14 days (--ec2-uptime)');
     expect(markdownReport(E)).toContain('- EC2 uptime: 24/7 assumed (--ec2-uptime measures it)');
+  });
+
+  it('the workloads waking more than --max-wakes a day: apart, with their wakes and the saving left out; the options say the limit', () => {
+    const busy = { workload: { ...E.workloads[0]!.workload, targetGroup: 'busy', hosts: ['busy.example.com'], backend: { kind: 'asg' as const, id: 'busy-asg' } }, wakesPerDay: 5.93, usdMonth: 12.3 };
+    const e = { ...E, busy: [busy] };
+    expect(markdownReport(e)).toContain('## More than 3 wakes a day');
+    expect(markdownReport(e)).toContain('| 111111111111 | eu-west-1 | web | busy.example.com | asg busy-asg | 5.9 | $12.30 |');
+    expect(markdownReport(e)).toContain('- Wakes a day: at most 3 at the figures\' window, the busier left out (--max-wakes)');
+    expect(summaryLines(e).join('\n')).toContain('More than 3 wakes a day: 1 workload left out (see the report)');
+    expect(markdownReport({ ...E, options: { ...E.options, maxWakes: null } })).toContain('- Wakes a day: any (--max-wakes none)');
+    expect(markdownReport(E)).not.toContain('## More than');
   });
 
   it('ECS uptime: each measured service\'s hours a day; the options say whether it was measured', () => {

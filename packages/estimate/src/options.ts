@@ -23,6 +23,8 @@ export interface Options {
   out: string;
   // The idle window the report's figures use (the recommended windows besides): an hour by default.
   window: number;
+  // Workloads waking more than this a day at that window are left out (--max-wakes, 3 by default; null: none).
+  maxWakes: number | null;
 }
 
 export class UsageError extends Error {}
@@ -30,7 +32,7 @@ export class UsageError extends Error {}
 export const USAGE = `Usage: npm run estimate -- --profile <profile>[,<profile>...] [--accounts 111111111111,222222222222]
   [--regions eu-west-1,eu-west-3] [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 0-90] [--discount-databases 0-90]
-  [--refresh discovery|metrics] [--window 60] [--out <dir>]`;
+  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--out <dir>]`;
 
 // Accounts created by AWS Organizations have it; the role is supposed to be there (decision 4).
 const DEFAULT_ROLE = 'OrganizationAccountAccessRole';
@@ -38,9 +40,11 @@ const REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
 const ACCOUNT = /^\d{12}$/;
 // Options without a value; --uptime is every uptime option.
 const FLAGS = ['uptime', 'ec2-uptime', 'ecs-uptime'];
-const NAMES = ['profile', 'accounts', 'regions', 'exclude-tags', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window'];
+const NAMES = ['profile', 'accounts', 'regions', 'exclude-tags', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window', 'max-wakes'];
 // The router's limits of idleMinutes.
 const WINDOW = { min: 5, max: 1440, default: 60 };
+// More wakes a day than this keep visitors waiting more than they save (the user, 2026-10-11).
+const MAX_WAKES = 3;
 
 const percent = (name: string, value: string | undefined) => {
   if (value === undefined) return 0;
@@ -111,10 +115,12 @@ export function parseOptions(argv: string[]): Options {
   if (refresh !== null && refresh !== 'discovery' && refresh !== 'metrics') throw new UsageError('--refresh: discovery or metrics');
   const window = given.has('window') ? Number(given.get('window')) : WINDOW.default;
   if (!/^\d+$/.test(given.get('window') ?? String(WINDOW.default)) || window < WINDOW.min || window > WINDOW.max) throw new UsageError(`--window: whole minutes from ${WINDOW.min} to ${WINDOW.max}`);
+  const maxWakes = given.get('max-wakes') ?? String(MAX_WAKES);
+  if (maxWakes !== 'none' && !/^\d+(\.\d+)?$/.test(maxWakes)) throw new UsageError('--max-wakes: a number of wakes a day, such as 3 or 0.5, or none');
   return {
     profiles, accounts, regions, excludeTags, ec2Uptime: flags.has('uptime') || flags.has('ec2-uptime'), ecsUptime: flags.has('uptime') || flags.has('ecs-uptime'), role: given.get('role') ?? DEFAULT_ROLE,
     baseline: kind === 'always' ? { kind } : { kind, timeZone },
     discounts: { compute: percent('discount-compute', given.get('discount-compute')), databases: percent('discount-databases', given.get('discount-databases')) },
-    refresh, out: given.get('out') ?? process.cwd(), window,
+    refresh, out: given.get('out') ?? process.cwd(), window, maxWakes: maxWakes === 'none' ? null : Number(maxWakes),
   };
 }

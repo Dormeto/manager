@@ -42,6 +42,7 @@ export function summaryLines(e: Estimate): string[] {
   }
   if (e.leftOut.length) lines.push(`Left out: ${n(e.leftOut.length, 'workload')} (see the report for why)`);
   if (e.excluded.length) lines.push(`Excluded by tags: ${n(e.excluded.length, 'workload')} (see the report)`);
+  if (e.busy.length) lines.push(`More than ${e.options.maxWakes} wakes a day: ${n(e.busy.length, 'workload')} left out (see the report)`);
   if (e.unreachable.length) lines.push(`Not reached: ${n(e.unreachable.length, 'account')} (see the report for how to include them)`);
   if (e.failedRegions.length) lines.push(`Regions that failed: ${e.failedRegions.map((r) => `${r.account}/${r.region}`).join(', ')}`);
   return lines;
@@ -178,6 +179,11 @@ export function markdownReport(e: Estimate): string {
     ...(e.leftOut.length
       ? ['| Account | Region | Load balancer | Target group | Why |', '|---|---|---|---|---|', ...e.leftOut.map((l) => `| ${l.workload.account} | ${l.workload.region} | ${cell(l.workload.loadBalancer)} | ${cell(l.workload.targetGroup)} | ${cell(l.reason)} |`)]
       : ['None.']), '',
+    ...(e.busy.length
+      ? [`## More than ${o.maxWakes} wakes a day`, '', `Left out: at ${windowWords(o.window)}, each would wake its visitors more than ${o.maxWakes} times a day (--max-wakes).`, '',
+        '| Account | Region | Load balancer | Hosts | Backend | Wakes a day | Saving left out |', '|---|---|---|---|---|---|---|',
+        ...e.busy.map((b) => `| ${b.workload.account} | ${b.workload.region} | ${cell(b.workload.loadBalancer)} | ${cell(b.workload.hosts.join(', ') || b.workload.targetGroup)} | ${b.workload.backend.kind} ${cell(b.workload.backend.id.split('/').at(-1) ?? b.workload.backend.id)} | ${day(b.wakesPerDay)} | ${usd(b.usdMonth)} |`), '']
+      : []),
     ...(o.excludeTags.length
       ? ['## Excluded by tags', '', ...(e.excluded.length
         ? ['| Account | Region | Load balancer | Target group | Hosts | Tags matched |', '|---|---|---|---|---|---|', ...e.excluded.map((x) => `| ${x.workload.account} | ${x.workload.region} | ${cell(x.workload.loadBalancer)} | ${cell(x.workload.targetGroup)} | ${cell(x.workload.hosts.join(', '))} | ${cell(x.criterion)} |`)]
@@ -205,7 +211,8 @@ export function markdownReport(e: Estimate): string {
     `- Role in member accounts: ${o.role}`,
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,
     `- Discounts: compute ${o.discounts.compute}%, databases ${o.discounts.databases}%`,
-    `- Idle window of the figures: ${windowWords(o.window)} (the recommended windows besides)`, '',
+    `- Idle window of the figures: ${windowWords(o.window)} (the recommended windows besides)`,
+    `- Wakes a day: ${o.maxWakes === null ? 'any (--max-wakes none)' : `at most ${o.maxWakes} at the figures' window, the busier left out (--max-wakes)`}`, '',
     '## Assumptions', '',
     ...e.assumptions.map((a) => `- ${a}`), '',
   ];

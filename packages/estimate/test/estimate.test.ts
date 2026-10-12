@@ -34,7 +34,7 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
 const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60, running: { from: string; to: string }[] | null = null) => idleWindowAdvice({
@@ -244,6 +244,25 @@ describe('the estimate', () => {
       expect((await run()).assumptions.join(' ')).toContain('ECS services are assumed to run all the time at their desired count when discovered (--ecs-uptime measures when they had a task)');
       expect((await measuredRun([svc('api')], uptime({ [id('api')]: HALF }))).assumptions.join(' ')).toContain('ECS services: their uptime measured over the 14 days');
     });
+  });
+
+  // Waking several times a day, a workload keeps its visitors waiting more than it saves (the user, 2026-10-11).
+  it('a workload waking more than --max-wakes a day at the report\'s window is left out of the totals, apart with its wakes and saving; none keeps it', async () => {
+    // Requests every 4 hours: about 6 wakes a day at a 1-hour window; every 8 hours: about 3.
+    const every = (hours: number): [number, number][] => Array.from({ length: (14 * 24) / hours }, (_, k) => [10 + k * hours * 60, 2]);
+    const busy = w(A, 'eu-west-1', 'busy', [T3]);
+    const calm = w(A, 'eu-west-1', 'calm', [T3]);
+    const regions = [{ account: A, region: 'eu-west-1', workloads: [busy, calm], ineligible: [] }] as RegionDiscovery[];
+    const requests = [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/busy': every(4), 'arn:tg/calm': every(8) }, unreadable: {} }] as RegionRequests[];
+    const e = await run({ regions, requests });
+    expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['calm']);
+    expect(e.workloads[0]!.atWindow.wakesPerDay).toBeLessThanOrEqual(3);
+    expect(e.busy.map((b) => [b.workload.targetGroup, Math.round(b.wakesPerDay)])).toEqual([['busy', 6]]);
+    expect(e.busy[0]!.usdMonth).toBeGreaterThan(0);
+    expect(e.totals.workloads).toBe(1);
+    const kept = await run({ regions, requests, options: { ...OPTIONS, maxWakes: null } });
+    expect(kept.workloads.map((x) => x.workload.targetGroup)).toEqual(['busy', 'calm']);
+    expect(kept.busy).toEqual([]);
   });
 
   it('the workloads excluded by their tags, as given, apart from the estimate', async () => {

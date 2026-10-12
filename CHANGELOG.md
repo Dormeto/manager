@@ -11,7 +11,8 @@ CLI script, of the same release).
   account or organization before anything is installed, with read access only. Discovery, CloudWatch requests and the
   estimate, each cached; a terminal summary, and Markdown and JSON reports. EKS workloads too, read with the profile's
   own access to each cluster (a column EKS; a cluster it cannot read is listed with the reason). `--ec2-uptime` and
-  `--ecs-uptime` (`--uptime`: both) count only the hours each EC2 instance ran and each ECS service had a task.
+  `--ecs-uptime` (`--uptime`: both) count only the hours each EC2 instance ran and each ECS service had a task;
+  `--max-wakes` (3 by default, `none` to keep them) leaves out the workloads waking more than that a day.
 
 ## 0.10.0 — 2026-10-11
 
