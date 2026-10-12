@@ -1,13 +1,11 @@
 // The daily savings job (vision docs/specs/2026-10-08-savings-design.md, R9b): each workload's previous UTC day priced
 // from its history (a day item, idempotent by key), then the summary the Overview reads in one request: the last 30
 // days, this month, the cumulative total (a day added once), the top workloads, what is not priced, Dormeto's own cost.
-import { historyView, savingsOf, type Baseline, type Discounts, type FleetStore, type SavingsDay, type SavingsSummary, type StoppedItem } from '@dormeto/fleet';
+import { DORMETO_COST, historyView, savingsOf, type Baseline, type Discounts, type FleetStore, type SavingsDay, type SavingsSummary, type StoppedItem } from '@dormeto/fleet';
 
 const DAY_MS = 86_400_000;
 const WORKERS = 10;
 const TOP = 10;
-// The cost model (vision docs/architecture/costs.md): the manager, each router, each workload, a month.
-const COST = { manager: 5, router: 0.26, workload: 0.13 };
 
 const dateOf = (t: number) => new Date(t).toISOString().slice(0, 10);
 
@@ -98,7 +96,7 @@ export function createSavingsJob({ fleet, prices, baseline, now = Date.now, log 
         top: [...byWorkload.values()].filter((w) => w.usd > 0).sort((a, b) => b.usd - a.usd).slice(0, TOP),
         unpriced: { workloads: unpricedDay.length, hours: unpricedDay.reduce((n, d) => n + d.unpriced.reduce((m, u) => m + u.hours, 0), 0) },
         workloads: latestDay.length,
-        dormeto: { usdMonth: COST.manager + COST.router * routers + COST.workload * latestDay.length },
+        dormeto: { usdMonth: DORMETO_COST.manager + DORMETO_COST.router * routers + DORMETO_COST.workload * latestDay.length },
         // Those of its latest day: an earlier day run again keeps them.
         discounts: date === latest ? discounts : previous?.discounts ?? discounts,
       };

@@ -4,6 +4,10 @@
 import type { Phase } from './history.js';
 import type { StoppedItem } from './prices.js';
 
+// Dormeto's estimated cost a month (vision docs/architecture/costs.md): the manager, a router per account and region with
+// workloads, each workload; the savings job and the estimate before install net it off.
+export const DORMETO_COST = { manager: 5, router: 0.26, workload: 0.13 };
+
 export type Baseline = { kind: 'always' } | { kind: 'business-hours'; timeZone: string };
 export interface Savings {
   usd: number;
