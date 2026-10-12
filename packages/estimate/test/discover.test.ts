@@ -56,6 +56,21 @@ describe('a region\'s discovery', () => {
     expect(found.workloads[0]).toMatchObject({ account: A, region: R, loadBalancer: 'web', loadBalancerArn: LB, targetGroupArn: tg('web'), hosts: ['web.example.com'], backend: { kind: 'asg', id: 'web-asg' } });
   });
 
+  it('an ECS service keeps its desired count; one at 0 tasks is described as one task (its measured uptime may estimate it), unless Dormeto manages it', async () => {
+    const service = `arn:aws:ecs:${R}:${A}:service/prod/api`;
+    const at = (desired: number, over: Partial<ScannedRule> = {}) => {
+      const { ports } = regionPorts([rule('api', { backend: { kind: 'ecs', id: service, arn: service }, ...over })]);
+      ports.ecs = { ...ports.ecs, describeServices: async (input) => ({ services: [{ serviceArn: input.services[0], desiredCount: desired, launchType: 'FARGATE', taskDefinition: 'api:7' }] }) };
+      return discoverRegion(ports, { account: A, region: R }).then((r) => r.workloads[0]!);
+    };
+    const task = { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, arch: 'arm64', os: 'Linux' };
+    expect(await at(3)).toMatchObject({ ecsDesired: 3, stopped: [{ ...task, count: 3 }] });
+    expect(await at(0)).toMatchObject({ ecsDesired: 0, stopped: [{ ...task, count: 1 }] });
+    const ruleArn = `arn:aws:elasticloadbalancing:${R}:${A}:listener-rule/app/web/0123456789abcdef/aaaa/dddd`;
+    const napped = await at(0, { eligibility: 'managed', workloadId: 'abc', rules: [{ id: ruleArn, listener: 'HTTPS:443', priority: '10', conditions: '', hosts: [], managed: true }] });
+    expect([napped.ecsDesired, napped.stopped]).toEqual([undefined, []]);
+  });
+
   it('keeps each workload\'s tags: every value of each tag on its load balancer, target group or rule, as discovery reads them', async () => {
     const { ports } = regionPorts([rule('web', { tags: { env: ['dev'], team: ['web', 'shop'] } })]);
     expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.tags).toEqual({ env: ['dev'], team: ['web', 'shop'] });

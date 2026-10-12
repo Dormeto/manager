@@ -200,6 +200,7 @@ export function markdownReport(e: Estimate): string {
     `- Accounts: ${o.accounts ? `${o.accounts.join(', ')} (--accounts)` : 'every account reached'}`,
     `- Regions: ${o.regions ? o.regions.join(', ') : 'each account\'s enabled regions'}`,
     `- EC2 uptime: ${o.ec2Uptime ? 'measured over the 14 days (--ec2-uptime)' : '24/7 assumed (--ec2-uptime measures it)'}`,
+    `- ECS uptime: ${o.ecsUptime ? 'measured over the 14 days (--ecs-uptime)' : 'at the desired count when discovered, all the time (--ecs-uptime measures it)'}`,
     `- Excluded tags: ${o.excludeTags.length ? o.excludeTags.map(describeTags).join('; or ') : 'none'}`,
     `- Role in member accounts: ${o.role}`,
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,

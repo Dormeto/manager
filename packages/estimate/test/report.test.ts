@@ -9,7 +9,7 @@ const workload = (name: string, usd15: number, recommended = 30) => ({
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
+  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60 },
   accounts: 2, accountsListed: 2, accountNames: { '111111111111': 'prod', '333333333333': 'sandbox' },
   dormeto: {
     manager: { count: 1, unitMonth: 5, usdMonth: 5 },
@@ -117,6 +117,14 @@ describe('the estimate\'s reports', () => {
     expect(md).toContain('| instance i-0abc (uptime unreadable: CloudWatch could not read the uptime (Forbidden); 24/7 assumed) |');
     expect(md).toContain('- EC2 uptime: measured over the 14 days (--ec2-uptime)');
     expect(markdownReport(E)).toContain('- EC2 uptime: 24/7 assumed (--ec2-uptime measures it)');
+  });
+
+  it('ECS uptime: each measured service\'s hours a day; the options say whether it was measured', () => {
+    const service = { ...E.workloads[0]!, workload: { ...E.workloads[0]!.workload, backend: { kind: 'ecs' as const, id: 'arn:aws:ecs:eu-west-1:111111111111:service/prod/api' } }, uptime: { hoursPerDay: 9.5 } };
+    const md = markdownReport({ ...E, options: { ...E.options, ecsUptime: true }, workloads: [service] });
+    expect(md).toContain('| ecs api (runs 9.5 h a day, measured) |');
+    expect(md).toContain('- ECS uptime: measured over the 14 days (--ecs-uptime)');
+    expect(markdownReport(E)).toContain('- ECS uptime: at the desired count when discovered, all the time (--ecs-uptime measures it)');
   });
 
   it('many routers: their count, not each account and region', () => {

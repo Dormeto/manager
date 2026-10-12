@@ -25,6 +25,9 @@ export interface Workload {
   // An instance's state when discovered (not one Dormeto manages): one stopped is described all the same, estimated only
   // from its measured uptime (--ec2-uptime).
   instanceState?: string;
+  // An ECS service's desired count when discovered (not one Dormeto manages): one at 0 is described as one task, estimated
+  // only from its measured uptime (--ecs-uptime).
+  ecsDesired?: number;
   // Already managed by Dormeto: its requests while asleep go to its waker target group, added up (as R10).
   managed?: true;
   wakerTargetGroupArn?: string;
@@ -43,14 +46,14 @@ export type Progress = (event: { phase: 'discovery' | 'requests' | 'uptime'; acc
 
 // An ECS service ARN names its cluster (arn:aws:ecs:<region>:<account>:service/<cluster>/<service>); the old format
 // (service/<service>) is in the default cluster.
-const clusterOf = (serviceArn: string) => {
+export const clusterOf = (serviceArn: string) => {
   const parts = serviceArn.split(':').at(-1)!.split('/');
   return parts.length >= 3 ? parts[1]! : 'default';
 };
 
 // Discovery's backend as the router describes it: an Auto Scaling group's desired capacity and instances, an ECS
 // service's cluster and desired count, an instance (with its state, unless Dormeto manages it).
-async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, managed: boolean): Promise<{ running: RouterBackend | null; instanceState?: string }> {
+async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, managed: boolean): Promise<{ running: RouterBackend | null; instanceState?: string; ecsDesired?: number }> {
   if (backend.kind === 'k8s') {
     const k = backend.kubernetes!;
     return { running: { kind: 'k8s', id: backend.id, cluster: k.cluster, namespace: k.namespace, owner: k.owner, autoscaler: k.autoscaler } };
@@ -62,7 +65,9 @@ async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRul
   if (backend.kind === 'ecs') {
     const cluster = clusterOf(backend.id);
     const { services: [service] = [] } = await ports.ecs.describeServices({ cluster, services: [backend.id] });
-    return { running: { kind: 'ecs', id: backend.id, cluster, desired: service?.desiredCount ?? 0 } };
+    const desired = service?.desiredCount ?? 0;
+    if (managed) return { running: { kind: 'ecs', id: backend.id, cluster, desired } };
+    return { running: { kind: 'ecs', id: backend.id, cluster, desired: Math.max(desired, 1) }, ecsDesired: desired };
   }
   // Dormeto manages it: stopped for a nap, it runs when woken. Otherwise its state: one stopped is described all the same
   // (the estimate says it stops nothing, unless its measured uptime shows it ran); one terminated stops nothing. No
@@ -97,9 +102,11 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
     let stopped: StoppedItem[];
     let instanceState: string | undefined;
+    let ecsDesired: number | undefined;
     try {
       const found = await routerBackend(ports, rule.backend, managed !== null);
       instanceState = found.instanceState;
+      ecsDesired = found.ecsDesired;
       stopped = found.running ? await describeStopped(ports, [found.running]) : [];
     } catch (err) {
       // Never guessed: an item that cannot be priced, said in the estimate.
@@ -109,6 +116,7 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
       account, region, loadBalancer: rule.loadBalancer, loadBalancerArn: rule.loadBalancerArn, targetGroup: rule.targetGroup ?? '',
       targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped, tags: rule.tags,
       ...(instanceState ? { instanceState } : {}),
+      ...(ecsDesired !== undefined ? { ecsDesired } : {}),
       ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
     });
   }

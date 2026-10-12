@@ -68,8 +68,11 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
     `Prices: AWS's on-demand list prices, Spot prices for Spot capacity, less the discounts given (compute ${options.discounts.compute}%, databases ${options.discounts.databases}%); storage, load balancers and data transfer are not counted.`,
     `Savings counted within ${baseline.kind === 'always' ? 'every hour (24/7)' : `business hours (weekdays 08:00 to 20:00, ${baseline.timeZone})`}.`,
     options.ec2Uptime
-      ? 'EC2 instances without an Auto Scaling group: their uptime measured over the 14 days (CloudWatch CPUUtilization, published every 5 minutes while an instance runs); their actual cost counts the hours they ran, their savings only the hours Dormeto would nap them while they ran. Instances Dormeto already manages, Auto Scaling groups and ECS services are assumed to run all the time.'
+      ? 'EC2 instances without an Auto Scaling group: their uptime measured over the 14 days (CloudWatch CPUUtilization, published every 5 minutes while an instance runs); their actual cost counts the hours they ran, their savings only the hours Dormeto would nap them while they ran. Instances Dormeto already manages and Auto Scaling groups are assumed to run all the time.'
       : 'EC2 instances without an Auto Scaling group are assumed to run 24/7 (--ec2-uptime measures it): one stopped at night by a schedule saves less than estimated here.',
+    options.ecsUptime
+      ? 'ECS services: their uptime measured over the 14 days (CloudWatch CPUUtilization of the service, published every minute while it has a task); their actual cost counts the hours they had a task, their savings only the hours Dormeto would nap them then, at their desired count when discovered (one task for a service found at 0). Services Dormeto already manages are assumed to run all the time.'
+      : 'ECS services are assumed to run all the time at their desired count when discovered (--ecs-uptime measures when they had a task): one scaled to 0 at night by a schedule saves less than estimated here.',
     ...(kubernetes ? ['Kubernetes pods: their share of their nodes (the larger of CPU and memory over the node\'s allocatable) at the node\'s price, saved only where a node autoscaler removes the nodes they free; the EKS control plane and the nodes\' DaemonSets keep running.'] : []),
     `Dormeto's cost: about $${DORMETO_COST.manager} a month for the manager, $${DORMETO_COST.router} per account and region with workloads, $${DORMETO_COST.workload} per workload.`,
   ];
@@ -108,9 +111,15 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
         leftOut.push({ workload, reason: `its backend (${workload.backend.kind} ${workload.backend.id}) also serves ${group[0]!.targetGroup}: estimated there, with every target group's requests` });
         continue;
       }
+      const kinds = { ec2: options.ec2Uptime, ecs: options.ecsUptime };
+      const measure = Boolean(uptime) && measured(workload, kinds);
       const stoppedNow = workload.instanceState === 'stopped' || workload.instanceState === 'stopping';
-      if (stoppedNow && !uptime) {
+      if (stoppedNow && !measure) {
         leftOut.push({ workload, reason: 'a stopped instance: nothing running to stop (--ec2-uptime estimates it from the hours it ran)' });
+        continue;
+      }
+      if (workload.ecsDesired === 0 && !measure) {
+        leftOut.push({ workload, reason: 'an ECS service at 0 tasks: nothing running to stop (--ecs-uptime estimates it as one task from the hours it ran)' });
         continue;
       }
       if (!workload.stopped.length) {
@@ -120,7 +129,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       // Measured: its running periods; unreadable, 24/7 (null).
       let running: { from: string; to: string }[] | null = null;
       let measuredUptime: WorkloadEstimate['uptime'];
-      if (uptime && measured(workload)) {
+      if (measure) {
         const periods = ran?.running[workload.backend.id];
         if (periods) {
           if (!periods.length) {

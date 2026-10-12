@@ -34,7 +34,7 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
 const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60, running: { from: string; to: string }[] | null = null) => idleWindowAdvice({
@@ -197,6 +197,52 @@ describe('the estimate', () => {
       const e = await measuredRun([vm('napped', { managed: true, instanceState: undefined }), { ...w(A, 'eu-west-1', 'fleet', [T3]) }], uptime({}));
       expect(e.workloads.map((x) => x.uptime)).toEqual([undefined, undefined]);
       expect(e.totals.kinds).toEqual({ asg: 1, ec2: 1, ecs: 0, eks: 0 });
+    });
+  });
+
+  describe('ECS services', () => {
+    const svc = (name: string, over: Partial<Workload> = {}): Workload => ({ ...w(A, 'eu-west-1', name, [FARGATE]), backend: { kind: 'ecs', id: `arn:aws:ecs:eu-west-1:${A}:service/prod/${name}` }, ecsDesired: 1, ...over });
+    const only = (workloads: Workload[]) => ({
+      regions: [{ account: A, region: 'eu-west-1', workloads, ineligible: [] }] as RegionDiscovery[],
+      requests: [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: Object.fromEntries(workloads.map((x) => [x.targetGroupArn, daily])), unreadable: {} }] as RegionRequests[],
+    });
+    const HALF: [number, number][] = Array.from({ length: 14 }, (_, d) => [d * 1440, d * 1440 + 720]);
+    const uptime = (running: Record<string, [number, number][]>) => [{ account: A, region: 'eu-west-1', from: FROM, to: TO, running, unreadable: {} }];
+    const id = (name: string) => `arn:aws:ecs:eu-west-1:${A}:service/prod/${name}`;
+    const measuredRun = (workloads: Workload[], up: ReturnType<typeof uptime> | null, kinds = { ec2Uptime: false, ecsUptime: true }) =>
+      run({ ...only(workloads), options: { ...OPTIONS, ...(up ? kinds : {}) }, uptime: up });
+
+    it('measured (--ecs-uptime): the actual cost of the hours it had a task, the savings only while it had one', async () => {
+      const e = await measuredRun([svc('api')], uptime({ [id('api')]: HALF }));
+      const x = e.workloads[0]!;
+      expect(x.uptime).toEqual({ hoursPerDay: 12 });
+      expect(x.actualMonth).toBeCloseTo(0.0099 * 12 * 30, 9);
+      expect(x.atWindow.usdMonth).toBeLessThan((await run(only([svc('api')]))).workloads[0]!.atWindow.usdMonth);
+    });
+
+    it('at 0 tasks when discovered: left out without --ecs-uptime, saying how to estimate it; estimated as one task from the hours it ran with it', async () => {
+      const night = svc('night', { ecsDesired: 0 });
+      expect((await run(only([night]))).leftOut.map((l) => l.reason)).toEqual(['an ECS service at 0 tasks: nothing running to stop (--ecs-uptime estimates it as one task from the hours it ran)']);
+      const e = await measuredRun([night], uptime({ [id('night')]: HALF }));
+      expect(e.workloads.map((x) => [x.workload.targetGroup, x.uptime])).toEqual([['night', { hoursPerDay: 12 }]]);
+      expect((await measuredRun([night], uptime({ [id('night')]: [] }))).leftOut.map((l) => l.reason)).toEqual(['it did not run in the last 14 days (its measured uptime)']);
+    });
+
+    it('--ec2-uptime alone measures no ECS service, nor a stopped instance with --ecs-uptime alone', async () => {
+      const e = await measuredRun([svc('api')], uptime({ [id('api')]: HALF }), { ec2Uptime: true, ecsUptime: false });
+      expect([e.workloads[0]!.uptime, e.workloads[0]!.actualMonth]).toEqual([undefined, expect.closeTo(0.0099 * 24 * 30, 9)]);
+      const stopped = { ...w(A, 'eu-west-1', 'vm', [T3]), backend: { kind: 'instance' as const, id: 'i-vm' }, instanceState: 'stopped' };
+      expect((await measuredRun([stopped], uptime({ 'i-vm': HALF }))).leftOut.map((l) => l.reason)).toEqual(['a stopped instance: nothing running to stop (--ec2-uptime estimates it from the hours it ran)']);
+    });
+
+    it('managed by Dormeto: not measured', async () => {
+      const e = await measuredRun([svc('demo', { managed: true, ecsDesired: undefined })], uptime({}));
+      expect(e.workloads.map((x) => x.uptime)).toEqual([undefined]);
+    });
+
+    it('the assumptions say how ECS services ran', async () => {
+      expect((await run()).assumptions.join(' ')).toContain('ECS services are assumed to run all the time at their desired count when discovered (--ecs-uptime measures when they had a task)');
+      expect((await measuredRun([svc('api')], uptime({ [id('api')]: HALF }))).assumptions.join(' ')).toContain('ECS services: their uptime measured over the 14 days');
     });
   });
 

@@ -1,11 +1,12 @@
 // The measured uptime of EC2 instances without an Auto Scaling group (vision docs/specs/2026-10-10-savings-estimate-design.md
-// §5, --ec2-uptime): when each ran over its region's requests period, from its CPUUtilization — EC2 publishes it every
-// 5 minutes while an instance runs and nothing while it is stopped (detailed monitoring adds up to the same 5 minutes).
-// Twenty instances per GetMetricData call (4,032 values each over 14 days, under the 100,800 a call returns), every
-// page. A metric CloudWatch could not read is unreadable, never a stop. Instances Dormeto manages are not measured: their
+// §5, --ec2-uptime) and of ECS services (--ecs-uptime; --uptime both): when each ran over its region's requests period,
+// from its CPUUtilization — EC2 publishes an instance's every 5 minutes while it runs (detailed monitoring adds up to the
+// same 5 minutes), ECS a service's every minute while it has a task, and nothing while stopped or at 0 tasks (read on
+// dev's ECS demo). Twenty per GetMetricData call (4,032 values each over 14 days, under the 100,800 a call returns),
+// every page. A metric CloudWatch could not read is unreadable, never a stop. What Dormeto manages is not measured: its
 // uptime is already its naps. Kept per account and region the same UTC day.
 import { freshRequests, type Cache } from './cache.js';
-import type { Progress, RegionDiscovery, Workload } from './discover.js';
+import { clusterOf, type Progress, type RegionDiscovery, type Workload } from './discover.js';
 import type { CloudWatchPort, RegionRequests } from './requests.js';
 
 const MIN_MS = 60_000;
@@ -17,24 +18,32 @@ export interface RegionUptime {
   region: string;
   from: string;
   to: string;
-  // By instance id: when it ran, [start, end) in minutes from `from`, sorted and disjoint.
+  // By instance id or service ARN: when it ran, [start, end) in minutes from `from`, sorted and disjoint.
   running: Record<string, [number, number][]>;
   unreadable: Record<string, string>;
 }
 
-// The instances measured: without an Auto Scaling group, not managed by Dormeto.
-export const measured = (w: Workload) => w.backend.kind === 'instance' && !w.managed;
+// What each option measures: EC2 instances without an Auto Scaling group (ec2), ECS services (ecs), never what Dormeto
+// manages.
+export interface UptimeKinds { ec2: boolean; ecs: boolean }
+export const measured = (w: Workload, kinds: UptimeKinds = { ec2: true, ecs: false }) =>
+  !w.managed && ((kinds.ec2 && w.backend.kind === 'instance') || (kinds.ecs && w.backend.kind === 'ecs'));
 
-export async function readUptime(cloudwatch: CloudWatchPort, instances: string[], { from, to }: { from: string; to: string }): Promise<Pick<RegionUptime, 'running' | 'unreadable'>> {
+// An instance by its id; an ECS service (arn:aws:ecs:...:service/<cluster>/<service>) by its cluster and name.
+const metricOf = (id: string) => (id.startsWith('arn:') && id.split(':')[2] === 'ecs'
+  ? { Namespace: 'AWS/ECS', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'ClusterName', Value: clusterOf(id) }, { Name: 'ServiceName', Value: id.split('/').at(-1)! }] }
+  : { Namespace: 'AWS/EC2', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'InstanceId', Value: id }] });
+
+export async function readUptime(cloudwatch: CloudWatchPort, ids: string[], { from, to }: { from: string; to: string }): Promise<Pick<RegionUptime, 'running' | 'unreadable'>> {
   const start = Date.parse(from);
   const end = Math.round((Date.parse(to) - start) / MIN_MS);
-  const minutes = new Map<string, number[]>(instances.map((id) => [id, []]));
+  const minutes = new Map<string, number[]>(ids.map((id) => [id, []]));
   const unreadable: Record<string, string> = {};
-  for (let first = 0; first < instances.length; first += PER_CALL) {
-    const batch = instances.slice(first, first + PER_CALL);
+  for (let first = 0; first < ids.length; first += PER_CALL) {
+    const batch = ids.slice(first, first + PER_CALL);
     const queries = batch.map((id, k) => ({
       Id: `u${k}`, ReturnData: true,
-      MetricStat: { Metric: { Namespace: 'AWS/EC2', MetricName: 'CPUUtilization', Dimensions: [{ Name: 'InstanceId', Value: id }] }, Period: PERIOD_MINUTES * 60, Stat: 'SampleCount' },
+      MetricStat: { Metric: metricOf(id), Period: PERIOD_MINUTES * 60, Stat: 'SampleCount' },
     }));
     let token: string | undefined;
     do {
@@ -71,7 +80,7 @@ export async function readUptime(cloudwatch: CloudWatchPort, instances: string[]
   return { running, unreadable };
 }
 
-export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refresh, now, progress = () => {} }: {
+export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refresh, now, progress = () => {}, kinds = { ec2: true, ecs: false } }: {
   regions: RegionDiscovery[];
   requests: RegionRequests[];
   cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>;
@@ -79,31 +88,32 @@ export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refres
   refresh: 'discovery' | 'metrics' | null;
   now: () => number;
   progress?: Progress;
+  kinds?: UptimeKinds;
 }): Promise<RegionUptime[]> {
   const out: RegionUptime[] = [];
   for (const region of regions) {
-    const instances = [...new Set(region.workloads.filter(measured).map((w) => w.backend.id))];
+    const ids = [...new Set(region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id))];
     const period = requests.find((r) => r.account === region.account && r.region === region.region);
-    if (!instances.length || !period) continue;
+    if (!ids.length || !period) continue;
     const where = { account: region.account, region: region.region };
     const path = `uptime/${region.account}-${region.region}.json`;
     const kept = refresh ? null : await cache.get<RegionUptime>(path, freshRequests(now()));
     // Kept while it measures the same period and every instance.
-    if (kept && kept.from === period.from && instances.every((id) => id in kept.running || id in kept.unreadable)) {
+    if (kept && kept.from === period.from && ids.every((id) => id in kept.running || id in kept.unreadable)) {
       out.push(kept);
-      progress({ phase: 'uptime', ...where, from: 'cache', workloads: instances.length });
+      progress({ phase: 'uptime', ...where, from: 'cache', workloads: ids.length });
       continue;
     }
     let read: RegionUptime;
     try {
-      read = { ...where, from: period.from, to: period.to, ...(await readUptime(await cloudwatchOf(region.account, region.region), instances, period)) };
+      read = { ...where, from: period.from, to: period.to, ...(await readUptime(await cloudwatchOf(region.account, region.region), ids, period)) };
       await cache.put(path, read);
-      progress({ phase: 'uptime', ...where, from: 'aws', workloads: instances.length });
+      progress({ phase: 'uptime', ...where, from: 'aws', workloads: ids.length });
     } catch (err) {
-      // Not read at all (a denial, throttling): its instances unreadable with AWS's reason, nothing kept, the run goes on.
+      // Not read at all (a denial, throttling): its instances and services unreadable with AWS's reason, nothing kept, the run goes on.
       const why = `${(err as Error).name}: ${(err as Error).message}`;
-      read = { ...where, from: period.from, to: period.to, running: {}, unreadable: Object.fromEntries(instances.map((id) => [id, why])) };
-      progress({ phase: 'uptime', ...where, from: 'aws', workloads: instances.length, error: why });
+      read = { ...where, from: period.from, to: period.to, running: {}, unreadable: Object.fromEntries(ids.map((id) => [id, why])) };
+      progress({ phase: 'uptime', ...where, from: 'aws', workloads: ids.length, error: why });
     }
     out.push(read);
   }

@@ -10,7 +10,8 @@ CLI script, of the same release).
 - `npm run estimate -- --profile <profile>` (the repository's tool, not in a release): what Dormeto would save on an AWS
   account or organization before anything is installed, with read access only. Discovery, CloudWatch requests and the
   estimate, each cached; a terminal summary, and Markdown and JSON reports. EKS workloads too, read with the profile's
-  own access to each cluster (a column EKS; a cluster it cannot read is listed with the reason).
+  own access to each cluster (a column EKS; a cluster it cannot read is listed with the reason). `--ec2-uptime` and
+  `--ecs-uptime` (`--uptime`: both) count only the hours each EC2 instance ran and each ECS service had a task.
 
 ## 0.10.0 — 2026-10-11
 

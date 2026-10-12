@@ -222,7 +222,7 @@ anything is installed, from a laptop with read access (vision docs/specs/2026-10
 
 ```
 npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
-  [--exclude-tags 'env=dev|test,team=web' ...] [--ec2-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
+  [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
   [--refresh discovery|metrics] [--window 60] [--out <dir>]
 ```
 
@@ -243,7 +243,13 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   (its `CPUUtilization`, which EC2 publishes every 5 minutes while an instance runs): its actual cost counts the hours
   it ran, its savings only the hours Dormeto would nap it while it ran (an instance stopped at night by a schedule saves
   less). An instance found stopped is estimated from the hours it ran (without the option, it is left out). Instances
-  Dormeto already manages, Auto Scaling groups and ECS services are not measured.
+  Dormeto already manages and Auto Scaling groups are not measured.
+- **ECS uptime:** `--ecs-uptime` measures when each ECS service had a task over the 14 days (its `CPUUtilization`, which
+  ECS publishes every minute while the service has a task, and not at 0 tasks): its actual cost and its savings count
+  only those hours, at its desired count when discovered (a service scaled to 0 at night saves less). A service found at
+  0 tasks is estimated as one task from the hours it ran (without the option, it is left out). When it had a task is
+  measured, not how many: a service scaled from 4 tasks to 1 at night stays priced at its count when discovered.
+  Services Dormeto already manages are not measured. `--uptime` sets both `--ec2-uptime` and `--ecs-uptime`.
 - **Three phases:** discovery (discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
   five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`

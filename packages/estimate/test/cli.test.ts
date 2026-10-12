@@ -157,4 +157,14 @@ describe('the estimate command', () => {
     expect(calls.metrics).toBe(2);
     expect(d.out).toContain(`  uptime ${A} ${R}: 1 workload (cache)`);
   });
+
+  it('--uptime: every uptime option, the instances\' measured as with --ec2-uptime', async () => {
+    const { aws } = fakeAws();
+    const d = deps(aws);
+    const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
+    expect(await main(['--profile', 'p', '--uptime', '--out', out], d.deps)).toBe(0);
+    const json = JSON.parse(readFileSync(join(out, 'estimate-2026-10-10.json'), 'utf8'));
+    expect([json.options.ec2Uptime, json.options.ecsUptime]).toEqual([true, true]);
+    expect(json.workloads[0].uptime.hoursPerDay).toBeCloseTo(5 / 60, 9);
+  });
 });

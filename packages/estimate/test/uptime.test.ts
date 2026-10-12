@@ -65,6 +65,28 @@ describe('the measured uptime of EC2 instances', () => {
   });
 });
 
+describe('the measured uptime of ECS services', () => {
+  // ECS publishes a service's CPUUtilization every minute while it has a task, nothing at 0 tasks (read on dev's demo).
+  it('each service\'s running periods from its CPUUtilization by cluster and service; an old ARN names the default cluster', async () => {
+    const asked: { Name: string; Value: string }[][] = [];
+    const port: CloudWatchPort = {
+      getMetricData: async (input) => {
+        asked.push(...input.MetricDataQueries.map((q) => q.MetricStat.Metric.Dimensions));
+        return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: every5(0, 60), Values: every5(0, 60).map(() => 5), StatusCode: 'Complete' })) };
+      },
+    };
+    const api = `arn:aws:ecs:${R}:${A}:service/prod/api`;
+    const old = `arn:aws:ecs:${R}:${A}:service/legacy`;
+    const read = await readUptime(port, [api, old, 'i-web'], { from: FROM, to: TO });
+    expect(read.running).toEqual({ [api]: [[0, 60]], [old]: [[0, 60]], 'i-web': [[0, 60]] });
+    expect(asked).toEqual([
+      [{ Name: 'ClusterName', Value: 'prod' }, { Name: 'ServiceName', Value: 'api' }],
+      [{ Name: 'ClusterName', Value: 'default' }, { Name: 'ServiceName', Value: 'legacy' }],
+      [{ Name: 'InstanceId', Value: 'i-web' }],
+    ]);
+  });
+});
+
 describe('the uptime of every region', () => {
   const w = (name: string, over: Partial<Workload> = {}): Workload => ({
     account: A, region: R, loadBalancer: 'web', loadBalancerArn: 'arn:lb', targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [],
@@ -87,6 +109,24 @@ describe('the uptime of every region', () => {
     expect(calls).toHaveLength(1);
     await run('metrics');
     expect(calls).toHaveLength(2);
+  });
+
+  it('--ecs-uptime measures the ECS services Dormeto does not manage, --ec2-uptime the instances, both with --uptime', async () => {
+    const api = `arn:aws:ecs:${R}:${A}:service/prod/api`;
+    const withEcs: RegionDiscovery[] = [{ ...regions[0]!, workloads: [...regions[0]!.workloads, w('api', { backend: { kind: 'ecs', id: api }, instanceState: undefined, ecsDesired: 0 }), w('demo-ecs', { backend: { kind: 'ecs', id: `arn:aws:ecs:${R}:${A}:service/prod/demo` }, instanceState: undefined, managed: true })] }];
+    const measured = async (kinds: { ec2: boolean; ecs: boolean }) => {
+      const asked: string[] = [];
+      const port: CloudWatchPort = { getMetricData: async (input) => {
+        asked.push(...input.MetricDataQueries.map((q) => q.MetricStat.Metric.Dimensions.map((d) => d.Value).join('/')));
+        return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: [], Values: [], StatusCode: 'Complete' })) };
+      } };
+      const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+      await uptimeAll({ regions: withEcs, requests, cloudwatchOf: async () => port, cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW, kinds });
+      return asked;
+    };
+    expect(await measured({ ec2: false, ecs: true })).toEqual(['prod/api']);
+    expect(await measured({ ec2: true, ecs: false })).toEqual(['i-web', 'i-night']);
+    expect(await measured({ ec2: true, ecs: true })).toEqual(['i-web', 'i-night', 'prod/api']);
   });
 
   it('a region whose uptime cannot be read at all: its instances unreadable with AWS\'s reason, the run goes on', async () => {
