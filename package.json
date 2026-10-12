@@ -7,6 +7,7 @@
     "node": ">=24"
   },
   "workspaces": [
+    "packages/discovery",
     "packages/api",
     "packages/dashboard"
   ],
