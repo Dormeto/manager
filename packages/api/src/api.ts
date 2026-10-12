@@ -1,5 +1,6 @@
 // Manager API: HTTP API (payload 2.0) behind the Cognito JWT authorizer. The routers answer through their controller;
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
+import { DEFAULT_CONFIG, lint, restatus, validateConfig, type Candidate, type DiscoveryStore } from '@dormeto/discovery';
 
 export interface Router {
   name: string;
@@ -9,6 +10,7 @@ export interface Router {
 
 export interface ApiEvent {
   rawPath: string;
+  queryStringParameters?: Record<string, string>;
   requestContext: { http: { method: string }; authorizer?: { jwt?: { claims?: Record<string, string> } } };
   body?: string;
 }
@@ -67,6 +69,12 @@ export interface UsersService {
   setEnabled(email: string, enabled: boolean): Promise<void>;
 }
 
+// Organization discovery: its items in the manager table, and a run on demand (asynchronous Lambda invoke).
+export interface DiscoveryApi {
+  store: DiscoveryStore;
+  run(by: string): Promise<void>;
+}
+
 // A router answered with an error (function error, unknown workload): 502 for the caller.
 export class RouterError extends Error {}
 
@@ -113,6 +121,7 @@ export interface ApiOptions {
   version: string;
   users?: UsersService;
   preferences?: PreferencesStore;
+  discovery?: DiscoveryApi;
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -134,7 +143,7 @@ function roleIn(body: Record<string, unknown>): Role {
   return role;
 }
 
-export function createApi({ routers, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences }: ApiOptions) {
+export function createApi({ routers, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery }: ApiOptions) {
   const routerOf = (name: string | undefined): Router => {
     const router = routers.find((r) => r.name === name);
     if (!router) throw new HttpError(404, 'not_found', `unknown router: ${name}`);
@@ -232,7 +241,10 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
       }
     }
 
-    if (method === 'GET' && resource === 'discovery' && a && !b) return reply(200, await invoke(routerOf(a), { action: 'discover' }));
+    if (resource === 'discovery' && discovery && !b) {
+      const response = await discoveryRoute(method, a, identity, event, discovery);
+      if (response) return response;
+    }
 
     if (method === 'GET' && resource === 'audit' && !a) {
       need(identity, 'admin');
@@ -279,6 +291,64 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
     }
 
     throw new HttpError(404, 'not_found', `no route for ${method} /api/${parts.join('/')}`);
+  }
+
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  async function discoveryRoute(method: string, sub: string | undefined, identity: Identity, event: ApiEvent, d: DiscoveryApi): Promise<ApiResponse | null> {
+    if (method === 'GET' && !sub) {
+      const q = event.queryStringParameters ?? {};
+      const candidates = (await d.store.listCandidates())
+        .filter((c) => (!q.status || c.status === q.status) && (!q.account || c.account === q.account) && (!q.region || c.region === q.region));
+      return reply(200, { lastRun: await d.store.lastRun(), candidates });
+    }
+    if (method === 'POST' && sub === 'run') {
+      need(identity, 'operator');
+      return audited(identity, 'discovery-run', 'discovery', async () => {
+        await d.run(identity.email);
+        return { result: 'requested', response: reply(202, { accepted: true }) };
+      });
+    }
+    if (sub === 'config') {
+      const inventory = (await d.store.getInventory()) ?? { accounts: [], ous: {} };
+      if (method === 'GET') {
+        const stored = await d.store.getConfig();
+        const config = stored?.config ?? DEFAULT_CONFIG;
+        return reply(200, { config, updatedAt: stored?.updatedAt ?? null, updatedBy: stored?.updatedBy ?? null, lint: lint(config, inventory) });
+      }
+      if (method === 'PUT') {
+        need(identity, 'admin');
+        const { config, errors } = validateConfig(bodyOf(event));
+        if (!config) return reply(400, { error: 'bad_request', message: 'invalid configuration', errors });
+        const summary = `${plural(config.filters.length, 'filter')}, ${plural(config.globalExcludes.length, 'global exclude')}, regions ${config.regions.join(' ')}`;
+        return audited(identity, 'discovery-config', 'discovery', async () => {
+          await d.store.putConfig(config, identity.email);
+          return { result: summary, response: reply(200, { config, lint: lint(config, inventory) }) };
+        });
+      }
+    }
+    if (method === 'POST' && (sub === 'dismiss' || sub === 'restore')) {
+      need(identity, 'operator');
+      const body = bodyOf(event);
+      const ids = body.ids;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.length > 100 || ids.some((id) => typeof id !== 'string')) {
+        throw new HttpError(400, 'bad_request', 'ids must be a list of 1 to 100 candidate IDs');
+      }
+      const note = typeof body.note === 'string' ? body.note.slice(0, 256) : undefined;
+      const found = await Promise.all((ids as string[]).map((id) => d.store.getCandidate(id)));
+      const missing = (ids as string[]).filter((_, i) => !found[i]);
+      if (missing.length) throw new HttpError(404, 'not_found', `unknown candidates: ${missing.join(', ')}`);
+      const at = new Date(now()).toISOString();
+      return audited(identity, `discovery-${sub}`, (ids as string[]).join(' '), async () => {
+        const updated = (found as Candidate[]).map((c) => {
+          const { dismissed: _, ...rest } = c;
+          return restatus(sub === 'dismiss' ? { ...rest, dismissed: { by: identity.email, at, ...(note ? { note } : {}) } } : rest, at);
+        });
+        await d.store.putCandidates(updated);
+        return { result: plural(updated.length, 'candidate'), response: reply(200, { candidates: updated }) };
+      });
+    }
+    return null;
   }
 
   return async function handler(event: ApiEvent): Promise<ApiResponse> {

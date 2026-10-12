@@ -88,3 +88,9 @@ export function nextCandidates({ previous, results, inventory, config, now }: {
   }
   return out;
 }
+
+// A stored candidate whose dismissal changed (API dismiss and restore): status and history again, no scan needed.
+export function restatus(candidate: Omit<Candidate, 'dismissed'> & { dismissed?: Candidate['dismissed'] }, at: string): Candidate {
+  const { status: _s, statusReason: _r, history: _h, ...rest } = candidate;
+  return settle(rest, candidate as Candidate, at);
+}

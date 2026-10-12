@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeStatus, nextCandidates } from '../src/lifecycle.js';
+import { computeStatus, nextCandidates, restatus } from '../src/lifecycle.js';
 import type { Candidate, PairResult, ScannedRule } from '../src/types.js';
 import { A, C, INVENTORY, config, filter, rule } from './fixtures.js';
 
@@ -96,5 +96,17 @@ describe('nextCandidates', () => {
     const [now] = run([], [c!], excluded, T1);
     expect([now!.status, now!.statusReason, now!.lastSeenAt]).toEqual(['excluded', `excluded: global exclude 1 (account ${C.id})`, iso(T0)]);
     expect(run([], [now!], excluded, T1 + 1000)).toEqual([]);
+  });
+});
+
+describe('restatus', () => {
+  it('recomputes the status of a stored candidate after a dismissal or a restore, with history', () => {
+    const [c] = run([ok([rule()])]);
+    const dismissed = restatus({ ...c!, dismissed: { by: 'ops@example.com', at: iso(T1), note: 'legacy' } }, iso(T1));
+    expect([dismissed.status, dismissed.statusReason]).toEqual(['dismissed', 'dismissed by ops@example.com: legacy']);
+    const { dismissed: _, ...rest } = dismissed;
+    const restored = restatus(rest, iso(T1 + 1000));
+    expect(restored.status).toBe('pending-onboarding');
+    expect(restored.history.map((h) => h.status)).toEqual(['pending-onboarding', 'dismissed', 'pending-onboarding']);
   });
 });

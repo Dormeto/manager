@@ -135,14 +135,7 @@ describe('actions', () => {
   });
 });
 
-describe('discovery and audit', () => {
-  it('runs the discovery of a router', async () => {
-    const calls: unknown[] = [];
-    const { api } = setup(async (router, payload) => { calls.push(payload); return { candidates: [] }; });
-    expect(json(await api(event('GET', '/api/discovery/dmt-test')))).toEqual({ candidates: [] });
-    expect(calls).toEqual([{ action: 'discover' }]);
-  });
-
+describe('audit', () => {
   it('lists the audit for admins only', async () => {
     const { api } = setup(async () => ({ state: 'WAKING' }));
     await api(event('POST', '/api/workloads/dmt-dev/demo/wake', 'dmt-operator'));

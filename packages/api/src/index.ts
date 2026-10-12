@@ -6,6 +6,7 @@ import {
 import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
+import { createStore } from '@dormeto/discovery';
 import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
@@ -90,8 +91,21 @@ const ses: SesPort = {
   createEmailIdentity: (input) => sesClient.send(new CreateEmailIdentityCommand(input)),
 };
 
+// Discovery: items of the manager table, runs on demand by the discovery Lambda (asynchronous).
+const discovery = {
+  store: createStore({ dynamo, table }),
+  async run(by: string) {
+    await lambdaFor(process.env.AWS_REGION ?? 'eu-west-1').send(new InvokeCommand({
+      FunctionName: process.env.DISCOVERY_FUNCTION,
+      InvocationType: 'Event',
+      Payload: Buffer.from(JSON.stringify({ source: 'manual', by })),
+    }));
+  },
+};
+
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   users: createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '' }),
   preferences,
+  discovery,
 });
