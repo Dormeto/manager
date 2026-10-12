@@ -5,7 +5,7 @@ import { jsonReport, markdownReport, summaryLines } from '../src/report.js';
 
 const workload = (name: string, usd15: number, recommended = 30) => ({
   workload: { account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', loadBalancerArn: 'arn:lb', targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg' as const, id: `${name}-asg` }, stopped: [] },
-  quiet: name === 'docs', atWindow: { usdMonth: usd15, wakesPerDay: 2, asleepHours: 20 }, recommended: { minutes: recommended, usdMonth: usd15 - 1, wakesPerDay: 1 },
+  quiet: name === 'docs', actualMonth: usd15 * 2, atWindow: { usdMonth: usd15, wakesPerDay: 2, asleepHours: 20 }, recommended: { minutes: recommended, usdMonth: usd15 - 1, wakesPerDay: 1 },
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
@@ -17,9 +17,9 @@ const E: Estimate = {
     workloads: { count: 12, unitMonth: 0.13, usdMonth: 1.56 },
     usdMonth: 7.08,
   },
-  totals: { workloads: 12, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08 },
-  byAccount: { '111111111111': { workloads: 12, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82 } },
-  byRegion: { 'eu-west-1': { workloads: 12, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82 } },
+  totals: { workloads: 12, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08, withDormetoMonth: 226.58 },
+  byAccount: { '111111111111': { workloads: 12, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
+  byRegion: { 'eu-west-1': { workloads: 12, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
   workloads: Array.from({ length: 12 }, (_, i) => (i === 5 ? { ...workload('napping', 15), workload: { ...workload('napping', 15).workload, managed: true as const } } : workload(i === 3 ? 'docs' : `app${i}`, 10 + i))),
   leftOut: [{ workload: workload('gpu', 0).workload, reason: 'what it stops has no AWS list price' }],
   ineligible: [{ account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }],
@@ -54,29 +54,58 @@ describe('the estimate\'s reports', () => {
     expect(summaryLines(restricted)[0]).toContain('for 12 workloads in 2 of the organization\'s 28 accounts;');
   });
 
-  it('the totals: a row per account and the total; Dormeto\'s cost by part, each with its computation, and the total', () => {
-    const md = markdownReport(E);
-    expect(md).toContain([
-      '| Account | Name | Workloads | At 1 hour | At the recommended windows | Dormeto | Net at 1 hour |',
-      '|---|---|---|---|---|---|---|',
-      '| 111111111111 | prod | 12 | $180.50 | $168.50 | $1.82 | $178.68 |',
-      '| **Total** | | **12** | **$180.50** | **$168.50** | **$7.08** | **$173.42** |',
+  it('the accounts: a row each and the total, their actual cost, their cost with Dormeto enabled and the savings', () => {
+    expect(markdownReport(E)).toContain([
+      '| Account | Name | Workloads | Actual monthly cost | Cost with Dormeto enabled | Savings |',
+      '|---|---|---|---|---|---|',
+      '| 111111111111 | prod | 12 | $400.00 | $221.32 | 45% |',
+      '| **Total** | | **12** | **$400.00** | **$226.58** | **43%** |',
+      '',
+      'Cost with Dormeto enabled: at a 1-hour idle window, Dormeto\'s cost included; the total includes the manager ($5.00), once per installation.',
     ].join('\n'));
-    expect(md).toContain('The total includes the manager ($5.00), once per installation.');
-    expect(md).toContain([
+  });
+
+  it('Dormeto\'s cost by part, each with its computation, and the cost with Dormeto applied', () => {
+    expect(markdownReport(E)).toContain([
       '| Part | Computation | A month |',
       '|---|---|---|',
       '| Manager | 1 × $5.00: one per installation, whatever the number of accounts and workloads | $5.00 |',
       '| Routers | 2 × $0.26: one per account and region with workloads (111111111111 eu-west-1, 111111111111 eu-west-3) | $0.52 |',
       '| Workloads | 12 × $0.13: each workload\'s naps, wakes and idle checks | $1.56 |',
-      '| **Total** | | **$7.08** |',
+      '| **Dormeto\'s cost** | | **$7.08** |',
+      '| Actual cost | what naps would stop in the 12 workloads, running 24/7 | $400.00 |',
+      '| Savings | at a 1-hour idle window | -$180.50 |',
+      '| **Cost with Dormeto applied** | $400.00 - $180.50 + $7.08 | **$226.58** |',
     ].join('\n'));
+    const paris = markdownReport({ ...E, options: { ...E.options, baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' } } });
+    expect(paris).toContain('| Actual cost | what naps would stop in the 12 workloads, running in business hours (Europe/Paris) | $400.00 |');
   });
 
   it('many routers: their count, not each account and region', () => {
     const where = Array.from({ length: 7 }, (_, i) => ({ account: `11111111111${i}`, region: 'eu-west-1' }));
     const md = markdownReport({ ...E, dormeto: { ...E.dormeto, routers: { count: 7, unitMonth: 0.26, usdMonth: 1.82, where } } });
     expect(md).toContain('| Routers | 7 × $0.26: one per account and region with workloads | $1.82 |');
+  });
+
+  // The visual: the actual cost against the cost with Dormeto, a month, in dollars and percent of the actual cost.
+  const VISUAL = [
+    'Monthly cost of the 12 workloads estimated, at a 1-hour idle window:',
+    `  Actual cost   ${'█'.repeat(40)}  $400.00  100%`,
+    `  With Dormeto  ${'█'.repeat(22)}▋${' '.repeat(17)}  $226.58   57%`,
+    '  Saved: $173.42 a month, 43% of the actual cost',
+  ];
+
+  it('the visual, in the report under the totals and in the terminal under the summary', () => {
+    expect(markdownReport(E)).toContain(['```text', ...VISUAL, '```'].join('\n'));
+    const lines = summaryLines(E);
+    expect(lines.slice(1, 1 + VISUAL.length + 1)).toEqual(['', ...VISUAL]);
+  });
+
+  it('the visual when Dormeto would cost more than it saves', () => {
+    const lines = summaryLines({ ...E, totals: { ...E.totals, actualMonth: 10, usdMonthWindow: 4, withDormetoMonth: 13.09 } });
+    expect(lines).toContain(`  Actual cost   ${'█'.repeat(30)}▌${' '.repeat(9)}  $10.00  100%`);
+    expect(lines).toContain(`  With Dormeto  ${'█'.repeat(40)}  $13.09  131%`);
+    expect(lines).toContain('  Dormeto would cost $3.09 a month more than it saves, 31% of the actual cost');
   });
 
   it('the JSON parses back to the estimate', () => {
@@ -93,6 +122,11 @@ describe('the estimate\'s reports', () => {
       return rows;
     };
     const cells = (rows: string[]) => rows.filter((l) => l.startsWith('  │')).map((l) => l.split('│').slice(1, -1).map((c) => c.trim()));
+    const joints = (l: string) => [...l].flatMap((c, i) => ('┬┼┴│┐┤┘'.includes(c) && i > 2 ? [i] : []));
+    const aligned = (rows: string[]) => {
+      expect(new Set(rows.map((l) => l.length)).size).toBe(1);
+      for (const l of rows) expect(joints(l)).toEqual(joints(rows[1]!));
+    };
     const accounts = table('By account:');
     // Borders: around the table, under the heading, above the total.
     expect(accounts.map((l) => l[2])).toEqual(['┌', '│', '├', '│', '├', '│', '└']);
@@ -100,30 +134,32 @@ describe('the estimate\'s reports', () => {
     expect(accounts[2]).toMatch(/^ {2}├─+┼[─┼]+┤$/);
     expect(accounts[6]).toMatch(/^ {2}└─+┴[─┴]+┘$/);
     expect(cells(accounts)).toEqual([
-      ['Account', 'Name', 'Workloads', 'At 1 hour', 'At the recommended windows', 'Dormeto', 'Net at 1 hour'],
-      ['111111111111', 'prod', '12', '$180.50', '$168.50', '$1.82', '$178.68'],
-      ['Total', '', '12', '$180.50', '$168.50', '$7.08', '$173.42'],
+      ['Account', 'Name', 'Workloads', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+      ['111111111111', 'prod', '12', '$400.00', '$221.32', '45%'],
+      ['Total', '', '12', '$400.00', '$226.58', '43%'],
     ]);
     // Aligned: every line as long, the figures right-aligned under their headings, the columns' borders in line.
-    expect(new Set(accounts.map((l) => l.length)).size).toBe(1);
-    expect(accounts[3]!.indexOf('$180.50 │') + '$180.50'.length).toBe(accounts[1]!.indexOf('At 1 hour │') + 'At 1 hour'.length);
-    const joints = (l: string) => [...l].flatMap((c, i) => ('┬┼┴│┐┤┘'.includes(c) && i > 2 ? [i] : []));
-    for (const l of accounts) expect(joints(l)).toEqual(joints(accounts[1]!));
-    expect(lines[lines.indexOf(accounts[6]!) + 1]).toBe('  The total includes the manager ($5.00), once per installation.');
+    aligned(accounts);
+    expect(accounts[3]!.indexOf('$221.32 │') + '$221.32'.length).toBe(accounts[1]!.indexOf('Cost with Dormeto enabled │') + 'Cost with Dormeto enabled'.length);
+    expect(lines[lines.indexOf(accounts[6]!) + 1]).toBe('  Cost with Dormeto enabled: at a 1-hour idle window, Dormeto\'s cost included; the total includes the manager ($5.00), once per installation.');
     const cost = table('Dormeto\'s cost:');
-    expect(cost).toHaveLength(9);
+    // A rule under the heading, above Dormeto's cost, above the actual cost, above the cost with Dormeto applied.
+    expect(cost.map((l) => l[2])).toEqual(['┌', '│', '├', '│', '│', '│', '├', '│', '├', '│', '│', '├', '│', '└']);
     expect(cells(cost)).toEqual([
       ['Part', 'Computation', 'A month'],
       ['Manager', '1 × $5.00: one per installation, whatever the number of accounts and workloads', '$5.00'],
       ['Routers', '2 × $0.26: one per account and region with workloads (111111111111 eu-west-1, 111111111111 eu-west-3)', '$0.52'],
       ['Workloads', '12 × $0.13: each workload\'s naps, wakes and idle checks', '$1.56'],
-      ['Total', '', '$7.08'],
+      ['Dormeto\'s cost', '', '$7.08'],
+      ['Actual cost', 'what naps would stop in the 12 workloads, running 24/7', '$400.00'],
+      ['Savings', 'at a 1-hour idle window', '-$180.50'],
+      ['Cost with Dormeto applied', '$400.00 - $180.50 + $7.08', '$226.58'],
     ]);
-    expect(new Set(cost.map((l) => l.length)).size).toBe(1);
+    aligned(cost);
   });
 
   it('the terminal\'s accounts: the ten saving the most, the others counted', () => {
-    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39 }]));
+    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, actualMonth: 2 * i, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39, withDormetoMonth: i + 0.39 }]));
     const lines = summaryLines({ ...E, byAccount });
     const from = lines.indexOf('By account:');
     expect(lines[from + 4]).toMatch(/^ {2}│ 100000000011 /);

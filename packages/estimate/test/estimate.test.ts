@@ -1,7 +1,7 @@
 // Phase 3 of the estimate (spec §6): each eligible workload's R10 replay priced by the product's price book, what is
 // left out and why, the totals by account, region and all, net of Dormeto's cost.
 import { describe, expect, it } from 'vitest';
-import { DORMETO_COST, idleWindowAdvice, type StoppedItem } from '@dormeto/fleet';
+import { DORMETO_COST, baselineHours, idleWindowAdvice, type StoppedItem } from '@dormeto/fleet';
 import type { Reached } from '../src/accounts.js';
 import type { RegionDiscovery, Workload } from '../src/discover.js';
 import { estimateAll } from '../src/estimate.js';
@@ -106,6 +106,27 @@ describe('the estimate', () => {
     const merged = [...daily, ...evening].sort((x, y) => x[0] - y[0]);
     expect(e.workloads[0]!.atWindow.usdMonth).toBeCloseTo(row(await advise(merged, [T3]), 60).usdMonth!, 9);
     expect(e.leftOut).toEqual([{ workload: b, reason: 'its backend (asg shared-asg) also serves shop-a: estimated there, with every target group\'s requests' }]);
+  });
+
+  it('each workload\'s actual cost a month: what its naps would stop, running every hour of the baseline, as the savings are priced', async () => {
+    const e = await run();
+    const shop = e.workloads.find((x) => x.workload.targetGroup === 'shop')!;
+    // $0.0456 an hour (the price book's, for both instances), 30 days of 24 hours.
+    expect(shop.actualMonth).toBeCloseTo(0.0456 * 720, 9);
+    expect(shop.atWindow.usdMonth).toBeLessThan(shop.actualMonth);
+    const paris = { kind: 'business-hours' as const, timeZone: 'Europe/Paris' };
+    const within = (await run({ baseline: paris })).workloads.find((x) => x.workload.targetGroup === 'shop')!;
+    expect(within.actualMonth).toBeCloseTo((0.0456 * baselineHours(FROM, TO, paris) * 30) / 14, 9);
+  });
+
+  it('the totals\' actual cost and their cost with Dormeto enabled: the actual cost less the savings, plus Dormeto\'s cost', async () => {
+    const e = await run();
+    expect(e.totals.actualMonth).toBeCloseTo(e.workloads.reduce((n, x) => n + x.actualMonth, 0), 9);
+    expect(e.totals.withDormetoMonth).toBeCloseTo(e.totals.actualMonth - e.totals.usdMonthWindow + e.totals.dormetoMonth, 9);
+    const a = e.byAccount[A]!;
+    expect(a.actualMonth).toBeCloseTo(e.workloads.filter((x) => x.workload.account === A).reduce((n, x) => n + x.actualMonth, 0), 9);
+    // An account's: its routers and workloads, the manager in the total only.
+    expect(a.withDormetoMonth).toBeCloseTo(a.actualMonth - a.usdMonthWindow + DORMETO_COST.router + 2 * DORMETO_COST.workload, 9);
   });
 
   it('no workload to estimate: Dormeto costs nothing, not even the manager', async () => {

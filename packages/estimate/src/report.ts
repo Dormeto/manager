@@ -23,6 +23,8 @@ export function summaryLines(e: Estimate): string[] {
     `About ${usd(t.usdMonthWindow)} a month at a ${windowAdjective(e.options.window)} idle window (${usd(t.usdMonthRecommended)} at the recommended windows) for ${n(t.workloads, 'workload')} in ${restricted(e) ? `${e.accounts} of the organization's ${n(e.accountsListed, 'account')}` : n(e.accounts, 'account')}; Dormeto costs about ${usd(t.dormetoMonth)} a month: net about ${usd(net(t))}.`,
   ];
   if (e.why) lines.push(e.why);
+  const visual = costVisual(e);
+  if (visual.length) lines.push('', ...visual);
   if (t.workloads) {
     const accounts = accountsTable(e, TERMINAL_ACCOUNTS);
     lines.push('', 'By account:', ...textTable(accounts));
@@ -44,64 +46,102 @@ export function summaryLines(e: Estimate): string[] {
 }
 
 // A table of the totals, as Markdown in the report and as aligned text in the terminal: its heading, which columns are
-// figures (right-aligned as text), its rows, its total row and a note.
-interface Table { head: string[]; figures: boolean[]; rows: string[][]; total: string[]; note: string | null }
+// figures (right-aligned as text), its groups of rows (a rule between them as text; a strong row's label and figures in
+// bold as Markdown) and a note.
+interface Row { cells: string[]; strong?: boolean }
+interface Table { head: string[]; figures: boolean[]; groups: Row[][]; note: string | null }
 
 const markdownTable = (t: Table) => {
   const row = (cells: string[]) => `|${cells.map((c) => (c ? ` ${c} ` : ' ')).join('|')}|`;
-  return [
-    row(t.head), `|${t.head.map(() => '---').join('|')}|`, ...t.rows.map((r) => row(r.map(cell))),
-    row(t.total.map((c) => (c ? `**${c}**` : ''))), ...(t.note ? ['', t.note] : []),
-  ];
+  const strong = (r: Row) => r.cells.map((c, i) => (r.strong && c && (i === 0 || t.figures[i]) ? `**${cell(c)}**` : cell(c)));
+  return [row(t.head), `|${t.head.map(() => '---').join('|')}|`, ...t.groups.flat().map((r) => row(strong(r))), ...(t.note ? ['', t.note] : [])];
 };
 
-// Bordered: around the table, under the heading, above the total.
+// Bordered: around the table, under the heading, between its groups.
 const textTable = (t: Table) => {
-  const widths = t.head.map((_, i) => Math.max(...[t.head, ...t.rows, t.total].map((r) => r[i]!.length)));
+  const widths = t.head.map((_, i) => Math.max(...[t.head, ...t.groups.flat().map((r) => r.cells)].map((r) => r[i]!.length)));
   const line = (r: string[]) => `  │ ${r.map((c, i) => (t.figures[i] ? c.padStart(widths[i]!) : c.padEnd(widths[i]!))).join(' │ ')} │`;
   const rule = (left: string, joint: string, right: string) => `  ${left}${widths.map((w) => '─'.repeat(w + 2)).join(joint)}${right}`;
   return [
-    rule('┌', '┬', '┐'), line(t.head), rule('├', '┼', '┤'), ...t.rows.map(line), rule('├', '┼', '┤'), line(t.total), rule('└', '┴', '┘'),
+    rule('┌', '┬', '┐'), line(t.head), ...t.groups.flatMap((g) => [rule('├', '┼', '┤'), ...g.map((r) => line(r.cells))]), rule('└', '┴', '┘'),
     ...(t.note ? [`  ${t.note}`] : []),
   ];
 };
 
-// The accounts' totals, a row each (at most `limit`, those saving the most), and the total (the manager in its
-// Dormeto cost).
+// What Dormeto would save of an actual cost, cost with Dormeto included.
+const saved = (t: Totals) => (t.actualMonth ? `${Math.round(((t.actualMonth - t.withDormetoMonth) / t.actualMonth) * 100)}%` : '');
+
+// The accounts, a row each (at most `limit`, those saving the most), and the total (the manager in its cost with Dormeto).
 function accountsTable(e: Estimate, limit = Infinity): Table & { more: number } {
-  const at = `At ${windowWords(e.options.window)}`;
   const name = (account: string) => (e.accountNames[account] && e.accountNames[account] !== account ? e.accountNames[account]! : '');
   const t = e.totals;
   const accounts = Object.entries(e.byAccount);
   const shown = limit < accounts.length ? [...accounts].sort((a, b) => b[1].usdMonthWindow - a[1].usdMonthWindow).slice(0, limit) : accounts;
+  const manager = e.dormeto.manager.count ? `; the total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation` : '';
   return {
-    head: ['Account', 'Name', 'Workloads', at, 'At the recommended windows', 'Dormeto', `Net ${at.toLowerCase()}`],
-    figures: [false, false, true, true, true, true, true],
-    rows: shown.map(([account, a]) => [account, name(account), String(a.workloads), usd(a.usdMonthWindow), usd(a.usdMonthRecommended), usd(a.dormetoMonth), usd(net(a))]),
-    total: ['Total', '', String(t.workloads), usd(t.usdMonthWindow), usd(t.usdMonthRecommended), usd(t.dormetoMonth), usd(net(t))],
-    note: e.dormeto.manager.count ? `The total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation.` : null,
+    head: ['Account', 'Name', 'Workloads', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+    figures: [false, false, true, true, true, true],
+    groups: [
+      shown.map(([account, a]) => ({ cells: [account, name(account), String(a.workloads), usd(a.actualMonth), usd(a.withDormetoMonth), saved(a)] })),
+      [{ cells: ['Total', '', String(t.workloads), usd(t.actualMonth), usd(t.withDormetoMonth), saved(t)], strong: true }],
+    ],
+    note: `Cost with Dormeto enabled: at a ${windowAdjective(e.options.window)} idle window, Dormeto's cost included${manager}.`,
     more: accounts.length - shown.length,
   };
 }
 
 // Each account and region with a router, while they are few enough to read.
 const ROUTERS_LISTED = 6;
-// Dormeto's cost by part, each with its computation, and the total.
+// Dormeto's cost by part, each with its computation, and its total; then the actual cost, the savings and the cost with
+// Dormeto applied.
 function costTable(e: Estimate): Table {
   const { manager, routers, workloads } = e.dormeto;
+  const t = e.totals;
+  const b = e.options.baseline;
   const times = (p: { count: number; unitMonth: number }) => `${p.count} × ${usd(p.unitMonth)}`;
   const where = routers.where.length && routers.where.length <= ROUTERS_LISTED ? ` (${routers.where.map((w) => `${w.account} ${w.region}`).join(', ')})` : '';
   return {
     head: ['Part', 'Computation', 'A month'],
     figures: [false, false, true],
-    rows: [
-      ['Manager', `${times(manager)}: one per installation, whatever the number of accounts and workloads`, usd(manager.usdMonth)],
-      ['Routers', `${times(routers)}: one per account and region with workloads${where}`, usd(routers.usdMonth)],
-      ['Workloads', `${times(workloads)}: each workload's naps, wakes and idle checks`, usd(workloads.usdMonth)],
+    groups: [
+      [
+        { cells: ['Manager', `${times(manager)}: one per installation, whatever the number of accounts and workloads`, usd(manager.usdMonth)] },
+        { cells: ['Routers', `${times(routers)}: one per account and region with workloads${where}`, usd(routers.usdMonth)] },
+        { cells: ['Workloads', `${times(workloads)}: each workload's naps, wakes and idle checks`, usd(workloads.usdMonth)] },
+      ],
+      [{ cells: ['Dormeto\'s cost', '', usd(e.dormeto.usdMonth)], strong: true }],
+      [
+        { cells: ['Actual cost', `what naps would stop in the ${n(t.workloads, 'workload')}, running ${b.kind === 'always' ? '24/7' : `in business hours (${b.timeZone})`}`, usd(t.actualMonth)] },
+        { cells: ['Savings', `at a ${windowAdjective(e.options.window)} idle window`, usd(-t.usdMonthWindow)] },
+      ],
+      [{ cells: ['Cost with Dormeto applied', `${usd(t.actualMonth)} - ${usd(t.usdMonthWindow)} + ${usd(t.dormetoMonth)}`, usd(t.withDormetoMonth)], strong: true }],
     ],
-    total: ['Total', '', usd(e.dormeto.usdMonth)],
     note: null,
   };
+}
+
+// The visual: the actual cost against the cost with Dormeto, a month, bars on one scale (the larger 40 characters, to an
+// eighth), in dollars and percent of the actual cost.
+const BAR = 40;
+function costVisual(e: Estimate): string[] {
+  const t = e.totals;
+  if (!t.actualMonth) return [];
+  const most = Math.max(t.actualMonth, t.withDormetoMonth);
+  const bar = (v: number) => {
+    const eighths = Math.round((Math.max(0, v) / most) * BAR * 8);
+    return `${'█'.repeat(Math.floor(eighths / 8))}${eighths % 8 ? '▏▎▍▌▋▊▉'[(eighths % 8) - 1] : ''}`.padEnd(BAR);
+  };
+  const values = [usd(t.actualMonth), usd(t.withDormetoMonth)];
+  const width = Math.max(...values.map((v) => v.length));
+  const percent = (v: number) => `${Math.round((v / t.actualMonth) * 100)}%`.padStart(4);
+  const net = t.actualMonth - t.withDormetoMonth;
+  const share = `${Math.round((Math.abs(net) / t.actualMonth) * 100)}% of the actual cost`;
+  return [
+    `Monthly cost of the ${n(t.workloads, 'workload')} estimated, at a ${windowAdjective(e.options.window)} idle window:`,
+    `  Actual cost   ${bar(t.actualMonth)}  ${values[0]!.padStart(width)}  ${percent(t.actualMonth)}`,
+    `  With Dormeto  ${bar(t.withDormetoMonth)}  ${values[1]!.padStart(width)}  ${percent(t.withDormetoMonth)}`,
+    net >= 0 ? `  Saved: ${usd(net)} a month, ${share}` : `  Dormeto would cost ${usd(-net)} a month more than it saves, ${share}`,
+  ];
 }
 
 // The terminal's accounts: those saving the most.
@@ -116,6 +156,7 @@ export function markdownReport(e: Estimate): string {
     ...(e.why ? [`> ${e.why}`, ''] : []),
     '## Totals', '',
     `Dormeto would save about **${usd(t.usdMonthWindow)} a month** with a ${windowAdjective(o.window)} idle window (${usd(t.usdMonthRecommended)} with each workload's recommended window), for ${n(t.workloads, 'workload')}. Dormeto itself costs about ${usd(t.dormetoMonth)} a month: **net about ${usd(net(t))}**.`, '',
+    ...(costVisual(e).length ? ['```text', ...costVisual(e), '```', ''] : []),
     '### By account', '',
     ...markdownTable(accountsTable(e)), '',
     '### Dormeto\'s cost', '',

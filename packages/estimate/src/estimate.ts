@@ -2,7 +2,7 @@
 // requests replayed by the product's idle window advisor (R10) and priced by its price book, at the report's window
 // (--window, an hour by default) and at the recommended one; what cannot be estimated, with the reason; the totals by account,
 // region and all, net of Dormeto's cost. Conservative where the facts are unknown before install (decision 5).
-import { DORMETO_COST, idleWindowAdvice, type Baseline, type StoppedItem } from '@dormeto/fleet';
+import { DORMETO_COST, idleWindowAdvice, savingsOf, type Baseline, type StoppedItem } from '@dormeto/fleet';
 import type { Reached, Unreachable } from './accounts.js';
 import type { Ineligible, RegionDiscovery, Workload } from './discover.js';
 import type { Options } from './options.js';
@@ -13,12 +13,16 @@ const WAKE_MS = 60_000;
 export interface WorkloadEstimate {
   workload: Workload;
   quiet: boolean; // no request in 14 days
+  // What its naps would stop, running every hour of the baseline: its cost a month now.
+  actualMonth: number;
   // At the report's window (options.window).
   atWindow: { usdMonth: number; wakesPerDay: number; asleepHours: number };
   recommended: { minutes: number; usdMonth: number; wakesPerDay: number };
 }
 export interface LeftOut { workload: Workload; reason: string }
-export interface Totals { workloads: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number }
+// withDormetoMonth: the actual cost less the savings at the report's window, plus Dormeto's cost (an account's: its
+// routers and workloads; the total's: the manager too).
+export interface Totals { workloads: number; actualMonth: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number; withDormetoMonth: number }
 // Dormeto's cost by part: how many, the cost of one a month, theirs.
 export interface CostPart { count: number; unitMonth: number; usdMonth: number }
 export interface DormetoCost { manager: CostPart; routers: CostPart & { where: { account: string; region: string }[] }; workloads: CostPart; usdMonth: number }
@@ -56,7 +60,7 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
   ];
 }
 
-const empty = (): Totals => ({ workloads: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0 });
+const empty = (): Totals => ({ workloads: 0, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
 
 export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now }: {
   reached: Reached;
@@ -115,8 +119,11 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
       const at = row(options.window);
       const best = row(advice.recommended);
+      // Its cost now: asleep never, priced as the savings are (the same baseline, prices and month).
+      const always = await savingsOf([{ state: 'ASLEEP', from: read.from, to: read.to, stopped: workload.stopped }], { hourly: (item) => hourly(workload.region, item).catch(() => null), baseline });
+      const days = (Date.parse(read.to) - Date.parse(read.from)) / 86_400_000;
       workloads.push({
-        workload, quiet: minutes.length === 0,
+        workload, quiet: minutes.length === 0, actualMonth: (always.usd * 30) / days,
         atWindow: { usdMonth: at.usdMonth!, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
         recommended: { minutes: advice.recommended, usdMonth: best.usdMonth!, wakesPerDay: best.wakesPerDay },
       });
@@ -133,12 +140,14 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
     routed.add(where);
     for (const t of [totals, (byAccount[x.workload.account] ??= empty()), (byRegion[x.workload.region] ??= empty())]) {
       t.workloads += 1;
+      t.actualMonth += x.actualMonth;
       t.usdMonthWindow += x.atWindow.usdMonth;
       t.usdMonthRecommended += x.recommended.usdMonth;
       t.dormetoMonth += router + DORMETO_COST.workload;
     }
   }
   if (workloads.length) totals.dormetoMonth += DORMETO_COST.manager;
+  for (const t of [totals, ...Object.values(byAccount), ...Object.values(byRegion)]) t.withDormetoMonth = t.actualMonth - t.usdMonthWindow + t.dormetoMonth;
   const part = (count: number, unitMonth: number): CostPart => ({ count, unitMonth, usdMonth: count * unitMonth });
   const dormeto: DormetoCost = {
     manager: part(workloads.length ? 1 : 0, DORMETO_COST.manager),
