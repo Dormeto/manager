@@ -57,7 +57,7 @@ data "aws_iam_policy_document" "operations" {
   statement {
     sid       = "OperationItems"
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
-    resources = [aws_dynamodb_table.manager.arn]
+    resources = [aws_dynamodb_table.manager.arn, "${aws_dynamodb_table.manager.arn}/index/*"]
   }
   statement {
     sid       = "RouterBundle"

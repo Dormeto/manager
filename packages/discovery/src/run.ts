@@ -137,9 +137,10 @@ async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => 
   for (const [group, merged] of Map.groupBy(superseded.map((id) => previous.get(id)!), (c) => groupOf.get(c.id)!)) {
     if (!previous.has(group)) previous.set(group, mergedCandidate(group, merged));
   }
+  const supersededCandidates = superseded.map((id) => previous.get(id)!);
   for (const id of superseded) previous.delete(id);
   if (superseded.length) {
-    await deps.store.deleteCandidates(superseded);
+    await deps.store.deleteCandidates(supersededCandidates);
     log.info('DiscoveryCandidatesMerged', { count: superseded.length });
   }
   // With regions ["*"], an account without credentials has no known regions: its candidates' regions count as failed.

@@ -84,18 +84,30 @@ export function createRecords({ dynamo, table, now = Date.now }: { dynamo: Dynam
     }
   }
 
+  const operationItem = (op: Operation): Item => ({
+    ...key(`OP#${op.id}`), data: { S: JSON.stringify(op) }, status: { S: op.status },
+    gsi1pk: { S: 'OPS' }, gsi1sk: { S: `${op.createdAt}#${op.id}` }, expiresAt: { N: String(seconds(Date.parse(op.createdAt)) + RETENTION_S) },
+  });
+
   return {
+    // Indexed by creation time on gsi1 (scale design §4): the list reads the newest ones only.
     async putOperation(op: Operation) {
-      await dynamo.send(new PutItemCommand({
-        TableName: table,
-        Item: { ...key(`OP#${op.id}`), data: { S: JSON.stringify(op) }, status: { S: op.status }, expiresAt: { N: String(seconds(Date.parse(op.createdAt)) + RETENTION_S) } },
-      }));
+      await dynamo.send(new PutItemCommand({ TableName: table, Item: operationItem(op) }));
     },
     async getOperation(id: string) {
       return data<Operation>(await get(`OP#${id}`));
     },
     async listOperations(limit = 100) {
-      return (await query('OP#')).map((i) => data<Operation>(i)!).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
+      const page = await dynamo.send(new QueryCommand({
+        TableName: table, IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': { S: 'OPS' } }, ScanIndexForward: false, Limit: limit,
+      }));
+      return ((page.Items ?? []) as Item[]).map((i) => data<Operation>(i)!).filter(Boolean);
+    },
+    // Operations of versions before R4.5 (without the time index): indexed, once (dev migration).
+    async indexOperations() {
+      const legacy = (await query('OP#')).filter((i) => !i.gsi1pk).map((i) => data<Operation>(i)!).filter(Boolean);
+      for (const op of legacy) await dynamo.send(new PutItemCommand({ TableName: table, Item: operationItem(op) }));
+      return legacy.length;
     },
 
     // One operation per target (target group, router, account-region): a second request learns the running operation.

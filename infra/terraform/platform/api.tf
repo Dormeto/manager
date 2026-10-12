@@ -14,6 +14,21 @@ resource "aws_dynamodb_table" "manager" {
     name = "sk"
     type = "S"
   }
+  attribute {
+    name = "gsi1pk"
+    type = "S"
+  }
+  attribute {
+    name = "gsi1sk"
+    type = "S"
+  }
+  # Listings (scale design §4): candidates by status (CS#<status>), operations by time (OPS).
+  global_secondary_index {
+    name            = "gsi1"
+    hash_key        = "gsi1pk"
+    range_key       = "gsi1sk"
+    projection_type = "ALL"
+  }
   ttl {
     attribute_name = "expiresAt"
     enabled        = true
@@ -69,7 +84,7 @@ data "aws_iam_policy_document" "api" {
     # Audit, preferences and discovery items (configuration, dismissals, manual exclusions: DeleteItem lifts one).
     sid       = "ManagerItems"
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:BatchWriteItem", "dynamodb:DeleteItem"]
-    resources = [aws_dynamodb_table.manager.arn]
+    resources = [aws_dynamodb_table.manager.arn, "${aws_dynamodb_table.manager.arn}/index/*"]
   }
   statement {
     sid = "Users"

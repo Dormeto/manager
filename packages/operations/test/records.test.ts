@@ -29,6 +29,22 @@ describe('operation records', () => {
     expect(dynamo.items.get('OP#a')!.expiresAt).toEqual({ N: String(T0 / 1000 + 90 * 86_400) });
   });
 
+  it('lists operations newest first through the time index, with a limit', async () => {
+    const { records, dynamo } = setup();
+    for (const [id, at] of [['a', '2026-10-05T10:00:00.000Z'], ['b', '2026-10-05T12:00:00.000Z'], ['c', '2026-10-05T11:00:00.000Z']] as const) await records.putOperation(operation(id, { createdAt: at }));
+    expect((await records.listOperations(2)).map((o) => o.id)).toEqual(['b', 'c']);
+    expect([dynamo.items.get('OP#a')!.gsi1pk!.S, dynamo.items.get('OP#a')!.gsi1sk!.S]).toEqual(['OPS', '2026-10-05T10:00:00.000Z#a']);
+  });
+
+  it('indexes the operations of earlier versions by time, once', async () => {
+    const { records, dynamo } = setup();
+    const legacy = operation('old', { createdAt: '2026-10-04T10:00:00.000Z' });
+    dynamo.items.set('OP#old', { pk: { S: 'T#default' }, sk: { S: 'OP#old' }, data: { S: JSON.stringify(legacy) }, status: { S: legacy.status } });
+    expect(await records.indexOperations()).toBe(1);
+    expect(await records.indexOperations()).toBe(0);
+    expect((await records.listOperations()).map((o) => o.id)).toEqual(['old']);
+  });
+
   it('claims a target for one operation: a second claim names the running one; the claim expires', async () => {
     const { records, advance } = setup();
     expect(await records.claimActive('TG#arn:tg', 'op1', 60 * MIN)).toEqual({ ok: true });

@@ -130,6 +130,15 @@ export type Status =
   | 'out-of-scope'
   | 'excluded'
   | 'gone';
+export const CANDIDATE_STATUSES: readonly Status[] = ['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible', 'dismissed', 'excluded', 'out-of-scope', 'gone'];
+
+// Scan state of an account (R4.5): when it and each of its regions were last scanned, and for how many successive runs a
+// region had no application load balancer (scanned less often).
+export interface AccountScan {
+  account: string;
+  scannedAt: string;
+  regions: Record<string, { scannedAt: string; emptyRuns: number }>;
+}
 
 export interface Candidate extends ScannedRule {
   accountName: string;

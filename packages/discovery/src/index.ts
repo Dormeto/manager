@@ -6,5 +6,5 @@ export { covers, lint } from './lint.js';
 export { computeStatus, nextCandidates, rescope, restatus } from './lifecycle.js';
 export { activeExclusions, exclusionCriterion, withExclusions } from './exclusions.js';
 export { loadInventory, type OrganizationsPort } from './org.js';
-export { createStore, type DiscoveryStore, type DynamoSender, type StoredConfig } from './store.js';
+export { InvalidCursor, createStore, type DiscoveryStore, type DynamoSender, type StoredConfig } from './store.js';
 export { runDiscovery, type RunDeps } from './run.js';

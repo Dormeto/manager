@@ -33,6 +33,12 @@ export function fakeDynamo() {
         return {};
       }
       case 'QueryCommand': {
+        // The time index of operations: gsi1pk = :pk, newest first when asked, with a limit.
+        if (input.IndexName === 'gsi1') {
+          let found = [...items.values()].filter((i) => i.gsi1pk?.S === input.ExpressionAttributeValues[':pk'].S).sort((a, b) => (a.gsi1sk!.S! < b.gsi1sk!.S! ? -1 : 1));
+          if (input.ScanIndexForward === false) found.reverse();
+          return { Items: found.slice(0, input.Limit ?? Infinity) };
+        }
         const prefix = input.ExpressionAttributeValues[':prefix'].S as string;
         return { Items: [...items.keys()].filter((k) => k.startsWith(prefix)).sort().map((k) => items.get(k)) };
       }

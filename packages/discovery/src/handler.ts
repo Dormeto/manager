@@ -17,7 +17,9 @@ const write = (level: string) => (event: string, data: object = {}) => console.l
 const log: Logger = { info: write('info'), warn: write('warn'), error: write('error') };
 let managerAccount: string | undefined;
 
-export const handler = async (event: { source?: string; by?: string } = {}) => {
+export const handler = async (event: { source?: string; by?: string; action?: string } = {}) => {
+  // One-off: candidates of versions before R4.5 moved to their account partition (dev migration).
+  if (event.action === 'migrate') return { migrated: await store.migrateCandidates() };
   managerAccount ??= (await sts.send(new GetCallerIdentityCommand({}))).Account ?? '';
   const run = await runDiscovery({
     store,

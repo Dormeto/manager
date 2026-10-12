@@ -16,7 +16,16 @@ export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null 
     async listCandidates() { return [...items.values()]; },
     async getCandidate(id: string) { return items.get(id) ?? null; },
     async putCandidates(list: Candidate[]) { for (const c of list) items.set(c.id, c); },
-    async deleteCandidates(ids: string[]) { for (const id of ids) items.delete(id); },
+    async deleteCandidates(list: Pick<Candidate, 'id'>[]) { for (const c of list) items.delete(c.id); },
+    async pageCandidates({ status, limit, cursor }: { status: Candidate['status']; limit: number; cursor?: string }) {
+      const all = [...items.values()].filter((c) => c.status === status);
+      const start = cursor ? Number(cursor) : 0;
+      return { candidates: all.slice(start, start + limit), cursor: start + limit < all.length ? String(start + limit) : null };
+    },
+    async accountCandidates(account: string) { return [...items.values()].filter((c) => c.account === account); },
+    async getAccountScan() { return null; },
+    async putAccountScan() {},
+    async migrateCandidates() { return 0; },
     async getInventory(): Promise<OrgInventory | null> { return { accounts: [{ id: '121014831971', name: 'dormeto', ouPath: ['r-1u0b'], tags: {} }], ous: { 'r-1u0b': { name: 'Root', parent: null } } }; },
     async putInventory() {},
     exclusions: new Map<string, Exclusion>(),

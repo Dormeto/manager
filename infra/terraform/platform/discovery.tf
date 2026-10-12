@@ -25,7 +25,7 @@ data "aws_iam_policy_document" "discovery" {
   statement {
     sid       = "DiscoveryItems"
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
-    resources = [aws_dynamodb_table.manager.arn]
+    resources = [aws_dynamodb_table.manager.arn, "${aws_dynamodb_table.manager.arn}/index/*"]
   }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
