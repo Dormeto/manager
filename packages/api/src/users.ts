@@ -50,7 +50,7 @@ async function mapped<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cognito: CognitoPort; ses: SesPort; userPoolId: string; sender?: 'ses' | 'cognito' }): UsersService & { mfaEnabled(username: string): Promise<boolean> } {
+export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cognito: CognitoPort; ses: SesPort; userPoolId: string; sender?: 'ses' | 'cognito' }): UsersService & { mfaEnabled(username: string, options?: { activate?: boolean }): Promise<boolean> } {
   // Any address receives Cognito's own email, and SES in production.
   async function inProduction() {
     return sender === 'cognito' || (await ses.getAccount()).ProductionAccessEnabled === true;
@@ -83,8 +83,21 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
     return names;
   }
 
-  // An authenticator app set up: TOTP among the user's MFA settings.
-  const mfaEnabled = async (username: string) => ((await cognito.adminGetUser({ UserPoolId: userPoolId, Username: username })).UserMFASettingList ?? []).includes('SOFTWARE_TOKEN_MFA');
+  // An authenticator app set up: TOTP among the user's MFA settings. activate (policy required): managed login's MFA_SETUP
+  // registers a verified authenticator without turning TOTP on in the user's settings, so it is turned on here — Cognito
+  // refuses that to a user without a verified authenticator, which then counts as none (seen live, R6c review).
+  async function mfaEnabled(username: string, { activate = false } = {}) {
+    const input = { UserPoolId: userPoolId, Username: username };
+    if (((await cognito.adminGetUser(input)).UserMFASettingList ?? []).includes('SOFTWARE_TOKEN_MFA')) return true;
+    if (!activate) return false;
+    try {
+      await cognito.adminSetUserMFAPreference({ ...input, SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true } });
+      return true;
+    } catch (err) {
+      if ((err as Error).name === 'InvalidParameterException') return false;
+      throw err;
+    }
+  }
   // Five at a time: the Users view reads every user's MFA.
   async function inFives<T, R>(items: T[], each: (item: T) => Promise<R>): Promise<R[]> {
     const out: R[] = [];

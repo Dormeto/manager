@@ -134,3 +134,35 @@ describe('users service: review M4', () => {
     expect((await users.list())[0]!.mfa).toBeNull();
   });
 });
+
+describe('users service: MFA set up at sign-in (review I3, found live)', () => {
+  // Under required, managed login's MFA_SETUP registers a verified authenticator without turning TOTP on in the user's
+  // settings (UserMFASettingList empty): turning it on succeeds for such a user only.
+  function cognitoWith(registered: Set<string>) {
+    const settings = new Map<string, string[]>();
+    return {
+      settings,
+      port: {
+        async listUsers() { return { Users: [] }; }, async listUsersInGroup() { return { Users: [] }; },
+        async adminCreateUser() { return {}; }, async adminAddUserToGroup() { return {}; }, async adminRemoveUserFromGroup() { return {}; },
+        async adminDisableUser() { return {}; }, async adminEnableUser() { return {}; },
+        async adminGetUser({ Username }: { Username: string }) { return { UserMFASettingList: settings.get(Username) ?? [] }; },
+        async adminSetUserMFAPreference({ Username, SoftwareTokenMfaSettings }: { Username: string; SoftwareTokenMfaSettings: { Enabled: boolean } }) {
+          if (SoftwareTokenMfaSettings.Enabled && !registered.has(Username)) throw Object.assign(new Error('User does not have delivery config set to turn on SOFTWARE_TOKEN_MFA'), { name: 'InvalidParameterException' });
+          settings.set(Username, SoftwareTokenMfaSettings.Enabled ? ['SOFTWARE_TOKEN_MFA'] : []);
+          return {};
+        },
+      },
+    };
+  }
+  const ses = { getAccount: async () => ({}), getEmailIdentity: async () => ({}), createEmailIdentity: async () => ({}) };
+
+  it('with activate (required), a user with a verified authenticator but TOTP off is turned on, and counts as enrolled', async () => {
+    const c = cognitoWith(new Set(['u-setup']));
+    const users = createUsers({ cognito: c.port, ses, userPoolId: 'pool', sender: 'cognito' });
+    expect(await users.mfaEnabled('u-setup')).toBe(false);
+    expect(await users.mfaEnabled('u-setup', { activate: true })).toBe(true);
+    expect(c.settings.get('u-setup')).toEqual(['SOFTWARE_TOKEN_MFA']);
+    expect(await users.mfaEnabled('u-none', { activate: true })).toBe(false);
+  });
+});
