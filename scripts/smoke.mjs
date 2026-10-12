@@ -52,11 +52,16 @@ if (first) {
   check(status.status === 200 && status.body?.workloadId === first.workloadId && Array.isArray(status.body?.backends), `status of ${first.workloadId}`,
     `${status.body?.state}, route ${status.body?.route}, ${status.body?.backends?.length} backends (${status.ms} ms)`);
 }
-for (const router of routers.body?.routers ?? []) {
-  const discovery = await call(`/discovery/${router.name}`, { token });
-  const managed = (discovery.body?.candidates ?? []).filter((c) => c.status === 'managed').length;
-  check(discovery.status === 200 && managed === router.workloads, `discovery of ${router.name}`, `${discovery.body?.candidates?.length} rules, ${managed} managed (${discovery.ms} ms)`);
-}
+// Organization discovery: once a run succeeded, every workload of the routers is a managed candidate.
+const discovery = await call('/discovery', { token });
+const lastRun = discovery.body?.lastRun;
+const managed = (discovery.body?.candidates ?? []).filter((c) => c.status === 'managed').length;
+const expected = (routers.body?.routers ?? []).reduce((n, r) => n + (r.workloads ?? 0), 0);
+check(discovery.status === 200 && (!['ok', 'partial'].includes(lastRun?.status) || managed >= expected), 'discovery',
+  `last run ${lastRun?.status ?? 'none'}${lastRun ? ` ${lastRun.startedAt}` : ''}, ${discovery.body?.candidates?.length} candidates, ${managed} managed of ${expected} workloads (${discovery.ms} ms)`);
+const perimeter = await call('/discovery/config', { token });
+check(perimeter.status === 200 && Array.isArray(perimeter.body?.config?.filters), 'discovery perimeter',
+  `${perimeter.body?.config?.filters?.length} filters, ${perimeter.body?.config?.globalExcludes?.length} global excludes, ${perimeter.body?.lint?.length} lint findings`);
 const wake = option('wake');
 if (wake) {
   const result = await call(`/workloads/${wake}/wake`, { token, method: 'POST' });
