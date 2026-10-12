@@ -5,6 +5,8 @@ export interface DayRow { day: Date; segments: Segment[] }
 
 const LABELS: Record<string, string> = { AWAKE: 'Awake', NAPPING: 'Napping', ASLEEP: 'Asleep', WAKING: 'Waking', FAILED: 'Failed', UNKNOWN: 'Unknown' };
 export const stateLabel = (state: string): string => LABELS[state] ?? state;
+// The order of the states in the history's legend and the 7-day bar.
+export const STATE_ORDER = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
 
 // The narrowest a phase is drawn (percent of a day's row, about 2 pixels): a 40-second wake stays visible.
 export const MIN_WIDTH = 0.25;

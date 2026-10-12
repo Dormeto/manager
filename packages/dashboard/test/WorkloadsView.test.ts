@@ -6,7 +6,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadsView from '../src/views/WorkloadsView.vue';
-import IdleBar from '../src/components/IdleBar.vue';
+import StateBar from '../src/components/StateBar.vue';
 
 const paths: string[] = [];
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -17,7 +17,7 @@ Object.defineProperty(window, 'visualViewport', {
 const SHOP = {
   router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop', account: '111122223333', region: 'eu-west-1', state: 'ASLEEP', url: null, wakeMode: 'browser',
   wakeCount: 3, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null, pendingWake: false, backends: ['asg', 'rds-instance'],
-  idleHours7d: 150, requests7d: 12,
+  idleHours7d: 150, requests7d: 12, states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } },
 };
 vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { paths.push(path); return { workloads: [SHOP], total: 1, errors: [] }; }) }));
 
@@ -79,7 +79,7 @@ describe('Workloads view', () => {
     wrapper.unmount();
   });
 
-  it('shows each workload\'s idle share over 7 days as in Discovery, asking the page with it', async () => {
+  it('shows each workload\'s time in each state over 7 days, with its idle hours, asking the page with them (user request)', async () => {
     const pinia = createPinia();
     setActivePinia(pinia);
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
@@ -87,10 +87,12 @@ describe('Workloads view', () => {
     paths.length = 0;
     const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
     await flushPromises();
-    expect(new URLSearchParams(paths[0]!.split('?')[1]).get('idle')).toBe('1');
+    const query = new URLSearchParams(paths[0]!.split('?')[1]);
+    expect([query.get('idle'), query.get('states')]).toEqual(['1', '1']);
     const headers = wrapper.findAll('thead th').map((th) => th.text());
-    const cell = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Idle (7 days)')]!;
-    expect(cell.findComponent(IdleBar).props()).toEqual({ idleHours7d: 150, requests7d: 12 });
+    expect(headers).not.toContain('Idle (7 days)');
+    const cell = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Last 7 days')]!;
+    expect(cell.findComponent(StateBar).props()).toMatchObject({ states: SHOP.states7d, idleHours7d: 150, requests7d: 12 });
     wrapper.unmount();
   });
 

@@ -19,6 +19,11 @@ service is not priced), which also brings 0.5.0's `ec2:ModifyInstanceAttribute`.
   days, this month and since the start, net of Dormeto's own estimated cost, and the top workloads; the History card
   gives its period's estimate. Storage, load balancers and data transfer are not counted; discounts are not known.
 - Routers 0.27.0 say what each nap stopped.
+- Workloads: a bar of each workload's time in each state over the last 7 days, from its history, on the Workloads list
+  (instead of the idle share) and in the workload's header; its tooltip gives each state's share, time and meaning, the
+  time without history and the hours without requests. Napping has a color of its own, the same in the state chip, the
+  history and the bar. A router written in Terraform shows a chip saying where it is changed; one the manager installed
+  shows none.
 
 ## 0.6.0 — 2026-10-08 (not published: in 0.7.0)
 

@@ -20,6 +20,10 @@ describe('format', () => {
     expect(stateColor('ASLEEP')).toBe('info');
     expect(stateColor('UNKNOWN')).toBe('grey');
   });
+  it('gives napping a color of its own, apart from waking, in the chip, the history and the 7-day bar (user request)', () => {
+    expect(stateColor('NAPPING')).toBe('napping');
+    expect(stateColor('WAKING')).toBe('warning');
+  });
   it('describes rule conditions like the router admin page', () => {
     expect(ruleText({ headers: [{ name: 'x-dormeto-e2e', value: 'no-wake' }] })).toBe('header x-dormeto-e2e = no-wake');
     expect(ruleText({ pathPrefixes: ['/api/'], sourceIps: ['198.51.100.0/24'] })).toBe('source 198.51.100.0/24, path /api/*');

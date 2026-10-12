@@ -10,6 +10,13 @@ export function relative(iso: string | null | undefined, now = Date.now()): stri
   return future ? `in ${text}` : `${text} ago`;
 }
 
+// A duration of days as days and hours (6 d 2 h), a shorter one as duration() does.
+export function longDuration(seconds: number): string {
+  if (seconds < 86_400) return duration(Math.round(seconds));
+  const hours = Math.round(seconds / 3600);
+  return hours % 24 ? `${Math.floor(hours / 24)} d ${hours % 24} h` : `${hours / 24} d`;
+}
+
 export function duration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined) return '—';
   if (seconds < 60) return `${seconds} s`;
@@ -18,7 +25,8 @@ export function duration(seconds: number | null | undefined): string {
   return minutes % 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${Math.floor(minutes / 60)} h`;
 }
 
-const STATE_COLORS: Record<string, string> = { AWAKE: 'success', ASLEEP: 'info', WAKING: 'warning', NAPPING: 'warning', FAILED: 'error' };
+// The same in the state chip, the history and the 7-day bar; napping's own color is in the themes (theme.ts).
+const STATE_COLORS: Record<string, string> = { AWAKE: 'success', ASLEEP: 'info', WAKING: 'warning', NAPPING: 'napping', FAILED: 'error' };
 export const stateColor = (state: string): string => STATE_COLORS[state] ?? 'grey';
 
 const BACKEND_LABELS: Record<string, string> = {

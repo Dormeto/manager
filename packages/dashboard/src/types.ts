@@ -42,10 +42,14 @@ export interface WorkloadSummary {
   backends?: string[]; // the kinds of its backends, databases last (routers 0.23.3 and later)
   idleHours7d?: number; // hours without any request over the last 7 days, and the requests (from discovery)
   requests7d?: number | null;
+  states7d?: StatesWeek; // seconds in each state over the last 7 days, from the history (asked with states=1)
   pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored: number; deferred: number; wakes: number } | null;
   settings: Settings;
 }
+
+// Seconds in each state over a period of 7 days (UNKNOWN: without history).
+export interface StatesWeek { from: string; to: string; totals: Record<string, number> }
 
 export interface Counts {
   ignored: Record<string, number>;
@@ -91,6 +95,9 @@ export interface WorkloadStatus {
   pauses?: Pause[];
   targetGroupArn?: string;
   source?: 'terraform' | 'manager'; // routers 0.18.2 and later
+  states7d?: StatesWeek; // the manager's: as on its Workloads row
+  idleHours7d?: number;
+  requests7d?: number | null;
   drift?: { at: string; kind: string; detail: string; by: string }[]; // repairs of what onboarding added, newest first
   lastRequestAt: string | null;
   nap: { eligibleAt: string; latestAt: string; inSeconds: number } | null;

@@ -62,7 +62,7 @@ describe('HistoryCard', () => {
     expect(wrapper.text()).toContain('Asleep 75% of the time with history');
     expect(wrapper.find('[data-test="gap"]').exists()).toBe(true);
     const napping = wrapper.findAll('[data-test="segment"]').find((x) => x.attributes('aria-label')?.startsWith('Napping'))!;
-    expect(napping.classes()).toContain('napping');
+    expect(napping.classes()).toContain('bg-napping');
     wrapper.unmount();
   });
 

@@ -5,7 +5,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { duration, stateColor, usd } from '../format';
-import { causeText, collapseRows, dayRows, stateLabel, type Phase } from '../history';
+import { STATE_ORDER, causeText, collapseRows, dayRows, stateLabel, type Phase } from '../history';
 import type { WorkloadHistory } from '../types';
 
 const props = defineProps<{ router: string; id: string; now: number }>();
@@ -43,7 +43,7 @@ const summary = computed(() => {
   ];
 });
 const transitions = computed(() => [...(history.value?.entries ?? [])].reverse().slice(0, 50));
-const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
+const LEGEND = STATE_ORDER;
 </script>
 
 <template>
@@ -74,14 +74,14 @@ const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
             <v-tooltip v-for="(s, i) in item.row.segments" :key="i" location="top" :text="segmentLabel(s.phase, s.merged)">
               <template #activator="{ props: tip }">
                 <div v-bind="tip" data-test="segment" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
-                  :class="['segment', `bg-${stateColor(s.state)}`, { napping: s.state === 'NAPPING' }]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
+                  :class="['segment', `bg-${stateColor(s.state)}`]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
               </template>
             </v-tooltip>
           </div>
         </div>
       </template>
       <div class="d-flex flex-wrap ga-3 mt-2 text-body-small text-medium-emphasis">
-        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-1"><span :class="['swatch', `bg-${stateColor(state)}`, { napping: state === 'NAPPING' }]" />{{ stateLabel(state) }}</span>
+        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-1"><span :class="['swatch', `bg-${stateColor(state)}`]" />{{ stateLabel(state) }}</span>
       </div>
       <v-table v-if="transitions.length" density="compact" class="mt-3">
         <thead><tr><th>When</th><th>Change</th><th>Why</th><th>Wake</th></tr></thead>
@@ -104,7 +104,6 @@ const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
 .ticks { position: relative; flex: 1; height: 18px; }
 .ticks span { position: absolute; top: 0; }
 /* Napping shares waking's color (the state chips), lighter here to tell them apart. */
-.napping { opacity: 0.5; }
 .bar { position: relative; flex: 1; height: 14px; border-radius: 3px; background: rgba(var(--v-theme-on-surface), 0.06); overflow: hidden; }
 .segment { position: absolute; top: 0; bottom: 0; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }

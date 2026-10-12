@@ -6,6 +6,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
+import StateBar from '../src/components/StateBar.vue';
 
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 // Awake for 35 minutes; the run last written 5 minutes ago (a nap request at the last idle check: no state change).
@@ -30,6 +31,16 @@ async function mountView() {
 }
 
 describe('Workload view', () => {
+  it('shows in its header its time in each state over 7 days, the bar of its Workloads row (user request)', async () => {
+    const states7d = { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } };
+    current = { ...status, states7d, idleHours7d: 150, requests7d: 12 };
+    const wrapper = await mountView();
+    const bar = wrapper.find('[data-test="header"]').findComponent(StateBar);
+    expect(bar.props()).toMatchObject({ states: states7d, idleHours7d: 150, requests7d: 12 });
+    wrapper.unmount();
+    current = status;
+  });
+
   it('says why the last wake failed, how many times in a row, and when a request retries it (R7b)', async () => {
     current = {
       ...status, state: 'FAILED', failedAt: minutesAgo(2), consecutiveFailures: 3, nextAttemptAt: new Date(Date.now() + 4 * 60_000).toISOString(), fallbacks: [],

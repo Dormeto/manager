@@ -16,6 +16,13 @@ const HELP: Record<string, string> = {
 };
 export const stateHelp = (state: string): string => HELP[state] ?? 'Unknown: the router has not reported this workload\'s state yet.';
 
+// In a few words, beside its share of the 7-day bar.
+const BRIEF: Record<string, string> = {
+  AWAKE: 'serving requests', NAPPING: 'stopping its backends', ASLEEP: 'backends stopped, the next request wakes it', WAKING: 'starting its backends',
+  FAILED: 'a wake or a nap did not finish',
+};
+export const stateBrief = (state: string): string => BRIEF[state] ?? '';
+
 type Run = { state: string; awakeSince: string | null; wakeStartedAt: string | null; failedAt: string | null; updatedAt: string | null };
 const LABEL: Record<string, string> = { AWAKE: 'Awake', NAPPING: 'Napping', ASLEEP: 'Asleep', WAKING: 'Waking', FAILED: 'Failed' };
 

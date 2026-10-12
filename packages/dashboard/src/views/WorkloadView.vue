@@ -14,6 +14,7 @@ import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
+import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import { stateSince } from '../state';
@@ -154,11 +155,12 @@ const summary = computed(() => {
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-center ga-3 mb-4">
+  <div data-test="header" class="d-flex flex-wrap align-center ga-3 mb-4">
     <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
     <h1 class="text-headline-small">{{ title }}</h1>
     <v-btn v-if="session.canOperate && status?.source === 'manager'" :icon="mdiPencilOutline" variant="text" size="small" aria-label="Rename" @click="renameOpen = true" />
     <StateChip v-if="status" :state="status.state" :failure="status.failure" />
+    <StateBar v-if="status" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :width="140" />
     <PauseChip :pauses="pauses" />
     <router-link :to="`/routers/${encodeURIComponent(router)}`" class="text-medium-emphasis">{{ router }}</router-link>
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>

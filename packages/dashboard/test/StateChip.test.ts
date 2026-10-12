@@ -48,4 +48,9 @@ describe('StateChip', () => {
     expect(document.body.textContent).toMatch(/Last wake failed: no capacity \(no capacity for db\.t4g\.micro in eu-west-3a\)/);
     wrapper.unmount();
   });
+
+  it('colors a napping workload as the history does', () => {
+    const wrapper = mount(StateChip, { props: { state: 'NAPPING' }, global: { plugins: [createVuetify({ components })] } });
+    expect(wrapper.html()).toContain('bg-napping');
+  });
 });

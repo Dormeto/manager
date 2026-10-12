@@ -8,6 +8,7 @@ import App from './App.vue';
 import { loadConfig } from './config';
 import { initAuth } from './auth';
 import { router } from './router';
+import { THEMES } from './theme';
 
 const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
 let theme = prefersDark ? 'dark' : 'light';
@@ -21,10 +22,7 @@ const vuetify = createVuetify({
   icons: { defaultSet: 'mdi', aliases, sets: { mdi } },
   theme: {
     defaultTheme: theme,
-    themes: {
-      light: { colors: { primary: '#3546c4', secondary: '#8f5200', background: '#f6f5f2', surface: '#ffffff' } },
-      dark: { dark: true, colors: { primary: '#8b98ff', secondary: '#f5b14c', background: '#0f1220', surface: '#1a2036' } },
-    },
+    themes: THEMES,
   },
   defaults: { VCard: { rounded: 'lg', variant: 'flat', border: true }, VBtn: { rounded: 'lg' }, VChip: { size: 'small' } },
 });
