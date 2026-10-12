@@ -86,8 +86,8 @@ describe('nameRule', () => {
 });
 
 describe('concurrencyText', () => {
-  it('shows the limit, what the router used and its worst case (information only)', () => {
-    expect(concurrencyText({ limit: 1000, needed: 20, worstCase: 7513 })).toBe('limit 1,000, used up to 20 in 24 hours; 7,513 if every workload not awake woke at once');
+  it('shows the limit, what the router can need and its worst case (information only)', () => {
+    expect(concurrencyText({ limit: 1000, needed: 20, worstCase: 7513 })).toBe('limit 1,000, needs up to 20 (waker 24-hour peak and queues); 7,513 if every workload not awake woke at once');
     expect(concurrencyText({ error: 'AccessDenied' })).toBe('AccessDenied');
     expect(concurrencyText(null)).toBe('—');
     // Routers before 0.22.3 give the worst case as the need.
