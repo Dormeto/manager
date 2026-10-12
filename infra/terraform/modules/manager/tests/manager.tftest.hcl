@@ -92,8 +92,8 @@ run "event_driven_refresh" {
     error_message = "Discovery may read the refresh queue."
   }
   assert {
-    condition     = jsondecode(aws_sfn_state_machine.discovery.definition).States.Finalize.Next == "Connect?" && jsondecode(aws_sfn_state_machine.discovery.definition).States.Connections.Parameters.Payload.task == "connections"
-    error_message = "After finalize, the run's connections go to the operations."
+    condition     = jsondecode(aws_sfn_state_machine.discovery.definition).States.Finalize.Next == "Connect?" && jsondecode(aws_sfn_state_machine.discovery.definition).States.Connections.Parameters.Payload == { task = "connections", "runId.$" = "$.startedAt" }
+    error_message = "After finalize, the operations read the run's connections by its id (never the lists through Step Functions)."
   }
   assert {
     condition     = aws_lambda_function.operations.environment[0].variables.OPERATIONS_STATE_MACHINE == "arn:aws:states:eu-west-1:111122223333:stateMachine:dmt-test-manager-operations"

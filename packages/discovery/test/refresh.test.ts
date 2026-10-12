@@ -2,7 +2,7 @@
 // and the rescan of the account-regions that forwarded events name.
 import { describe, expect, it } from 'vitest';
 import { trailCovers } from '../src/aws.js';
-import { refreshAccounts, runDiscovery } from '../src/run.js';
+import { refreshAccounts, runDiscovery, runSummary } from '../src/run.js';
 import { A, B, C, config, filter } from './fixtures.js';
 import { setup } from './run-fakes.js';
 
@@ -135,5 +135,16 @@ describe('the refresh of forwarded events', () => {
     const out = await refreshAccounts(s.deps, [event('999999999999', 'eu-west-3'), event(A.id, 'ap-south-1'), { account: 'x', region: 'y' } as never, {} as never]);
     expect(out).toEqual({ skipped: false, pairs: [] });
     expect(s.scanned).toEqual([]);
+  });
+});
+
+describe('what the state machine carries', () => {
+  it('the run\'s summary counts its connections: 1,000 accounts in 17 regions stay far below Step Functions\' 256 KB (R5c review I3)', () => {
+    const regions = Array.from({ length: 17 }, (_, i) => `xx-region-${i}`);
+    const connect = Array.from({ length: 1000 }, (_, i) => ({ account: String(100000000000 + i), regions }));
+    const run = { startedAt: '2026-10-06T12:00:00.000Z', finishedAt: '2026-10-06T12:10:00.000Z', trigger: 'schedule' as const, status: 'ok' as const, targets: [], counts: {}, lint: [], connections: { connect, disconnect: ['999999999999'] } };
+    const summary = runSummary(run);
+    expect(summary.connections).toEqual({ connect: 1000, disconnect: 1 });
+    expect(JSON.stringify(summary).length).toBeLessThan(2000);
   });
 });

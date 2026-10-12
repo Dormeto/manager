@@ -516,3 +516,17 @@ function requireOrganizations(deps: RunDeps): OrganizationsPort {
   if (!deps.organizations) throw new Error('organization mode needs Organizations access');
   return deps.organizations;
 }
+
+// What the state machine carries after a run: small, whatever the organization (Step Functions' payloads are at most
+// 256 KB); the connections are counted, and the operations read their lists from the run record (R5c review I3).
+export function runSummary(run: RunRecord) {
+  return {
+    startedAt: run.startedAt,
+    status: run.status,
+    ...(run.skippedReason ? { skippedReason: run.skippedReason } : {}),
+    ...(run.error ? { error: run.error } : {}),
+    counts: run.counts,
+    errors: run.targets.filter((t) => t.status === 'error').length,
+    connections: { connect: run.connections?.connect.length ?? 0, disconnect: run.connections?.disconnect.length ?? 0 },
+  };
+}

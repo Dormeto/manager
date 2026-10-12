@@ -1,11 +1,12 @@
 // Operations Lambda: the tasks of the Step Functions workflow ({ task: 'next' | 'fail', operationId }), and the
-// connections a discovery run decides ({ task: 'connections', connect, disconnect }, packaging design §5).
+// connections a discovery run decided ({ task: 'connections', runId }, packaging design §5).
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { STSClient } from '@aws-sdk/client-sts';
 import { createStore } from '@dormeto/discovery';
 import { createBundle, createTargets } from './aws.js';
+import { runConnections } from './connections.js';
 import { createEngine } from './engine.js';
 import { createRecords } from './records.js';
 import { routersOf } from './routers.js';
@@ -19,9 +20,10 @@ const log = { info: write('info'), warn: write('warn'), error: write('error') };
 const sfn = new SFNClient({});
 const commandRole = process.env.COMMAND_ROLE ?? 'DmtCommandRole';
 
+const discovery = createStore({ dynamo, table });
 const engine = createEngine({
   records,
-  discovery: createStore({ dynamo, table }),
+  discovery,
   routers: () => routersOf(JSON.parse(process.env.ROUTERS ?? '[]'), records),
   target: createTargets({ sts: new STSClient({}), roleName: commandRole, sessionName: `dmt-${env}-operations` }),
   bundle: createBundle({ s3: new S3Client({}), bucket: process.env.ARTIFACTS_BUCKET ?? '', version: process.env.ROUTER_VERSION ?? '' }),
@@ -39,10 +41,9 @@ const engine = createEngine({
   log,
 });
 
-type Connections = Parameters<typeof engine.connections>[0];
-export const handler = async (event: { task: string; operationId?: string; error?: { Error?: string; Cause?: string } } & Partial<Connections>) => {
+export const handler = async (event: { task: string; operationId?: string; runId?: string; error?: { Error?: string; Cause?: string } }) => {
   if (event.task === 'next') return engine.next(event.operationId!);
-  if (event.task === 'connections') return engine.connections({ connect: event.connect ?? [], disconnect: event.disconnect ?? [] }, 'discovery');
+  if (event.task === 'connections') return runConnections(discovery, engine, String(event.runId ?? ''));
   if (event.task === 'fail') {
     await engine.fail(event.operationId!, [event.error?.Error, event.error?.Cause].filter(Boolean).join(': ') || 'workflow failed');
     return { done: true, status: 'failed' };

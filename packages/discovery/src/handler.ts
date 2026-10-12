@@ -7,7 +7,7 @@ import { OrganizationsClient } from '@aws-sdk/client-organizations';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { commandCheck, createAssumeRole, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, trailCovers, trailsPort, type Credentials } from './aws.js';
-import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
+import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSummary, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { createStore } from './store.js';
 
@@ -73,14 +73,5 @@ export const handler = async (event: Event = {}) => {
   const run = event.step === 'finalize' ? await finalizeRun(deps, event.plan)
     : event.step === 'abandon' ? await abandonRun(deps, event.plan, event.error ?? 'unknown error')
       : await runDiscovery(deps, trigger(event));
-  return {
-    startedAt: run.startedAt,
-    status: run.status,
-    ...(run.skippedReason ? { skippedReason: run.skippedReason } : {}),
-    ...(run.error ? { error: run.error } : {}),
-    counts: run.counts,
-    errors: run.targets.filter((t) => t.status === 'error').length,
-    // The operations task connections takes them (packaging design §5).
-    connections: run.connections ?? { connect: [], disconnect: [] },
-  };
+  return runSummary(run);
 };

@@ -216,13 +216,14 @@ resource "aws_sfn_state_machine" "discovery" {
       # Event-driven refresh: accounts to connect or disconnect go to the operations (one operation per account).
       "Connect?" = {
         Type    = "Choice"
-        Choices = [{ Or = [{ Variable = "$.connections.connect[0]", IsPresent = true }, { Variable = "$.connections.disconnect[0]", IsPresent = true }], Next = "Connections" }]
+        Choices = [{ Or = [{ Variable = "$.connections.connect", NumericGreaterThan = 0 }, { Variable = "$.connections.disconnect", NumericGreaterThan = 0 }], Next = "Connections" }]
         Default = "Done"
       }
       Connections = {
-        Type       = "Task"
-        Resource   = "arn:aws:states:::lambda:invoke"
-        Parameters = { FunctionName = aws_lambda_function.operations.arn, Payload = { task = "connections", "connect.$" = "$.connections.connect", "disconnect.$" = "$.connections.disconnect" } }
+        Type     = "Task"
+        Resource = "arn:aws:states:::lambda:invoke"
+        # The run's id only: the operations read its lists from the run record (Step Functions' payloads: 256 KB at most).
+        Parameters = { FunctionName = aws_lambda_function.operations.arn, Payload = { task = "connections", "runId.$" = "$.startedAt" } }
         ResultPath = "$.connected"
         Retry      = local.discovery_retry
         # The run is recorded: a failure here waits for the next run.
