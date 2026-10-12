@@ -133,8 +133,16 @@ resource "aws_cognito_managed_login_branding" "dashboard" {
   use_cognito_provided_values = true
 }
 
+# SES sending authorizations take a while to propagate: an invitation sent right after the pool creation was dropped
+# silently (2026-10-04). The bootstrap invitations wait for it.
+resource "time_sleep" "ses_policy" {
+  depends_on      = [aws_ses_identity_policy.cognito, aws_cognito_user_pool.main]
+  create_duration = "60s"
+}
+
 resource "aws_cognito_user" "admin" {
   for_each                 = toset(var.admin_emails)
+  depends_on               = [time_sleep.ses_policy]
   user_pool_id             = aws_cognito_user_pool.main.id
   username                 = each.value
   desired_delivery_mediums = ["EMAIL"]

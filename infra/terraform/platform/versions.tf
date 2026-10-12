@@ -13,6 +13,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.9"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.13"
+    }
   }
 
   # The key comes from env/<env>.backend.hcl: terraform init -backend-config=env/dev.backend.hcl
