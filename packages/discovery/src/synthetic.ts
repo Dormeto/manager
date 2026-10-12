@@ -7,7 +7,8 @@ export const SYNTHETIC_REGIONS = [
   'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'ca-central-1', 'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1',
   'eu-north-1', 'ap-south-1', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3', 'ap-southeast-1', 'ap-southeast-2', 'sa-east-1',
 ];
-const OU = 'ou-synthetic';
+// Shaped like an OU id, so that a perimeter's filter can name it.
+export const SYNTHETIC_OU = 'ou-dmts-synthetic';
 const TARGET_GROUPS = 10;
 const RULES = 5;
 
@@ -17,8 +18,8 @@ const hex = (n: number, size: number) => n.toString(16).padStart(size, '0');
 
 export function syntheticInventory(accounts: number, root = 'r-synthetic'): OrgInventory {
   return {
-    accounts: Array.from({ length: accounts }, (_, i) => ({ id: `000000${String(i + 1).padStart(6, '0')}`, name: `synthetic-${String(i + 1).padStart(4, '0')}`, ouPath: [root, OU], tags: {} })),
-    ous: { [root]: { name: 'Root', parent: null }, [OU]: { name: 'synthetic', parent: root } },
+    accounts: Array.from({ length: accounts }, (_, i) => ({ id: `000000${String(i + 1).padStart(6, '0')}`, name: `synthetic-${String(i + 1).padStart(4, '0')}`, ouPath: [root, SYNTHETIC_OU], tags: {} })),
+    ous: { [root]: { name: 'Root', parent: null }, [SYNTHETIC_OU]: { name: 'synthetic', parent: root } },
   };
 }
 
