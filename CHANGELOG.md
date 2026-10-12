@@ -15,9 +15,14 @@ that authenticates with Amazon Cognito).
   to 0.23.2. Until the access module or script is applied again in its account, onboarding there says so.
 - A shadow rule covers its rule whatever the order AWS lists their conditions in: onboarding no longer fails at its check
   for a rule with several conditions, and the idle check no longer rewrites such a shadow every 5 minutes.
-- Routers: the upgrade is an icon beside the router's version; upgrade, uninstall, pause and resume explain themselves in
-  a tooltip (uninstall asks first); a count of workloads opens that workload, or the list of those workloads.
-- A notice of an operation just started links to its steps in Operations.
+- Routers shows the version an upgrade installed at once (not at the router's next check).
+- Routers: the upgrade is an icon beside the router's version, animated while an upgrade runs; upgrade, uninstall, pause
+  and resume explain themselves in a tooltip (uninstall asks first); a count of workloads opens that workload, or the
+  list of those workloads.
+- Discovery: an onboarding or offboarding running on a candidate shows in its status, and Onboard or Offboard waits for
+  it.
+- Routers and Discovery say what they started, and how an upgrade, onboarding or offboarding ended, in a toast linking to
+  its steps in Operations.
 - Discovery shows only the statuses that have candidates.
 - Organization access says its status with an icon, the counts and event-driven refresh explained in its tooltip; the
   panel lists only what needs attention.
