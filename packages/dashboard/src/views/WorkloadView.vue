@@ -100,9 +100,9 @@ async function exclude(body: object) {
   excludeOpen.value = false;
   acting.value = true;
   try {
-    await api('/exclusions', { method: 'POST', body: JSON.stringify({ ...body, workload: { router: props.router, id: props.id } }) });
-    notice.value = { type: 'success', text: 'Excluded: woken and never napped, waiting for offboarding. Lift the exclusion in Discovery.' };
-    await run();
+    const { operation } = await api<{ operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify({ ...body, workload: { router: props.router, id: props.id } }) });
+    notice.value = { type: 'success', text: `Excluded: it is being paused (operation ${operation.id}): woken and never napped, waiting for offboarding. Lift the exclusion in Discovery.` };
+    setTimeout(run, 3000);
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
   } finally {

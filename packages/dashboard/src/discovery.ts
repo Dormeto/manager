@@ -90,9 +90,12 @@ export function workloadOf(routers: { name: string; region: string; account?: st
 }
 
 // The name of a workload of a router (exclusions list the workloads they paused by router and id), its id when unknown.
-export function workloadNamed(workloads: { router: string; workloadId: string; name?: string }[]) {
+export function workloadNamed(workloads: { router: string; workloadId: string; name?: string; account?: string; region?: string }[]) {
   const names = new Map(workloads.map((w) => [`${w.router}/${w.workloadId}`, w.name ?? w.workloadId]));
-  return (router: string, workloadId: string): string => names.get(`${router}/${workloadId}`) ?? workloadId;
+  const located = new Map(workloads.filter((w) => w.account && w.region).map((w) => [`${w.account}/${w.region}/${w.workloadId}`, w.name ?? w.workloadId]));
+  // By the router's name in the manager, else by its account and region (the workflow records routers by their AWS name).
+  return (router: string, workloadId: string, account?: string, region?: string): string =>
+    names.get(`${router}/${workloadId}`) ?? (account && region ? located.get(`${account}/${region}/${workloadId}`) : undefined) ?? workloadId;
 }
 
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;

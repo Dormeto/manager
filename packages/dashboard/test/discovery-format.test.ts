@@ -82,5 +82,8 @@ describe('names of workloads by router and id', () => {
   it('gives the name of a workload of a router, its id when unknown', () => {
     const named = workloadNamed([{ router: 'dmtr-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' }, { router: 'dmt-dev', workloadId: 'demo' }]);
     expect([named('dmtr-dev-eu-west-3', '7010ea54b5c02245'), named('dmt-dev', 'demo'), named('dmt-dev', 'a4dffc5bf369a297')]).toEqual(['Paris', 'demo', 'a4dffc5bf369a297']);
+    // The workflow records the router by its AWS name, with its account and region.
+    const located = workloadNamed([{ router: 'dmtr-dev-eu-west-3', account: '121014831971', region: 'eu-west-3', workloadId: 'a4dffc5bf369a297', name: 'paris-app' }]);
+    expect(located('dmtr-dev', 'a4dffc5bf369a297', '121014831971', 'eu-west-3')).toBe('paris-app');
   });
 });

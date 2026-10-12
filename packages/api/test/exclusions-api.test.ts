@@ -21,6 +21,12 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
   const store = memoryStore(candidates);
   store.config = { config: { version: 1, mode: 'organization', regions: ['eu-west-1'], refreshHours: 24, globalExcludes: [], filters: [{ name: 'a', include: [{ accountIds: [ACCOUNT] }], exclude: [] }] }, updatedAt: '', updatedBy: '' };
   let ids = 0;
+  // The workflow: the API creates the operation; its steps run elsewhere (operations engine tests).
+  const created: [string, Record<string, unknown>, string][] = [];
+  const operations = {
+    async create(type: string, input: Record<string, unknown>, by: string) { created.push([type, input, by]); return { id: `op${created.length}`, type, input } as never; },
+    list: async () => [], get: async () => null, installedRouters: async () => [],
+  };
   const api = createApi({
     routers: [
       { name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: ACCOUNT },
@@ -38,8 +44,9 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
     audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
     now: () => NOW, newId: () => `x${++ids}`, version: '0.2.0',
     discovery: { store, run: async () => {} },
+    operations: operations as never,
   });
-  return { api, audit, calls, store };
+  return { api, audit, calls, store, created };
 }
 
 function event(method: string, path: string, groups = '', body?: unknown): ApiEvent {
@@ -53,28 +60,29 @@ const json = (res: { body?: string }) => JSON.parse(res.body ?? 'null');
 const expiresAt = new Date(NOW + 7 * DAY).toISOString();
 
 describe('exclusions', () => {
-  it('excludes a target group: stored, its candidate waits for offboarding, its workload is paused in its router, audited', async () => {
-    const { api, audit, calls, store } = setup();
+  it('excludes a target group: stored, its candidate waits for offboarding, the workflow pauses its workloads, audited', async () => {
+    const { api, audit, calls, store, created } = setup();
     expect((await api(event('POST', '/api/exclusions', 'dmt-viewer', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }))).statusCode).toBe(403);
     const res = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: ' migration ', expiresAt }));
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(202);
     const exclusion: Exclusion = {
       id: 'x1', target: { kind: 'target-group', arn: TG, account: ACCOUNT, region: 'eu-west-1', name: 'dmt-dev-asg-app' },
-      reason: 'migration', by: 'ops@example.com', at: new Date(NOW).toISOString(), expiresAt, paused: [{ router: 'dmt-dev', workloadId: 'demo-asg' }],
+      reason: 'migration', by: 'ops@example.com', at: new Date(NOW).toISOString(), expiresAt,
     };
-    expect(json(res)).toEqual({ exclusion, candidates: 1, paused: [{ router: 'dmt-dev', workloadId: 'demo-asg' }], unpaused: [] });
+    expect(json(res)).toMatchObject({ exclusion, candidates: 1, operation: { id: 'op1' } });
     expect(await store.getExclusion('x1')).toEqual(exclusion);
-    expect(calls).toEqual([['dmt-dev', { action: 'pause', workloadId: 'demo-asg', targetGroupArn: TG, by: 'ops@example.com', reason: 'excluded: migration', until: expiresAt, exclusionId: 'x1' }]]);
+    // The API answers at once: no router is called, the operation pauses the workloads.
+    expect([calls, created]).toEqual([[], [['exclude', { exclusionId: 'x1' }, 'ops@example.com']]]);
     const stored = await store.getCandidate(TG);
     expect([stored!.status, stored!.statusReason]).toEqual(['pending-offboarding', 'excluded: manual exclusion by ops@example.com: migration']);
     expect((await store.getCandidate('free'))!.status).toBe('pending-onboarding');
-    expect(audit).toEqual([{ id: 'x2', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'exclude', target: 'target group dmt-dev-asg-app', result: `migration; until ${expiresAt}; paused dmt-dev/demo-asg` }]);
+    expect(audit).toEqual([{ id: 'x2', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'exclude', target: 'target group dmt-dev-asg-app', result: `migration; until ${expiresAt}; operation op1` }]);
   });
 
-  it('excludes a load balancer: every candidate on it, a workload no registered router manages is reported', async () => {
+  it('excludes a load balancer: every candidate on it', async () => {
     const { api, store } = setup();
     const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'load-balancer', arn: LB }, reason: 'legacy' })));
-    expect([res.candidates, res.paused, res.unpaused]).toEqual([3, [{ router: 'dmt-dev', workloadId: 'demo-asg' }], ['other: no registered router manages it']]);
+    expect(res.candidates).toBe(3);
     expect((await store.getCandidate('free'))!.status).toBe('excluded');
     expect((await store.getExclusion('x1'))!.target).toEqual({ kind: 'load-balancer', arn: LB, account: ACCOUNT, region: 'eu-west-1', name: 'dmt-dev' });
   });
@@ -86,11 +94,10 @@ describe('exclusions', () => {
     expect((await store.listCandidates()).map((c) => c.status).sort()).toEqual(['excluded', 'pending-offboarding', 'pending-offboarding']);
   });
 
-  it('pauses the workload it was created from, even without a discovery candidate', async () => {
-    const { api, calls } = setup([]);
-    const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration', workload: { router: 'dmt-dev', id: 'demo-asg' } })));
-    expect(res.paused).toEqual([{ router: 'dmt-dev', workloadId: 'demo-asg' }]);
-    expect(calls.map(([router, p]) => [router, p.action, p.workloadId])).toEqual([['dmt-dev', 'pause', 'demo-asg']]);
+  it('passes the workload it was created from to the workflow, even without a discovery candidate', async () => {
+    const { api, created } = setup([]);
+    await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration', workload: { router: 'dmt-dev', id: 'demo-asg' } }));
+    expect(created).toEqual([['exclude', { exclusionId: 'x1', hint: { router: 'dmt-dev', workloadId: 'demo-asg' } }, 'ops@example.com']]);
   });
 
   it('refuses an unknown kind, a malformed ARN or account, a missing reason, an expiry in the past or an unknown router', async () => {
@@ -114,7 +121,7 @@ describe('exclusions', () => {
     const { api, store } = setup();
     const at = (reason: string) => api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason }));
     expect((await at('x'.repeat(247))).statusCode).toBe(400);
-    expect((await at('x'.repeat(246))).statusCode).toBe(201);
+    expect((await at('x'.repeat(246))).statusCode).toBe(202);
     expect(await store.listExclusions()).toHaveLength(1);
   });
 
@@ -124,62 +131,19 @@ describe('exclusions', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('pauses the right workload when routers share an account and region, and every workload of the same id elsewhere', async () => {
-    const TG3 = TG.replace('eu-west-1', 'eu-west-3').replace('73e2d6bc24d8a067', '3333333333333333');
-    const LB3 = LB.replace('eu-west-1', 'eu-west-3');
-    // dmt-dev and dmt-dev2 both have a "web" in eu-west-1, only dmt-dev2's forwards to TG; dmt-paris has a "web" in eu-west-3.
-    const answer: Answer = (router, p) => {
-      const owns = (router === 'dmt-dev2' && p.targetGroupArn === TG) || (router === 'dmt-paris' && p.targetGroupArn === TG3);
-      if (p.action === 'pause' && !owns) throw new RouterError(`workload not configured: ${p.workloadId} (its target group is not ${p.targetGroupArn})`);
-      return { pause: {}, woken: [] };
-    };
-    const { api, calls, store } = setup([managed(TG, 'web', TG), managed(TG3, 'web', TG3, { region: 'eu-west-3', loadBalancerArn: LB3 })], answer);
-    const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'account', account: ACCOUNT }, reason: 'payments' })));
-    expect(res.paused).toEqual([{ router: 'dmt-dev2', workloadId: 'web' }, { router: 'dmt-paris', workloadId: 'web' }]);
-    expect(calls.filter(([, p]) => p.action === 'pause').map(([r]) => r)).toEqual(['dmt-dev', 'dmt-dev2', 'dmt-paris']);
-    expect((await store.getExclusion('x1'))!.paused).toEqual(res.paused);
-  });
-
-  it('a workload whose pause fails is reported with its error; the pauses that succeeded are kept with the exclusion', async () => {
-    const answer: Answer = (router, p) => {
-      if (p.action === 'pause' && p.workloadId === 'other') throw new RouterError('Rate exceeded');
-      return { pause: {}, woken: [] };
-    };
-    const { api, store } = setup(undefined, answer);
-    const res = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'load-balancer', arn: LB }, reason: 'legacy' }));
-    expect(res.statusCode).toBe(201);
-    expect(json(res).unpaused).toEqual(['other (dmt-dev): Rate exceeded']);
-    expect((await store.getExclusion('x1'))!.paused).toEqual([{ router: 'dmt-dev', workloadId: 'demo-asg' }]);
-  });
-
-  it('a router too old to pause is reported, not fatal', async () => {
-    const answer: Answer = (router, p) => {
-      if (p.action === 'pause') throw new RouterError('unknown action: pause');
-      return null;
-    };
-    const { api } = setup([managed(TG, 'demo-asg', TG)], answer);
-    const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'a' })));
-    expect([res.paused, res.unpaused]).toEqual([[], ['demo-asg (dmt-dev): router too old to pause, upgrade it to 0.16.0 or later']]);
-  });
-
-  it('a lift that cannot resume a workload keeps the exclusion lifted, to retry; the next lift finishes it', async () => {
-    let down = true;
-    const answer: Answer = (router, p) => {
-      if (p.action === 'resume' && down) throw new RouterError('Rate exceeded');
-      return p.action === 'pause' ? { pause: {}, woken: [] } : { resumed: true };
-    };
-    const { api, store } = setup(undefined, answer);
+  it('a lift marks the exclusion lifted, brings the candidates back and lets the workflow resume its workloads; lifting again retries', async () => {
+    const { api, store, created, calls } = setup();
     await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }));
-    const first = json(await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator')));
-    expect(first).toEqual({ candidates: 1, resumed: [], errors: ['dmt-dev/demo-asg: Rate exceeded'] });
-    const kept = await store.getExclusion('x1');
-    expect([kept!.liftedAt, kept!.paused]).toEqual([new Date(NOW).toISOString(), [{ router: 'dmt-dev', workloadId: 'demo-asg' }]]);
+    const first = await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'));
+    expect([first.statusCode, json(first)]).toEqual([202, { candidates: 1, operation: expect.objectContaining({ id: 'op2' }) }]);
+    expect(created.at(-1)).toEqual(['lift-exclusion', { exclusionId: 'x1' }, 'ops@example.com']);
+    expect((await store.getExclusion('x1'))!.liftedAt).toBe(new Date(NOW).toISOString());
     expect((await store.getCandidate(TG))!.status).toBe('managed');
     const { exclusions } = json(await api(event('GET', '/api/exclusions')));
     expect(exclusions[0].lifting).toBe(true);
-    down = false;
-    expect(json(await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'))).resumed).toEqual([{ router: 'dmt-dev', workloadId: 'demo-asg' }]);
-    expect(await store.getExclusion('x1')).toBeNull();
+    // Still listed (the operation deletes it once everything is resumed): lifting again starts another operation.
+    expect((await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'))).statusCode).toBe(202);
+    expect(calls).toEqual([]);
   });
 
   it('an expired exclusion brings its candidates back without a run, once', async () => {
@@ -205,18 +169,13 @@ describe('exclusions', () => {
     expect(exclusions.map((e: Exclusion & { expired: boolean }) => [e.id, e.expired])).toEqual([['old', true], ['x1', false]]);
   });
 
-  it('lifting resumes the workloads paused for it only, and brings the candidates back', async () => {
-    const { api, audit, calls, store } = setup();
+  it('lifting is for operators, audited, and an unknown exclusion is a 404', async () => {
+    const { api, audit } = setup();
     await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }));
-    calls.length = 0;
     expect((await api(event('DELETE', '/api/exclusions/x1', 'dmt-viewer'))).statusCode).toBe(403);
-    const res = await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'));
-    expect(json(res)).toEqual({ candidates: 1, resumed: [{ router: 'dmt-dev', workloadId: 'demo-asg' }], errors: [] });
-    expect(calls).toEqual([['dmt-dev', { action: 'resume', workloadId: 'demo-asg', by: 'ops@example.com', exclusionId: 'x1' }]]);
-    expect(await store.getExclusion('x1')).toBeNull();
-    expect((await store.getCandidate(TG))!.status).toBe('managed');
-    expect(audit.at(-1)).toMatchObject({ action: 'exclusion-lift', target: 'target group dmt-dev-asg-app', result: 'migration; resumed dmt-dev/demo-asg' });
-    expect((await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'))).statusCode).toBe(404);
+    await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator'));
+    expect(audit.at(-1)).toMatchObject({ action: 'exclusion-lift', target: 'target group dmt-dev-asg-app', result: 'migration; operation op2' });
+    expect((await api(event('DELETE', '/api/exclusions/nope', 'dmt-operator'))).statusCode).toBe(404);
   });
 
   it('the perimeter lint counts the active exclusions', async () => {

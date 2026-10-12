@@ -6,7 +6,7 @@ const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
 type Item = Record<string, AttributeValue>;
 
-export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard';
+export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion';
 export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Operation {

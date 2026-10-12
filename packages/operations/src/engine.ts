@@ -1,7 +1,7 @@
 // Operations engine (vision docs/specs/2026-10-05-onboarding-design.md, R4b): an operation is a list of steps run one at a
 // time by the Step Functions workflow (`next` until done, waiting as asked), each step idempotent; `fail` releases what the
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
-import { restatus, type Candidate, type DiscoveryStore } from '@dormeto/discovery';
+import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, OperationType, Records } from './records.js';
@@ -40,7 +40,7 @@ export interface TargetAccess {
 
 export interface EngineDeps {
   records: Records;
-  discovery?: Pick<DiscoveryStore, 'getCandidate' | 'putCandidates'>;
+  discovery?: Pick<DiscoveryStore, 'getCandidate' | 'putCandidates' | 'accountCandidates' | 'getInventory' | 'getExclusion' | 'putExclusion' | 'deleteExclusion'>;
   routers(): Promise<RouterRef[]>;
   target(account: string, region: string): Promise<TargetAccess>;
   bundle(): Promise<{ blueprint: Blueprint; zip: Uint8Array; codeSha256: string }>;
@@ -74,7 +74,13 @@ const PLANS: Record<OperationType, string[]> = {
   onboard: ['find router', 'lock router', ...installSteps, 'register router', 'lock load balancer', 'slot', 'preview', 'onboard', 'verify', 'candidate'],
   // Paused first (that wakes an asleep workload): no nap starts or commits while the instrumentation goes.
   offboard: ['locate', 'lock load balancer', 'slot', 'pause', 'wait awake', 'offboard', 'candidate'],
+  // Exclusions (scale design §6): the API answers at once; their workloads are paused or resumed here, in batches.
+  exclude: ['pause workloads'],
+  'lift-exclusion': ['resume workloads'],
 };
+// Router calls per step of an exclusion: the step runs again until every workload is done.
+const EXCLUSION_BATCH = 25;
+const EXCLUDED = 'excluded: ';
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const loadBalancerOfRule = (ruleArn: string) => ruleArn.replace(':listener-rule/app/', ':loadbalancer/app/').split('/').slice(0, 4).join('/');
@@ -85,6 +91,105 @@ export function createEngine(deps: EngineDeps) {
   const newId = deps.newId ?? (() => crypto.randomUUID());
   // Installed routers are named dmtr-<env>: DmtCommandRole and DmtRouterBoundary are scoped to that namespace.
   const routerName = `dmtr-${deps.settings.env}`;
+
+  // A router of the registry by its account, region and name (exclusions record them).
+  async function routerNamed(account: string | undefined, region: string | undefined, name: string): Promise<RouterRef | null> {
+    const all = await deps.routers();
+    return all.find((r) => r.name === name && (!account || r.account === account) && (!region || r.region === region)) ?? null;
+  }
+  const notConfigured = (err: unknown) => /^workload not configured/.test((err as Error).message ?? '');
+  const callRouter = async (router: RouterRef, payload: Record<string, unknown>) => (await deps.target(router.account, router.region)).invoke(router.controller, payload);
+
+  // The managed workloads an exclusion matches: the candidates of its account (and the workload it was created from),
+  // each with the routers of its account and region.
+  async function excludedWorkloads(e: Exclusion, hint?: { router: string; workloadId: string }) {
+    const d = deps.discovery!;
+    const inventory = (await d.getInventory()) ?? { accounts: [], ous: {} };
+    const criterion = exclusionCriterion(e);
+    const all = await deps.routers();
+    const wanted = new Map<string, { workloadId: string; targetGroupArn?: string; routers: RouterRef[] }>();
+    for (const c of await d.accountCandidates(e.target.account)) {
+      const account = inventory.accounts.find((a) => a.id === c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
+      if (!c.workloadId || c.goneAt || !matches(criterion, account, c, inventory)) continue;
+      wanted.set(`${c.workloadId} ${c.targetGroupArn}`, {
+        workloadId: c.workloadId, ...(c.targetGroupArn ? { targetGroupArn: c.targetGroupArn } : {}),
+        routers: all.filter((r) => r.region === c.region && r.account === c.account),
+      });
+    }
+    if (hint) {
+      const router = all.find((r) => r.name === hint.router);
+      wanted.set(`${hint.workloadId} ${e.target.arn}`, { workloadId: hint.workloadId, ...(e.target.arn ? { targetGroupArn: e.target.arn } : {}), routers: router ? [router] : [] });
+    }
+    return [...wanted.entries()].map(([key, w]) => ({ key, ...w }));
+  }
+
+  // Pause the workloads of an exclusion, a batch per run of the step; each pause saved with the exclusion at once.
+  async function pauseExcluded(op: Operation): Promise<Outcome> {
+    const d = deps.discovery!;
+    const e = await d.getExclusion(String(op.target.exclusionId));
+    if (!e || e.liftedAt) return { status: 'done', detail: 'lifted since' };
+    const wanted = await excludedWorkloads(e, op.input.hint as { router: string; workloadId: string } | undefined);
+    const handled = new Set((op.context.handled as string[] | undefined) ?? []);
+    const unpaused = (op.context.unpaused as string[] | undefined) ?? [];
+    const paused = [...(e.paused ?? [])];
+    let budget = EXCLUSION_BATCH;
+    for (const w of wanted) {
+      if (handled.has(w.key)) continue;
+      if (budget-- <= 0) break;
+      let outcome: string | null = `${w.workloadId}: no registered router manages it`;
+      for (const router of w.routers) {
+        try {
+          await callRouter(router, {
+            action: 'pause', workloadId: w.workloadId, ...(w.targetGroupArn ? { targetGroupArn: w.targetGroupArn } : {}), by: op.by, reason: `${EXCLUDED}${e.reason}`,
+            ...(e.expiresAt ? { until: e.expiresAt } : {}), exclusionId: e.id,
+          });
+          paused.push({ router: router.name, account: router.account, region: router.region, workloadId: w.workloadId });
+          await d.putExclusion({ ...e, paused });
+          outcome = null;
+          break;
+        } catch (err) {
+          if (notConfigured(err)) continue;
+          outcome = `${w.workloadId} (${router.name}): ${(err as Error).message}`;
+          break;
+        }
+      }
+      if (outcome) unpaused.push(outcome);
+      handled.add(w.key);
+    }
+    op.context.handled = [...handled];
+    op.context.unpaused = unpaused;
+    if (wanted.some((w) => !handled.has(w.key))) return { status: 'wait', seconds: 0, detail: `${handled.size} of ${wanted.length}` };
+    return { status: 'done', detail: [`paused ${paused.length}`, ...unpaused.map((u) => `not paused ${u}`)].join('; ') };
+  }
+
+  // Resume what an exclusion paused, a batch per run; what cannot be resumed stays with the exclusion (lifting), for a
+  // later lift; the exclusion goes once everything is resumed.
+  async function resumeExcluded(op: Operation): Promise<Outcome> {
+    const d = deps.discovery!;
+    const e = await d.getExclusion(String(op.target.exclusionId));
+    if (!e) return { status: 'done', detail: 'nothing to resume' };
+    const left = [...(e.paused ?? [])];
+    const errors = (op.context.errors as string[] | undefined) ?? [];
+    const kept = (op.context.kept as Exclusion['paused']) ?? [];
+    for (let budget = EXCLUSION_BATCH; budget > 0 && left.length; budget -= 1) {
+      const p = left.shift()!;
+      const router = await routerNamed(p.account, p.region, p.router);
+      try {
+        if (!router) throw new Error(`router ${p.router} is no longer registered`);
+        await callRouter(router, { action: 'resume', workloadId: p.workloadId, by: op.by, exclusionId: e.id });
+      } catch (err) {
+        kept.push(p);
+        errors.push(`${p.router}/${p.workloadId}: ${(err as Error).message}`);
+      }
+      await d.putExclusion({ ...e, paused: [...left, ...kept] });
+    }
+    op.context.errors = errors;
+    op.context.kept = kept;
+    if (left.length) return { status: 'wait', seconds: 0, detail: `${left.length} to resume` };
+    if (kept.length) return { status: 'done', detail: `not resumed: ${errors.join('; ')} (lift again to retry)` };
+    await d.deleteExclusion(e.id);
+    return { status: 'done', detail: 'every workload resumed' };
+  }
 
   // The onboarder derives the workload id from the target group (routers 0.20.0 and later); the name is for people. Both
   // are kept in the operation for the next steps.
@@ -100,6 +205,11 @@ export function createEngine(deps: EngineDeps) {
 
   // The target of an operation, and the key no second operation may claim at the same time.
   async function targetOf(type: OperationType, input: Record<string, unknown>): Promise<{ target: Record<string, string>; activeKey: string }> {
+    if (type === 'exclude' || type === 'lift-exclusion') {
+      const e = await deps.discovery?.getExclusion(String(input.exclusionId));
+      if (!e) throw new Error(`unknown exclusion: ${input.exclusionId}`);
+      return { target: { exclusionId: e.id, account: e.target.account }, activeKey: `EXCL#${e.id}` };
+    }
     if (type === 'onboard') {
       const c = await deps.discovery?.getCandidate(String(input.candidateId));
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
@@ -316,6 +426,8 @@ export function createEngine(deps: EngineDeps) {
         const result = await invokeRouter(op, 'onboarder', { action: 'offboard', workloadId: op.target.workloadId, by: op.by });
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
       }
+      case 'pause workloads': return pauseExcluded(op);
+      case 'resume workloads': return resumeExcluded(op);
       case 'candidate':
         if (op.type === 'onboard' && !op.context.workloadId) await previewOf(op);
         return op.type === 'onboard'

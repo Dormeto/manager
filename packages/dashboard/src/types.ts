@@ -166,14 +166,14 @@ export interface Exclusion {
   by: string;
   at: string;
   expiresAt?: string;
-  paused?: { router: string; workloadId: string }[];
+  paused?: { router: string; workloadId: string; account?: string; region?: string }[];
   expired?: boolean;
   liftedAt?: string;
   lifting?: boolean; // lifted, some workloads not resumed yet: Lift again retries
 }
 
 // Operations (onboarding, R4b): run by the workflow, step by step.
-export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard';
+export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion';
 export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Operation {

@@ -1,7 +1,7 @@
 // Manager API: HTTP API (payload 2.0) behind the Cognito JWT authorizer. The routers answer through their controller;
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
 import {
-  DEFAULT_CONFIG, EXCLUSION_KINDS, activeExclusions, exclusionCriterion, lint, matches, rescope, restatus, validateConfig, withExclusions,
+  DEFAULT_CONFIG, EXCLUSION_KINDS, activeExclusions, lint, rescope, restatus, validateConfig, withExclusions,
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
@@ -649,11 +649,13 @@ export function createApi({
   }
 
   const targetText = (t: Exclusion['target']) => `${KIND_TEXT[t.kind]} ${t.name}${t.kind === 'account' && t.name !== t.account ? ` (${t.account})` : ''}`;
-  const pairText = (list: { router: string; workloadId: string }[]) => list.map((p) => `${p.router}/${p.workloadId}`).join(', ');
 
   // The stored candidates decided again with the current exclusions.
-  async function rescoped(d: DiscoveryApi) {
-    const [stored, exclusions, inventory, candidates] = await Promise.all([d.store.getConfig(), d.store.listExclusions(), d.store.getInventory(), d.store.listCandidates()]);
+  // The stored candidates decided again with the exclusions (no run needed): those of the given accounts only (an
+  // exclusion concerns one account), or all.
+  async function rescoped(d: DiscoveryApi, accounts?: string[]) {
+    const load = accounts ? Promise.all(accounts.map((a) => d.store.accountCandidates(a))).then((x) => x.flat()) : d.store.listCandidates();
+    const [stored, exclusions, inventory, candidates] = await Promise.all([d.store.getConfig(), d.store.listExclusions(), d.store.getInventory(), load]);
     const changed = rescope(candidates, withExclusions(stored?.config ?? DEFAULT_CONFIG, exclusions, now()), inventory ?? { accounts: [], ous: {} }, now());
     await d.store.putCandidates(changed);
     return changed.length;
@@ -664,52 +666,13 @@ export function createApi({
     const exclusions = await d.store.listExclusions();
     const lapsed = exclusions.filter((e) => e.expiresAt && Date.parse(e.expiresAt) <= now() && !e.lapsedAt);
     if (!lapsed.length) return exclusions;
-    await rescoped(d);
+    await rescoped(d, [...new Set(lapsed.map((e) => e.target.account))]);
     const at = new Date(now()).toISOString();
     for (const e of lapsed) await d.store.putExclusion({ ...e, lapsedAt: at });
     return d.store.listExclusions();
   }
 
-  // Pause the managed workloads of the stored candidates the exclusion matches (and the workload it was created from) in the
-  // registered router of their account and region whose workload forwards to their target group. Each pause is saved with
-  // the exclusion as soon as it succeeds (a Lift resumes it); a failure is reported, never fatal.
-  async function pauseMatched(d: DiscoveryApi, e: Exclusion, identity: Identity, hint?: { router: Router; id: string }) {
-    const inventory = (await d.store.getInventory()) ?? { accounts: [], ous: {} };
-    const criterion = exclusionCriterion(e);
-    const accountOf = (c: Candidate) => inventory.accounts.find((a) => a.id === c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
-    const wanted = new Map<string, { workloadId: string; targetGroupArn?: string; routers: Router[] }>();
-    for (const c of await d.store.listCandidates()) {
-      if (!c.workloadId || c.goneAt || !matches(criterion, accountOf(c), c, inventory)) continue;
-      wanted.set(`${c.workloadId} ${c.targetGroupArn}`, {
-        workloadId: c.workloadId, ...(c.targetGroupArn ? { targetGroupArn: c.targetGroupArn } : {}),
-        routers: routers.filter((r) => r.region === c.region && (!r.account || r.account === c.account)),
-      });
-    }
-    if (hint) wanted.set(`${hint.id} ${e.target.arn}`, { workloadId: hint.id, targetGroupArn: e.target.arn!, routers: [hint.router] });
-    const paused: { router: string; workloadId: string }[] = [];
-    const unpaused: string[] = [];
-    for (const { workloadId, targetGroupArn, routers: candidates } of wanted.values()) {
-      let outcome: string | null = `${workloadId}: no registered router manages it`;
-      for (const router of candidates) {
-        try {
-          await invoke(router, {
-            action: 'pause', workloadId, ...(targetGroupArn ? { targetGroupArn } : {}), by: identity.email, reason: `${EXCLUDED}${e.reason}`,
-            ...(e.expiresAt ? { until: e.expiresAt } : {}), exclusionId: e.id,
-          });
-          paused.push({ router: router.name, workloadId });
-          await d.store.putExclusion({ ...e, paused });
-          outcome = null;
-          break;
-        } catch (err) {
-          if (err instanceof RouterError && err.message.startsWith('workload not configured')) continue;
-          outcome = `${workloadId} (${router.name}): ${unknownAction(err, 'pause') ? 'router too old to pause, upgrade it to 0.16.0 or later' : (err as Error).message}`;
-          break;
-        }
-      }
-      if (outcome) unpaused.push(outcome);
-    }
-    return { paused, unpaused };
-  }
+
 
   async function exclusionsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, d: DiscoveryApi): Promise<ApiResponse | null> {
     if (method === 'GET' && !id) {
@@ -734,46 +697,30 @@ export function createApi({
         hint = { router, id: String(workload.id) };
       }
       const exclusion: Exclusion = { id: newId(), target, reason, by: identity.email, at: new Date(now()).toISOString(), ...(expiresAt ? { expiresAt } : {}) };
+      if (!operations) throw new HttpError(503, 'unavailable', 'the operations workflow is not configured');
       return audited(identity, 'exclude', targetText(target), async () => {
-        // Stored first: the exclusion stands even if a router cannot be reached.
+        // Stored first: the exclusion stands even if a router cannot be reached. The workflow pauses its workloads
+        // (scale design §6): the API answers at once, whatever their number.
         await d.store.putExclusion(exclusion);
-        const candidates = await rescoped(d);
-        const { paused, unpaused } = await pauseMatched(d, exclusion, identity, hint);
-        const saved = { ...exclusion, ...(paused.length ? { paused } : {}) };
-        const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), ...(paused.length ? [`paused ${pairText(paused)}`] : []),
-          ...unpaused.map((u) => `not paused ${u}`)].join('; ');
-        return { result, response: reply(201, { exclusion: saved, candidates, paused, unpaused }) };
+        const candidates = await rescoped(d, [target.account]);
+        const op = await operations.create('exclude', { exclusionId: exclusion.id, ...(hint ? { hint: { router: hint.router.name, workloadId: hint.id } } : {}) }, identity.email);
+        const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), `operation ${op.id}`].join('; ');
+        return { result, response: reply(202, { exclusion, candidates, operation: op }) };
       });
     }
     if (method === 'DELETE' && id) {
       need(identity, 'operator');
       const exclusion = await d.store.getExclusion(decodeURIComponent(id));
       if (!exclusion) throw new HttpError(404, 'not_found', `unknown exclusion: ${id}`);
+      if (!operations) throw new HttpError(503, 'unavailable', 'the operations workflow is not configured');
       return audited(identity, 'exclusion-lift', targetText(exclusion.target), async () => {
-        // Marked lifted first (it no longer applies), deleted only once every workload paused for it is resumed: a router
-        // that cannot be reached leaves the exclusion listed, and Lift again retries.
+        // Marked lifted first (it no longer applies); the workflow resumes its workloads and deletes it once all are
+        // resumed: until then it stays listed, and Lift again retries.
         const lifted = { ...exclusion, liftedAt: exclusion.liftedAt ?? new Date(now()).toISOString() };
         await d.store.putExclusion(lifted);
-        const candidates = await rescoped(d);
-        const resumed: { router: string; workloadId: string }[] = [];
-        const left: { router: string; workloadId: string }[] = [];
-        const errors: string[] = [];
-        for (const p of exclusion.paused ?? []) {
-          const router = routers.find((r) => r.name === p.router);
-          try {
-            if (!router) throw new Error(`router ${p.router} is no longer registered`);
-            // { resumed: false }: the pause already lapsed (its until), nothing left to resume.
-            await invoke(router, { action: 'resume', workloadId: p.workloadId, by: identity.email, exclusionId: exclusion.id });
-            resumed.push(p);
-          } catch (err) {
-            left.push(p);
-            errors.push(`${p.router}/${p.workloadId}: ${(err as Error).message}`);
-          }
-        }
-        if (left.length) await d.store.putExclusion({ ...lifted, paused: left });
-        else await d.store.deleteExclusion(exclusion.id);
-        const result = [exclusion.reason, ...(resumed.length ? [`resumed ${pairText(resumed)}`] : []), ...errors.map((e) => `not resumed ${e}`)].join('; ');
-        return { result, response: reply(200, { candidates, resumed, errors }) };
+        const candidates = await rescoped(d, [exclusion.target.account]);
+        const op = await operations.create('lift-exclusion', { exclusionId: exclusion.id }, identity.email);
+        return { result: `${exclusion.reason}; operation ${op.id}`, response: reply(202, { candidates, operation: op }) };
       });
     }
     return null;

@@ -115,8 +115,8 @@ const excludeOptions = computed(() => {
 async function exclude(body: object) {
   excludeOpen.value = false;
   try {
-    const result = await api<{ candidates: number; paused: { router: string; workloadId: string }[]; unpaused: string[] }>('/exclusions', { method: 'POST', body: JSON.stringify(body) });
-    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated${result.paused.length ? `, paused ${result.paused.map((p) => nameOf.value(p.router, p.workloadId)).join(', ')}` : ''}${result.unpaused.length ? `; no registered router manages ${result.unpaused.join(', ')}` : ''}.` };
+    const result = await api<{ candidates: number; operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify(body) });
+    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated; its managed workloads are being paused (operation ${result.operation.id}, in Operations).` };
     selected.value = [];
     await load();
   } catch (err) {
@@ -126,8 +126,8 @@ async function exclude(body: object) {
 
 async function lift(e: Exclusion) {
   try {
-    const result = await api<{ candidates: number; resumed: { router: string; workloadId: string }[]; errors: string[] }>(`/exclusions/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
-    notice.value = { type: result.errors.length ? 'error' : 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back${result.resumed.length ? `, resumed ${result.resumed.map((p) => nameOf.value(p.router, p.workloadId)).join(', ')}` : ''}${result.errors.length ? `; ${result.errors.join('; ')}` : ''}.` };
+    const result = await api<{ candidates: number; operation: { id: string } }>(`/exclusions/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+    notice.value = { type: 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back; its workloads are being resumed (operation ${result.operation.id}, in Operations).` };
     await load();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -282,7 +282,7 @@ const headers = [
       <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
         <v-list-item-subtitle class="text-wrap">
           {{ e.reason }} · by {{ e.by }} {{ relative(e.at, now) }} · {{ e.expiresAt ? (e.expired ? `expired ${relative(e.expiresAt, now)}` : `expires ${relative(e.expiresAt, now)}`) : 'no expiry' }}
-          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${nameOf(p.router, p.workloadId)} (${p.router})`).join(', ') }}</template>
+          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${nameOf(p.router, p.workloadId, p.account, p.region)} (${p.router})`).join(', ') }}</template>
         </v-list-item-subtitle>
         <template #append>
           <v-chip v-if="e.expired" variant="tonal" label class="mr-2">expired</v-chip>

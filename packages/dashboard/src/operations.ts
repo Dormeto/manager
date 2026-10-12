@@ -16,6 +16,8 @@ export function operationTitle(op: Operation): string {
     case 'install-router': return `Install a router in ${where(op)}`;
     case 'upgrade-router': return `Upgrade the router of ${where(op)}`;
     case 'uninstall-router': return `Uninstall the router of ${where(op)}`;
+    case 'exclude': return `Pause the workloads of an exclusion in ${op.target.account}`;
+    case 'lift-exclusion': return `Resume the workloads of a lifted exclusion in ${op.target.account}`;
   }
 }
 
