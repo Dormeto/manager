@@ -15,7 +15,7 @@ const managed = (id: string, workloadId: string, targetGroupArn: string, over: P
 });
 
 type Answer = (router: string, payload: Record<string, unknown>) => unknown;
-function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(TG2, 'other', TG2), candidate('free', { loadBalancerArn: LB, targetGroupArn: 'arn:free' })], answer?: Answer) {
+function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(TG2, 'other', TG2), candidate('free', { loadBalancerArn: LB, targetGroupArn: 'arn:free' })], answer?: Answer, workloads: Record<string, unknown>[] = []) {
   const audit: AuditEntry[] = [];
   const calls: [string, Record<string, unknown>][] = [];
   const store = memoryStore(candidates);
@@ -51,6 +51,10 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
     now: () => NOW, newId: () => `x${++ids}`, version: '0.2.0',
     discovery: { store, run: async () => {} },
     operations: operations as never,
+    fleet: {
+      listRouters: async () => [], listWorkloads: async () => { throw new Error('exclusions never list every workload'); },
+      getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
+    },
   });
   return { api, audit, calls, store, created, operations };
 }
@@ -181,9 +185,19 @@ describe('exclusions', () => {
       routers: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'c', account: ACCOUNT }], invoke: async () => null,
       audit: { write: async () => {}, list: async () => [] }, now: () => now, version: '0.2.0', discovery: { store, run: async () => {} },
     });
-    const { candidates } = json(await later(event('GET', '/api/discovery')));
-    expect(candidates.find((c: Candidate) => c.id === TG).status).toBe('managed');
+    expect((await later(event('GET', '/api/discovery'))).statusCode).toBe(200);
+    expect((await store.getCandidate(TG))!.status).toBe('managed');
     expect((await store.getExclusion('x1'))!.lapsedAt).toBe(new Date(NOW + 2 * DAY).toISOString());
+  });
+
+  it('names the workloads an exclusion paused from their summaries', async () => {
+    const { api, store } = setup([], undefined, [{ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' }]);
+    await store.putExclusion({
+      id: 'x9', target: { kind: 'account', account: ACCOUNT, name: 'dormeto' }, reason: 'a', by: 'ops@example.com', at: '2026-10-04T00:00:00.000Z',
+      paused: [{ router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-1', workloadId: 'a4dffc5bf369a297' }, { router: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-3', workloadId: 'gone' }],
+    });
+    const [e] = json(await api(event('GET', '/api/exclusions'))).exclusions;
+    expect(e.paused.map((p: { name?: string }) => p.name ?? null)).toEqual(['Shop', null]);
   });
 
   it('lists exclusions to viewers, expired ones marked', async () => {

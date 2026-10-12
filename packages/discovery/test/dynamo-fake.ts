@@ -48,8 +48,12 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
         let found = [...items.values()].filter((i) => (i[hash]?.S ?? (hash === 'pk' ? 'T#default' : undefined)) === pk && (i[range]?.S ?? '').startsWith(prefix))
           .sort((a, b) => (a[range]!.S! < b[range]!.S! ? -1 : 1));
         if (input.ScanIndexForward === false) found.reverse();
+        // After the start key's position, as DynamoDB does (the item there may have moved or gone since).
         const start = input.ExclusiveStartKey;
-        if (start) found = found.slice(found.findIndex((i) => keyOf(i) === keyOf(start)) + 1);
+        if (start) {
+          const at = start[range]?.S ?? '';
+          found = found.filter((i) => (input.ScanIndexForward === false ? i[range]!.S! < at : i[range]!.S! > at));
+        }
         const limit = Math.min(input.Limit ?? Infinity, pageSize);
         const page = found.slice(0, limit);
         if (input.Select === 'COUNT') {

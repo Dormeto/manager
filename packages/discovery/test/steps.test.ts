@@ -96,6 +96,8 @@ describe('a run in steps', () => {
       `${A.id}/eu-west-1 ok`, `${A.id}/eu-west-3 ok`, `${B.id}/* error: the account step did not finish (timed out or failed)`,
     ]);
     expect((await s.store.lastRun())).toMatchObject({ startedAt: plan.runId, status: 'partial' });
+    // The counts the Discovery view starts from, moved by the changes until the next run.
+    expect((await s.store.getCounts())!.counts).toEqual({ 'pending-onboarding': 2 });
     expect(await s.store.acquireLock('next')).toBe(true);
   });
 

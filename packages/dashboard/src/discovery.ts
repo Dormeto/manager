@@ -79,23 +79,25 @@ export function idleText(c: { idleHours7d: number; requests7d: number | null }):
 // From red (always busy) through amber to green (always idle: the most to save).
 export const idleColor = (idleHours7d: number): string => `hsl(${Math.round((120 * Math.min(Math.max(idleHours7d, 0), 168)) / 168)} 70% 42%)`;
 
-// The workload of a managed candidate, for its name and link: its router by account (when known) and region, then its id.
-export function workloadOf(routers: { name: string; region: string; account?: string }[], workloads: { router: string; workloadId: string; name?: string }[]) {
-  return (c: { account: string; region: string; workloadId?: string }): { router: string; workloadId: string; name: string } | null => {
-    if (!c.workloadId) return null;
-    const here = new Set(routers.filter((r) => r.region === c.region && (!r.account || r.account === c.account)).map((r) => r.name));
-    const w = workloads.find((x) => here.has(x.router) && x.workloadId === c.workloadId);
-    return w ? { router: w.router, workloadId: w.workloadId, name: w.name ?? w.workloadId } : null;
-  };
+// The first status people act on that has candidates: the Discovery view opens on it.
+export function firstStatus(counts: Partial<Record<Status, number>>): Status {
+  return STATUSES.find((s) => (counts[s] ?? 0) > 0) ?? 'pending-onboarding';
 }
 
-// The name of a workload of a router (exclusions list the workloads they paused by router and id), its id when unknown.
-export function workloadNamed(workloads: { router: string; workloadId: string; name?: string; account?: string; region?: string }[]) {
-  const names = new Map(workloads.map((w) => [`${w.router}/${w.workloadId}`, w.name ?? w.workloadId]));
-  const located = new Map(workloads.filter((w) => w.account && w.region).map((w) => [`${w.account}/${w.region}/${w.workloadId}`, w.name ?? w.workloadId]));
-  // By the router's name in the manager, else by its account and region (the workflow records routers by their AWS name).
-  return (router: string, workloadId: string, account?: string, region?: string): string =>
-    names.get(`${router}/${workloadId}`) ?? (account && region ? located.get(`${account}/${region}/${workloadId}`) : undefined) ?? workloadId;
+// Pages of a cursor-paged list: page n starts at the cursor page n - 1 gave; any page seen can be shown again.
+export function cursorPages() {
+  const cursors: (string | null)[] = [null];
+  return {
+    cursor: (page: number) => cursors[page] ?? null,
+    loaded(page: number, next: string | null) {
+      cursors.length = page + 1;
+      if (next) cursors.push(next);
+    },
+    hasNext: (page: number) => cursors.length > page + 1,
+    reset() {
+      cursors.length = 1;
+    },
+  };
 }
 
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;

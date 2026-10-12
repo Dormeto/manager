@@ -295,6 +295,7 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
       counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),
     };
     await deps.store.putRun(record);
+    await deps.store.putCounts(record.counts);
     log.info('DiscoveryRun', { status, accounts: plan.accounts.length, errors, counts: record.counts });
     return record;
   } catch (err) {

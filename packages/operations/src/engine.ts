@@ -40,7 +40,7 @@ export interface TargetAccess {
 
 export interface EngineDeps {
   records: Records;
-  discovery?: Pick<DiscoveryStore, 'getCandidate' | 'putCandidates' | 'accountCandidates' | 'getInventory' | 'getExclusion' | 'updateExclusion' | 'deleteExclusion'>;
+  discovery?: Pick<DiscoveryStore, 'getCandidate' | 'replaceCandidates' | 'accountCandidates' | 'getInventory' | 'getExclusion' | 'updateExclusion' | 'deleteExclusion'>;
   routers(): Promise<RouterRef[]>;
   target(account: string, region: string): Promise<TargetAccess>;
   bundle(): Promise<{ blueprint: Blueprint; zip: Uint8Array; codeSha256: string }>;
@@ -297,7 +297,7 @@ export function createEngine(deps: EngineDeps) {
     const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? '');
     const c = id ? await deps.discovery?.getCandidate(id) : null;
     if (!c) return { status: 'skipped', detail: 'no discovery candidate' };
-    await deps.discovery!.putCandidates([restatus(change(c), iso(now()))]);
+    await deps.discovery!.replaceCandidates([restatus(change(c), iso(now()))], [c]);
     return { status: 'done' };
   }
 

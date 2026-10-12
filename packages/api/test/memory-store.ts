@@ -1,5 +1,5 @@
 // In-memory discovery store and candidates for the API tests.
-import type { Candidate, DiscoveryConfig, DiscoveryStore, Exclusion, OrgInventory, RunRecord, StoredConfig } from '@dormeto/discovery';
+import { InvalidCursor, type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type OrgInventory, type RunRecord, type StoredConfig } from '@dormeto/discovery';
 
 export const NOW = Date.UTC(2026, 9, 4, 12, 0);
 
@@ -17,10 +17,29 @@ export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null 
     async getCandidate(id: string) { return items.get(id) ?? null; },
     async putCandidates(list: Candidate[]) { for (const c of list) items.set(c.id, c); },
     async deleteCandidates(list: Pick<Candidate, 'id'>[]) { for (const c of list) items.delete(c.id); },
-    async pageCandidates({ status, limit, cursor }: { status: Candidate['status']; limit: number; cursor?: string }) {
-      const all = [...items.values()].filter((c) => c.status === status);
-      const start = cursor ? Number(cursor) : 0;
-      return { candidates: all.slice(start, start + limit), cursor: start + limit < all.length ? String(start + limit) : null };
+    // As the index: in account, region and id order, after the cursor's position (the candidate there may have moved).
+    async pageCandidates({ status, limit, cursor, account, region }: { status: Candidate['status']; limit: number; cursor?: string; account?: string; region?: string }) {
+      const keyOf = (c: Candidate) => `${c.account}#${c.region}#${c.id}`;
+      const prefix = account ? `${account}#${region ? `${region}#` : ''}` : '';
+      if (cursor && !cursor.startsWith('k:')) throw new InvalidCursor();
+      const after = cursor?.slice(2) ?? '';
+      const all = [...items.values()].filter((c) => c.status === status && keyOf(c).startsWith(prefix) && keyOf(c) > after).sort((a, b) => keyOf(a).localeCompare(keyOf(b)));
+      const page = all.slice(0, limit);
+      return { candidates: page, cursor: all.length > limit ? `k:${keyOf(page.at(-1)!)}` : null };
+    },
+    counts: null as { counts: Partial<Record<Candidate['status'], number>>; at: string } | null,
+    async getCounts() { return structuredClone(store.counts); },
+    async putCounts(counts: Partial<Record<Candidate['status'], number>>) { store.counts = { counts: { ...counts }, at: new Date(NOW).toISOString() }; },
+    async replaceCandidates(after: Candidate[], before: Candidate[]) {
+      for (const c of after) items.set(c.id, c);
+      if (!store.counts) return;
+      const counts = store.counts.counts;
+      for (const c of after) {
+        const from = before.find((b) => b.id === c.id)?.status;
+        if (from === c.status) continue;
+        if (from && !(counts[from] = (counts[from] ?? 0) - 1)) delete counts[from];
+        counts[c.status] = (counts[c.status] ?? 0) + 1;
+      }
     },
     async accountCandidates(account: string) { return [...items.values()].filter((c) => c.account === account); },
     async getAccountScan() { return null; },

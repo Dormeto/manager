@@ -45,11 +45,12 @@ if (option('run')) {
   await call('/discovery/run', { method: 'POST' });
   for (let i = 0; i < 180; i += 1) {
     await sleep(5000);
-    if ((await call('/discovery')).lastRun?.startedAt !== before) break;
+    const { lastRun } = await call('/discovery');
+    if (lastRun?.startedAt !== before && lastRun?.status !== 'running') break;
   }
 }
 if (option('show') || option('run')) {
-  const { lastRun, candidates } = await call('/discovery');
+  const { lastRun, counts } = await call('/discovery');
   if (!lastRun) {
     console.log('no run yet');
     process.exit(0);
@@ -59,7 +60,11 @@ if (option('show') || option('run')) {
   for (const t of lastRun.targets.filter((t) => t.status !== 'skipped')) console.log(`  ${t.account}/${t.region} ${t.status}${t.error ? `: ${t.error}` : ` ${t.rules} rules, ${t.ms} ms`}`);
   for (const s of lastRun.skipped ?? []) console.log(`  ${s.pairs} pairs of ${s.accounts} accounts skipped: ${s.reason}`);
   for (const f of lastRun.lint) console.log(`  lint ${f.level}: ${f.message}`);
-  for (const c of candidates.sort((a, b) => a.account.localeCompare(b.account) || a.region.localeCompare(b.region))) {
-    console.log(`  ${c.status.padEnd(19)} ${c.account} ${c.region} ${c.loadBalancer} ${c.conditions} — ${c.statusReason}`);
+  console.log(`  counts now ${JSON.stringify(counts)}; empty account-regions ${lastRun.emptyPairs ?? 0}`);
+  // The candidates, a status at a time, the first 200 of each.
+  for (const status of Object.keys(counts)) {
+    for (const c of (await call(`/discovery/candidates?status=${status}&limit=200`)).candidates) {
+      console.log(`  ${c.status.padEnd(19)} ${c.account} ${c.region} ${c.loadBalancer} ${c.conditions} — ${c.statusReason}`);
+    }
   }
 }

@@ -1,8 +1,8 @@
 // Manager API: HTTP API (payload 2.0) behind the Cognito JWT authorizer. The routers answer through their controller;
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
 import {
-  DEFAULT_CONFIG, EXCLUSION_KINDS, activeExclusions, lint, rescope, restatus, validateConfig, withExclusions,
-  type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind,
+  CANDIDATE_STATUSES, DEFAULT_CONFIG, EXCLUSION_KINDS, InvalidCursor, activeExclusions, lint, rescope, restatus, validateConfig, withExclusions,
+  type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 import { reporting, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
@@ -155,6 +155,9 @@ const REASON_MAX = 256;
 // Pause until and exclusion expiry: at most this far ahead.
 const AHEAD_MAX_MS = 366 * DAY_MS;
 const ACCOUNT = /^\d{12}$/;
+// Candidates per page of the Discovery view: 50 by default, at most 200 (scale design §5).
+const CANDIDATES_PAGE = 50;
+const CANDIDATES_MAX = 200;
 const ARNS: Record<Exclude<ExclusionKind, 'account'>, RegExp> = {
   'target-group': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):targetgroup\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
   'load-balancer': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):loadbalancer\/app\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
@@ -588,13 +591,40 @@ export function createApi({
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+  // A managed candidate's workload, by its name (the id is not for people), with the router the dashboard links to.
+  async function withWorkload(c: Candidate) {
+    if (!c.workloadId) return c;
+    const router = routers.find((r) => accountOfRouter(r) === c.account && r.region === c.region);
+    const summary = fleet ? await fleet.getWorkload(c.account, c.region, c.workloadId).catch(() => null) : null;
+    if (!router && !summary) return c;
+    return { ...c, workload: { router: router?.name ?? summary!.router, workloadId: c.workloadId, name: (summary?.name as string | undefined) ?? c.workloadId } };
+  }
+
   async function discoveryRoute(method: string, sub: string | undefined, identity: Identity, event: ApiEvent, d: DiscoveryApi): Promise<ApiResponse | null> {
+    // The last run and the counts per status (scale design §5); the candidates come by page.
     if (method === 'GET' && !sub) {
       await settleExpired(d);
+      const [lastRun, counts] = await Promise.all([d.store.lastRun(), d.store.getCounts()]);
+      return reply(200, { lastRun, counts: counts?.counts ?? (await d.store.lastRun({ completed: true }))?.counts ?? {} });
+    }
+    if (method === 'GET' && sub === 'candidates') {
       const q = event.queryStringParameters ?? {};
-      const candidates = (await d.store.listCandidates())
-        .filter((c) => (!q.status || c.status === q.status) && (!q.account || c.account === q.account) && (!q.region || c.region === q.region));
-      return reply(200, { lastRun: await d.store.lastRun(), candidates });
+      const status = q.status as Status;
+      if (!CANDIDATE_STATUSES.includes(status)) throw new HttpError(400, 'bad_request', `status must be one of ${CANDIDATE_STATUSES.join(', ')}`);
+      if ((q.account && !ACCOUNT.test(q.account)) || (q.region && (!q.account || !REGION.test(q.region)))) {
+        throw new HttpError(400, 'bad_request', 'account must be 12 digits; a region needs its account');
+      }
+      const limit = q.limit === undefined ? CANDIDATES_PAGE : Number(q.limit);
+      if (!Number.isInteger(limit) || limit < 1) throw new HttpError(400, 'bad_request', 'limit must be a positive integer');
+      let page;
+      try {
+        page = await d.store.pageCandidates({ status, limit: Math.min(limit, CANDIDATES_MAX), ...(q.cursor ? { cursor: q.cursor } : {}), ...(q.account ? { account: q.account } : {}), ...(q.region ? { region: q.region } : {}) });
+      } catch (err) {
+        if (err instanceof InvalidCursor) throw new HttpError(400, 'bad_request', 'invalid cursor');
+        throw err;
+      }
+      const shown = page.candidates.filter((c) => visible(identity, { account: c.account, region: c.region }));
+      return reply(200, { candidates: await Promise.all(shown.map(withWorkload)), cursor: page.cursor });
     }
     if (method === 'POST' && sub === 'run') {
       need(identity, 'operator');
@@ -641,7 +671,7 @@ export function createApi({
           const { dismissed: _, ...rest } = c;
           return restatus(sub === 'dismiss' ? { ...rest, dismissed: { by: identity.email, at, ...(note ? { note } : {}) } } : rest, at);
         });
-        await d.store.putCandidates(updated);
+        await d.store.replaceCandidates(updated, found as Candidate[]);
         return { result: plural(updated.length, 'candidate'), response: reply(200, { candidates: updated }) };
       });
     }
@@ -674,7 +704,7 @@ export function createApi({
     const load = accounts ? Promise.all(accounts.map((a) => d.store.accountCandidates(a))).then((x) => x.flat()) : d.store.listCandidates();
     const [stored, exclusions, inventory, candidates] = await Promise.all([d.store.getConfig(), d.store.listExclusions(), d.store.getInventory(), load]);
     const changed = rescope(candidates, withExclusions(stored?.config ?? DEFAULT_CONFIG, exclusions, now()), inventory ?? { accounts: [], ous: {} }, now());
-    await d.store.putCandidates(changed);
+    await d.store.replaceCandidates(changed, candidates);
     return changed.length;
   }
 
@@ -695,7 +725,16 @@ export function createApi({
     if (method === 'GET' && !id) {
       const all = await settleExpired(d);
       const active = new Set(activeExclusions(all, now()).map((e) => e.id));
-      return reply(200, { exclusions: all.map((e) => ({ ...e, expired: !e.liftedAt && !active.has(e.id), lifting: Boolean(e.liftedAt) })) });
+      // The workloads each one paused, by their names (from their summaries; the id is not for people).
+      const named = async (p: NonNullable<Exclusion['paused']>[number]) => {
+        const summary = fleet && p.account && p.region ? await fleet.getWorkload(p.account, p.region, p.workloadId).catch(() => null) : null;
+        return summary?.name ? { ...p, name: summary.name } : p;
+      };
+      return reply(200, {
+        exclusions: await Promise.all(all.map(async (e) => ({
+          ...e, ...(e.paused ? { paused: await Promise.all(e.paused.map(named)) } : {}), expired: !e.liftedAt && !active.has(e.id), lifting: Boolean(e.liftedAt),
+        }))),
+      });
     }
     if (method === 'POST' && !id) {
       need(identity, 'operator');

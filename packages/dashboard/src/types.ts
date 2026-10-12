@@ -167,7 +167,7 @@ export interface Exclusion {
   by: string;
   at: string;
   expiresAt?: string;
-  paused?: { router: string; workloadId: string; account?: string; region?: string }[];
+  paused?: { router: string; workloadId: string; account?: string; region?: string; name?: string }[]; // name: from its summary
   expired?: boolean;
   liftedAt?: string;
   lifting?: boolean; // lifted, some workloads not resumed yet: Lift again retries

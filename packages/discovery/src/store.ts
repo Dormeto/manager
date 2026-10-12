@@ -9,8 +9,9 @@ const RETENTION_S = 90 * 86_400;
 const LOCK_MS = 15 * 60_000;
 // An expired exclusion stays listed (shown as expired) for 30 days.
 const EXPIRED_EXCLUSION_S = 30 * 86_400;
-// Writes of one exclusion tried before giving up, when other writers keep changing it.
-const EXCLUSION_WRITES = 5;
+// Writes of an item of several writers (an exclusion, the counts) tried before giving up, when others keep changing it.
+const VERSIONED_WRITES = 5;
+const COUNTS = 'DISC#COUNTS';
 type Item = Record<string, AttributeValue>;
 
 export interface StoredConfig {
@@ -27,7 +28,13 @@ export interface DiscoveryStore {
   lastRun(options?: { completed?: boolean }): Promise<RunRecord | null>;
   putRun(run: RunRecord): Promise<void>;
   listCandidates(): Promise<Candidate[]>;
-  pageCandidates(page: { status: Status; limit: number; cursor?: string }): Promise<{ candidates: Candidate[]; cursor: string | null }>;
+  // A page of the candidates of a status, in account, region and id order; within an account, or an account and region.
+  pageCandidates(page: { status: Status; limit: number; cursor?: string; account?: string; region?: string }): Promise<{ candidates: Candidate[]; cursor: string | null }>;
+  // Candidates changed between runs (dismissals, exclusions, operations): written, and the counts moved by their status.
+  replaceCandidates(after: Candidate[], before: Candidate[]): Promise<void>;
+  // Candidates per status: set by each run, moved by each change between runs (scale design §5).
+  getCounts(): Promise<{ counts: Partial<Record<Status, number>>; at: string } | null>;
+  putCounts(counts: Partial<Record<Status, number>>): Promise<void>;
   accountCandidates(account: string): Promise<Candidate[]>;
   getCandidate(id: string): Promise<Candidate | null>;
   putCandidates(candidates: Candidate[]): Promise<void>;
@@ -91,6 +98,30 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     return item?.data?.S ? (JSON.parse(item.data.S) as T) : null;
   };
   const packed = (value: unknown): AttributeValue => ({ B: gzipSync(JSON.stringify(value)) });
+  const countsItem = (value: { counts: Partial<Record<Status, number>>; at: string }, version: number): Item => ({ ...key(COUNTS), data: { S: JSON.stringify(value) }, version: { N: String(version) } });
+
+  // Read, change and write back an item of several writers, again on the newer version when another one changed it in
+  // between; null (nothing written) when there is no such item.
+  async function updateVersioned<T>(sk: string, toItem: (value: T, version: number) => Item, change: (value: T) => T | Promise<T>): Promise<T | null> {
+    for (let attempt = 1; ; attempt += 1) {
+      const item = await get(sk);
+      const current = data<T>(item);
+      if (!current) return null;
+      const version = item!.version?.N ?? '0';
+      const next = await change(structuredClone(current));
+      try {
+        await dynamo.send(new PutItemCommand({
+          TableName: table, Item: toItem(next, Number(version) + 1),
+          ConditionExpression: 'attribute_exists(sk) AND (attribute_not_exists(version) OR version = :version)',
+          ExpressionAttributeValues: { ':version': { N: version } },
+        }));
+        return next;
+      } catch (err) {
+        if ((err as Error).name !== 'ConditionalCheckFailedException' || attempt >= VERSIONED_WRITES) throw err;
+      }
+    }
+  }
+
   const exclusionItem = (exclusion: Exclusion, version: number): Item => ({
     ...key(`EXCL#${exclusion.id}`),
     data: { S: JSON.stringify(exclusion) },
@@ -195,9 +226,12 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       })))).flat();
       return items.map((item) => data<Candidate>(item)!).filter(Boolean);
     },
-    async pageCandidates({ status, limit, cursor }) {
+    async pageCandidates({ status, limit, cursor, account, region }) {
+      const prefix = account ? `${account}#${region ? `${region}#` : ''}` : '';
       const page = await dynamo.send(new QueryCommand({
-        TableName: table, IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': { S: `CS#${status}` } },
+        TableName: table, IndexName: 'gsi1',
+        KeyConditionExpression: prefix ? 'gsi1pk = :pk AND begins_with(gsi1sk, :prefix)' : 'gsi1pk = :pk',
+        ExpressionAttributeValues: { ':pk': { S: `CS#${status}` }, ...(prefix ? { ':prefix': { S: prefix } } : {}) },
         Limit: limit, ...(cursor ? { ExclusiveStartKey: decodeCursor(cursor, status) } : {}),
       }));
       return { candidates: ((page.Items ?? []) as Item[]).map((item) => data<Candidate>(item)!).filter(Boolean), cursor: encodeCursor(page.LastEvaluatedKey) };
@@ -213,6 +247,32 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     },
     async putCandidates(candidates) {
       await batchWrite(candidates.map((c) => ({ PutRequest: { Item: candidateItem(c) } })));
+    },
+    async replaceCandidates(after, before) {
+      await batchWrite(after.map((c) => ({ PutRequest: { Item: candidateItem(c) } })));
+      const was = new Map(before.map((c) => [c.id, c.status]));
+      const moves: Partial<Record<Status, number>> = {};
+      for (const c of after) {
+        const from = was.get(c.id);
+        if (from === c.status) continue;
+        if (from) moves[from] = (moves[from] ?? 0) - 1;
+        moves[c.status] = (moves[c.status] ?? 0) + 1;
+      }
+      if (!Object.keys(moves).length) return;
+      await updateVersioned<{ counts: Partial<Record<Status, number>>; at: string }>(COUNTS, countsItem, ({ counts, at }) => {
+        const next = { ...counts };
+        for (const [status, n] of Object.entries(moves) as [Status, number][]) {
+          next[status] = Math.max(0, (next[status] ?? 0) + n);
+          if (!next[status]) delete next[status];
+        }
+        return { counts: next, at };
+      });
+    },
+    async getCounts() {
+      return data<{ counts: Partial<Record<Status, number>>; at: string }>(await get(COUNTS));
+    },
+    async putCounts(counts) {
+      await put(countsItem({ counts, at: new Date(now()).toISOString() }, 1));
     },
     async deleteCandidates(candidates) {
       await batchWrite(candidates.map((c) => ({ DeleteRequest: { Key: candidateKey(c.account, c.region, c.id) } })));
@@ -271,23 +331,7 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     },
     // The API, the workflow and expiry write the same exclusion: each write is conditional on the version it read.
     async updateExclusion(id, change) {
-      for (let attempt = 1; ; attempt += 1) {
-        const item = await get(`EXCL#${id}`);
-        const current = data<Exclusion>(item);
-        if (!current) return null;
-        const version = item!.version?.N ?? '0';
-        const next = await change(structuredClone(current));
-        try {
-          await dynamo.send(new PutItemCommand({
-            TableName: table, Item: exclusionItem(next, Number(version) + 1),
-            ConditionExpression: 'attribute_exists(sk) AND (attribute_not_exists(version) OR version = :version)',
-            ExpressionAttributeValues: { ':version': { N: version } },
-          }));
-          return next;
-        } catch (err) {
-          if ((err as Error).name !== 'ConditionalCheckFailedException' || attempt >= EXCLUSION_WRITES) throw err;
-        }
-      }
+      return updateVersioned<Exclusion>(`EXCL#${id}`, exclusionItem, change);
     },
     async deleteExclusion(id) {
       await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(`EXCL#${id}`) }));

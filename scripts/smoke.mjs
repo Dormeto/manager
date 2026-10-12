@@ -55,10 +55,16 @@ if (first) {
 // Organization discovery: once a run succeeded, every workload of the routers is a managed candidate.
 const discovery = await call('/discovery', { token });
 const lastRun = discovery.body?.lastRun;
-const managed = (discovery.body?.candidates ?? []).filter((c) => c.status === 'managed').length;
+// Counts per status (the candidates come by page).
+const counts = discovery.body?.counts ?? {};
+const managed = counts.managed ?? 0;
+const total = Object.values(counts).reduce((n, c) => n + c, 0);
 const expected = (routers.body?.routers ?? []).reduce((n, r) => n + (r.workloads ?? 0), 0);
 check(discovery.status === 200 && (!['ok', 'partial'].includes(lastRun?.status) || managed >= expected), 'discovery',
-  `last run ${lastRun?.status ?? 'none'}${lastRun ? ` ${lastRun.startedAt}` : ''}, ${discovery.body?.candidates?.length} candidates, ${managed} managed of ${expected} workloads (${discovery.ms} ms)`);
+  `last run ${lastRun?.status ?? 'none'}${lastRun ? ` ${lastRun.startedAt}` : ''}, ${total} candidates, ${managed} managed of ${expected} workloads (${discovery.ms} ms)`);
+const page = await call('/discovery/candidates?status=managed&limit=5', { token });
+check(page.status === 200 && Array.isArray(page.body?.candidates) && page.body.candidates.length === Math.min(5, managed), 'discovery page',
+  `${page.body?.candidates?.length} managed on the first page${page.body?.cursor ? ', more after' : ''} (${page.ms} ms)`);
 const perimeter = await call('/discovery/config', { token });
 check(perimeter.status === 200 && Array.isArray(perimeter.body?.config?.filters), 'discovery perimeter',
   `${perimeter.body?.config?.filters?.length} filters, ${perimeter.body?.config?.globalExcludes?.length} global excludes, ${perimeter.body?.lint?.length} lint findings`);

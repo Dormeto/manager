@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Organization discovery: the last run (scanned, skipped and failed account-regions, lint) and the candidate rules.
+// Organization discovery: the last run (scanned, skipped and failed account-regions, lint) and the candidates, a status
+// at a time, paged on the server (scale design §5), starting with the statuses people act on.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useDisplay } from 'vuetify';
 import { mdiCancel, mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiLogoutVariant, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
@@ -7,11 +8,11 @@ import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import OnboardDialog from '../components/OnboardDialog.vue';
-import type { RouterInfo, WorkloadSummary } from '../types';
+import type { RouterInfo } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import { STATUSES, ruleLines, statusColor, statusLabel, targetText, workloadNamed, workloadOf } from '../discovery';
+import { STATUSES, cursorPages, firstStatus, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative } from '../format';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -26,12 +27,21 @@ const now = useNow();
 const session = useSession();
 const badge = useDiscoveryBadge();
 const { smAndDown } = useDisplay();
+// A managed candidate carries its workload's name and router (from its summary).
+type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string } };
+const PAGE = 50;
 const lastRun = ref<RunRecord | null>(null);
-const candidates = ref<Candidate[]>([]);
+const counts = ref<Partial<Record<Status, number>>>({});
+const candidates = ref<Listed[]>([]);
 const loading = ref(false);
 const running = ref(false);
 const error = ref('');
-const shown = ref<Status[]>(['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible']);
+const status = ref<Status | null>(null);
+const account = ref('');
+const region = ref('');
+const page = ref(0);
+const pages = cursorPages();
+const hasNext = ref(false);
 const selected = ref<string[]>([]);
 const dismissDialog = ref(false);
 const note = ref('');
@@ -40,37 +50,60 @@ const onboardOpen = ref(false);
 const excludeOpen = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 let poll: number | undefined;
-// Managed candidates link to their workload, by its name (the workload id is not for people).
-const workloadFor = ref<ReturnType<typeof workloadOf>>(() => null);
-const nameOf = ref<ReturnType<typeof workloadNamed>>((_router, id) => id);
+const filtered = computed(() => /^\d{12}$/.test(account.value));
 
-async function loadWorkloads() {
-  try {
-    const [{ routers }, { workloads }] = await Promise.all([api<{ routers: RouterInfo[] }>('/routers'), api<{ workloads: WorkloadSummary[] }>('/workloads')]);
-    workloadFor.value = workloadOf(routers, workloads);
-    nameOf.value = workloadNamed(workloads);
-  } catch {
-    // Names are a convenience: the candidates show without them.
+// One page of the shown status, within the account (and region) when given.
+async function loadPage() {
+  if (!status.value) return;
+  const query = new URLSearchParams({ status: status.value, limit: String(PAGE) });
+  if (filtered.value) {
+    query.set('account', account.value);
+    if (/^[a-z]{2}(-[a-z]+)+-\d$/.test(region.value)) query.set('region', region.value);
   }
+  const cursor = pages.cursor(page.value);
+  if (cursor) query.set('cursor', cursor);
+  const result = await api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${query}`);
+  pages.loaded(page.value, result.cursor);
+  hasNext.value = pages.hasNext(page.value);
+  candidates.value = result.candidates;
+  selected.value = [];
 }
 
 async function load() {
   loading.value = true;
   try {
     const [result, excluded] = await Promise.all([
-      api<{ lastRun: RunRecord | null; candidates: Candidate[] }>('/discovery'),
+      api<{ lastRun: RunRecord | null; counts: Partial<Record<Status, number>> }>('/discovery'),
       api<{ exclusions: Exclusion[] }>('/exclusions'),
     ]);
     lastRun.value = result.lastRun;
-    candidates.value = result.candidates;
+    counts.value = result.counts;
     exclusions.value = excluded.exclusions.sort((a, b) => b.at.localeCompare(a.at));
-    badge.fromCounts(result.lastRun?.counts);
+    badge.fromCounts(result.counts);
+    status.value ??= firstStatus(result.counts);
+    await loadPage();
     error.value = '';
   } catch (err) {
     error.value = (err as Error).message;
   } finally {
     loading.value = false;
   }
+}
+
+// Another status or filter starts again from the first page.
+function show(next: Status | null) {
+  if (!next) return;
+  status.value = next;
+  restart();
+}
+function restart() {
+  page.value = 0;
+  pages.reset();
+  load();
+}
+function turn(by: number) {
+  page.value += by;
+  load();
 }
 
 // The run is asynchronous: poll until a new run record appears (a run takes seconds to minutes).
@@ -87,7 +120,8 @@ async function runNow() {
   const deadline = Date.now() + 15 * 60_000;
   poll = window.setInterval(async () => {
     await load();
-    if (lastRun.value?.startedAt !== before || Date.now() > deadline) {
+    // A new run, once finished (it shows as running while its accounts are scanned).
+    if ((lastRun.value?.startedAt !== before && lastRun.value?.status !== 'running') || Date.now() > deadline) {
       window.clearInterval(poll);
       running.value = false;
     }
@@ -162,17 +196,12 @@ async function offboard() {
     notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
     return;
   }
-  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, `Offboarding of ${workloadFor.value(c)?.name ?? c.workloadId}`);
+  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, `Offboarding of ${c.workload?.name ?? c.workloadId}`);
 }
 
-onMounted(() => { load(); loadWorkloads(); });
+onMounted(load);
 onBeforeUnmount(() => window.clearInterval(poll));
 
-const order = (s: Status) => STATUSES.indexOf(s);
-const counts = computed(() => Object.fromEntries(STATUSES.map((s) => [s, candidates.value.filter((c) => c.status === s).length])) as Record<Status, number>);
-const visible = computed(() => candidates.value
-  .filter((c) => shown.value.includes(c.status))
-  .sort((a, b) => order(a.status) - order(b.status) || a.account.localeCompare(b.account) || a.region.localeCompare(b.region) || a.loadBalancer.localeCompare(b.loadBalancer)));
 const failed = computed(() => lastRun.value?.targets.filter((t) => t.status === 'error') ?? []);
 // Account-regions scanned without any rule are counted, not listed (R4.5).
 const scanned = computed(() => (lastRun.value?.targets.filter((t) => t.status === 'ok').length ?? 0) + (lastRun.value?.emptyPairs ?? 0));
@@ -181,16 +210,19 @@ const skipped = computed(() => lastRun.value?.skipped?.reduce((n, s) => n + s.pa
 const seconds = computed(() => (lastRun.value ? Math.round((Date.parse(lastRun.value.finishedAt) - Date.parse(lastRun.value.startedAt)) / 1000) : null));
 const selectedDismissed = computed(() => selected.value.length > 0 && selected.value.every((id) => candidates.value.find((c) => c.id === id)?.status === 'dismissed'));
 const runColor = (status: RunRecord['status']) => ({ running: 'info', ok: 'success', partial: 'warning', failed: 'error', skipped: 'grey' })[status];
+// In account, region and id order (the index's): no other sort on the server.
 const headers = [
-  { title: 'Status', key: 'status' },
-  { title: 'Account', key: 'account' },
-  { title: 'Region', key: 'region' },
+  { title: 'Status', key: 'status', sortable: false },
+  { title: 'Account', key: 'account', sortable: false },
+  { title: 'Region', key: 'region', sortable: false },
   { title: 'Rule', key: 'conditions', sortable: false },
   { title: 'Backend', key: 'backend', sortable: false },
-  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end' as const },
+  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end' as const, sortable: false },
   { title: 'Reason', key: 'statusReason', sortable: false },
-  { title: 'First seen', key: 'firstSeenAt' },
+  { title: 'First seen', key: 'firstSeenAt', sortable: false },
 ];
+const first = computed(() => page.value * PAGE + (candidates.value.length ? 1 : 0));
+const last = computed(() => page.value * PAGE + candidates.value.length);
 </script>
 
 <template>
@@ -224,10 +256,10 @@ const headers = [
   <LintAlert v-if="lastRun" :findings="lastRun.lint" :settings-link="session.isAdmin" />
 
   <div class="d-flex flex-wrap align-center ga-2 mb-2">
-    <v-chip-group v-model="shown" multiple column>
+    <v-chip-group :model-value="status" mandatory column @update:model-value="show">
       <v-tooltip v-for="s in STATUSES" :key="s" location="top" max-width="380">
         <template #activator="{ props }">
-          <v-chip v-bind="props" :value="s" :color="statusColor(s)" filter variant="tonal">{{ statusLabel(s) }} ({{ counts[s] }})</v-chip>
+          <v-chip v-bind="props" :value="s" :color="statusColor(s)" filter variant="tonal">{{ statusLabel(s) }} ({{ counts[s] ?? 0 }})</v-chip>
         </template>
         <StatusHelp :status="s" />
       </v-tooltip>
@@ -242,9 +274,14 @@ const headers = [
     </template>
   </div>
 
+  <div class="d-flex flex-wrap ga-2 mb-2">
+    <v-text-field v-model="account" label="Account" placeholder="12 digits" density="compact" hide-details clearable max-width="220" @update:model-value="restart" />
+    <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" :disabled="!filtered" @update:model-value="restart" />
+  </div>
+
   <v-card>
-    <v-data-table v-model="selected" :mobile="smAndDown" :headers="headers" :items="visible" :loading="loading" item-value="id"
-      :show-select="session.canOperate" :items-per-page="50">
+    <v-data-table v-model="selected" :mobile="smAndDown" :headers="headers" :items="candidates" :loading="loading" item-value="id"
+      :show-select="session.canOperate" :items-per-page="-1" hide-default-footer>
       <template #[`item.status`]="{ item }"><DiscoveryStatusChip :status="item.status" /></template>
       <template #[`item.account`]="{ item }">
         <div>{{ item.accountName }}</div>
@@ -262,18 +299,24 @@ const headers = [
       </template>
       <template #[`item.backend`]="{ item }">
         <BackendLabel v-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
-        <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ workloadFor(item)?.name ?? item.workloadId }}</span>
+        <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ item.workload?.name ?? item.workloadId }}</span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
         <IdleBar v-if="item.idleHours7d !== null" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
       </template>
       <template #[`item.statusReason`]="{ item }">
-        <span v-if="item.status === 'managed' && workloadFor(item)" class="text-medium-emphasis">managed as
-          <router-link :to="`/workloads/${workloadFor(item)!.router}/${workloadFor(item)!.workloadId}`">{{ workloadFor(item)!.name }}</router-link></span>
+        <span v-if="item.status === 'managed' && item.workload" class="text-medium-emphasis">managed as
+          <router-link :to="`/workloads/${item.workload.router}/${item.workload.workloadId}`">{{ item.workload.name }}</router-link></span>
         <span v-else class="text-medium-emphasis">{{ item.status === 'managed' && item.workloadId ? `managed as workload ${item.workloadId}` : item.statusReason }}</span>
       </template>
       <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap">{{ relative(item.firstSeenAt, now) }}</span></template>
     </v-data-table>
+    <v-card-actions>
+      <span class="text-body-small text-medium-emphasis">{{ first }}–{{ last }}<template v-if="!filtered && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
+      <v-spacer />
+      <v-btn variant="text" :disabled="page === 0 || loading" @click="turn(-1)">Previous</v-btn>
+      <v-btn variant="text" :disabled="!hasNext || loading" @click="turn(1)">Next</v-btn>
+    </v-card-actions>
   </v-card>
 
   <v-card id="exclusions" class="mt-4" title="Exclusions">
@@ -283,7 +326,7 @@ const headers = [
       <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
         <v-list-item-subtitle class="text-wrap">
           {{ e.reason }} · by {{ e.by }} {{ relative(e.at, now) }} · {{ e.expiresAt ? (e.expired ? `expired ${relative(e.expiresAt, now)}` : `expires ${relative(e.expiresAt, now)}`) : 'no expiry' }}
-          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${nameOf(p.router, p.workloadId, p.account, p.region)} (${p.router})`).join(', ') }}</template>
+          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${p.name ?? p.workloadId} (${p.router})`).join(', ') }}</template>
         </v-list-item-subtitle>
         <template #append>
           <v-chip v-if="e.expired" variant="tonal" label class="mr-2">expired</v-chip>

@@ -137,6 +137,36 @@ describe('discovery store at organization scale', () => {
     expect((await store.listCandidates()).map((c) => c.id).sort()).toEqual([arn(1), arn(2)]);
   });
 
+  it('pages the candidates of a status within an account, or an account and region', async () => {
+    const { store } = setup();
+    const other = (i: number, account: string, region: string) => candidate(i, { id: arn(i, account, region), account, region });
+    await store.putCandidates([candidate(1), other(2, '111111111111', 'eu-west-3'), other(3, '222222222222', 'eu-west-1'), candidate(4, { status: 'managed' })]);
+    const ids = async (where: { account?: string; region?: string }) => (await store.pageCandidates({ status: 'pending-onboarding', limit: 10, ...where })).candidates.map((c) => c.id);
+    expect(await ids({ account: '111111111111' })).toEqual([arn(1), arn(2, '111111111111', 'eu-west-3')]);
+    expect(await ids({ account: '111111111111', region: 'eu-west-3' })).toEqual([arn(2, '111111111111', 'eu-west-3')]);
+  });
+
+  it('a candidate that changes status between two pages is neither repeated nor an error', async () => {
+    const { store } = setup();
+    await store.putCandidates(Array.from({ length: 4 }, (_, i) => candidate(i)));
+    const first = await store.pageCandidates({ status: 'pending-onboarding', limit: 2 });
+    // The last one of the first page moves: the next page goes on after its position.
+    await store.putCandidates([candidate(1, { status: 'dismissed' })]);
+    const second = await store.pageCandidates({ status: 'pending-onboarding', limit: 2, cursor: first.cursor! });
+    expect([second.candidates.map((c) => c.id), second.cursor]).toEqual([[arn(2), arn(3)], null]);
+  });
+
+  it('keeps the counts per status: set by a run, moved by each status change between runs', async () => {
+    const { store } = setup();
+    // Before any run, nothing to move.
+    await store.replaceCandidates([candidate(1, { status: 'dismissed' })], [candidate(1)]);
+    expect(await store.getCounts()).toBeNull();
+    await store.putCounts({ 'pending-onboarding': 2, dismissed: 1 });
+    await store.replaceCandidates([candidate(2, { status: 'dismissed' }), candidate(3)], [candidate(2), candidate(3)]);
+    expect((await store.getCounts())!.counts).toEqual({ 'pending-onboarding': 1, dismissed: 2 });
+    expect((await store.pageCandidates({ status: 'dismissed', limit: 10 })).candidates.map((c) => c.id)).toEqual([arn(1), arn(2)]);
+  });
+
   it('lists the candidates of an account, and keeps the account scan state beside them', async () => {
     const { store } = setup();
     await store.putCandidates([candidate(1), candidate(2), candidate(3, { account: '222222222222', id: arn(3, '222222222222') })]);

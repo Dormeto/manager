@@ -30,7 +30,17 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
   const records = createRecords({ dynamo, table: 't', now: () => now });
   const account = fakeInstallAccount();
   const items = new Map(candidates.map((c) => [c.id, c]));
-  const discovery = { getCandidate: async (id: string) => items.get(id) ?? null, putCandidates: async (list: Candidate[]) => { for (const c of list) items.set(c.id, c); } } as unknown as DiscoveryStore;
+  // Status changes of the candidates, as the discovery counts move with them.
+  const moves: [string, string][] = [];
+  const discovery = {
+    getCandidate: async (id: string) => items.get(id) ?? null,
+    replaceCandidates: async (after: Candidate[], before: Candidate[]) => {
+      for (const c of after) {
+        moves.push([before.find((b) => b.id === c.id)?.status ?? '', c.status]);
+        items.set(c.id, c);
+      }
+    },
+  } as unknown as DiscoveryStore;
   // The router functions of the target account: onboarder and controller actions.
   const invocations: [string, Record<string, unknown>][] = [];
   const router = { state: 'AWAKE', previewOk: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600 };
@@ -73,7 +83,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
     }
     throw new Error('the operation never finished');
   }
-  return { engine, records, account, invocations, invocationsPaused, router, answers, items, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { engine, records, account, invocations, invocationsPaused, router, answers, items, moves, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 const DEV_ROUTER: RouterRef = {
@@ -103,6 +113,7 @@ describe('operations engine', () => {
     expect(stored.steps.find((x) => x.name === 'preview')!.detail).toBe(`Paris (${WORKLOAD_ID})`);
     expect(s.account.state.roles.size, 'a Terraform router is never touched').toBe(0);
     expect(s.items.get(TG)).toMatchObject({ eligibility: 'managed', workloadId: WORKLOAD_ID, status: 'managed' });
+    expect(s.moves).toEqual([['pending-onboarding', 'managed']]);
     expect(await s.records.acquireLock(`LB#${LB}`, 'other', 60_000)).toBe(true);
     expect(await s.records.claimActive(`TG#${TG}`, 'other', 60_000)).toEqual({ ok: true });
   });
@@ -178,6 +189,7 @@ describe('operations engine', () => {
     expect(actions.length).toBeGreaterThan(4);
     expect(s.items.get(TG)).toMatchObject({ eligibility: 'eligible', status: 'pending-onboarding' });
     expect(s.items.get(TG)!.workloadId).toBeUndefined();
+    expect(s.moves).toEqual([['managed', 'pending-onboarding']]);
     // The name comes from the router (the operation's title), never from the request.
     expect((await s.records.getOperation(op.id))!.context.name).toBe('Paris');
   });

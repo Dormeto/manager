@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATUSES, workloadNamed, workloadOf, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
+import { STATUSES, cursorPages, firstStatus, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -60,30 +60,24 @@ describe('rules of a candidate', () => {
   });
 });
 
-describe('workload of a candidate', () => {
-  const routers = [{ name: 'dmt-dev', region: 'eu-west-1' }, { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '121014831971' }, { name: 'dmtr-dev-038606077307-eu-west-3', region: 'eu-west-3', account: '038606077307' }];
-  const workloads = [
-    { router: 'dmt-dev', workloadId: 'demo', name: 'demo' },
-    { router: 'dmtr-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' },
-    { router: 'dmtr-dev-038606077307-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Ligoj' },
-  ];
-  it('finds a managed candidate\'s workload by its router (account and region) and id, for its name and link', () => {
-    const find = workloadOf(routers, workloads);
-    expect(find({ account: '121014831971', region: 'eu-west-3', workloadId: '7010ea54b5c02245' })).toEqual({ router: 'dmtr-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' });
-    expect(find({ account: '038606077307', region: 'eu-west-3', workloadId: '7010ea54b5c02245' })!.name).toBe('Ligoj');
-    // A router written in Terraform may not know its account: its region is enough.
-    expect(find({ account: '121014831971', region: 'eu-west-1', workloadId: 'demo' })!.router).toBe('dmt-dev');
-    expect(find({ account: '121014831971', region: 'eu-west-1', workloadId: 'gone' })).toBeNull();
-    expect(find({ account: '121014831971', region: 'eu-west-1' })).toBeNull();
+describe('Discovery view paging', () => {
+  it('starts with the first status people act on that has candidates', () => {
+    expect(firstStatus({ ineligible: 3, 'pending-offboarding': 1 })).toBe('pending-offboarding');
+    expect(firstStatus({ 'pending-onboarding': 2, ineligible: 3 })).toBe('pending-onboarding');
+    expect(firstStatus({})).toBe('pending-onboarding');
   });
-});
 
-describe('names of workloads by router and id', () => {
-  it('gives the name of a workload of a router, its id when unknown', () => {
-    const named = workloadNamed([{ router: 'dmtr-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' }, { router: 'dmt-dev', workloadId: 'demo' }]);
-    expect([named('dmtr-dev-eu-west-3', '7010ea54b5c02245'), named('dmt-dev', 'demo'), named('dmt-dev', 'a4dffc5bf369a297')]).toEqual(['Paris', 'demo', 'a4dffc5bf369a297']);
-    // The workflow records the router by its AWS name, with its account and region.
-    const located = workloadNamed([{ router: 'dmtr-dev-eu-west-3', account: '121014831971', region: 'eu-west-3', workloadId: 'a4dffc5bf369a297', name: 'paris-app' }]);
-    expect(located('dmtr-dev', 'a4dffc5bf369a297', '121014831971', 'eu-west-3')).toBe('paris-app');
+  it('pages with cursors: forward from each page\'s cursor, back to any page seen', () => {
+    const pages = cursorPages();
+    expect([pages.cursor(0), pages.hasNext(0)]).toEqual([null, false]);
+    pages.loaded(0, 'c1');
+    pages.loaded(1, 'c2');
+    expect([pages.cursor(1), pages.cursor(2), pages.hasNext(1), pages.hasNext(2)]).toEqual(['c1', 'c2', true, false]);
+    // Page 1 again, now the last one (a candidate moved): page 2 is forgotten.
+    pages.loaded(1, null);
+    expect([pages.hasNext(1), pages.cursor(2)]).toEqual([false, null]);
+    pages.reset();
+    expect([pages.cursor(1), pages.hasNext(0)]).toEqual([null, false]);
   });
+
 });
