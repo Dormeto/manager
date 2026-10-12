@@ -305,6 +305,37 @@ describe('failure index (R7b)', () => {
     expect(await s.store.listFailures()).toEqual([]);
   });
 
+  it('reads a failure time in milliseconds (router 0.25.0 before its fix), as found in dev', async () => {
+    const s = setup();
+    await s.ingest(failed(at(T1, 10), { failure: { ...failure, kind: 'unhealthy', at: Date.parse(at(T1, 10)) } }));
+    const [entry] = await s.store.listFailures();
+    expect(entry!.failure).toMatchObject({ kind: 'unhealthy', at: at(T1, 10) });
+  });
+
+  it('the next check\'s failure replaces a failure without reason, though a few milliseconds older than the change', async () => {
+    const s = setup();
+    await s.ingest({ account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed', detail: { router: 'dmtr-dev', workloadId: 'a', from: 'WAKING', to: 'FAILED', at: at(T1, 10), cause: 'wake-failed' } });
+    const real = { ...failure, kind: 'unhealthy', at: new Date(Date.parse(at(T1, 10)) - 4).toISOString() };
+    await s.ingest(checked(T2, [workload('a', 'FAILED', { failure: real, consecutiveFailures: 1, nextAttemptAt: at(T2, 60) })]));
+    const [entry] = await s.store.listFailures();
+    expect(entry).toMatchObject({ failure: { kind: 'unhealthy', at: real.at }, consecutiveFailures: 1, nextAttemptAt: at(T2, 60) });
+  });
+
+  it('a failure the index lost (or holds without reason) is written again at the next check, though the summary had it', async () => {
+    const s = setup();
+    const real = { ...failure, at: at(T1, -60) };
+    await s.ingest(checked(T1, [workload('a', 'FAILED', { failure: real, consecutiveFailures: 1 })]));
+    const [indexed] = await s.store.listFailures();
+    await s.store.deleteFailure(ACCOUNT, REGION, 'a', (await s.store.getFailure(ACCOUNT, REGION, 'a'))!.version);
+    await s.ingest(checked(T2, [workload('a', 'FAILED', { failure: real, consecutiveFailures: 1 })]));
+    expect(await s.store.listFailures()).toEqual([indexed]);
+    const puts: unknown[] = [];
+    const put = s.store.putFailure;
+    s.store.putFailure = async (...args) => { puts.push(args); return put(...args); };
+    await s.ingest(checked(at(T2, 300), [workload('a', 'FAILED', { failure: real, consecutiveFailures: 1 })]));
+    expect(puts, 'not written again when the index has it').toEqual([]);
+  });
+
   it('keeps the fallback instance types in use, and drops what is not one', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a', 'AWAKE', { fallbacks: [{ instance: 'i-0123456789abcdef0', from: 't3.medium', to: 't3a.medium' }, { instance: 'x', from: 'a', to: 'b' }, 'junk'] })]));

@@ -102,7 +102,7 @@ export function createIngest({ store, now = Date.now, log }: {
     // A failed wake is indexed for the watchdog (R7b), whatever comes after it before the next check; a wake that
     // succeeds removes it.
     if (to === 'FAILED') {
-      const failure = failureOf(d.failure) ?? { kind: 'unknown', step: 'wake' as const, message: NO_REASON, at };
+      const failure = failureOf(d.failure, at) ?? { kind: 'unknown', step: 'wake' as const, message: NO_REASON, at };
       const summary = await store.getWorkload(account, region, workloadId);
       await indexFailure({ account, region, router, workloadId, name: summary?.name, url: summary?.url as string | null | undefined, wakeId: typeof d.wakeId === 'string' ? d.wakeId.slice(0, 64) : undefined, failure });
     } else if (to === 'AWAKE') {
@@ -117,22 +117,27 @@ export function createIngest({ store, now = Date.now, log }: {
   async function syncFailure(before: WorkloadSummary | undefined, after: WorkloadSummary, at: string) {
     const now = failureIn(after, at);
     const was = failureIn(before, at);
-    if (now && now.at !== was?.at) {
+    // While a summary has a failure, the index is read at each check (failed workloads only) and written when it lacks it.
+    if (now) {
       await indexFailure({
         account: after.account, region: after.region, router: after.router, workloadId: after.workloadId, name: after.name, url: after.url as string | null | undefined,
         failure: now, consecutiveFailures: after.consecutiveFailures as number | undefined, nextAttemptAt: after.nextAttemptAt as string | undefined,
       });
-    } else if (!now && was) {
+    } else if (was) {
       await unindexFailure(after.account, after.region, after.workloadId, at);
     }
   }
 
-  // Written when newer than what the index holds (events arrive late or twice).
+  // Written when newer than what the index holds (events arrive late or twice). A failure with its reason replaces one
+  // without: the change's time is a few milliseconds after the failure's own, and only routers before 0.25.0 (whose
+  // summaries have no reason either) send none.
   async function indexFailure(entry: FailureEntry) {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const read = await store.getFailure(entry.account, entry.region, entry.workloadId);
-      if (read && read.entry.failure.at > entry.failure.at) return;
-      const merged = read && read.entry.failure.at === entry.failure.at ? { ...read.entry, ...Object.fromEntries(Object.entries(entry).filter(([, v]) => v !== undefined)) } : entry;
+      const reasonFor = read && read.entry.failure.message === NO_REASON && entry.failure.message !== NO_REASON;
+      if (read && read.entry.failure.at > entry.failure.at && !reasonFor) return;
+      const merged = read && (read.entry.failure.at === entry.failure.at || reasonFor) ? { ...read.entry, ...Object.fromEntries(Object.entries(entry).filter(([, v]) => v !== undefined)) } : entry;
+      if (read && JSON.stringify(merged) === JSON.stringify(read.entry)) return;
       if (await store.putFailure(merged as FailureEntry, read?.version ?? 0)) return;
     }
   }

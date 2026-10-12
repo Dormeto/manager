@@ -54,7 +54,9 @@ const FAILURE_KINDS = new Set(['capacity', 'quota', 'permission', 'configuration
 export interface Failure { kind: string; step: 'wake' | 'nap'; backend?: string; message: string; at: string }
 export function failureOf(v: unknown, fallbackAt?: string | null): Failure | undefined {
   if (!isObject(v)) return undefined;
-  const at = time(v.at) ?? fallbackAt ?? null;
+  // ISO; milliseconds in the events of router 0.25.0's first build.
+  const ms = typeof v.at === 'number' && Number.isFinite(v.at) && v.at > 0 ? new Date(v.at).toISOString() : null;
+  const at = time(v.at) ?? ms ?? fallbackAt ?? null;
   if (!at) return undefined;
   return defined({
     kind: typeof v.kind === 'string' && FAILURE_KINDS.has(v.kind) ? v.kind : 'unknown',
