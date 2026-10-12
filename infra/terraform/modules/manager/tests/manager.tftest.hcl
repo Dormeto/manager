@@ -59,6 +59,20 @@ run "without_a_domain_nor_ses" {
   }
 }
 
+run "the_smoke_user_is_named_at_plan_without_a_domain" {
+  command = plan
+  variables {
+    smoke_user = true
+  }
+
+  # Not from CloudFront's host, unknown until the distribution exists (the provider fails on an unknown attribute map;
+  # found by B4's install).
+  assert {
+    condition     = aws_cognito_user.smoke[0].username == "smoke@dmt-test-manager.invalid" && aws_cognito_user.smoke[0].attributes.email == "smoke@dmt-test-manager.invalid"
+    error_message = "Without a domain, the smoke user is smoke@<name>.invalid."
+  }
+}
+
 run "uninstall_lifts_the_users_protection" {
   command = plan
   variables {

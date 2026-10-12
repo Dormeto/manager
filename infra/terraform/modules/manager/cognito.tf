@@ -188,11 +188,11 @@ resource "random_password" "smoke" {
 resource "aws_cognito_user" "smoke" {
   count          = var.smoke_user ? 1 : 0
   user_pool_id   = aws_cognito_user_pool.main.id
-  username       = "smoke@${local.dashboard_host}"
+  username       = local.smoke_username
   message_action = "SUPPRESS"
   password       = random_password.smoke[0].result
   attributes = {
-    email          = "smoke@${local.dashboard_host}"
+    email          = local.smoke_username
     email_verified = "true"
   }
 }

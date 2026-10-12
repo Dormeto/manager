@@ -34,7 +34,7 @@ Customers install a release with the manager module (https://dormeto.com/get-sta
 
 ```hcl
 module "dormeto" {
-  source          = "https://releases.dormeto.com/manager/0.2.0/terraform-aws-dormeto-0.2.0.zip//modules/manager"
+  source          = "https://releases.dormeto.com/manager/0.2.1/terraform-aws-dormeto-0.2.1.zip//modules/manager"
   env             = "prod"
   organization_id = "o-exampleorgid"
   admin_emails    = ["you@example.com"]

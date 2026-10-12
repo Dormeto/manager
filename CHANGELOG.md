@@ -3,6 +3,13 @@
 Versions of the Dormeto manager, each with the router version it installs. Releases:
 https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.html).
 
+## 0.2.1 — 2026-10-06
+
+Router 0.22.6.
+
+- An install without a custom domain and with `smoke_user` no longer fails at apply (the smoke user is named
+  `smoke@dmt-<env>-manager.invalid`, known at plan).
+
 ## 0.2.0 — 2026-10-06
 
 Router 0.22.6.

@@ -143,6 +143,9 @@ locals {
   cognito_prefix = "${local.name}-${local.account_id}"
   dashboard_host = local.custom_domain ? var.domain.dashboard : aws_cloudfront_distribution.dashboard.domain_name
   auth_host      = local.custom_domain ? var.domain.auth : "${local.cognito_prefix}.auth.${local.region}.amazoncognito.com"
+  # Known at plan: never CloudFront's host, unknown until the distribution exists (the provider fails on an unknown
+  # Cognito attribute map). Never sent mail (SUPPRESS).
+  smoke_username = "smoke@${local.custom_domain ? var.domain.dashboard : "${local.name}.invalid"}"
 
   # The release's artifacts (scripts/release/artifacts.mjs): every reader checks them all first, so that a missing one
   # fails the plan with its path rather than leaving the dashboard empty or a Lambda without code.
