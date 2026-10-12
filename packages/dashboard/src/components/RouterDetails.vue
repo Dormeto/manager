@@ -2,7 +2,7 @@
 // Details of one router: health figures (Lambda, failure queues, IP lists) and its configuration with the source of each item.
 import { onMounted, ref } from 'vue';
 import { api } from '../api';
-import { listSourceHref, relative, ruleText } from '../format';
+import { concurrencyText, listSourceHref, relative, ruleText } from '../format';
 import { useNow } from '../now';
 import type { RouterDetails } from '../types';
 
@@ -43,6 +43,8 @@ const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
             <tr><th class="font-weight-regular text-medium-emphasis">Failure queues</th>
               <td v-if="details.health.queues.error" class="text-warning">{{ details.health.queues.error }}</td>
               <td v-else>check-failures {{ details.health.queues.check ?? '—' }}, controller-failures {{ details.health.queues.controller ?? '—' }}</td></tr>
+            <tr><th class="font-weight-regular text-medium-emphasis">Lambda concurrency</th>
+              <td :class="{ 'text-warning': details.health.concurrency?.error }">{{ concurrencyText(details.health.concurrency) }}</td></tr>
             <tr v-for="l in details.health.ipLists" :key="l.name"><th class="font-weight-regular text-medium-emphasis">IP list {{ l.name }}</th>
               <td :class="{ 'text-warning': l.error }">{{ l.error ?? `${l.entries.toLocaleString()} entries, downloaded ${relative(l.fetchedAt, now)}` }}</td></tr>
           </tbody>

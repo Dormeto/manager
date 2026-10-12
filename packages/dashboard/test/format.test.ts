@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendArn, checkHealth, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { backendArn, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -82,5 +82,15 @@ describe('nameRule', () => {
   it('accepts a workload name of at most 64 characters without control characters, empty meaning the default', () => {
     expect([nameRule('Shop (front)'), nameRule(''), nameRule('x'.repeat(64))]).toEqual([true, true, true]);
     expect([nameRule('x'.repeat(65)), nameRule('a\tb')]).toEqual(['at most 64 characters', 'no control characters']);
+  });
+});
+
+describe('concurrencyText', () => {
+  it('shows the limit, what the router used and its worst case (information only)', () => {
+    expect(concurrencyText({ limit: 1000, needed: 20, worstCase: 7513 })).toBe('limit 1,000, used up to 20 in 24 hours; 7,513 if every workload not awake woke at once');
+    expect(concurrencyText({ error: 'AccessDenied' })).toBe('AccessDenied');
+    expect(concurrencyText(null)).toBe('—');
+    // Routers before 0.22.3 give the worst case as the need.
+    expect(concurrencyText({ limit: 10, needed: 18 })).toBe('limit 10, needs up to 18');
   });
 });

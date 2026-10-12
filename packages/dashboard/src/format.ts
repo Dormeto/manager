@@ -81,6 +81,16 @@ export function checkHealth(router: { checkSchedule?: string | null; lastSchedul
   return { late, text: late ? `idle check late: last run ${ago}` : `idle check ${ago}` };
 }
 
+// The account's Lambda concurrency limit against what the router used in 24 hours; the worst case (every workload not awake
+// woken at once) is information only. Routers before 0.22.3 give that worst case as the need.
+export function concurrencyText(c: { limit?: number; needed?: number; worstCase?: number; error?: string } | null | undefined): string {
+  if (!c) return '—';
+  if (c.error) return c.error;
+  const n = (v: number | undefined) => (v ?? 0).toLocaleString('en-US');
+  if (c.worstCase === undefined) return `limit ${n(c.limit)}, needs up to ${n(c.needed)}`;
+  return `limit ${n(c.limit)}, used up to ${n(c.needed)} in 24 hours; ${n(c.worstCase)} if every workload not awake woke at once`;
+}
+
 // Countdown shown next to the refresh button.
 export function refreshLabel({ seconds, nextAt, loading }: { seconds: number; nextAt: number | null; loading: boolean }, now = Date.now()) {
   if (loading) return 'Refreshing…';

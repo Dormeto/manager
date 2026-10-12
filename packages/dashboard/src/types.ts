@@ -147,6 +147,7 @@ export interface RouterDetails {
     lambda: { error?: string; controller?: { errors: number; throttles: number }; waker?: { errors: number; throttles: number; peakConcurrency: number } };
     queues: { error?: string; check?: number; controller?: number };
     ipLists: { name: string; entries: number; fetchedAt: string | null; error?: string }[];
+    concurrency?: { limit?: number; needed?: number; worstCase?: number; error?: string } | null;
   };
 }
 
