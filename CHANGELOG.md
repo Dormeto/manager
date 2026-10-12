@@ -5,6 +5,17 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## 0.9.0 — 2026-10-10
+
+Router 0.28.1 (unchanged). Access: nothing to apply again in the member accounts; the manager's own IAM changes with its
+module (the API may invoke the discovery function).
+
+- The Idle window card on each workload's page: its last 14 days of requests replayed against idle windows from 5 to
+  120 minutes (and its own), each window's estimated savings a month, wakes and visitors' wait a day, and a
+  recommendation: the shortest window that already avoids 90% of the wakes the longest one avoids. Every request counts
+  (the requests the waker ignores are not known per minute): the card compares the replay with the real wakes and says
+  when it counts clearly more. Read through the discovery role, kept a day.
+
 ## 0.8.1 — 2026-10-09
 
 Router 0.28.1. Access: nothing to apply again.

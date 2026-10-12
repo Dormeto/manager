@@ -196,6 +196,25 @@ time per target group, router or workload, one per load balancer (lock), three p
   the workloads not priced, Dormeto's estimated cost. `GET /api/savings` answers it; a workload's history adds its
   period's `savings`.
 
+## Idle window advisor (R10)
+
+- **What it does:** a workload's Idle window card replays its last 14 days of requests (CloudWatch `RequestCount` per
+  minute, kept 15 days) against idle windows of 5, 10, 15, 20, 30, 45, 60, 90 and 120 minutes and its own, with the
+  router's rules (a nap at a check once the window has passed since the last request and since the wake; a request
+  while asleep, a wake of the median measured duration). Each window: savings a month (the asleep time priced as the
+  savings above: what its latest nap stopped, the baseline, Spot prices and discounts), wakes and visitors' wait a day.
+  Recommended: the shortest window that already avoids 90% of the wakes the 120-minute window avoids.
+- **Every request counts:** the application and waker target groups' requests are added up, as activity and as wakes;
+  the waker's filters (scanners, no-wake rules, IP lists) are not known per minute, so the card compares the replay of
+  the current window with the wakes the history recorded and says when it counts clearly more.
+- **How it reads:** `GET /api/workloads/{router}/{id}/idle-window` (viewers too) invokes the discovery function's step
+  `requests` under `DmtDiscoveryRole` (the load balancer and the waker target group from the rules, then
+  `GetMetricData`): nothing more to apply in the member accounts. The answer is kept a day as `T#default` /
+  `IDLE#<account>#<region>#<workloadId>` (TTL), or until the workload's idle window changes. A discovery run may take
+  the function's reserved executions: the card then says to try again.
+- **Changing the window:** the workload module's `idle_minutes`, or offboarding and onboarding again; not from the
+  manager yet.
+
 ## Organization access (discovery)
 
 Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a
