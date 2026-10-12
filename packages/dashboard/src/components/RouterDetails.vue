@@ -45,8 +45,8 @@ const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
               <td v-else>check-failures {{ details.health.queues.check ?? '—' }}, controller-failures {{ details.health.queues.controller ?? '—' }}</td></tr>
             <tr><th class="font-weight-regular text-medium-emphasis">Lambda concurrency</th>
               <td :class="{ 'text-warning': details.health.concurrency?.error }">{{ concurrencyText(details.health.concurrency) }}</td></tr>
-            <tr v-for="l in details.health.ipLists" :key="l.name"><th class="font-weight-regular text-medium-emphasis">IP list {{ l.name }}</th>
-              <td :class="{ 'text-warning': l.error }">{{ l.error ?? `${l.entries.toLocaleString()} entries, downloaded ${relative(l.fetchedAt, now)}` }}</td></tr>
+            <tr v-for="l in details.health.ipLists" :key="l.name"><th class="font-weight-regular text-medium-emphasis">IP list {{ l.name }}{{ l.source === 'manager' ? ' (manager)' : '' }}</th>
+              <td :class="{ 'text-warning': l.error && !l.pending }">{{ l.error ?? `${l.entries.toLocaleString()} entries, downloaded ${relative(l.fetchedAt, now)}` }}</td></tr>
           </tbody>
         </v-table>
       </v-col>
@@ -67,6 +67,12 @@ const SOURCE = { terraform: 'Terraform', manager: 'manager' } as const;
                 <span v-if="!details.configuration.ipLists.value.length" class="text-medium-emphasis">none</span>
               </td>
               <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.ipLists.source] }}</v-chip></td></tr>
+            <tr v-if="details.configuration.ipListsCatalog"><th class="font-weight-regular text-medium-emphasis">The manager's IP lists</th>
+              <td>
+                <div v-for="l in details.configuration.ipListsCatalog.value.lists" :key="l.name">{{ l.name }} ({{ l.action }}, every {{ l.refreshHours }} h)</div>
+                <span v-if="!details.configuration.ipListsCatalog.value.lists.length" class="text-medium-emphasis">none</span>
+              </td>
+              <td><v-chip size="x-small" variant="tonal" label>{{ SOURCE[details.configuration.ipListsCatalog.source] }}</v-chip></td></tr>
             <tr><th class="font-weight-regular text-medium-emphasis">Router no-wake rules</th>
               <td>
                 <div v-for="r in details.configuration.noWakeRules.value" :key="r.name"><strong>{{ r.name }}</strong>: {{ r.invalid ? `invalid, ${r.invalid}` : ruleText(r.conditions) }}</div>

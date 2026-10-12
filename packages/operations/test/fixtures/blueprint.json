@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.22.6",
-    "build": "79c810cca8d3"
+    "version": "0.24.0",
+    "build": "45f7f87bb8d8"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -87,6 +87,15 @@
                 "aws:ResourceTag/dormeto:workload": "false"
               }
             }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "cognito-idp:DescribeUserPoolClient"
+            ],
+            "Resource": [
+              "arn:${partition}:cognito-idp:${region}:${account}:userpool/*"
+            ]
           },
           {
             "Effect": "Allow",
@@ -220,6 +229,15 @@
             "Resource": [
               "arn:${partition}:logs:${region}:${account}:log-group:/aws/lambda/${name}-controller:*"
             ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject"
+            ],
+            "Resource": [
+              "arn:${partition}:s3:::${ipListsBucket}/*"
+            ]
           }
         ]
       }
@@ -281,6 +299,15 @@
             ],
             "Resource": [
               "arn:${partition}:logs:${region}:${account}:log-group:/aws/lambda/${name}-waker:*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "s3:GetObject"
+            ],
+            "Resource": [
+              "arn:${partition}:s3:::${ipListsBucket}/*"
             ]
           }
         ]
@@ -409,6 +436,15 @@
             ],
             "Resource": [
               "arn:${partition}:elasticloadbalancing:${region}:${account}:listener-rule/app/*"
+            ]
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "cognito-idp:DescribeUserPoolClient"
+            ],
+            "Resource": [
+              "arn:${partition}:cognito-idp:${region}:${account}:userpool/*"
             ]
           },
           {
@@ -608,9 +644,10 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.22.6",
-        "DMT_BUILD": "79c810cca8d3",
+        "DMT_VERSION": "0.24.0",
+        "DMT_BUILD": "45f7f87bb8d8",
         "DMT_IP_LISTS": "${ipLists}",
+        "DMT_IP_LISTS_CATALOG": "${ipListsCatalog}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_CHECK_SCHEDULE": "${checkSchedule}",
         "DMT_METRICS": "${metrics}",
@@ -642,12 +679,13 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.22.6",
-        "DMT_BUILD": "79c810cca8d3",
+        "DMT_VERSION": "0.24.0",
+        "DMT_BUILD": "45f7f87bb8d8",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
         "DMT_IP_LISTS": "${ipLists}",
+        "DMT_IP_LISTS_CATALOG": "${ipListsCatalog}",
         "DMT_MANAGER_BUS": "${managerBus}"
       },
       "roleArn": "arn:${partition}:iam::${account}:role/dormeto/router/${name}-${region}-waker",
@@ -666,8 +704,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.22.6",
-        "DMT_BUILD": "79c810cca8d3",
+        "DMT_VERSION": "0.24.0",
+        "DMT_BUILD": "45f7f87bb8d8",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },

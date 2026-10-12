@@ -7,7 +7,7 @@ import {
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 import { reporting, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
 import { fleetRouters, type FleetRouter } from './routers.js';
-import type { Alarm } from './watchdog.js';
+import type { Alarm, ListStatusLine } from './watchdog.js';
 
 export type Router = FleetRouter;
 
@@ -150,6 +150,12 @@ export interface ApiOptions {
     open(): Promise<Alarm[]>;
     subscriptions(): Promise<{ topicArn: string; subscriptions: { protocol: string; endpoint: string; pending: boolean }[] }>;
   };
+  // The manager's IP lists (R6b): its catalog, and what the list function last did for each list (status.json).
+  ipLists?: {
+    catalogUrl: string;
+    catalog(): Promise<{ lists?: { name: string; url: string; action: string; refreshHours: number }[] } | null>;
+    status(): Promise<{ lists?: (ListStatusLine & { dropped?: number })[] } | null>;
+  };
 }
 
 // An alert endpoint as administrators see it: an address reduced to its first letter and domain, an ARN to its name.
@@ -234,7 +240,7 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists,
   fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -497,6 +503,20 @@ export function createApi({
         await preferences.put(identity.sub, saved);
         return reply(200, saved);
       }
+    }
+
+    if (method === 'GET' && resource === 'ip-lists' && !a) {
+      if (!ipLists) return reply(200, { catalog: null, lists: [] });
+      const [catalog, status] = await Promise.all([ipLists.catalog(), ipLists.status()]);
+      const lines = new Map((status?.lists ?? []).map((l) => [l.name, l]));
+      return reply(200, {
+        catalog: ipLists.catalogUrl,
+        lists: (catalog?.lists ?? []).map(({ name, url, action, refreshHours }) => {
+          const l = lines.get(name);
+          const done = l && l.url === url ? { version: l.version, entries: l.entries, dropped: l.dropped, fetchedAt: l.fetchedAt, lastAttemptAt: l.lastAttemptAt, error: l.error, errorAt: l.errorAt } : {};
+          return { name, url, action, refreshHours, ...Object.fromEntries(Object.entries(done).filter(([, v]) => v !== undefined)) };
+        }),
+      });
     }
 
     if (method === 'GET' && resource === 'alerts' && !a) {

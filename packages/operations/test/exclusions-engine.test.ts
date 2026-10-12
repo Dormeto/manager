@@ -68,7 +68,7 @@ function setup({ candidates, known, fail = new Set<string>(), routers = ROUTERS,
       },
     }) as never,
     bundle: async () => { throw new Error('no bundle'); },
-    settings: { env: 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', noWakeRules: '', metrics: '', commandRole: 'DmtCommandRole', managerBus: '' } },
+    settings: { env: 'dev', principals: [], routerSettings: { ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971', checkSchedule: '', ipLists: '', noWakeRules: '', metrics: '', commandRole: 'DmtCommandRole', managerBus: '' } },
     start: async () => 'arn:execution', now: () => Date.parse('2026-10-05T12:00:00.000Z'), newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
   });
   async function drive(id: string) {

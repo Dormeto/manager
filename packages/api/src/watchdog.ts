@@ -89,6 +89,23 @@ export function routerObservations({ terraformRouters, installed, summaries, man
 }
 
 // remove: a subject clear for 6 hours (nothing left to damp) leaves the table.
+// The manager's IP lists (R6b), from the list function's status.json: a failed download, or no new version for twice the
+// list's refresh period (an error after 7 days: the routers' copy grows old).
+export interface ListStatusLine { name: string; url?: string; version?: string; entries?: number; refreshHours?: number; fetchedAt?: string; lastAttemptAt?: string; error?: string; errorAt?: string }
+export function listObservations(status: { lists?: ListStatusLine[] } | null, now: number): Observation[] {
+  const hint = 'The routers keep the last version published; the list function retries every hour (its logs: dmt-<env>-manager-ip-lists).';
+  return (status?.lists ?? []).map((l) => {
+    const problems: Problem[] = [];
+    if (l.error) problems.push({ code: 'download', level: 'warning', text: l.version ? `last download failed: ${l.error}` : `never downloaded: ${l.error}`, hint });
+    const refreshHours = l.refreshHours ?? 24;
+    const age = l.fetchedAt ? now - Date.parse(l.fetchedAt) : 0;
+    if (l.fetchedAt && age > 2 * refreshHours * 60 * MIN) {
+      problems.push({ code: 'stale', level: age > 7 * 24 * 60 * MIN ? 'error' : 'warning', text: `no new version for ${Math.floor(age / (60 * MIN))} hours (refreshed every ${refreshHours} hours)`, hint });
+    }
+    return { subject: { id: `list#${l.name}`, kind: 'list' as const, name: l.name }, problems };
+  });
+}
+
 interface Change { alarm: Alarm; version: number; opened: OpenProblem[]; raised: OpenProblem[]; resolved: boolean; remove: boolean }
 
 // The next state of one subject's alarm, and what changed; null when nothing is to be written.
@@ -124,7 +141,7 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
   const { alarm, opened, raised, resolved } = change;
   const s = alarm.subject;
   const where = s.kind === 'router' ? `${s.name} (${s.account} ${s.region})` : `IP list ${s.name}`;
-  const link = `${dashboardUrl}/routers`;
+  const link = `${dashboardUrl}/routers${s.kind === 'list' ? '#ip-lists' : ''}`;
   const line = (p: OpenProblem) => `- [${p.level}] ${p.text} (since ${time(p.since)})${p.hint ? `\n  ${p.hint}` : ''}`;
   if (resolved) {
     return {

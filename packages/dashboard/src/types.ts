@@ -115,6 +115,21 @@ export interface AlarmInfo {
   since: string;
   problems: (Problem & { code: string; since: string; hint?: string })[];
 }
+// The manager's IP lists (R6b): its catalog, with what the list function last did for each list.
+export interface IpListRow {
+  name: string;
+  url: string;
+  action: 'defer' | 'ignore';
+  refreshHours: number;
+  version?: string;
+  entries?: number;
+  dropped?: number;
+  fetchedAt?: string;
+  lastAttemptAt?: string;
+  error?: string;
+}
+export interface IpListsInfo { catalog: string | null; lists: IpListRow[] }
+
 export interface AlertsInfo {
   alarms: AlarmInfo[];
   notifications: { topicArn: string; confirmed: number; pending: number; endpoints?: { protocol: string; endpoint: string; pending: boolean }[] } | null;
@@ -158,6 +173,8 @@ export interface RouterDetails {
   configuration: {
     checkSchedule: Configured<string | null>;
     ipLists: Configured<{ name: string; url: string; action: string; refreshHours: number }[]>;
+    // The manager's lists (routers 0.24.0 with a catalog).
+    ipListsCatalog?: Configured<{ url: string; lists: { name: string; action: string; refreshHours: number }[] }>;
     noWakeRules: Configured<Rule[]>;
     metrics: Configured<boolean | null>;
   };
@@ -170,7 +187,7 @@ export interface RouterDetails {
     lastScheduledCheckAt: string | null;
     lambda: { error?: string; controller?: { errors: number; throttles: number }; waker?: { errors: number; throttles: number; peakConcurrency: number } };
     queues: { error?: string; check?: number; controller?: number };
-    ipLists: { name: string; entries: number; fetchedAt: string | null; error?: string }[];
+    ipLists: { name: string; entries: number; fetchedAt: string | null; error?: string; source?: 'terraform' | 'manager'; pending?: boolean }[];
     concurrency?: { limit?: number; needed?: number; worstCase?: number; error?: string } | null;
   };
 }

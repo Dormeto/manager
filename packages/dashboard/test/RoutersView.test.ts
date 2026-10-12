@@ -22,6 +22,7 @@ vi.mock('../src/api', () => ({
     }
     if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'upgrade-router', target: { account: '111122223333', region: 'eu-west-3' }, ...server.ended };
     if (path.startsWith('/workloads?')) return { workloads: [{ workloadId: 'a4dffc5bf369a297', router: 'dmtr-dev-eu-west-3', state: 'ASLEEP' }], total: 1 };
+    if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
       return {
         alarms: [{ id: 'router#111122223333#eu-west-1', kind: 'router', name: 'dmtr-dev-eu-west-1', account: '111122223333', region: 'eu-west-1', level: 'warning', since: new Date(Date.now() - 3 * 3_600_000).toISOString(), problems: [] }],
@@ -236,6 +237,12 @@ describe('Routers view', () => {
     const wrapper = await mountView();
     expect(rowOf(wrapper, 'dmtr-dev-eu-west-1').text()).toContain('alert since 3 h ago');
     expect(rowOf(wrapper, 'dmt-dev').text()).not.toContain('alert since');
+    wrapper.unmount();
+  });
+
+  it('shows the manager\'s IP lists under the routers', async () => {
+    const wrapper = await mountView();
+    expect(wrapper.find('#ip-lists').text()).toMatch(/ipsum.*defer.*12/);
     wrapper.unmount();
   });
 });

@@ -32,6 +32,8 @@ const engine = createEngine({
     principals: JSON.parse(process.env.MANAGER_PRINCIPALS ?? '[]'),
     routerSettings: {
       checkSchedule: 'rate(5 minutes)', ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false', managerBus: process.env.MANAGER_BUS ?? '',
+      // The manager's IP lists (R6b): its catalog, and the bucket its routers may read.
+      ipListsCatalog: process.env.ROUTER_IP_LISTS_CATALOG ?? '', ipListsBucket: process.env.ROUTER_IP_LISTS_BUCKET ?? 'none',
       // The role's name in an assumed-role ARN, without its path.
       commandRole: commandRole.split('/').at(-1)!,
     },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RouterSummary } from '@dormeto/fleet';
 import type { InstalledRouter } from '@dormeto/operations';
-import { createWatchdog, problemCode, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
+import { createWatchdog, listObservations, problemCode, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0);
 const MIN = 60_000;
@@ -193,5 +193,34 @@ describe('watchdog: routers', () => {
     await s.watchdog.run();
     expect(s.sent[0]!.subject).toMatch(/^[\x20-\x7e]{1,100}$/);
     expect(s.sent[0]!.subject.endsWith('...')).toBe(true);
+  });
+});
+
+describe('watchdog: IP lists (R6b)', () => {
+  const line = (over: Record<string, unknown>) => ({ name: 'ipsum', url: 'https://x', version: '1', entries: 9, refreshHours: 24, fetchedAt: iso(NOW - HOUR), lastAttemptAt: iso(NOW - HOUR), ...over });
+
+  it('alarms a list whose last download failed, and one with no new version for twice its period, an error after 7 days', () => {
+    expect(listObservations({ lists: [line({})] }, NOW)).toEqual([{ subject: { id: 'list#ipsum', kind: 'list', name: 'ipsum' }, problems: [] }]);
+    const failed = listObservations({ lists: [line({ error: 'HTTP 503', errorAt: iso(NOW - HOUR) })] }, NOW);
+    expect(failed[0]!.problems).toEqual([{ code: 'download', level: 'warning', text: 'last download failed: HTTP 503', hint: expect.any(String) }]);
+    const stale = listObservations({ lists: [line({ fetchedAt: iso(NOW - 50 * HOUR) })] }, NOW);
+    expect(stale[0]!.problems.map((p) => [p.code, p.level, p.text])).toEqual([['stale', 'warning', 'no new version for 50 hours (refreshed every 24 hours)']]);
+    const old = listObservations({ lists: [line({ fetchedAt: iso(NOW - 8 * 24 * HOUR) })] }, NOW);
+    expect(old[0]!.problems[0]!.level).toBe('error');
+    const never = listObservations({ lists: [{ name: 'gcp', url: 'https://y', refreshHours: 24, lastAttemptAt: iso(NOW - HOUR), error: 'HTTP 404' }] }, NOW);
+    expect(never[0]!.problems.map((p) => p.text)).toEqual(['never downloaded: HTTP 404']);
+  });
+
+  it('sends a list\'s alarm through the run, as a router\'s', async () => {
+    const s = setup({ summaries: [summary(MANAGER, 'eu-west-1', MIN)] });
+    const watchdog = createWatchdog({
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [],
+      fleet: { listRouters: async () => [] }, registry: { listRouters: async () => [] }, alarms: s.alarms,
+      notify: { publish: async (n) => { s.sent.push(n); } }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
+      extraObservations: async () => listObservations({ lists: [line({ error: 'HTTP 503' })] }, NOW),
+    });
+    await watchdog.run();
+    expect(s.sent.map((n) => [n.subject, n.attributes.kind])).toEqual([['[Dormeto dev] IP list ipsum: last download failed: HTTP 503', 'list']]);
+    expect(s.sent[0]!.message).toContain('https://app.dev.dormeto.com/routers#ip-lists');
   });
 });

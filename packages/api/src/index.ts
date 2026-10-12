@@ -8,11 +8,13 @@ import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand,
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ListSubscriptionsByTopicCommand, SNSClient, type Subscription } from '@aws-sdk/client-sns';
+import { S3Client } from '@aws-sdk/client-s3';
 import { createStore } from '@dormeto/discovery';
 import { createFleetStore } from '@dormeto/fleet';
 import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
+import { readJson } from './s3-json.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
 const routers: Router[] = JSON.parse(process.env.ROUTERS ?? '[]');
@@ -115,7 +117,7 @@ const engine = createEngine({
   routers: async () => [],
   target: async () => unused(),
   bundle: async () => unused(),
-  settings: { env: process.env.ENV ?? 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', noWakeRules: '', metrics: '', managerBus: '', commandRole: '' } },
+  settings: { env: process.env.ENV ?? 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', ipListsCatalog: '', ipListsBucket: '', noWakeRules: '', metrics: '', managerBus: '', commandRole: '' } },
   start: async (op) => (await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.OPERATIONS, name: op.id, input: JSON.stringify({ operationId: op.id }) }))).executionArn ?? '',
   log: { info: (event, data = {}) => console.log(JSON.stringify({ level: 'info', event, ...data })), warn: (event, data = {}) => console.log(JSON.stringify({ level: 'warn', event, ...data })), error: (event, data = {}) => console.log(JSON.stringify({ level: 'error', event, ...data })) },
 });
@@ -144,6 +146,15 @@ const alerts = process.env.ALERTS_TOPIC ? {
   },
 } : undefined;
 
+// The manager's IP lists (R6b): the catalog Terraform writes, the status the list function writes.
+const listsBucket = process.env.LISTS_BUCKET;
+const s3 = new S3Client({});
+const ipLists = listsBucket ? {
+  catalogUrl: `s3://${listsBucket}/catalog.json`,
+  catalog: () => readJson<{ lists?: { name: string; url: string; action: string; refreshHours: number }[] }>(s3, listsBucket, 'catalog.json'),
+  status: () => readJson<{ lists?: [] }>(s3, listsBucket, 'status.json'),
+} : undefined;
+
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
@@ -156,4 +167,5 @@ export const handler = createApi({
   fleet: createFleetStore({ dynamo, table }),
   routerVersion: process.env.ROUTER_VERSION,
   alerts,
+  ipLists,
 });

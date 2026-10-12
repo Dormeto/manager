@@ -9,6 +9,7 @@ const VALUES = {
   name: 'dmtr-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false',
   managerBus: 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager',
   commandRole: 'DmtCommandRole',
+  ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971',
 };
 const BOUNDARY = 'arn:aws:iam::121014831971:policy/DmtRouterBoundary';
 const PRINCIPALS = ['arn:aws:iam::121014831971:role/dmt-dev-manager-api'];
@@ -186,7 +187,7 @@ describe('installer', () => {
     upgraded.state.logGroups = s.state.logGroups; upgraded.state.functions = s.state.functions; upgraded.state.schedules = s.state.schedules;
     upgraded.state.eventRules = s.state.eventRules; upgraded.state.mappings = s.state.mappings;
     expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
-    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(16);
+    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(next.roles[0]!.policy.Statement.length);
     const controller = s.state.functions.get('dmtr-dev-controller')!;
     expect((controller.config.Environment as { Variables: Record<string, string> }).Variables).toMatchObject({ DMT_VERSION: '0.18.0', DMT_METRICS: 'true' });
     expect(controller.codeSha256).toBe(createHash('sha256').update(new Uint8Array([9, 9])).digest('base64'));

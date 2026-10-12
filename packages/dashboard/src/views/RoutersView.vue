@@ -20,6 +20,7 @@ import RefreshIndicator from '../components/RefreshIndicator.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import type { AlarmInfo, AlertsInfo, RouterInfo, RouterOperationType } from '../types';
+import IpListsPanel from '../components/IpListsPanel.vue';
 
 const now = useNow();
 const session = useSession();
@@ -219,6 +220,7 @@ const headers = [
       </template>
     </v-data-table>
   </v-card>
+  <IpListsPanel />
   <v-dialog v-model="installOpen" max-width="480">
     <v-card title="Install a router">
       <v-card-text>

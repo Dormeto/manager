@@ -38,7 +38,7 @@ function setup({ commandMissing = false } = {}) {
       invoke: async () => { throw new Error('no router call'); },
     }),
     bundle: async () => ({ blueprint: published as unknown as Blueprint, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
-    settings: { env: 'dev', principals: [], routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
+    settings: { env: 'dev', principals: [], routerSettings: { ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
     start: async (op) => `arn:execution:${op.id}`,
     now: () => now, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
   });

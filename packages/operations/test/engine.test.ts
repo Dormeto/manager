@@ -69,7 +69,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
       },
     }),
     bundle: async () => ({ blueprint: published as unknown as Blueprint, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
-    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
+    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
     start: async (op) => { started.push(op.id); return `arn:execution:${op.id}`; },
     now: () => now, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
   });
@@ -132,6 +132,10 @@ describe('operations engine', () => {
     expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
     // The router sends its state to the manager's event bus (scale design §3).
     expect((s.account.state.functions.get('dmtr-dev-controller')!.config.Environment as { Variables: Record<string, string> }).Variables.DMT_MANAGER_BUS).toBe(BUS);
+    // The manager's IP lists (R6b): the waker and the controller read its catalog.
+    for (const fn of ['dmtr-dev-controller', 'dmtr-dev-waker']) {
+      expect((s.account.state.functions.get(fn)!.config.Environment as { Variables: Record<string, string> }).Variables.DMT_IP_LISTS_CATALOG).toBe('s3://dmt-dev-manager-ip-lists-121014831971/catalog.json');
+    }
   });
 
   it('a second request for the same target is a conflict naming the running operation', async () => {

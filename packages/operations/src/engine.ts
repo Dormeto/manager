@@ -58,7 +58,8 @@ export interface EngineDeps {
   bundle(): Promise<{ blueprint: Blueprint; zip: Uint8Array; codeSha256: string }>;
   // managerBus: the manager's event bus, where the routers send their state (scale design §3).
   // commandRole: the command role's name without its path; the forwarder ignores the manager's own calls (routers 0.23.0).
-  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
+  // ipListsCatalog and ipListsBucket: the manager's IP lists (R6b), read by its routers (router 0.24.0).
+  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; ipListsCatalog: string; ipListsBucket: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
   start(op: Operation): Promise<string>; // starts the workflow execution, returns its ARN
   now?: () => number;
   newId?: () => string;
