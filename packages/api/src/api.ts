@@ -13,6 +13,7 @@ export interface Router {
   controller: string;
   account?: string; // the manager's account until routers run in other accounts (onboarding, R4)
   source?: 'terraform' | 'manager'; // written in Terraform, or installed by the manager (operations)
+  installed?: { version: string; build: string; at: string }; // what the manager's last install or upgrade put there
 }
 
 // Operations (onboarding, R4b): created by the API, run by the workflow.
@@ -231,6 +232,7 @@ export function createApi({
       ...terraformRouters.map((r) => ({ ...r, source: 'terraform' as const })),
       ...installed.filter((i) => !terraformRouters.some((t) => (t.account ?? managerAccount) === i.account && t.region === i.region)).map((i) => ({
         name: `${i.name}${i.account === managerAccount ? '' : `-${i.account}`}-${i.region}`, region: i.region, controller: i.controller, account: i.account, source: 'manager' as const,
+        installed: { version: i.version, build: i.build, at: i.installedAt },
       })),
     ];
   }
@@ -374,8 +376,10 @@ export function createApi({
     const own = workloads.filter((w) => w.account === summary.account && w.region === summary.region);
     const health = (summary.health ?? {}) as { status?: string; problems?: unknown[]; lastScheduledCheckAt?: string | null };
     const updated = own.map((w) => Date.parse(String(w.updatedAt ?? ''))).filter((ms) => ms > 0);
+    // An install or upgrade since its last report: the version it put there (the router reports it at its next check).
+    const { version, build } = router.installed && Date.parse(router.installed.at) > Date.parse(summary.checkedAt ?? '') ? router.installed : summary;
     return {
-      ...where(router), version: summary.version, build: summary.build, workloads: Object.values(summary.counts).reduce((n, c) => n + c, 0),
+      ...where(router), version, build, workloads: Object.values(summary.counts).reduce((n, c) => n + c, 0),
       checkSchedule: summary.checkSchedule, lastScheduledCheckAt: health.lastScheduledCheckAt ?? summary.checkedAt,
       health: { status: health.status ?? 'unknown', problems: health.problems ?? [] }, pauses: summary.pauses, workloadStates: summary.counts,
       paused: summary.pauses.length ? own.length : own.filter((w) => (w.pauses as unknown[] | undefined)?.length).length,
@@ -490,16 +494,22 @@ export function createApi({
 
     if (method === 'GET' && resource === 'routers' && !a) {
       const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
-      const { summaries, workloads } = await reports();
+      const [{ summaries, workloads }, listed] = await Promise.all([reports(), operations?.list() ?? []]);
       const silent = shown.filter((r) => !summaries.has(r));
       const called = await each(silent, (r) => routerRow(r));
+      // The install, upgrade or uninstall running on a router (the dashboard shows it in progress).
+      const running = listed.filter((op) => op.status === 'running' && ADMIN_TYPES.has(op.type));
+      const operationOf = (router: Router) => {
+        const op = running.find((o) => o.target.account === accountOfRouter(router) && o.target.region === router.region);
+        return op ? { operation: { id: op.id, type: op.type } } : {};
+      };
       const rows = shown.map((router) => {
         const summary = summaries.get(router);
         if (!summary) {
           const result = called[silent.indexOf(router)]!;
-          return { ...(result.status === 'fulfilled' ? result.value : { ...where(router), error: (result.reason as Error).message }), reporting: false };
+          return { ...(result.status === 'fulfilled' ? result.value : { ...where(router), error: (result.reason as Error).message }), reporting: false, ...operationOf(router) };
         }
-        return reportingRow(router, summary, workloads);
+        return { ...reportingRow(router, summary, workloads), ...operationOf(router) };
       });
       return reply(200, { routers: rows, ...(routerVersion ? { available: { version: routerVersion } } : {}) });
     }

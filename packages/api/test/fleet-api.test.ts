@@ -1,7 +1,7 @@
 // Workloads and routers read from the summaries the routers push (scale design §4): no router is called per poll; a
 // router that does not report is called, within a timeout and a cap.
 import { describe, expect, it } from 'vitest';
-import { createApi, type ApiEvent, type Router } from '../src/api.js';
+import { createApi, type ApiEvent, type OperationsApi, type Router } from '../src/api.js';
 
 const NOW = Date.parse('2026-10-05T12:00:00.000Z');
 const ACCOUNT = '121014831971';
@@ -21,10 +21,10 @@ const workloadSummary = (region: string, router: string, id: string, state: stri
 
 function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt-dev'), routerSummary('eu-west-3', 'dmtr-dev', { counts: { ASLEEP: 1 } })], workloads = [
   workloadSummary('eu-west-1', 'dmt-dev', 'a', 'AWAKE'), workloadSummary('eu-west-1', 'dmt-dev', 'b', 'ASLEEP'), workloadSummary('eu-west-3', 'dmtr-dev', 'p', 'ASLEEP', { name: 'Paris' }),
-], invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'list' ? { router: { version: '0.20.1' }, workloads: [{ workloadId: 'x', state: 'AWAKE' }] } : { router: { version: '0.20.1' }, pauses: [], workloads: { total: 1, byState: { AWAKE: 1 }, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }), visible, callTimeoutMs, callDeadlineMs }: {
+], invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'list' ? { router: { version: '0.20.1' }, workloads: [{ workloadId: 'x', state: 'AWAKE' }] } : { router: { version: '0.20.1' }, pauses: [], workloads: { total: 1, byState: { AWAKE: 1 }, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }), visible, callTimeoutMs, callDeadlineMs, operations }: {
   routers?: Router[]; summaries?: ReturnType<typeof routerSummary>[]; workloads?: ReturnType<typeof workloadSummary>[];
   invoke?: (router: Router, payload: Record<string, unknown>) => Promise<unknown>; visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; callTimeoutMs?: number;
-  callDeadlineMs?: number;
+  callDeadlineMs?: number; operations?: OperationsApi;
 } = {}) {
   const calls: [string, string][] = [];
   let listed = 0;
@@ -40,7 +40,7 @@ function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt
       listWorkloads: async () => { listed += 1; return workloads as never; },
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
-    ...(visible ? { visible } : {}), ...(callTimeoutMs ? { callTimeoutMs } : {}), ...(callDeadlineMs ? { callDeadlineMs } : {}),
+    ...(visible ? { visible } : {}), ...(callTimeoutMs ? { callTimeoutMs } : {}), ...(callDeadlineMs ? { callDeadlineMs } : {}), ...(operations ? { operations } : {}),
   });
   return { api, calls, listed: () => listed };
 }
@@ -48,6 +48,15 @@ const event = (path: string, query: Record<string, string> = {}): ApiEvent => ({
   rawPath: path, queryStringParameters: query, requestContext: { http: { method: 'GET' }, authorizer: { jwt: { claims: { email: 'ops@example.com', sub: 'u1', 'cognito:groups': '[dmt-viewer]' } } } },
 });
 const json = (res: { body?: string }) => JSON.parse(res.body ?? 'null');
+// The router the manager installed in eu-west-3 (dmtr-dev), upgraded to 0.21.2 at 11:59, after its last report (11:58).
+const installed = { name: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-3', controller: 'c3', onboarder: 'o3', version: '0.21.2', build: 'b2', installedBy: 'ops@example.com', installedAt: '2026-10-05T11:59:00.000Z' };
+const routerOperation = (id: string, type: string, status: string, region = 'eu-west-3') => ({
+  id, type, status, target: { account: ACCOUNT, region }, input: {}, steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: '', context: {}, by: 'ops@example.com',
+  createdAt: '2026-10-05T11:59:30.000Z', updatedAt: '2026-10-05T11:59:30.000Z',
+});
+const withOperations = (list: ReturnType<typeof routerOperation>[] = []): OperationsApi => ({
+  create: async () => { throw new Error('unused'); }, list: async () => list as never, get: async () => null, installedRouters: async () => [installed],
+});
 
 describe('workloads and routers from the summaries', () => {
   it('reads the summaries: no router is called for routers that report', async () => {
@@ -62,6 +71,22 @@ describe('workloads and routers from the summaries', () => {
     expect(s.calls).toEqual([]);
     expect(routers.map((r: Record<string, unknown>) => [r.name, r.version, r.workloads, r.reporting, (r.health as { status: string }).status])).toEqual([
       ['dmt-dev', '0.21.1', 2, true, 'ok'], ['dmtr-dev-eu-west-3', '0.21.1', 1, true, 'ok'],
+    ]);
+  });
+
+  it('shows the version an upgrade installed until the router reports after it', async () => {
+    const s = setup({ routers: [ROUTERS[0]!], operations: withOperations() });
+    const row = () => s.api(event('/api/routers')).then((res) => json(res).routers.find((r: { name: string }) => r.name === 'dmtr-dev-eu-west-3'));
+    expect([(await row()).version, (await row()).build]).toEqual(['0.21.2', 'b2']);
+  });
+
+  it('names the router operation running on each router (install, upgrade or uninstall), not the others', async () => {
+    const s = setup({ routers: [ROUTERS[0]!], operations: withOperations([
+      routerOperation('op-up', 'upgrade-router', 'running'), routerOperation('op-old', 'upgrade-router', 'succeeded'), routerOperation('op-onb', 'onboard', 'running', 'eu-west-1'),
+    ]) });
+    const routers = json(await s.api(event('/api/routers'))).routers;
+    expect(routers.map((r: { name: string; operation?: unknown }) => [r.name, r.operation ?? null])).toEqual([
+      ['dmt-dev', null], ['dmtr-dev-eu-west-3', { id: 'op-up', type: 'upgrade-router' }],
     ]);
   });
 
