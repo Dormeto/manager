@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
-import { historyView, reporting, savingsOf, type Baseline, type HistoryEntry, type RouterSummary, type SavingsSummary, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, historyView, reporting, savingsOf, type Baseline, type HistoryEntry, type RouterSummary, type SavingsSummary, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 
@@ -195,10 +195,24 @@ export function maskEndpoint(protocol: string, endpoint: string): string {
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const DAY_MS = 86_400_000;
-// The time in each state of a Workloads row and a workload's view: 7 days, kept 5 minutes, for at most 10,000 workloads.
+// The time in each state of a Workloads row and a workload's view (7 days) and its savings (30 days): kept 5 minutes, for
+// at most 10,000 workloads.
 const STATES_DAYS = 7;
+const COSTS_DAYS = 30;
 const STATES_MS = 300_000;
 const STATES_KEPT_MAX = 10_000;
+const HOUR_MS = 3_600_000;
+
+// Seconds per state of the phases within [from, to].
+function totalsWithin(phases: { state: string; from: string; to: string }[], from: string, to: string): Record<string, number> {
+  const [a, b] = [Date.parse(from), Date.parse(to)];
+  const totals: Record<string, number> = {};
+  for (const p of phases) {
+    const seconds = Math.round((Math.min(b, Date.parse(p.to)) - Math.max(a, Date.parse(p.from))) / 1000);
+    if (seconds > 0) totals[p.state] = (totals[p.state] ?? 0) + seconds;
+  }
+  return totals;
+}
 const REASON_MAX = 256;
 // Pause until and exclusion expiry: at most this far ahead.
 const AHEAD_MAX_MS = 366 * DAY_MS;
@@ -450,19 +464,40 @@ export function createApi({
     return { view: historyView({ before, entries, from, to, now: to, initial }), before, entries, truncated };
   }
 
-  // Seconds in each state over the last 7 days (user request: the bar of a Workloads row and of a workload's view), kept
-  // 5 minutes per workload while its state stays the same; without its history, none (never an error).
-  const statesKept = new Map<string, { state: unknown; until: number; value: { from: string; to: string; totals: Record<string, number> } }>();
-  async function statesOf(account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null) {
+  // From a workload's last 30 days of history (user request: the bar of a Workloads row and of a workload's view): its
+  // seconds in each state over the last 7 days, and, with prices, its savings over the 30 days: what its naps saved, the
+  // share of its time with history asleep within the baseline, and its last nap's items priced (an estimate of a month's
+  // savings at that rate). Kept 5 minutes per workload while its state stays the same; without its history, nothing
+  // (never an error).
+  type Costs = {
+    baseline: Baseline; from: string; to: string; napAt: string | null; savedShare: number | null;
+    items: { item: StoppedItem; hourly: number | null }[]; saved: { usd: number; hours: number; unpricedHours: number };
+  };
+  type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs };
+  const statesKept = new Map<string, { state: unknown; until: number; value: States }>();
+  async function statesOf(account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null): Promise<States | undefined> {
     if (!fleet?.listHistory || !fleet.historyBefore) return undefined;
     const key = `${account}#${region}#${id}`;
     const t = now();
     const kept = statesKept.get(key);
     if (kept && kept.until > t && kept.state === summary?.state) return kept.value;
     try {
-      const [from, to] = [new Date(t - STATES_DAYS * DAY_MS).toISOString(), new Date(t).toISOString()];
+      const to = new Date(t).toISOString();
+      const [from, from7] = [new Date(t - COSTS_DAYS * DAY_MS).toISOString(), new Date(t - STATES_DAYS * DAY_MS).toISOString()];
       const { view } = await historyOf(account, region, id, from, to, async () => summary);
-      const value = { from, to, totals: view.totals };
+      const value: States = { states7d: { from: from7, to, totals: totalsWithin(view.phases, from7, to) } };
+      if (savings) {
+        const hourly = (item: StoppedItem) => savings.hourly(region, item).catch(() => null);
+        const known = view.phases.filter((p) => p.state !== 'UNKNOWN').reduce((n, p) => n + (Date.parse(p.to) - Date.parse(p.from)) / HOUR_MS, 0);
+        const asleep = view.phases.filter((p) => p.state === 'ASLEEP').reduce((n, p) => n + baselineHours(p.from, p.to, savings.baseline), 0);
+        const last = [...view.phases].reverse().find((p) => p.state === 'ASLEEP' && p.stopped);
+        const realized = await savingsOf(view.phases, { hourly, baseline: savings.baseline });
+        value.costs = {
+          baseline: savings.baseline, from, to, napAt: last?.from ?? null, savedShare: known ? asleep / known : null,
+          items: await Promise.all((last?.stopped ?? []).map(async (item) => ({ item, hourly: await hourly(item) }))),
+          saved: { usd: realized.usd, hours: realized.hours, unpricedHours: realized.unpriced.reduce((n, u) => n + u.hours, 0) },
+        };
+      }
       if (statesKept.size >= STATES_KEPT_MAX) statesKept.clear();
       statesKept.set(key, { state: summary?.state, until: t + STATES_MS, value });
       return value;
@@ -722,11 +757,11 @@ export function createApi({
       // by its ARN), and its time in each state over 7 days, from its history: when the Workloads view asks.
       const page = q.limit && (q.idle === '1' || q.states === '1') ? await Promise.all(listed.map(async (w) => {
         const router = routers.find((r) => r.name === w.router);
-        const [c, states7d] = await Promise.all([
+        const [c, states] = await Promise.all([
           q.idle === '1' && discovery && typeof w.targetGroupArn === 'string' ? discovery.store.getCandidate(w.targetGroupArn).catch(() => null) : null,
           q.states === '1' && router ? statesOf(String(w.account ?? accountOfRouter(router)), String(w.region ?? router.region), String(w.workloadId), w) : undefined,
         ]);
-        return { ...w, ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}), ...(states7d ? { states7d } : {}) };
+        return { ...w, ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}), ...states };
       })) : listed;
       const cursor = start + limit < matching.length ? Buffer.from(String(start + limit)).toString('base64url') : null;
       return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors, ...(q.routers === '1' ? { routers: routerRows() } : {}) });
@@ -757,13 +792,13 @@ export function createApi({
           fleet ? fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null,
         ]);
         // The bar of its header, as on a Workloads row: its time in each state, and its idle hours from discovery.
-        const [states7d, c] = await Promise.all([
+        const [states, c] = await Promise.all([
           statesOf(accountOfRouter(router), router.region, id, summary),
           discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
         ]);
         return reply(200, {
           // Its account and region: the ARNs of its backends and targets.
-          ...(status as object), ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...(states7d ? { states7d } : {}),
+          ...(status as object), ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
         });
       }

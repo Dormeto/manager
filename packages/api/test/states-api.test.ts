@@ -14,13 +14,15 @@ const routerSummary = {
 };
 const workload = (id: string, over: Record<string, unknown> = {}) => ({
   account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: id, state: 'ASLEEP', targetGroupArn: `arn:tg/${id}`, updatedAt: iso(NOW - 3_600_000), pauses: [],
-  checkedAt: iso(NOW - 60_000), historySince: iso(NOW - 30 * 86_400_000), ...over,
+  checkedAt: iso(NOW - 60_000), historySince: iso(NOW - 60 * 86_400_000), ...over,
 });
-// Awake before the week, asleep for its last hour.
-const entries = [{ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: 'AWAKE', to: 'ASLEEP', at: iso(NOW - 3_600_000) }];
+// Awake before the week, asleep for its last hour, its nap having stopped two t3.medium instances and a database.
+const STOPPED = [{ kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' }, { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: false }, { kind: 'unknown', backend: 'ecs:svc', reason: 'AccessDenied' }];
+const entries = [{ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: 'AWAKE', to: 'ASLEEP', at: iso(NOW - 3_600_000), stopped: STOPPED }];
+const PRICES: Record<string, number> = { ec2: 0.0912, rds: 0.017 };
 const before = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to: 'AWAKE', at: iso(NOW - 10 * 86_400_000) };
 
-function setup({ workloads = [workload('a'), workload('b')], fail = false } = {}) {
+function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false } = {}) {
   let t = NOW;
   const read: string[] = [];
   const list = workloads.map((w) => ({ ...w }));
@@ -39,6 +41,7 @@ function setup({ workloads = [workload('a'), workload('b')], fail = false } = {}
       },
       historyBefore: async (_a: string, _r: string, id: string) => (id === 'a' ? before : null) as never,
     },
+    ...(priced ? { savings: { baseline: { kind: 'always' as const }, hourly: async (_region: string, item: { kind: string }) => { if (pricesFail) throw new Error('throttled'); return PRICES[item.kind] ?? null; } } } : {}),
     discovery: { store: { getCandidate: async (arn: string) => (arn === 'arn:tg/a' ? { idleHours7d: 150, requests7d: 12 } : null) as never }, run: async () => {} } as never,
   });
   return { api, read, list, later: (ms: number) => { t += ms; } };
@@ -54,7 +57,7 @@ describe('time in each state over 7 days', () => {
     const s = setup();
     const [a, b] = await page(s);
     expect(a!.states7d).toEqual({ from: iso(NOW - WEEK * 1000), to: iso(NOW), totals: { AWAKE: WEEK - 3_600, ASLEEP: 3_600 } });
-    // Asleep since before the week (its history began 30 days ago): the whole week asleep.
+    // Asleep since before the week (its history began 60 days ago): the whole week asleep.
     expect(b!.states7d.totals).toEqual({ ASLEEP: WEEK });
     expect(s.read).toEqual(['a', 'b']);
   });
@@ -88,6 +91,29 @@ describe('time in each state over 7 days', () => {
     s.later(300_000);
     await page(s);
     expect(s.read).toEqual(['a', 'b', 'a', 'a', 'b']);
+  });
+
+  it('over the last 30 days: what its naps saved, the share of its time asleep within the baseline, its last nap priced (user request)', async () => {
+    const s = setup();
+    const body = json(await s.api(event('/api/workloads/dmt-dev/a')));
+    const { saved, ...costs } = body.costs;
+    expect(costs).toEqual({
+      baseline: { kind: 'always' }, from: iso(NOW - 30 * 86_400_000), to: iso(NOW), napAt: iso(NOW - 3_600_000), savedShare: 1 / 720,
+      items: [{ item: STOPPED[0], hourly: 0.0912 }, { item: STOPPED[1], hourly: 0.017 }, { item: STOPPED[2], hourly: null }],
+    });
+    // Its hour asleep: the two instances and the database; the service not described.
+    expect(saved.usd).toBeCloseTo(0.1082, 6);
+    expect([saved.hours, saved.unpricedHours]).toEqual([1, 1]);
+    // The same on a Workloads page; a workload whose naps said nothing has no item, and its time asleep is not priced.
+    const [a, b] = await page(s);
+    expect(a!.costs).toEqual(body.costs);
+    expect(b!.costs).toEqual({ baseline: { kind: 'always' }, from: iso(NOW - 30 * 86_400_000), to: iso(NOW), napAt: null, savedShare: 1, items: [], saved: { usd: 0, hours: 720, unpricedHours: 720 } });
+  });
+
+  it('says no price when prices fail, and gives no costs without prices', async () => {
+    const failing = json(await setup({ pricesFail: true }).api(event('/api/workloads/dmt-dev/a')));
+    expect(failing.costs.items.map((i: { hourly: number | null }) => i.hourly)).toEqual([null, null, null]);
+    expect('costs' in json(await setup({ priced: false }).api(event('/api/workloads/dmt-dev/a')))).toBe(false);
   });
 
   it('never fails the page or the view: without its history, a workload has no figures', async () => {
