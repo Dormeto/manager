@@ -163,7 +163,8 @@ resource "aws_sfn_state_machine" "operations" {
   definition = jsonencode({
     Comment        = "Dormeto operation: the next step until done, waiting as each step asks"
     StartAt        = "Next"
-    TimeoutSeconds = 6 * 3600
+    # Slot waits end 24 hours after the operation started (engine.ts SLOT_WAIT_MAX); the steps after them fit in the hour left.
+    TimeoutSeconds = 25 * 3600
     States = {
       Next = {
         Type           = "Task"

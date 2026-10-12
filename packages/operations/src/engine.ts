@@ -7,7 +7,9 @@ import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type Step
 import type { Operation, OperationType, Records } from './records.js';
 
 const MINUTE = 60_000;
-const ACTIVE_TTL = 6 * 60 * MINUTE;
+// An operation lasts at most its slot waits (SLOT_WAIT_MAX) and the steps after them: the workflow's timeout is 25 hours
+// (an execution timeout is never caught: the operation would stay running).
+const ACTIVE_TTL = 25 * 60 * MINUTE;
 const LOCK_LEASE = 60 * MINUTE;
 const BUSY_MAX = 30 * MINUTE;
 // A step pending longer than this (a resource never settling) fails instead of looping until the workflow timeout.
@@ -18,8 +20,10 @@ const SLOTS = 3;
 const ORG_SLOT = 'ORG';
 const ORG_SLOTS = 50;
 const slotMax = (key: string) => (key === ORG_SLOT ? ORG_SLOTS : SLOTS);
-// Waiting for a slot lasts as long as it takes (the holders of dead operations expire), polling less often: 10 s to 60 s.
+// Waiting for a slot lasts as long as it takes (the holders of dead operations expire), polling less often: 10 s to 60 s,
+// up to 24 hours after the operation started (about 13,000 workflow events of the 25,000 an execution can hold).
 const slotWait = (attempts: number) => Math.min(60, 10 * 2 ** Math.max(0, attempts - 1));
+const SLOT_WAIT_MAX = 24 * 60 * MINUTE;
 const RETRY_MAX = 30;
 // AWS errors that pass: the step waits and runs again (a resource being updated, a throttled API).
 const TRANSIENT = new Set([
@@ -79,9 +83,10 @@ const PLANS: Record<OperationType, string[]> = {
   'install-router': ['find router', 'lock router', ...installSteps, 'register router', 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', 'verify router'],
   'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', ...uninstallSteps, 'unregister router'],
-  onboard: ['find router', 'lock router', ...installSteps, 'register router', 'lock load balancer', 'slot', 'preview', 'onboard', 'verify', 'candidate'],
+  // The slot before the load balancer's lock: an operation waiting for a slot holds no lock others wait for.
+  onboard: ['find router', 'lock router', ...installSteps, 'register router', 'slot', 'lock load balancer', 'preview', 'onboard', 'verify', 'candidate'],
   // Paused first (that wakes an asleep workload): no nap starts or commits while the instrumentation goes.
-  offboard: ['locate', 'lock load balancer', 'slot', 'pause', 'wait awake', 'offboard', 'candidate'],
+  offboard: ['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'candidate'],
   // Exclusions (scale design §6): the API answers at once; their workloads are paused or resumed here, in batches.
   exclude: ['pause workloads'],
   'lift-exclusion': ['resume workloads'],
@@ -531,7 +536,7 @@ export function createEngine(deps: EngineDeps) {
       return { done: false, waitSeconds: 0 };
     } catch (err) {
       const waited = now() - Date.parse(step.startedAt);
-      if (err instanceof SlotBusy) {
+      if (err instanceof SlotBusy && now() - Date.parse(op.createdAt) <= SLOT_WAIT_MAX) {
         step.detail = err.message;
         await records.putOperation(op);
         return { done: false, waitSeconds: slotWait(step.attempts) };
@@ -546,7 +551,8 @@ export function createEngine(deps: EngineDeps) {
         await records.putOperation(op);
         return { done: false, waitSeconds: err instanceof RetryLater ? err.seconds : 10 };
       }
-      const message = err instanceof Busy ? `${err.message} since more than ${BUSY_MAX / MINUTE} minutes` : (err as Error).message;
+      const message = err instanceof SlotBusy ? `waited more than ${SLOT_WAIT_MAX / 60 / MINUTE} hours for a slot: ${err.message}`
+        : err instanceof Busy ? `${err.message} since more than ${BUSY_MAX / MINUTE} minutes` : (err as Error).message;
       step.status = 'failed';
       step.detail = message;
       step.finishedAt = iso(now());

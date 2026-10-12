@@ -95,7 +95,7 @@ const WORKLOAD_ID = '7010ea54b5c02245';
 const BUS = 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager';
 
 describe('operations engine', () => {
-  it('onboards a candidate with an existing router: lock, slot, preview, onboard, verify, candidate managed, everything released', async () => {
+  it('onboards a candidate with an existing router: slot, lock, preview, onboard, verify, candidate managed, everything released', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: { idleMinutes: 30 } }, 'ops@example.com');
     expect(s.started).toEqual([op.id]);
@@ -104,7 +104,7 @@ describe('operations engine', () => {
     const stored = (await s.records.getOperation(op.id))!;
     expect(stored.steps.map((x) => [x.name, x.status])).toEqual([
       ['find router', 'done'], ['lock router', 'skipped'], ...['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'].map((n) => [`install ${n}`, 'skipped']),
-      ['register router', 'skipped'], ['lock load balancer', 'done'], ['slot', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
+      ['register router', 'skipped'], ['slot', 'done'], ['lock load balancer', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
     ]);
     expect(s.invocations.map(([fn, p]) => [fn.split(':').at(-1), p.action])).toEqual([['dmt-dev-onboarder', 'preview'], ['dmt-dev-onboarder', 'onboard'], ['dmt-dev-controller', 'status']]);
     // The onboarder derives the id at the preview; the onboard step passes it back with the name.
@@ -201,6 +201,48 @@ describe('operations engine', () => {
     expect(await s.records.slotHolders('ORG')).toHaveLength(49);
   });
 
+  it('an operation still waiting for a slot 24 hours after it started fails, releasing what it holds, before the workflow times out', async () => {
+    const DAY = 24 * 60 * 60_000;
+    const s = setup({ routers: [DEV_ROUTER] });
+    for (const holder of ['a', 'b', 'c']) await s.records.acquireSlot(`${ACCOUNT}#eu-west-3`, holder, 3, 3 * DAY);
+    const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
+    expect(await s.drive(op.id, { maxIterations: 3000 })).toEqual({ done: true, status: 'failed' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.error).toBe(`slot: waited more than 24 hours for a slot: 3 operations already run in ${ACCOUNT}/eu-west-3`);
+    expect(s.now() - T0).toBeGreaterThan(DAY);
+    expect(s.now() - T0).toBeLessThan(DAY + 2 * 60_000);
+    expect(stored.holds).toEqual({ locks: [], slots: [] });
+    expect(await s.records.acquireLock(`LB#${LB}`, 'other', 60_000)).toBe(true);
+    // The same for a wait for the organization's places.
+    const org = setup({ routers: [DEV_ROUTER] });
+    for (let i = 0; i < 50; i += 1) await org.records.acquireSlot('ORG', `op-${i}`, 50, 3 * DAY);
+    const queued = await org.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
+    expect(await org.drive(queued.id, { maxIterations: 3000 })).toEqual({ done: true, status: 'failed' });
+    expect((await org.records.getOperation(queued.id))!.error).toBe('find router: waited more than 24 hours for a slot: 50 operations already run across the organization: waiting for one to end');
+  });
+
+  it('two onboardings on one load balancer waiting for a slot hold no lock meanwhile: both run once slots free, past 30 minutes', async () => {
+    const TG2 = TG.replace('paris-app/73e2d6bc24d8a067', 'paris-api/83e2d6bc24d8a068');
+    const s = setup({ routers: [DEV_ROUTER], candidates: [candidate(), candidate({ id: TG2, targetGroup: 'paris-api', targetGroupArn: TG2 })] });
+    for (const holder of ['a', 'b', 'c']) await s.records.acquireSlot(`${ACCOUNT}#eu-west-3`, holder, 3, 24 * 60 * 60_000);
+    const ops = [await s.engine.create('onboard', { candidateId: TG }, 'ops'), await s.engine.create('onboard', { candidateId: TG2 }, 'ops')];
+    // Both workflows run side by side: the earliest due runs next.
+    const due = new Map(ops.map((op) => [op.id, s.now()]));
+    const results: Record<string, unknown> = {};
+    while (due.size) {
+      const [id, at] = [...due].sort((x, y) => x[1] - y[1])[0]!;
+      s.advance(Math.max(0, at - s.now()));
+      // The slots free after 45 minutes.
+      if (s.now() - T0 > 45 * 60_000) for (const holder of ['a', 'b']) await s.records.releaseSlot(`${ACCOUNT}#eu-west-3`, holder);
+      const r = await s.engine.next(id);
+      if (r.done) {
+        results[id] = r;
+        due.delete(id);
+      } else due.set(id, s.now() + (r.waitSeconds ?? 0) * 1000);
+    }
+    expect(results).toEqual({ [ops[0]!.id]: { done: true, status: 'succeeded' }, [ops[1]!.id]: { done: true, status: 'succeeded' } });
+  });
+
   it('offboards: wakes the workload, waits until awake, offboards, and the candidate is onboardable again', async () => {
     const s = setup({ routers: [DEV_ROUTER], candidates: [candidate({ eligibility: 'managed', workloadId: 'paris', status: 'managed', statusReason: 'managed' })] });
     s.router.state = 'ASLEEP';
@@ -209,7 +251,7 @@ describe('operations engine', () => {
     const result = await s.drive(op.id, { between: () => { if (s.router.state === 'WAKING' && (polls += 1) > 3) s.router.state = 'AWAKE'; } });
     expect(result).toEqual({ done: true, status: 'succeeded' });
     expect((await s.records.getOperation(op.id))!.steps.map((x) => [x.name, x.status])).toEqual([
-      ['locate', 'done'], ['lock load balancer', 'done'], ['slot', 'done'], ['pause', 'done'], ['wait awake', 'done'], ['offboard', 'done'], ['candidate', 'done'],
+      ['locate', 'done'], ['slot', 'done'], ['lock load balancer', 'done'], ['pause', 'done'], ['wait awake', 'done'], ['offboard', 'done'], ['candidate', 'done'],
     ]);
     // Paused (it wakes an asleep workload): no nap can start while the instrumentation goes.
     expect(s.invocationsPaused).toEqual([{ action: 'pause', workloadId: 'paris', by: 'ops', reason: 'offboarding', keepAsleep: false }]);
