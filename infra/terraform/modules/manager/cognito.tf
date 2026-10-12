@@ -37,6 +37,11 @@ resource "aws_cognito_user_pool" "main" {
     enabled = true
   }
 
+  # An email changed (by an administrator: no client may write it) is kept until the new address is verified.
+  user_attribute_update_settings {
+    attributes_require_verification_before_update = ["email"]
+  }
+
   admin_create_user_config {
     allow_admin_create_user_only = true
     invite_message_template {
@@ -89,8 +94,11 @@ resource "aws_cognito_user_pool_client" "dashboard" {
   generate_secret                      = false
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
-  # aws.cognito.signin.user.admin: the user sets up their own authenticator from the Account page (R6c).
+  # aws.cognito.signin.user.admin: the user sets up their own authenticator from the Account page (R6c). With it a token
+  # may also change the user's attributes: never the email (a stolen access token could otherwise move the account to
+  # another address, set a password and an authenticator there, around MFA; the API trusts the email).
   allowed_oauth_scopes          = ["openid", "email", "profile", "aws.cognito.signin.user.admin"]
+  write_attributes              = ["name"]
   supported_identity_providers  = ["COGNITO"]
   callback_urls                 = concat(["https://${local.dashboard_host}/callback"], local.local_callbacks)
   logout_urls                   = concat(["https://${local.dashboard_host}/"], local.local_logouts)
@@ -171,6 +179,7 @@ resource "aws_cognito_user_pool_client" "smoke" {
   user_pool_id        = aws_cognito_user_pool.main.id
   generate_secret     = false
   explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
+  write_attributes    = ["name"]
   id_token_validity   = 1
   token_validity_units {
     id_token = "hours"

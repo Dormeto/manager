@@ -25,4 +25,13 @@ describe('MfaBanner', () => {
     expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'admin', mfa: { mode: 'operators', enabled: true, required: true } }).text()).toBe('');
     expect(mountBanner({ email: 'a@example.com', role: 'viewer', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: false } }).text()).toBe('');
   });
+
+  it('review M5: says nothing before /api/me answered', () => {
+    setActivePinia(createPinia());
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+    const session = useSession();
+    session.role = 'admin';
+    expect(mount(MfaBanner, { global: { plugins: [createVuetify({ components }), router] } }).text()).toBe('');
+    expect(session.acting).toBe('admin');
+  });
 });

@@ -103,7 +103,8 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
         PaginationToken = page.PaginationToken;
       } while (PaginationToken);
       const groups = await Promise.all(ORDER.map(async (role) => [role, await members(group(role))] as const));
-      const mfa = await inFives(all, (u) => mfaEnabled(u.Username ?? '').catch(() => false));
+      // null: Cognito could not say (the Users view shows unknown, not off).
+      const mfa = await inFives(all, (u) => mfaEnabled(u.Username ?? '').catch(() => null));
       return all.map((u, i): UserView => ({
         email: u.Attributes?.find((a) => a.Name === 'email')?.Value ?? u.Username ?? '',
         role: groups.find(([, names]) => names.has(u.Username ?? ''))?.[0] ?? 'viewer',
@@ -157,10 +158,13 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
     async resetMfa(email) {
       const input = { UserPoolId: userPoolId, Username: email };
       await mapped(() => cognito.adminSetUserMFAPreference({ ...input, SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } }));
-      if (cognito.adminDeleteSoftwareToken) {
-        await cognito.adminDeleteSoftwareToken(input).catch((err: Error) => {
-          if (err.name !== 'ResourceNotFoundException') throw err;
-        });
+      if (!cognito.adminDeleteSoftwareToken) return { tokenDeleted: false };
+      try {
+        await cognito.adminDeleteSoftwareToken(input);
+        return { tokenDeleted: true };
+      } catch (err) {
+        if ((err as Error).name !== 'ResourceNotFoundException') throw err;
+        return { tokenDeleted: false };
       }
     },
   };

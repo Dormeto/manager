@@ -66,7 +66,7 @@ function toggleTheme() {
           <v-btn v-bind="props" :icon="mdiAccountCircle" aria-label="Account" />
         </template>
         <v-list density="compact" min-width="240">
-          <v-list-item :title="session.email" :subtitle="`Role: ${session.role}${session.effectiveRole !== session.role ? ` (acting as ${session.effectiveRole ?? 'nothing'})` : ''}`" />
+          <v-list-item :title="session.email" :subtitle="`Role: ${session.role}${session.loaded && session.effectiveRole !== session.role ? ` (acting as ${session.effectiveRole ?? 'nothing'})` : ''}`" />
           <v-divider />
           <v-list-item :prepend-icon="mdiAccountCogOutline" title="Account and two-step verification" to="/account" />
           <v-list-item :prepend-icon="mdiLogout" title="Sign out" @click="signOut(getConfig())" />

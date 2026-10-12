@@ -7,13 +7,20 @@ import { totp } from './totp.mjs';
 const SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 const tokens = { IdToken: 'id', AccessToken: 'access', RefreshToken: 'refresh', ExpiresIn: 3600 };
 
-function fakes({ enrolled, stored, used = false }) {
+function fakes({ enrolled, stored, used = false, setup = false }) {
   const calls = [];
-  const state = { enrolled, stored, used };
+  const state = { enrolled, stored, used, setup };
   let now = 1_700_000_000_000;
   const cognito = async (name, input) => {
     calls.push([name, input]);
-    if (name === 'InitiateAuth') return state.enrolled ? { ChallengeName: 'SOFTWARE_TOKEN_MFA', Session: 's1' } : { AuthenticationResult: tokens };
+    if (name === 'InitiateAuth') {
+      if (state.setup && !state.enrolled) return { ChallengeName: 'MFA_SETUP', Session: 'setup-1' };
+      return state.enrolled ? { ChallengeName: 'SOFTWARE_TOKEN_MFA', Session: 's1' } : { AuthenticationResult: tokens };
+    }
+    if (name === 'RespondToAuthChallenge' && input.ChallengeName === 'MFA_SETUP') {
+      state.enrolled = true;
+      return { ChallengeName: 'SOFTWARE_TOKEN_MFA', Session: 's2' };
+    }
     if (name === 'RespondToAuthChallenge') {
       if (state.used) {
         state.used = false;
@@ -23,7 +30,7 @@ function fakes({ enrolled, stored, used = false }) {
       return { AuthenticationResult: tokens };
     }
     if (name === 'AssociateSoftwareToken') return { SecretCode: SECRET };
-    if (name === 'VerifySoftwareToken') return { Status: input.UserCode === totp(SECRET, now) ? 'SUCCESS' : 'ERROR' };
+    if (name === 'VerifySoftwareToken') return { Status: input.UserCode === totp(SECRET, now) ? 'SUCCESS' : 'ERROR', ...(input.Session ? { Session: 'verified-1' } : {}) };
     if (name === 'SetUserMFAPreference') { state.enrolled = true; return {}; }
     throw new Error(name);
   };
@@ -46,7 +53,8 @@ test('answers the authenticator challenge with the stored secret\'s code', async
 test('enrolls a smoke user without an authenticator once: the secret stored, then a sign-in with a code of the next step', async () => {
   const f = fakes({ enrolled: false, stored: 'none' });
   assert.deepEqual(await signInSmoke({ smoke, ...f }), tokens);
-  assert.deepEqual(f.calls.map(([name]) => name), ['InitiateAuth', 'AssociateSoftwareToken', 'VerifySoftwareToken', 'SetUserMFAPreference', 'PutParameter', 'InitiateAuth', 'RespondToAuthChallenge']);
+  // Review M7: the secret is stored before it is verified (a failure after that leaves it known).
+  assert.deepEqual(f.calls.map(([name]) => name), ['InitiateAuth', 'AssociateSoftwareToken', 'PutParameter', 'VerifySoftwareToken', 'SetUserMFAPreference', 'InitiateAuth', 'RespondToAuthChallenge']);
   assert.equal(f.state.stored, SECRET);
 });
 
@@ -62,4 +70,20 @@ test('a code already used (a sign-in a moment ago) waits for the next one, once'
   assert.deepEqual(await signInSmoke({ smoke, ...f }), tokens);
   assert.deepEqual(f.calls.map(([name]) => name), ['InitiateAuth', 'RespondToAuthChallenge', 'InitiateAuth', 'RespondToAuthChallenge']);
   assert.ok(Math.floor(f.now() / 30_000) > Math.floor(before / 30_000), 'the next 30-second step');
+});
+
+test('review M7: a secret stored for a user no longer asked for a code (reset) is replaced by a new enrollment', async () => {
+  const f = fakes({ enrolled: false, stored: 'OLDSECRET' });
+  assert.deepEqual(await signInSmoke({ smoke, ...f }), tokens);
+  assert.ok(f.calls.some(([name]) => name === 'AssociateSoftwareToken'));
+  assert.equal(f.state.stored, SECRET);
+});
+
+test('review I3: under required, a smoke user never enrolled answers MFA_SETUP with a new authenticator', async () => {
+  const f = fakes({ enrolled: false, stored: 'none', setup: true });
+  assert.deepEqual(await signInSmoke({ smoke, ...f }), tokens);
+  const names = f.calls.map(([name, input]) => (name === 'RespondToAuthChallenge' ? `${name}:${input.ChallengeName}` : name));
+  assert.deepEqual(names, ['InitiateAuth', 'AssociateSoftwareToken', 'PutParameter', 'VerifySoftwareToken', 'RespondToAuthChallenge:MFA_SETUP', 'RespondToAuthChallenge:SOFTWARE_TOKEN_MFA']);
+  assert.deepEqual(f.calls[1][1], { Session: 'setup-1' });
+  assert.equal(f.state.stored, SECRET);
 });

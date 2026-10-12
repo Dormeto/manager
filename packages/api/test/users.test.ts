@@ -59,9 +59,9 @@ describe('users service', () => {
 
   it('resets a user\'s MFA: TOTP turned off and its token deleted; a user without a token is reset too', async () => {
     const { users, calls } = fakes();
-    await users.resetMfa('op@example.com');
+    expect(await users.resetMfa('op@example.com')).toEqual({ tokenDeleted: true });
     expect(calls).toEqual([['mfa-preference', 'op@example.com', { Enabled: false, PreferredMfa: false }], ['delete-token', 'op@example.com']]);
-    await expect(users.resetMfa('none@example.com')).resolves.toBeUndefined();
+    expect(await users.resetMfa('none@example.com')).toEqual({ tokenDeleted: false });
   });
 
   it('in the SES sandbox, an unverified address gets an SES identity and the invitation waits', async () => {
@@ -118,5 +118,19 @@ describe('users service', () => {
       ['remove', 'op@example.com', 'dmt-operator'], ['remove', 'op@example.com', 'dmt-viewer'], ['add', 'op@example.com', 'dmt-admin'],
       ['disable', 'op@example.com'], ['enable', 'op@example.com'],
     ]);
+  });
+});
+
+describe('users service: review M4', () => {
+  it('says the MFA is unknown (null) when Cognito cannot say, rather than off', async () => {
+    const cognito = {
+      async listUsers() { return { Users: [{ Username: 'u-1', Attributes: [{ Name: 'email', Value: 'a@example.com' }], UserStatus: 'CONFIRMED', Enabled: true }] }; },
+      async listUsersInGroup() { return { Users: [] }; },
+      async adminCreateUser() { return {}; }, async adminAddUserToGroup() { return {}; }, async adminRemoveUserFromGroup() { return {}; },
+      async adminDisableUser() { return {}; }, async adminEnableUser() { return {}; }, async adminSetUserMFAPreference() { return {}; },
+      async adminGetUser(): Promise<{ UserMFASettingList?: string[] }> { throw Object.assign(new Error('throttled'), { name: 'TooManyRequestsException' }); },
+    };
+    const users = createUsers({ cognito, ses: { getAccount: async () => ({}), getEmailIdentity: async () => ({}), createEmailIdentity: async () => ({}) }, userPoolId: 'pool', sender: 'cognito' });
+    expect((await users.list())[0]!.mfa).toBeNull();
   });
 });

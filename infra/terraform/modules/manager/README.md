@@ -21,7 +21,12 @@ certificate in us-east-1 and the Route 53 zone), `ses_identity` and `email_from`
 your SES identity; without, it sends them itself, about 50 a day), `discovery_role_name` and `command_role_name` (the
 roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRole` by default), `create_organization_roles`
 (false for a second environment in an account whose roles another one creates), `deletion_protection` (true: the users and the table are protected; set
-it to false and apply before `terraform destroy`), `log_retention_days`.
+it to false and apply before `terraform destroy`), `log_retention_days`, `mfa` (two-step verification with an
+authenticator app: `optional`, `operators` by default — administrators and operators keep viewer rights until they set it
+up from the Account page — or `required`), `alert_emails` (the addresses of the health alerts, each confirming the email
+AWS sends; other channels subscribe to the `alerts_topic_arn` output), `ip_lists` (IP reputation lists the manager
+downloads once for every router: `name`, `url`, `action` defer or ignore, `refresh_hours`; no secret in a URL, readable by
+the organization).
 
 To uninstall: offboard the workloads and uninstall the routers from the manager, turn event-driven refresh off and let a
 discovery run disconnect the accounts (Run now), then set `deletion_protection = false`, apply, and `terraform destroy`.

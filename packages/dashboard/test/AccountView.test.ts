@@ -9,10 +9,12 @@ import { useSession } from '../src/stores/session';
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 const calls: [string, Record<string, unknown>][] = [];
 const me: { value: Record<string, unknown> } = { value: {} };
+const scopeless = { value: false };
 let refreshed = 0;
 vi.mock('../src/cognito', () => ({
   cognito: vi.fn(async (target: string, body: Record<string, unknown>) => {
     calls.push([target, body]);
+    if (target === 'AssociateSoftwareToken' && scopeless.value) throw new Error('Access Token does not have required scopes');
     if (target === 'AssociateSoftwareToken') return { SecretCode: 'JBSWY3DPEHPK3PXP' };
     if (target === 'VerifySoftwareToken' && body.UserCode !== '123456') throw new Error('Invalid code received for user');
     return {};
@@ -33,7 +35,7 @@ async function mountView(mode: 'optional' | 'operators' | 'required', enabled: b
 }
 const button = (wrapper: Awaited<ReturnType<typeof mountView>>, text: string) => wrapper.findAll('button').find((b) => b.text().includes(text))!;
 
-beforeEach(() => { calls.length = 0; refreshed = 0; });
+beforeEach(() => { calls.length = 0; refreshed = 0; scopeless.value = false; });
 
 describe('Account', () => {
   it('sets up an authenticator app: secret and QR code, a code verified, TOTP preferred, rights read again', async () => {
@@ -75,5 +77,13 @@ describe('Account', () => {
     expect(calls).toEqual([['SetUserMFAPreference', { AccessToken: 'access-token', SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } }]]);
     const operators = await mountView('operators', true);
     expect(button(operators, 'Turn off')).toBeUndefined();
+  });
+
+  it('review M9: a session opened before two-step verification existed is told to sign in again', async () => {
+    scopeless.value = true;
+    const wrapper = await mountView('operators', false);
+    await button(wrapper, 'Set up an authenticator app').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('Your session predates two-step verification: sign out, sign in again, then set it up.');
   });
 });

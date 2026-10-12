@@ -3,7 +3,7 @@ import { createApi, type ApiEvent, type AuditEntry, type MfaMode, type UsersServ
 
 // The MFA policy (R6c): administrators and operators without MFA act as viewers under `operators`; nobody without MFA
 // passes `required` but to read who they are.
-function setup(mode: MfaMode, enrolled: Set<string> = new Set()) {
+function setup(mode: MfaMode, enrolled: Set<string> = new Set(), failing = false) {
   let now = 0;
   const reads: string[] = [];
   const audit: AuditEntry[] = [];
@@ -14,12 +14,12 @@ function setup(mode: MfaMode, enrolled: Set<string> = new Set()) {
     async resend() { return { invitation: 'sent' as const }; },
     async setRole() {},
     async setEnabled() {},
-    async resetMfa(email: string) { resets.push(email); },
+    async resetMfa(email: string) { resets.push(email); return { tokenDeleted: true }; },
   } satisfies UsersService;
   const api = createApi({
     routers: [], invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
     now: () => now, newId: () => 'id', version: '0.4.0', users,
-    mfa: { mode, async enabled(username) { reads.push(username); return enrolled.has(username); } },
+    mfa: { mode, async enabled(username) { reads.push(username); if (failing) throw new Error('TooManyRequestsException'); return enrolled.has(username); } },
   });
   return { api, reads, audit, resets, enrolled, advance: (ms: number) => { now += ms; } };
 }
@@ -90,8 +90,33 @@ describe('MFA policy', () => {
     const s = setup('operators', new Set(['u-1']));
     expect((await s.api(event('POST', '/api/users/ops%40example.com/mfa/reset', 'dmt-admin'))).statusCode).toBe(200);
     expect(s.resets).toEqual(['ops@example.com']);
-    expect(s.audit.map((e) => [e.action, e.target, e.result])).toEqual([['mfa-reset', 'ops@example.com', 'reset']]);
+    expect(s.audit.map((e) => [e.action, e.target, e.result])).toEqual([['mfa-reset', 'ops@example.com', 'reset, authenticator deleted']]);
     expect((await s.api(event('POST', '/api/users/admin%40example.com/mfa/reset', 'dmt-admin'))).statusCode).toBe(409);
     expect((await s.api(event('POST', '/api/users/ops%40example.com/mfa/reset', 'dmt-operator'))).statusCode).toBe(403);
+  });
+
+  it('review M1: when Cognito cannot say, an administrator acts as a viewer and /me says the MFA is unknown; required still refuses', async () => {
+    const s = setup('operators', new Set(), true);
+    expect((await s.api(event('GET', '/api/routers', 'dmt-admin'))).statusCode).toBe(200);
+    expect((await s.api(event('GET', '/api/users', 'dmt-admin'))).statusCode).toBe(403);
+    const me = json(await s.api(event('GET', '/api/me', 'dmt-admin')));
+    expect([me.effectiveRole, me.mfa]).toEqual(['viewer', { mode: 'operators', enabled: null, required: true }]);
+    const optional = setup('optional', new Set(), true);
+    expect(json(await optional.api(event('GET', '/api/me', 'dmt-admin'))).effectiveRole).toBe('admin');
+    const required = setup('required', new Set(), true);
+    expect((await required.api(event('GET', '/api/routers', 'dmt-viewer'))).statusCode).toBe(403);
+  });
+
+  it('review M6: an administrator without MFA is told why an admin route refuses them', async () => {
+    const s = setup('operators');
+    expect(json(await s.api(event('GET', '/api/users', 'dmt-admin')))).toEqual({ error: 'forbidden', message: 'two-step verification required to use your admin rights: set it up from your Account page' });
+    expect(json(await s.api(event('GET', '/api/users', 'dmt-viewer'))).message).toBe('admin role required');
+  });
+
+  it('review M10: an operator without MFA is a viewer under operators; with MFA, required lets requests through', async () => {
+    const s = setup('operators');
+    expect(json(await s.api(event('GET', '/api/me', 'dmt-operator'))).effectiveRole).toBe('viewer');
+    const required = setup('required', new Set(['u-1']));
+    expect((await required.api(event('GET', '/api/routers', 'dmt-viewer'))).statusCode).toBe(200);
   });
 });

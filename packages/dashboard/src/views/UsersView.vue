@@ -7,7 +7,8 @@ import { api } from '../api';
 import { relative } from '../format';
 import { useSession } from '../stores/session';
 
-interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa?: boolean }
+// mfa: null when Cognito could not say.
+interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa?: boolean | null }
 
 const now = useNow();
 const { smAndDown } = useDisplay();
@@ -92,7 +93,7 @@ load();
       <template #[`item.status`]="{ item }">
         <v-chip :color="!item.enabled ? 'error' : item.status === 'CONFIRMED' ? 'success' : 'warning'" variant="tonal" label>{{ item.enabled ? STATUS[item.status] ?? item.status : 'disabled' }}</v-chip>
       </template>
-      <template #[`item.mfa`]="{ item }"><v-chip :color="item.mfa ? 'success' : 'grey'" variant="tonal" label size="small">{{ item.mfa ? 'on' : 'off' }}</v-chip></template>
+      <template #[`item.mfa`]="{ item }"><v-chip :color="item.mfa ? 'success' : item.mfa === null ? 'warning' : 'grey'" variant="tonal" label size="small">{{ item.mfa ? 'on' : item.mfa === null ? 'unknown' : 'off' }}</v-chip></template>
       <template #[`item.createdAt`]="{ item }">{{ relative(item.createdAt, now) }}</template>
       <template #[`item.actions`]="{ item }">
         <v-menu v-if="item.email !== session.email">
@@ -104,7 +105,7 @@ load();
             <v-divider />
             <v-list-item v-if="item.status === 'FORCE_CHANGE_PASSWORD'" title="Resend the invitation"
               @click="run(`Invitation sent again to ${item.email}.`, () => api(`/users/${enc(item.email)}/resend`, { method: 'POST' }))" />
-            <v-list-item v-if="item.mfa" title="Reset two-step verification" @click="resetting = item" />
+            <v-list-item v-if="item.mfa !== false" title="Reset two-step verification" @click="resetting = item" />
             <v-list-item v-if="item.enabled" title="Disable" base-color="error"
               @click="run(`${item.email} is disabled.`, () => api(`/users/${enc(item.email)}/disable`, { method: 'POST' }))" />
             <v-list-item v-else title="Enable"

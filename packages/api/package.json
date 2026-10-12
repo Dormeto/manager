@@ -6,7 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.mjs --external:@aws-sdk/* && esbuild src/watchdog-handler.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/watchdog.mjs --external:@aws-sdk/*"
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.mjs \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\" --external:@aws-sdk/client-dynamodb --external:@aws-sdk/client-lambda --external:@aws-sdk/client-sesv2 --external:@aws-sdk/client-sfn --external:@aws-sdk/client-sns --external:@aws-sdk/client-s3 --external:@aws-sdk/credential-providers && esbuild src/watchdog-handler.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/watchdog.mjs --external:@aws-sdk/*"
   },
   "devDependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",

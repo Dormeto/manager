@@ -94,7 +94,8 @@ const cognito: CognitoPort = {
   adminGetUser: (input) => idp.send(new AdminGetUserCommand(input)),
   adminSetUserMFAPreference: (input) => idp.send(new AdminSetUserMFAPreferenceCommand(input)),
 };
-// AdminDeleteSoftwareToken (August 2026) only where the runtime's SDK has it: a reset still turns TOTP off without it.
+// AdminDeleteSoftwareToken (August 2026): the Cognito client is bundled (package.json build), so the command is there; a
+// build without it still turns TOTP off.
 const DeleteSoftwareToken = (cognitoSdk as Record<string, unknown>).AdminDeleteSoftwareTokenCommand as (new (input: object) => object) | undefined;
 if (DeleteSoftwareToken) cognito.adminDeleteSoftwareToken = (input) => idp.send(new DeleteSoftwareToken(input) as never);
 const sesClient = new SESv2Client({});
@@ -163,7 +164,8 @@ const ipLists = listsBucket ? {
 
 const users = createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '', sender: process.env.EMAIL_SENDER === 'cognito' ? 'cognito' : 'ses' });
 // The MFA policy (R6c): the manager module's mfa.
-const mfaMode = (['optional', 'operators', 'required'] as const).find((m) => m === process.env.MFA_MODE) ?? 'optional';
+// A missing or unknown value is the module's default, never less (review M2).
+const mfaMode = (['optional', 'operators', 'required'] as const).find((m) => m === process.env.MFA_MODE) ?? 'operators';
 
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',

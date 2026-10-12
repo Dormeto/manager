@@ -8,7 +8,8 @@ export interface Me {
   email: string;
   role: Role;
   effectiveRole?: Role | null;
-  mfa?: { mode: 'optional' | 'operators' | 'required'; enabled: boolean; required: boolean };
+  // enabled: null when Cognito could not say.
+  mfa?: { mode: 'optional' | 'operators' | 'required'; enabled: boolean | null; required: boolean };
 }
 
 export const useSession = defineStore('session', {

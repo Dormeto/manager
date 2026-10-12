@@ -37,7 +37,9 @@ async function step(run: () => Promise<void>) {
   try {
     await run();
   } catch (err) {
-    error.value = (err as Error).message;
+    const message = (err as Error).message;
+    // Tokens issued before the dashboard asked for the scope keep their scopes when renewed.
+    error.value = /required scopes/i.test(message) ? 'Your session predates two-step verification: sign out, sign in again, then set it up.' : message;
   } finally {
     busy.value = false;
   }
@@ -100,7 +102,7 @@ const turnOff = () => step(async () => {
       <v-card title="You">
         <v-card-text>
           <div>{{ session.email }}</div>
-          <div class="text-medium-emphasis">Role: {{ session.role }}{{ session.effectiveRole !== session.role ? `, acting as ${session.effectiveRole ?? 'nothing'} until two-step verification is on` : '' }}</div>
+          <div class="text-medium-emphasis">Role: {{ session.role }}{{ session.loaded && session.effectiveRole !== session.role ? `, acting as ${session.effectiveRole ?? 'nothing'} until two-step verification is on` : '' }}</div>
         </v-card-text>
       </v-card>
     </v-col>

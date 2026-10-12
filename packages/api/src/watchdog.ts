@@ -182,13 +182,13 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       const [summaries, installed, existing] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list()]);
       // Subjects other than routers that could not be read keep their alarms as they are (never resolved nor removed).
       let extra: Observation[] = [];
-      let extraUnread = false;
+      let extraUnread: string | null = null;
       if (extraObservations) {
         try {
           extra = await extraObservations();
         } catch (err) {
-          extraUnread = true;
-          log.error('SubjectsUnreadable', { error: (err as Error).message });
+          extraUnread = (err as Error).message;
+          log.error('SubjectsUnreadable', { error: extraUnread });
         }
       }
       const observations = [
@@ -205,7 +205,7 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       }
       // Subjects no longer known (a router uninstalled, a list removed): their alarms leave without a message.
       for (const { alarm, version } of known.values()) {
-        if (extraUnread && alarm.subject.kind !== 'router') continue;
+        if (extraUnread !== null && alarm.subject.kind !== 'router') continue;
         await alarms.remove(alarm.subject.id, version);
       }
 
@@ -253,6 +253,8 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       log.info('WatchdogRan', { subjects: observations.length, changes: changes.length, sent: single.length + (digested.length ? 1 : 0) - unsent.length, open: changes.filter((c) => c.alarm.level !== 'ok').length });
       // A path to the topic that fails is an error of the run: the watchdog-errors alarm (CloudWatch's own path) says it.
       if (unsent.length) throw new Error(`${unsent.length} alert${unsent.length === 1 ? '' : 's'} not sent: ${[...new Set(unsent)].join('; ')}`);
+      // The lists' status unread: the routers are done, and the run fails so that the watchdog's errors alarm says it.
+      if (extraUnread !== null) throw new Error(`subjects unreadable: ${extraUnread}`);
     },
   };
 }

@@ -15,6 +15,7 @@ vi.mock('../src/api', () => ({
         { email: 'admin@example.com', role: 'admin', status: 'CONFIRMED', enabled: true, createdAt: null, mfa: true },
         { email: 'ops@example.com', role: 'operator', status: 'CONFIRMED', enabled: true, createdAt: null, mfa: true },
         { email: 'new@example.com', role: 'viewer', status: 'CONFIRMED', enabled: true, createdAt: null, mfa: false },
+        { email: 'odd@example.com', role: 'viewer', status: 'CONFIRMED', enabled: true, createdAt: null, mfa: null },
       ] };
     }
     return { email: 'ops@example.com', mfa: false };
@@ -35,6 +36,8 @@ describe('Users', () => {
     const row = (email: string) => wrapper.findAll('tbody tr').find((r) => r.text().includes(email))!;
     expect(row('ops@example.com').text()).toContain('on');
     expect(row('new@example.com').text()).toContain('off');
+    // Review M4: Cognito could not say.
+    expect(row('odd@example.com').text()).toContain('unknown');
     await row('ops@example.com').find('button').trigger('click');
     await flushPromises();
     const reset = [...document.querySelectorAll('.v-list-item')].find((i) => i.textContent?.includes('Reset two-step verification')) as HTMLElement;

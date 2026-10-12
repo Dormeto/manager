@@ -69,7 +69,7 @@ export interface UserView {
   status: string;
   enabled: boolean;
   createdAt: string | null;
-  mfa?: boolean; // an authenticator app set up (R6c)
+  mfa?: boolean | null; // an authenticator app set up (R6c); null when Cognito could not say
 }
 
 // User management (Cognito, SES identities in the sandbox), behind the routes, roles and audit of this API.
@@ -79,8 +79,10 @@ export interface UsersService {
   resend(email: string): Promise<{ invitation: 'sent' }>;
   setRole(email: string, role: Role): Promise<void>;
   setEnabled(email: string, enabled: boolean): Promise<void>;
-  // The user's authenticator app removed: they set one up again at their next sign-in (R6c).
-  resetMfa(email: string): Promise<void>;
+  // The user's authenticator app turned off and, when the API can, deleted: they set one up again at their next sign-in
+  // (R6c). tokenDeleted: false when there was none, or the delete is not available (then, under required, the pool still
+  // asks for the old device).
+  resetMfa(email: string): Promise<{ tokenDeleted: boolean }>;
 }
 
 // The MFA policy (R6c): optional; operators (administrators and operators must use MFA, viewer rights until they do);
@@ -272,7 +274,11 @@ export function createApi({
     return id;
   };
   const need = (identity: Identity, role: Role) => {
-    if (RANK[identity.role] < RANK[role]) throw new HttpError(403, 'forbidden', `${role} role required`);
+    if (RANK[identity.role] >= RANK[role]) return;
+    // Rights the user has, waiting for their MFA (R6c): say so rather than that they lack the role.
+    const own = claimed.get(identity)?.role;
+    if (own && RANK[own] >= RANK[role]) throw new HttpError(403, 'forbidden', `two-step verification required to use your ${own} rights: set it up from your Account page`);
+    throw new HttpError(403, 'forbidden', `${role} role required`);
   };
 
   // The MFA policy (R6c): what Cognito says of each user's authenticator, cached per instance (5 minutes when set up, 30
@@ -293,10 +299,16 @@ export function createApi({
   async function applyMfa(identity: Identity, isMe: boolean, fresh: boolean) {
     const role = identity.role;
     const required = mfaRequired(role);
-    const enabled = mfa && (required || isMe) ? await mfaOf(identity, fresh) : null;
+    // Cognito unable to say (throttled, the user gone): the MFA is unknown, so the rights it gives are not given.
+    const enabled = mfa && (required || isMe)
+      ? await mfaOf(identity, fresh).catch((err: Error) => {
+        console.error(JSON.stringify({ level: 'error', event: 'MfaUnknown', user: identity.username, error: err.message }));
+        return null;
+      })
+      : null;
     let effective: Role | null = role;
     if (required && !enabled) effective = mfa!.mode === 'required' ? null : 'viewer';
-    claimed.set(identity, { role, enabled, effective });
+    claimed.set(identity, { role, enabled: enabled ?? null, effective });
     if (effective === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
     identity.role = effective ?? 'viewer';
   }
@@ -304,7 +316,8 @@ export function createApi({
     const c = claimed.get(identity) ?? { role: identity.role, enabled: null, effective: identity.role };
     return {
       email: identity.email, groups: identity.groups, role: c.role, effectiveRole: c.effective,
-      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled === true, required: mfaRequired(c.role) } } : {}),
+      // enabled: null when Cognito could not say.
+      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: mfaRequired(c.role) } } : {}),
     };
   }
 
@@ -736,8 +749,8 @@ export function createApi({
       if (method === 'POST' && b === 'mfa' && action === 'reset') {
         notSelf();
         return audited(identity, 'mfa-reset', email, async () => {
-          await users.resetMfa(email);
-          return { result: 'reset', response: reply(200, { email, mfa: false }) };
+          const { tokenDeleted } = await users.resetMfa(email);
+          return { result: tokenDeleted ? 'reset, authenticator deleted' : 'reset, no authenticator deleted', response: reply(200, { email, mfa: false, tokenDeleted }) };
         });
       }
       if (method === 'POST' && b === 'resend' && !action) {

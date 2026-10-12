@@ -295,6 +295,10 @@ run "ip_lists_are_validated" {
 run "mfa_operators_by_default" {
   command = plan
 
+  variables {
+    smoke_user = true
+  }
+
   assert {
     condition     = aws_cognito_user_pool.main.mfa_configuration == "OPTIONAL" && aws_lambda_function.api.environment[0].variables.MFA_MODE == "operators"
     error_message = "By default the user pool's MFA is optional and the API enforces it for administrators and operators."
@@ -302,6 +306,14 @@ run "mfa_operators_by_default" {
   assert {
     condition     = contains(aws_cognito_user_pool_client.dashboard.allowed_oauth_scopes, "aws.cognito.signin.user.admin")
     error_message = "The dashboard's access token may set up the user's own authenticator."
+  }
+  assert {
+    condition     = !contains(aws_cognito_user_pool_client.dashboard.write_attributes, "email") && length(aws_cognito_user_pool_client.dashboard.write_attributes) > 0 && !contains(aws_cognito_user_pool_client.smoke[0].write_attributes, "email")
+    error_message = "Review I1: no token may change the account's email (a stolen access token would otherwise take the account over, around MFA)."
+  }
+  assert {
+    condition     = aws_cognito_user_pool.main.user_attribute_update_settings[0].attributes_require_verification_before_update == toset(["email"])
+    error_message = "An email changed by an administrator is kept until the new address is verified."
   }
   assert {
     condition     = length(setsubtract(["cognito-idp:AdminSetUserMFAPreference", "cognito-idp:AdminDeleteSoftwareToken"], flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "Users"]))) == 0

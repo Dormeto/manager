@@ -10,7 +10,7 @@ function setup() {
     async resend(email) { calls.push(['resend', email]); if (email === 'unverified@example.com') throw new HttpError(409, 'conflict', 'address not verified yet'); return { invitation: 'sent' }; },
     async setRole(email, role) { calls.push(['role', email, role]); },
     async setEnabled(email, enabled) { calls.push([enabled ? 'enable' : 'disable', email]); },
-    async resetMfa(email) { calls.push(['mfa-reset', email]); },
+    async resetMfa(email) { calls.push(['mfa-reset', email]); return { tokenDeleted: true }; },
   };
   const api = createApi({
     routers: [], invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit },

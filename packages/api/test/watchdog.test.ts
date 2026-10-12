@@ -256,7 +256,8 @@ describe('watchdog: review fixes', () => {
     expect([...s.alarms.items.keys()].sort()).toEqual(['list#ipsum', `router#${MANAGER}#eu-west-1`]);
     failing = true;
     s.state.summaries = [summary(MANAGER, 'eu-west-1', MIN)];
-    await watchdog.run();
+    // Review M8: the routers are done, then the run fails, so that the watchdog's errors alarm says the lists are unread.
+    await expect(watchdog.run()).rejects.toThrow('subjects unreadable: S3 SlowDown');
     expect(s.sent.at(-1)!.subject).toBe('[Dormeto dev] dmt-dev (121014831971 eu-west-1): resolved');
     expect(s.alarms.items.has('list#ipsum'), 'kept while its status cannot be read').toBe(true);
   });
