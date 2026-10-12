@@ -89,7 +89,7 @@ export async function readUptime(cloudwatch: CloudWatchPort, ids: string[], { fr
   return { running, unreadable };
 }
 
-export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refresh, now, progress = () => {}, kinds = { ec2: true, ecs: false }, concurrency = 5 }: {
+export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refresh, now, progress = () => {}, kinds = { ec2: true, ecs: false }, concurrency = 5, onPlan = () => {}, onStart = () => {} }: {
   regions: RegionDiscovery[];
   requests: RegionRequests[];
   cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>;
@@ -100,22 +100,30 @@ export async function uptimeAll({ regions, requests, cloudwatchOf, cache, refres
   kinds?: UptimeKinds;
   // Regions read at once (--parallel).
   concurrency?: number;
+  // The phase's progress: how many regions are measured, when each starts.
+  onPlan?: (count: number) => void;
+  onStart?: (account: string, region: string) => void;
 }): Promise<RegionUptime[]> {
-  const read = await mapLimit(regions, concurrency, (region) => regionUptime(region, { requests, cloudwatchOf, cache, refresh, now, progress, kinds }));
-  return read.filter((r): r is RegionUptime => r !== null);
+  // The regions with something measured, over their requests period.
+  const toRead = regions.flatMap((region) => {
+    const ids = [...new Set([
+      ...region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id),
+      ...(kinds.rds ? (region.databases ?? []).filter((d) => !d.notStoppable).map(databaseKey) : []),
+    ])];
+    const period = requests.find((r) => r.account === region.account && r.region === region.region);
+    return ids.length && period ? [{ region, ids, period }] : [];
+  });
+  onPlan(toRead.length);
+  return mapLimit(toRead, concurrency, (r) => {
+    onStart(r.region.account, r.region.region);
+    return regionUptime(r, { cloudwatchOf, cache, refresh, now, progress });
+  });
 }
 
-// One region's uptime: kept, read, or unreadable with AWS's reason; null when nothing of it is measured.
-async function regionUptime(region: RegionDiscovery, { requests, cloudwatchOf, cache, refresh, now, progress, kinds }: {
-  requests: RegionRequests[]; cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>; cache: Cache;
-  refresh: 'discovery' | 'metrics' | null; now: () => number; progress: Progress; kinds: UptimeKinds;
-}): Promise<RegionUptime | null> {
-  const ids = [...new Set([
-    ...region.workloads.filter((w) => measured(w, kinds)).map((w) => w.backend.id),
-    ...(kinds.rds ? (region.databases ?? []).filter((d) => !d.notStoppable).map(databaseKey) : []),
-  ])];
-  const period = requests.find((r) => r.account === region.account && r.region === region.region);
-  if (!ids.length || !period) return null;
+// One region's uptime: kept, read, or unreadable with AWS's reason.
+async function regionUptime({ region, ids, period }: { region: RegionDiscovery; ids: string[]; period: RegionRequests }, { cloudwatchOf, cache, refresh, now, progress }: {
+  cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>; cache: Cache; refresh: 'discovery' | 'metrics' | null; now: () => number; progress: Progress;
+}): Promise<RegionUptime> {
   const where = { account: region.account, region: region.region };
   const path = `uptime/${region.account}-${region.region}.json`;
   const kept = refresh ? null : await cache.get<RegionUptime>(path, freshRequests(now()));

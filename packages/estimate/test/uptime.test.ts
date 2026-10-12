@@ -188,6 +188,19 @@ describe('the uptime of every region', () => {
     expect((await measure(2)).most).toBe(2);
   });
 
+  it('says how many regions it measures and when each starts (the phase\'s progress)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+    const planned: number[] = [];
+    const started: string[] = [];
+    const nothing: RegionDiscovery = { account: A, region: 'eu-west-3', ineligible: [], workloads: [w('fleet', { region: 'eu-west-3', backend: { kind: 'asg', id: 'fleet' }, instanceState: undefined })] };
+    const { port } = cloudwatch(() => ({ Timestamps: [], Values: [], StatusCode: 'Complete' }));
+    await uptimeAll({
+      regions: [...regions, nothing], requests: [...requests, { ...requests[0]!, region: 'eu-west-3' }], cloudwatchOf: async () => port,
+      cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW, onPlan: (count) => planned.push(count), onStart: (account, where) => started.push(`${account} ${where}`),
+    });
+    expect([planned, started]).toEqual([[1], [`${A} ${R}`]]);
+  });
+
   it('a region whose uptime cannot be read at all: its instances unreadable with AWS\'s reason, the run goes on', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
     const port: CloudWatchPort = { getMetricData: async () => { throw Object.assign(new Error('not authorized to perform: cloudwatch:GetMetricData'), { name: 'AccessDenied' }); } };

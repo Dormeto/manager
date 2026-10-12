@@ -97,10 +97,15 @@ describe('the estimate command', () => {
     const t = deps(fakeAws().aws);
     const updates: string[] = [];
     const ends: string[] = [];
-    expect(await main(['--profile', 'p', '--parallel', '2', '--out', out], { ...t.deps, status: { update: (l: string) => updates.push(l), end: (l: string) => ends.push(l) } })).toBe(0);
+    expect(await main(['--profile', 'p', '--parallel', '2', '--uptime', '--refresh', 'metrics', '--min-saving', 'none', '--out', out], { ...t.deps, status: { update: (l: string) => updates.push(l), end: (l: string) => ends.push(l) } })).toBe(0);
     expect(updates.length).toBeGreaterThan(0);
-    expect(ends).toEqual(['  Discovery [████████████████████] 100% · 1/1 account · 1 region · 1 workload · 0:00']);
-    expect(t.out.some((l) => l.startsWith('  discovery '))).toBe(false);
+    // Phase 2 too (the user, 2026-10-11): the requests, then the uptime, each on its line.
+    expect(ends).toEqual([
+      '  Discovery [████████████████████] 100% · 1/1 account · 1 region · 1 workload · 0:00',
+      '  Requests [████████████████████] 100% · 1/1 region · 1 workload · 0:00',
+      '  Uptime [████████████████████] 100% · 1/1 region · 1 workload · 0:00',
+    ]);
+    expect(t.out.some((l) => /^ {2}(discovery|requests|uptime) /.test(l))).toBe(false);
   });
 
   it('restricted to accounts of the organization (--accounts): only those, and how many of its accounts', async () => {

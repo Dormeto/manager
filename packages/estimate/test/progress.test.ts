@@ -1,7 +1,7 @@
 // The discovery phase's progress (the user, 2026-10-11): in a terminal, one line rewritten in place (a bar, the accounts
 // done, the regions, workloads and failures, the time); elsewhere (a log, CI), one line per account done.
 import { describe, expect, it } from 'vitest';
-import { discoveryView } from '../src/progress.js';
+import { discoveryView, regionsView } from '../src/progress.js';
 
 const A = '111111111111';
 const B = '222222222222';
@@ -100,5 +100,54 @@ describe('the discovery phase\'s progress', () => {
       `  discovery ${A} (1/2): 2 regions, 3 workloads, 1 from the cache, 1 failed`,
       `  discovery ${B} (2/2): failed (UnauthorizedOperation: not authorized)`,
     ]);
+  });
+});
+
+// The user, 2026-10-11: phase 2's CloudWatch reads (the requests, then the uptime) shown as discovery is.
+describe('phase 2\'s progress, by region', () => {
+  const done = (phase: 'requests' | 'uptime', account: string, workloads: number, extra: { from?: 'cache' | 'aws'; error?: string } = {}) =>
+    ({ phase, account, region: 'eu-west-1', from: extra.from ?? 'aws', workloads, ...(extra.error ? { error: extra.error } : {}) });
+
+  it('in a terminal: one line redrawn every second, the regions read of those to read, the workloads, failures, time, the last regions named', () => {
+    const c = clock();
+    const updates: string[] = [];
+    const ends: string[] = [];
+    const view = regionsView({ label: 'Requests', now: c.now, every: c.every, log: () => {}, status: { update: (l) => updates.push(l), end: (l) => ends.push(l) } });
+    expect(c.timers.map((t) => t.ms)).toEqual([1000]);
+    view.plan(3);
+    view.start(A, 'eu-west-1');
+    c.advance(10_000);
+    view.done(done('requests', A, 5));
+    view.start(B, 'eu-west-1');
+    view.start('333333333333', 'eu-west-1');
+    c.advance(30_000);
+    expect(updates.at(-1)).toBe(`  Requests [███████░░░░░░░░░░░░░]  33% · 1/3 regions · 5 workloads · 0:40 · waiting for ${B} eu-west-1 (0:30), 333333333333 eu-west-1 (0:30)`);
+    view.done(done('requests', B, 2, { error: 'Throttling: rate exceeded' }));
+    view.done(done('requests', '333333333333', 1, { from: 'cache' }));
+    view.end();
+    expect(ends).toEqual(['  Requests [████████████████████] 100% · 3/3 regions · 8 workloads · 1 failed · 0:40']);
+    expect(c.timers).toEqual([]);
+  });
+
+  it('elsewhere: a line per region read, as before, and every minute the regions still read', () => {
+    const c = clock();
+    const logs: string[] = [];
+    const view = regionsView({ label: 'Uptime', now: c.now, every: c.every, log: (l) => logs.push(l) });
+    view.plan(2);
+    view.start(A, 'eu-west-1');
+    view.start(B, 'eu-west-1');
+    view.done(done('uptime', A, 1, { from: 'cache' }));
+    c.advance(60_000);
+    view.end();
+    expect(logs).toEqual([`  uptime ${A} eu-west-1: 1 workload (cache)`, `  uptime: still reading 1 region: ${B} eu-west-1 (1:00)`]);
+  });
+
+  it('nothing to read: no line at all', () => {
+    const c = clock();
+    const ends: string[] = [];
+    const view = regionsView({ label: 'Uptime', now: c.now, every: c.every, log: () => {}, status: { update: () => {}, end: (l) => ends.push(l) } });
+    view.plan(0);
+    view.end();
+    expect(ends).toEqual([]);
   });
 });

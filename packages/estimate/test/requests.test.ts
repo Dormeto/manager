@@ -104,6 +104,18 @@ describe('the requests of every region', () => {
     expect((await measure(2)).most).toBe(2);
   });
 
+  it('says how many regions it reads and when each starts (the phase\'s progress)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+    const planned: number[] = [];
+    const started: string[] = [];
+    await requestsAll({
+      regions: [region([workload(1)]), region([], { region: 'eu-west-3' }), region([workload(2)], { region: 'eu-central-1', error: 'opt-in region not enabled' })],
+      cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW, cloudwatchOf: async () => cloudwatch().port,
+      onPlan: (count) => planned.push(count), onStart: (account, where) => started.push(`${account} ${where}`),
+    });
+    expect([planned, started]).toEqual([[1], [`${A} ${R}`]]);
+  });
+
   it('kept per account and region the same UTC day, read again the next day or when refreshed', async () => {
     const s = setup();
     const regions = [region([workload(0)])];

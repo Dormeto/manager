@@ -66,7 +66,7 @@ export async function readRequests(cloudwatch: CloudWatchPort, workloads: Worklo
   return { account: workloads[0]?.account ?? '', region: workloads[0]?.region ?? '', from: new Date(from).toISOString(), to: new Date(to).toISOString(), minutes, unreadable };
 }
 
-export async function requestsAll({ regions, cloudwatchOf, cache, refresh, now, progress = () => {}, concurrency = 5 }: {
+export async function requestsAll({ regions, cloudwatchOf, cache, refresh, now, progress = () => {}, concurrency = 5, onPlan = () => {}, onStart = () => {} }: {
   regions: RegionDiscovery[];
   cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>;
   cache: Cache;
@@ -75,16 +75,23 @@ export async function requestsAll({ regions, cloudwatchOf, cache, refresh, now, 
   progress?: Progress;
   // Regions read at once (--parallel).
   concurrency?: number;
+  // The phase's progress: how many regions are read, when each starts.
+  onPlan?: (count: number) => void;
+  onStart?: (account: string, region: string) => void;
 }): Promise<RegionRequests[]> {
-  const read = await mapLimit(regions, concurrency, (region) => regionRequests(region, { cloudwatchOf, cache, refresh, now, progress }));
-  return read.filter((r): r is RegionRequests => r !== null);
+  // A region without workload or that failed asks nothing.
+  const toRead = regions.filter((region) => !region.error && region.workloads.length);
+  onPlan(toRead.length);
+  return mapLimit(toRead, concurrency, (region) => {
+    onStart(region.account, region.region);
+    return regionRequests(region, { cloudwatchOf, cache, refresh, now, progress });
+  });
 }
 
-// One region's requests: kept, read, or unreadable with AWS's reason; null for a region without workload or that failed.
+// One region's requests: kept, read, or unreadable with AWS's reason.
 async function regionRequests(region: RegionDiscovery, { cloudwatchOf, cache, refresh, now, progress }: {
   cloudwatchOf: (account: string, region: string) => Promise<CloudWatchPort>; cache: Cache; refresh: 'discovery' | 'metrics' | null; now: () => number; progress: Progress;
-}): Promise<RegionRequests | null> {
-  if (region.error || !region.workloads.length) return null;
+}): Promise<RegionRequests> {
   const path = `requests/${region.account}-${region.region}.json`;
   const kept = refresh ? null : await cache.get<RegionRequests>(path, freshRequests(now()));
   // Kept only while it covers every workload discovery found (a new one since: read again).

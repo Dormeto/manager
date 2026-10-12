@@ -7,10 +7,10 @@ import type { Credentials } from '@dormeto/discovery/aws';
 import type { Discounts, StoppedItem } from '@dormeto/fleet';
 import { reachProfiles, type AccountsPorts } from './accounts.js';
 import { createCache, type PriceCache } from './cache.js';
-import { discoverAll, type Progress, type RegionPorts } from './discover.js';
+import { discoverAll, type RegionPorts } from './discover.js';
 import { estimateAll } from './estimate.js';
 import { USAGE, UsageError, parseOptions, type Options } from './options.js';
-import { discoveryView, type Status } from './progress.js';
+import { discoveryView, regionsView, type Status } from './progress.js';
 import { jsonReport, markdownReport, summaryLines } from './report.js';
 import { requestsAll, type CloudWatchPort } from './requests.js';
 import { excludeByTags } from './tags.js';
@@ -68,7 +68,6 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
       : reached.accounts.length === 1 ? `the account ${key}` : `the accounts ${reached.accounts.map((a) => a.account).join(', ')}`;
     deps.log(`Estimating ${what}; cache ${join(deps.cacheRoot, key)}`);
     if (reached.why) deps.log(reached.why);
-    const progress: Progress = (p) => deps.log(`  ${p.phase} ${p.account} ${p.region}: ${p.error ? `failed (${p.error})` : `${p.workloads} workload${p.workloads === 1 ? '' : 's'}`}${p.from === 'cache' ? ' (cache)' : ''}`);
     deps.log(`Phase 1: discovery (${options.parallel} account${options.parallel === 1 ? '' : 's'} at a time)`);
     const view = discoveryView({ accounts: reached.accounts.length, now: deps.now, log: deps.log, ...(deps.status ? { status: deps.status } : {}) });
     const discovered = await discoverAll({
@@ -81,10 +80,22 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     const credentialsOf = async (account: string) => (await reached.accounts.find((a) => a.account === account)?.credentials()) ?? null;
     deps.log(`Phase 2: requests (${options.parallel} region${options.parallel === 1 ? '' : 's'} at a time)`);
     const cloudwatchOf = async (account: string, region: string) => aws.cloudwatchOf(account, region, await credentialsOf(account));
-    const requests = await requestsAll({ regions, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress, concurrency: options.parallel });
+    // Phase 2's progress (the requests, then the uptime): in a terminal one line each, else a line per region.
+    const phase2 = (label: 'Requests' | 'Uptime') => {
+      const view = regionsView({ label, now: deps.now, log: deps.log, ...(deps.status ? { status: deps.status } : {}) });
+      return { view, hooks: { progress: view.done, onPlan: view.plan, onStart: view.start } };
+    };
+    const reading = phase2('Requests');
+    const requests = await requestsAll({ regions, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, concurrency: options.parallel, ...reading.hooks });
+    reading.view.end();
     // When the EC2 instances without an Auto Scaling group ran, and the ECS services had a task, over the same period.
     const kinds = { ec2: options.ec2Uptime, ecs: options.ecsUptime, rds: options.rdsUptime };
-    const uptime = kinds.ec2 || kinds.ecs || kinds.rds ? await uptimeAll({ regions, requests, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress, kinds, concurrency: options.parallel }) : null;
+    let uptime: Awaited<ReturnType<typeof uptimeAll>> | null = null;
+    if (kinds.ec2 || kinds.ecs || kinds.rds) {
+      const measuring = phase2('Uptime');
+      uptime = await uptimeAll({ regions, requests, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, kinds, concurrency: options.parallel, ...measuring.hooks });
+      measuring.view.end();
+    }
     deps.log('Phase 3: estimate');
     // The prices are public: any profile reads them
     const book = awsByProfile.get(options.profiles[0]!)!.prices(cache.prices);

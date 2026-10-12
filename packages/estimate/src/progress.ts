@@ -24,8 +24,12 @@ const interval: Every = (ms, fn) => {
   timer.unref?.();
   return () => clearInterval(timer);
 };
-// The accounts still read are named once this few remain.
+// The accounts (regions) still read are named once this few remain.
 const NAMED = 3;
+const bar = (share: number) => {
+  const filled = Math.round(share * BAR);
+  return `[${'█'.repeat(filled)}${'░'.repeat(BAR - filled)}] ${String(Math.round(share * 100)).padStart(3)}%`;
+};
 
 export function discoveryView({ accounts, now, log, status, every = interval }: { accounts: number; now: () => number; log: (line: string) => void; status?: Status; every?: Every }) {
   const started = now();
@@ -40,10 +44,9 @@ export function discoveryView({ accounts, now, log, status, every = interval }: 
     const done = all.filter((a) => a.done).length;
     // An account done counts whole, one started by the share of its regions scanned, one not started yet nothing.
     const share = accounts ? Math.min(all.reduce((total, a) => total + (a.done ? 1 : a.regions ? Math.min(a.scanned / a.regions, 1) : 0), 0) / accounts, 1) : 1;
-    const filled = Math.round(share * BAR);
     const failed = sum('failed');
     const waiting = accounts - done <= NAMED ? reading() : [];
-    return `  Discovery [${'█'.repeat(filled)}${'░'.repeat(BAR - filled)}] ${String(Math.round(share * 100)).padStart(3)}% · ${done}/${n(accounts, 'account')}`
+    return `  Discovery ${bar(share)} · ${done}/${n(accounts, 'account')}`
       + ` · ${n(sum('scanned'), 'region')} · ${n(sum('workloads'), 'workload')}${failed ? ` · ${failed} failed` : ''} · ${clock(now() - started)}`
       + (waiting.length ? ` · waiting for ${waiting.join(', ')}` : '');
   };
@@ -83,6 +86,54 @@ export function discoveryView({ accounts, now, log, status, every = interval }: 
     end() {
       stop();
       status?.end(line());
+    },
+  };
+}
+
+// Phase 2's CloudWatch reads by region (the requests, then the uptime): in a terminal, one line redrawn every second —
+// the regions read of those to read, the workloads, failures and time, the last regions still read named; elsewhere, a
+// line per region read and every minute the regions still read.
+export function regionsView({ label, now, log, status, every = interval }: { label: 'Requests' | 'Uptime'; now: () => number; log: (line: string) => void; status?: Status; every?: Every }) {
+  const started = now();
+  const phase = label.toLowerCase();
+  const reading = new Map<string, number>();
+  let total = 0;
+  let done = 0;
+  let workloads = 0;
+  let failed = 0;
+  const waiting = () => [...reading].map(([where, at]) => `${where} (${clock(now() - at)})`);
+  const line = () => {
+    const named = total - done <= NAMED ? waiting() : [];
+    return `  ${label} ${bar(total ? done / total : 1)} · ${done}/${n(total, 'region')} · ${n(workloads, 'workload')}${failed ? ` · ${failed} failed` : ''} · ${clock(now() - started)}`
+      + (named.length ? ` · waiting for ${named.join(', ')}` : '');
+  };
+  const stop = status
+    ? every(1000, () => { if (total) status.update(line()); })
+    : every(60_000, () => {
+      const still = waiting();
+      if (still.length) log(`  ${phase}: still reading ${n(still.length, 'region')}: ${still.slice(0, 5).join(', ')}${still.length > 5 ? ` and ${still.length - 5} more` : ''}`);
+    });
+  return {
+    // How many regions are to be read.
+    plan(count: number) {
+      total = count;
+      if (total) status?.update(line());
+    },
+    start(account: string, region: string) {
+      reading.set(`${account} ${region}`, now());
+      status?.update(line());
+    },
+    done(p: ProgressEvent) {
+      reading.delete(`${p.account} ${p.region}`);
+      done += 1;
+      workloads += p.workloads;
+      if (p.error) failed += 1;
+      if (!status) log(`  ${p.phase} ${p.account} ${p.region}: ${p.error ? `failed (${p.error})` : n(p.workloads, 'workload')}${p.from === 'cache' ? ' (cache)' : ''}`);
+      status?.update(line());
+    },
+    end() {
+      stop();
+      if (total) status?.end(line());
     },
   };
 }
