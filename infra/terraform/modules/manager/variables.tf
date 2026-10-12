@@ -42,6 +42,16 @@ variable "history_days" {
   }
 }
 
+variable "states_cache_minutes" {
+  description = "How long the API keeps each workload's figures (its time in each state over 7 days, its savings over 30 days) for the bar of all workloads in the Workloads view: from 1 minute to a day. Each refresh reads every workload's history."
+  type        = number
+  default     = 60
+  validation {
+    condition     = var.states_cache_minutes >= 1 && var.states_cache_minutes <= 1440 && floor(var.states_cache_minutes) == var.states_cache_minutes
+    error_message = "states_cache_minutes must be a whole number of minutes from 1 to 1440."
+  }
+}
+
 variable "savings_baseline" {
   description = "What the savings are counted against (R9): always (the workloads would run 24/7) or business-hours (weekdays 08:00 to 20:00 in savings_timezone)."
   type        = string

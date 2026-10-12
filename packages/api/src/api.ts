@@ -159,6 +159,8 @@ export interface ApiOptions {
   savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem): Promise<number | null> };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
+  // How long each workload's figures are kept for the bar of all workloads, whatever its state (an hour).
+  statesCacheMs?: number;
   // The organization roles the manager assumes, set in its Terraform (packaging design §3).
   accessRoles?: { discoveryRole: string; commandRole: string };
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
@@ -202,6 +204,9 @@ const COSTS_DAYS = 30;
 const STATES_MS = 300_000;
 const STATES_KEPT_MAX = 10_000;
 const HOUR_MS = 3_600_000;
+// The bar of all workloads reads at most this many workloads' histories at once.
+const STATES_CONCURRENCY = 20;
+const MONTH_HOURS = 730;
 
 // Seconds per state of the phases within [from, to].
 function totalsWithin(phases: { state: string; from: string; to: string }[], from: string, to: string): Record<string, number> {
@@ -293,7 +298,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
 }
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa, savings,
-  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
+  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -474,13 +479,16 @@ export function createApi({
     items: { item: StoppedItem; hourly: number | null }[]; saved: { usd: number; hours: number; unpricedHours: number };
   };
   type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs };
-  const statesKept = new Map<string, { state: unknown; until: number; value: States }>();
-  async function statesOf(account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null): Promise<States | undefined> {
+  const statesKept = new Map<string, { state: unknown; at: number; value: States }>();
+  // A workload's figures and when they were computed: kept maxAgeMs, and, for its own row and view, while its state stays
+  // the same.
+  async function statesEntry(account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null,
+    { maxAgeMs = STATES_MS, sameState = true } = {}): Promise<{ value: States; at: number } | undefined> {
     if (!fleet?.listHistory || !fleet.historyBefore) return undefined;
     const key = `${account}#${region}#${id}`;
     const t = now();
     const kept = statesKept.get(key);
-    if (kept && kept.until > t && kept.state === summary?.state) return kept.value;
+    if (kept && t - kept.at < maxAgeMs && (!sameState || kept.state === summary?.state)) return kept;
     try {
       const to = new Date(t).toISOString();
       const [from, from7] = [new Date(t - COSTS_DAYS * DAY_MS).toISOString(), new Date(t - STATES_DAYS * DAY_MS).toISOString()];
@@ -499,11 +507,47 @@ export function createApi({
         };
       }
       if (statesKept.size >= STATES_KEPT_MAX) statesKept.clear();
-      statesKept.set(key, { state: summary?.state, until: t + STATES_MS, value });
-      return value;
+      const entry = { state: summary?.state, at: t, value };
+      statesKept.set(key, entry);
+      return entry;
     } catch {
       return undefined;
     }
+  }
+  const statesOf = async (account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null) => (await statesEntry(account, region, id, summary))?.value;
+
+  // All the workloads the caller sees (user request: the bar of the Workloads view): their seconds in each state over 7
+  // days and their savings added up, from each workload's figures kept statesCacheMs whatever its state.
+  async function allStates(seen: Record<string, unknown>[]) {
+    const queue = [...seen];
+    const entries: { value: States; at: number }[] = [];
+    await Promise.all(Array.from({ length: STATES_CONCURRENCY }, async () => {
+      for (let w = queue.shift(); w; w = queue.shift()) {
+        const router = routers.find((r) => r.name === w.router);
+        if (!router) continue;
+        const entry = await statesEntry(String(w.account ?? accountOfRouter(router)), String(w.region ?? router.region), String(w.workloadId), w, { maxAgeMs: statesCacheMs, sameState: false });
+        if (entry) entries.push(entry);
+      }
+    }));
+    const computedAt = entries.length ? Math.min(...entries.map((e) => e.at)) : now();
+    const totals: Record<string, number> = {};
+    for (const { value } of entries) for (const [state, seconds] of Object.entries(value.states7d.totals)) totals[state] = (totals[state] ?? 0) + seconds;
+    const priced = entries.map((e) => e.value.costs).filter((c): c is Costs => Boolean(c));
+    const hourlyOf = (c: Costs) => c.items.reduce((n, i) => n + (i.hourly ?? 0), 0);
+    const pricedOnes = priced.filter((c) => c.items.some((i) => i.hourly !== null));
+    return {
+      workloads: seen.length, computedAt: new Date(computedAt).toISOString(), cacheMinutes: statesCacheMs / 60_000,
+      states7d: { from: new Date(computedAt - STATES_DAYS * DAY_MS).toISOString(), to: new Date(computedAt).toISOString(), totals },
+      ...(savings ? {
+        costs: {
+          baseline: savings.baseline,
+          saved: priced.reduce((n, c) => ({ usd: n.usd + c.saved.usd, hours: n.hours + c.saved.hours, unpricedHours: n.unpricedHours + c.saved.unpricedHours }), { usd: 0, hours: 0, unpricedHours: 0 }),
+          hourly: pricedOnes.length ? pricedOnes.reduce((n, c) => n + hourlyOf(c), 0) : null,
+          monthly: pricedOnes.length ? pricedOnes.reduce((n, c) => n + hourlyOf(c) * MONTH_HOURS * (c.savedShare ?? 0), 0) : null,
+          priced: pricedOnes.length,
+        },
+      } : {}),
+    };
   }
 
   async function listAll(identity: Identity) {
@@ -726,6 +770,11 @@ export function createApi({
 
     // The fleet's estimated savings (R9): the daily job's summary, one read.
     if (method === 'GET' && resource === 'savings' && !a) return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null });
+
+    if (method === 'GET' && resource === 'workloads' && a === 'states' && !b) {
+      const { rows } = await listAll(identity);
+      return reply(200, await allStates(rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') }))));
+    }
 
     if (method === 'GET' && resource === 'workloads' && !a) {
       const q = event.queryStringParameters ?? {};

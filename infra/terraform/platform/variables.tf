@@ -73,6 +73,12 @@ variable "ip_lists" {
   default = []
 }
 
+variable "states_cache_minutes" {
+  description = "How long the API keeps each workload's figures for the bar of all workloads (manager module states_cache_minutes)."
+  type        = number
+  default     = 60
+}
+
 variable "history_days" {
   description = "How long the state history is kept (manager module history_days)."
   type        = number

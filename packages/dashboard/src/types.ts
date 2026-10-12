@@ -72,6 +72,16 @@ export interface Costs {
   saved: { usd: number; hours: number; unpricedHours: number };
 }
 
+// All the workloads the caller sees (GET /api/workloads/states): their seconds in each state over 7 days and their
+// savings, from each workload's figures kept cacheMinutes.
+export interface FleetStates {
+  workloads: number;
+  computedAt: string;
+  cacheMinutes: number;
+  states7d: StatesWeek;
+  costs?: { baseline: Costs['baseline']; saved: Costs['saved']; hourly: number | null; monthly: number | null; priced: number };
+}
+
 export interface Counts {
   ignored: Record<string, number>;
   deferred: Record<string, number>;

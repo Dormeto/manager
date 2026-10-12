@@ -8,6 +8,7 @@ import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import { useSession } from '../src/stores/session';
 import StateBar from '../src/components/StateBar.vue';
+import { barSavings } from '../src/costs';
 
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
 // Awake for 35 minutes; the run last written 5 minutes ago (a nap request at the last idle check: no state change).
@@ -57,7 +58,7 @@ describe('Workload view', () => {
     };
     const [, database] = wrapper.findAll('[data-test="backend"]');
     expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS.*Base cost\$0\.0170 an hour · \$12\.41 a month.*Savedabout \$11\.17 a month/);
-    expect(wrapper.find('[data-test="header"]').findComponent(StateBar).props('costs')).toEqual(current.costs);
+    expect(wrapper.find('[data-test="header"]').findComponent(StateBar).props('savings')).toEqual(barSavings(current.costs as never));
     expect(await tip(wrapper.find('[data-test="target"]'))).toMatch(/Id10\.0\.1\.12.*ARN—.*ServiceAmazon ECS task/);
     wrapper.unmount();
     current = status;

@@ -372,6 +372,36 @@ run "history_days_is_validated" {
   expect_failures = [var.history_days]
 }
 
+run "states_cache_an_hour_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.STATES_CACHE_MINUTES == "60"
+    error_message = "The bar of all workloads keeps each workload's figures an hour by default."
+  }
+}
+
+run "states_cache_set" {
+  command = plan
+
+  variables {
+    states_cache_minutes = 15
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.STATES_CACHE_MINUTES == "15"
+    error_message = "states_cache_minutes reaches the API."
+  }
+}
+
+run "states_cache_is_validated" {
+  command = plan
+
+  variables {
+    states_cache_minutes = 0
+  }
+  expect_failures = [var.states_cache_minutes]
+}
+
 run "savings_job_daily_always_by_default" {
   command = plan
 

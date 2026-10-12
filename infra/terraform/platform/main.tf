@@ -6,14 +6,15 @@ module "manager" {
   env           = var.env
   artifacts_dir = "${path.module}/../../../dist/artifacts"
 
-  organization_id  = var.organization_id
-  admin_emails     = var.admin_emails
-  alert_emails     = var.alert_emails
-  ip_lists         = var.ip_lists
-  mfa              = var.mfa
-  history_days     = var.history_days
-  savings_baseline = var.savings_baseline
-  savings_timezone = var.savings_timezone
+  organization_id      = var.organization_id
+  admin_emails         = var.admin_emails
+  alert_emails         = var.alert_emails
+  ip_lists             = var.ip_lists
+  mfa                  = var.mfa
+  history_days         = var.history_days
+  states_cache_minutes = var.states_cache_minutes
+  savings_baseline     = var.savings_baseline
+  savings_timezone     = var.savings_timezone
   domain = {
     dashboard       = var.dashboard_domain
     auth            = var.auth_domain

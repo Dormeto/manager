@@ -22,7 +22,8 @@ service is not priced), which also brings 0.5.0's `ec2:ModifyInstanceAttribute`.
 - Workloads: a bar of each workload's time in each state over the last 7 days, from its history, on the Workloads list
   (instead of the idle share) and in the workload's header; its tooltip gives each state's share, time and meaning, the
   time without history, the hours without requests, what the naps saved in the last 30 days and a month's saving at that
-  rate. Napping has a color of its own, the same in the state chip, the history and the bar. The workload's actions are
+  rate. The Workloads view's header has the same bar for all workloads, from each workload's figures kept an hour
+  (`states_cache_minutes`). Napping has a color of its own, the same in the state chip, the history and the bar. The workload's actions are
   in one menu; each backend and target has its id, ARN and service in a tooltip, a backend its list price an hour and a
   month and its saving a month. A router written in Terraform shows a chip saying where it is changed; one the manager
   installed shows none.

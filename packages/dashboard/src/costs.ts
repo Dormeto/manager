@@ -46,3 +46,11 @@ export function monthlySaving(costs: Costs | undefined | null): number | null {
   if (!costs || !priced.length || costs.savedShare === null) return null;
   return priced.reduce((n, i) => n + i.hourly!, 0) * MONTH_HOURS * costs.savedShare;
 }
+
+// What the 7-day bar says of a workload's savings: the base cost an hour of what its last nap stopped, what its naps
+// saved in the last 30 days, and a month's saving at that rate.
+export function barSavings(costs: Costs | undefined | null): { saved: Costs['saved']; hourly: number | null; monthly: number | null } | null {
+  if (!costs) return null;
+  const priced = costs.items.filter((i) => i.hourly !== null);
+  return { saved: costs.saved, hourly: priced.length ? priced.reduce((n, i) => n + i.hourly!, 0) : null, monthly: monthlySaving(costs) };
+}

@@ -7,6 +7,7 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadsView from '../src/views/WorkloadsView.vue';
 import StateBar from '../src/components/StateBar.vue';
+import { barSavings } from '../src/costs';
 
 const paths: string[] = [];
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -19,7 +20,13 @@ const SHOP = {
   wakeCount: 3, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null, pendingWake: false, backends: ['asg', 'rds-instance'],
   idleHours7d: 150, requests7d: 12, costs: { baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: null, savedShare: 0.8, items: [], saved: { usd: 0, hours: 0, unpricedHours: 0 } }, states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } },
 };
-vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { paths.push(path); return { workloads: [SHOP], total: 1, errors: [] }; }) }));
+const FLEET = {
+  workloads: 2, computedAt: new Date(Date.now() - 12 * 60_000).toISOString(), cacheMinutes: 60,
+  states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 1_000_000, AWAKE: 209_600 } },
+  costs: { baseline: { kind: 'always' }, saved: { usd: 41.5, hours: 1200, unpricedHours: 0 }, hourly: 0.12, monthly: 70.08, priced: 2 },
+};
+vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [SHOP], total: 1, errors: [] }; }) }));
+const listPath = () => paths.find((p) => p.startsWith('/workloads?'))!;
 
 describe('Workloads view', () => {
   it('lists the workloads of one router in one state when the address names them, and shows the filter', async () => {
@@ -29,7 +36,7 @@ describe('Workloads view', () => {
     await router.push('/workloads?router=dmt-dev&state=ASLEEP');
     const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
     await flushPromises();
-    const query = new URLSearchParams(paths[0]!.split('?')[1]);
+    const query = new URLSearchParams(listPath().split('?')[1]);
     expect(query.get('router')).toBe('dmt-dev');
     expect(query.get('state')).toBe('ASLEEP');
     expect(wrapper.text()).toContain('dmt-dev');
@@ -87,19 +94,35 @@ describe('Workloads view', () => {
     paths.length = 0;
     const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
     await flushPromises();
-    const query = new URLSearchParams(paths[0]!.split('?')[1]);
+    const query = new URLSearchParams(listPath().split('?')[1]);
     expect([query.get('idle'), query.get('states')]).toEqual(['1', '1']);
     const headers = wrapper.findAll('thead th').map((th) => th.text());
     expect(headers).not.toContain('Idle (7 days)');
     const cell = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Last 7 days')]!;
-    expect(cell.findComponent(StateBar).props()).toMatchObject({ states: SHOP.states7d, idleHours7d: 150, requests7d: 12, costs: SHOP.costs });
+    expect(cell.findComponent(StateBar).props()).toMatchObject({ states: SHOP.states7d, idleHours7d: 150, requests7d: 12, savings: barSavings(SHOP.costs as never) });
+    wrapper.unmount();
+  });
+
+  it('shows in its header the bar of all workloads: their time in each state and their savings, and since when (user request)', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
+    await flushPromises();
+    const bar = wrapper.find('[data-test="workloads-header"]').findComponent(StateBar);
+    expect(bar.props()).toMatchObject({
+      states: FLEET.states7d, title: 'All 2 workloads, last 7 days', savings: { saved: FLEET.costs.saved, hourly: 0.12, monthly: 70.08 },
+      note: 'Computed 12 min ago; each workload\'s figures are kept 60 minutes.',
+    });
     wrapper.unmount();
   });
 
   it('dates a failed workload from its failure, not from the last write of its run', async () => {
     const failed = { ...SHOP, state: 'FAILED', failedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() };
     const { api } = await import('../src/api');
-    vi.mocked(api).mockImplementationOnce(async () => ({ workloads: [failed], total: 1, errors: [] }) as never);
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async (path: string) => (path === '/workloads/states' ? FLEET : { workloads: [failed], total: 1, errors: [] }) as never);
     const pinia = createPinia();
     setActivePinia(pinia);
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
@@ -109,5 +132,6 @@ describe('Workloads view', () => {
     const headers = wrapper.findAll('thead th').map((th) => th.text());
     expect(wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Since')]!.text()).toBe('2 h ago');
     wrapper.unmount();
+    vi.mocked(api).mockImplementation(original);
   });
 });

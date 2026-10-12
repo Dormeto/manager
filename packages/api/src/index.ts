@@ -187,6 +187,8 @@ export const handler = createApi({
   fleet,
   // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1), cached in the table.
   savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item) => prices.hourly(region, item) },
+  // The bar of all workloads: each workload's figures kept states_cache_minutes (an hour by default).
+  statesCacheMs: (Number(process.env.STATES_CACHE_MINUTES) || 60) * 60_000,
   routerVersion: process.env.ROUTER_VERSION,
   alerts,
   ipLists,

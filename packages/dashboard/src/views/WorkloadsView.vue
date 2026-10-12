@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
-import { ref, watch } from 'vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
 import { api } from '../api';
@@ -9,14 +9,28 @@ import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
 import BackendKinds from '../components/BackendKinds.vue';
 import StateBar from '../components/StateBar.vue';
+import { barSavings } from '../costs';
 import { stateSince } from '../state';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
-import type { RouterInfo, WorkloadSummary } from '../types';
+import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
 const { smAndDown } = useDisplay();
+// The bar of all workloads (user request): the API keeps each workload's figures an hour by default; asked again every
+// 10 minutes.
+const FLEET_MS = 600_000;
+const fleet = ref<FleetStates | null>(null);
+async function loadFleet() {
+  fleet.value = await api<FleetStates>('/workloads/states').catch(() => fleet.value);
+}
+let fleetTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  void loadFleet();
+  fleetTimer = setInterval(() => void loadFleet(), FLEET_MS);
+});
+onUnmounted(() => clearInterval(fleetTimer));
 const workloads = ref<WorkloadSummary[]>([]);
 const total = ref(0);
 const errors = ref<{ router: string; message: string }[]>([]);
@@ -88,8 +102,11 @@ const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, 
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+  <div data-test="workloads-header" class="d-flex flex-wrap align-center ga-4 mb-4">
     <h1 class="text-headline-small">Workloads</h1>
+    <StateBar v-if="fleet" :states="fleet.states7d" :title="`All ${fleet.workloads} workloads, last 7 days`" :width="200"
+      :savings="fleet.costs ? { saved: fleet.costs.saved, hourly: fleet.costs.hourly, monthly: fleet.costs.monthly } : null"
+      :note="`Computed ${relative(fleet.computedAt, now)}; each workload's figures are kept ${fleet.cacheMinutes} minutes.`" />
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     <v-chip v-if="attentionOnly" closable label @click:close="allWorkloads">Needing attention</v-chip>
@@ -110,7 +127,7 @@ const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, 
       <template #[`item.router`]="{ item }"><router-link :to="`/routers/${encodeURIComponent(item.router)}`">{{ item.router }}</router-link></template>
       <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" :failure="item.failure" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.states7d`]="{ item }">
-        <StateBar class="ml-auto" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :costs="item.costs" />
+        <StateBar class="ml-auto" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :savings="barSavings(item.costs)" />
       </template>
       <template #[`item.since`]="{ item }"><span class="nowrap">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">

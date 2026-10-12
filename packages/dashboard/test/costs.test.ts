@@ -1,7 +1,7 @@
 // What a workload's backends cost and save (user request): its last nap's items, priced by the API, matched to its
 // backends by kind; a month is 730 hours, saved at the share of the last 30 days asleep within the baseline.
 import { describe, expect, it } from 'vitest';
-import { backendCost, monthlySaving } from '../src/costs';
+import { backendCost, barSavings, monthlySaving } from '../src/costs';
 import type { Costs } from '../src/types';
 
 const SHOP = 'arn:aws:ecs:eu-west-3:111122223333:service/main/shop';
@@ -35,6 +35,15 @@ describe('costs', () => {
     const web = backendCost(two[1]!, two, more)!;
     expect([web.hourly, web.shared, web.unpriced]).toEqual([0.0456, 2, ['2 × m5.large (Windows)']]);
     expect(backendCost(two[2]!, two, more)).toMatchObject({ hourly: null, monthly: null, savedMonthly: null, unpriced: ['AccessDenied'] });
+  });
+
+  it('gives the bar a workload\'s base cost an hour, its 30 days\' savings, and a month\'s saving at that rate', () => {
+    const bar = barSavings(costs)!;
+    expect(bar.saved).toEqual(costs.saved);
+    expect(bar.hourly).toBeCloseTo(0.026875, 6);
+    expect(bar.monthly).toBeCloseTo(monthlySaving(costs)!, 6);
+    expect(barSavings(undefined)).toBeNull();
+    expect(barSavings({ ...costs, items: [] })).toEqual({ saved: costs.saved, hourly: null, monthly: null });
   });
 
   it('knows nothing before a nap said what it stopped', () => {

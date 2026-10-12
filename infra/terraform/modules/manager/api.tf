@@ -176,6 +176,7 @@ resource "aws_lambda_function" "api" {
       MFA_MODE                = var.mfa
       SAVINGS_BASELINE        = var.savings_baseline
       SAVINGS_TIMEZONE        = var.savings_timezone
+      STATES_CACHE_MINUTES    = tostring(var.states_cache_minutes)
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name
       COMMAND_ROLE   = var.command_role_name

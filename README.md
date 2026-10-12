@@ -176,6 +176,10 @@ time per target group, router or workload, one per load balancer (lock), three p
   Spot capacity is priced on-demand, and Savings Plans or Reserved Instances are not taken off: both come with the
   roadmap's R9.5.
 - **Baseline:** `savings_baseline` = `always` (24/7) or `business-hours` (weekdays 08:00 to 20:00 in `savings_timezone`).
+- **The 7-day bar:** a Workloads row and a workload's header read the workload's last 30 days of history (its time in
+  each state over 7 days, what its naps saved, its last nap priced), kept 5 minutes while its state stays the same. The
+  bar of all workloads (`GET /api/workloads/states`) adds up each workload's figures kept `states_cache_minutes` (60 by
+  default) whatever its state: a refresh reads every workload's history, 20 at a time.
 - **Daily job:** `dmt-<env>-manager-savings` (00:30 UTC; run it by hand with `{"day": "YYYY-MM-DD"}`) puts each
   workload's day as `SAV#<date>` / `<account>#<region>#<workloadId>` (kept `history_days`) and the summary
   (`T#default` / `SAVINGS`): the last 30 days, this month, the cumulative total (each day added once), the top workloads,

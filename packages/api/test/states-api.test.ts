@@ -22,16 +22,17 @@ const entries = [{ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', wor
 const PRICES: Record<string, number> = { ec2: 0.0912, rds: 0.017 };
 const before = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to: 'AWAKE', at: iso(NOW - 10 * 86_400_000) };
 
-function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false } = {}) {
+function setup({ workloads = [workload('a'), workload('b')], fail = false, priced = true, pricesFail = false, statesCacheMs = undefined as number | undefined, hidden = false } = {}) {
   let t = NOW;
   const read: string[] = [];
   const list = workloads.map((w) => ({ ...w }));
   const api = createApi({
-    routers: ROUTERS, now: () => t, version: '0.7.0', managerAccount: ACCOUNT,
+    routers: ROUTERS, now: () => t, version: '0.7.0', managerAccount: ACCOUNT, ...(statesCacheMs ? { statesCacheMs } : {}), ...(hidden ? { visible: () => false } : {}),
     audit: { write: async () => {}, list: async () => [] },
     invoke: async (_r, payload) => (payload.action === 'status' ? { workloadId: 'a', state: list[0]!.state } : null),
     fleet: {
-      listRouters: async () => [routerSummary] as never,
+      // A router reporting every few minutes: its summary stays fresh as time goes by.
+      listRouters: async () => [{ ...routerSummary, checkedAt: iso(t - 60_000), check: { ...routerSummary.check, checkedAt: iso(t - 60_000) } }] as never,
       listWorkloads: async () => list as never,
       getWorkload: async (_a: string, _r: string, id: string) => (list.find((w) => w.workloadId === id) ?? null) as never,
       listHistory: async (_a: string, _r: string, id: string) => {
@@ -122,5 +123,47 @@ describe('time in each state over 7 days', () => {
     expect(listed.map((w) => 'states7d' in w)).toEqual([false, false]);
     const view = await s.api(event('/api/workloads/dmt-dev/a'));
     expect([view.statusCode, 'states7d' in json(view)]).toEqual([200, false]);
+  });
+});
+
+describe('all the workloads over 7 days (the Workloads view\'s bar)', () => {
+  const fleet = async (s: ReturnType<typeof setup>) => json(await s.api(event('/api/workloads/states')));
+
+  it('adds up the time in each state and the savings of every workload the caller sees', async () => {
+    const body = await fleet(setup());
+    expect([body.workloads, body.computedAt, body.cacheMinutes]).toEqual([2, iso(NOW), 60]);
+    expect(body.states7d).toEqual({ from: iso(NOW - WEEK * 1000), to: iso(NOW), totals: { AWAKE: WEEK - 3_600, ASLEEP: WEEK + 3_600 } });
+    // a's hour asleep priced; b's 30 days asleep not described.
+    expect(body.costs.saved.usd).toBeCloseTo(0.1082, 6);
+    expect(body.costs.saved.unpricedHours).toBe(721);
+    expect(body.costs.hourly).toBeCloseTo(0.1082, 6);
+    expect(body.costs.monthly).toBeCloseTo((0.1082 * 730) / 720, 6);
+    expect(body.costs.priced).toBe(1);
+  });
+
+  it('keeps each workload\'s figures an hour whatever its state, and says since when', async () => {
+    const s = setup();
+    await fleet(s);
+    s.later(30 * 60_000);
+    s.list[0]!.state = 'WAKING';
+    const kept = await fleet(s);
+    expect([s.read, kept.computedAt]).toEqual([['a', 'b'], iso(NOW)]);
+    s.later(31 * 60_000);
+    const fresh = await fleet(s);
+    expect([s.read, fresh.computedAt]).toEqual([['a', 'b', 'a', 'b'], iso(NOW + 61 * 60_000)]);
+  });
+
+  it('keeps them as long as the manager is set to (states_cache_minutes)', async () => {
+    const s = setup({ statesCacheMs: 600_000 });
+    await fleet(s);
+    s.later(11 * 60_000);
+    expect((await fleet(s)).cacheMinutes).toBe(10);
+    expect(s.read).toEqual(['a', 'b', 'a', 'b']);
+  });
+
+  it('counts only the workloads the caller sees, and gives no costs without prices', async () => {
+    const hidden = await fleet(setup({ hidden: true }));
+    expect([hidden.workloads, hidden.states7d.totals]).toEqual([0, {}]);
+    expect('costs' in (await fleet(setup({ priced: false })))).toBe(false);
   });
 });
