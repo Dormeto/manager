@@ -5,6 +5,17 @@
 import { CHUNK_WORKLOADS_MAX, chunkOf, regionOf, routerOf, stateOf, timely, workloadIdOf, workloadOf } from './clean.js';
 import type { FleetStore, RouterSummary } from './store.js';
 
+// Workloads of a chunk written at once: a chunk holds about 90, a backlog of chunks drains within the Lambda timeout.
+const WRITES = 10;
+
+// Work on the items, at most `limit` at once; the first failure fails the whole (the event comes back).
+async function eachAtOnce<T>(items: T[], limit: number, work: (item: T) => Promise<void>) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await work(items[next++]!);
+  }));
+}
+
 export interface RouterEvent {
   account: string;
   region: string;
@@ -34,7 +45,7 @@ export function createIngest({ store, now = Date.now, log }: {
     if (current && current.summary.check.checkedAt > checkedAt) return;
     const listed: unknown[] = Array.isArray(d.workloads) ? d.workloads.slice(0, CHUNK_WORKLOADS_MAX) : [];
     const workloads = listed.map(workloadOf).filter((w): w is Record<string, unknown> => w !== null);
-    for (const w of workloads) {
+    await eachAtOnce(workloads, WRITES, async (w) => {
       const existing = await store.getWorkload(account, region, w.workloadId as string);
       // A state change newer than this check is kept.
       const newer = existing?.stateAt && existing.stateAt > checkedAt;
@@ -42,7 +53,7 @@ export function createIngest({ store, now = Date.now, log }: {
         ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
         ...(newer ? { state: existing.state, stateAt: existing.stateAt } : existing?.stateAt ? { stateAt: existing.stateAt } : {}),
       });
-    }
+    });
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const stored = attempt === 0 ? current : await store.getRouter(account, region);
       const check = stored?.summary.check;

@@ -148,6 +148,23 @@ describe('fleet', () => {
     expect(await s.ids()).toEqual(['a', 'b']);
   });
 
+  it('writes the workloads of a chunk ten at a time: a backlog drains within the Lambda timeout', async () => {
+    const s = setup();
+    let running = 0;
+    let peak = 0;
+    const slow = <A extends unknown[], R>(f: (...a: A) => Promise<R>) => async (...a: A) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 2));
+      try { return await f(...a); } finally { running -= 1; }
+    };
+    const store = { ...s.store, getWorkload: slow(s.store.getWorkload), putWorkload: slow(s.store.putWorkload) };
+    const ingest = createIngest({ store, now: () => NOW });
+    await ingest(checked(T1, Array.from({ length: 90 }, (_, i) => workload(`w${i}`))));
+    expect(peak).toBe(10);
+    expect((await s.store.listWorkloads())).toHaveLength(90);
+  });
+
   it('refuses a check of more chunks than a router can send', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a')], { index: 0, total: 1_000_000 }));

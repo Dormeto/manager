@@ -44,7 +44,7 @@ resource "aws_sqs_queue" "router_events_failed" {
 
 resource "aws_sqs_queue" "router_events" {
   name                       = "${local.name}-router-events"
-  visibility_timeout_seconds = 180 # six times the fleet Lambda's timeout
+  visibility_timeout_seconds = 720 # six times the fleet Lambda's timeout
   message_retention_seconds  = 86400
   redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.router_events_failed.arn, maxReceiveCount = 5 })
 }
@@ -123,8 +123,10 @@ resource "aws_lambda_function" "fleet" {
   handler          = "index.handler"
   filename         = data.archive_file.fleet.output_path
   source_code_hash = data.archive_file.fleet.output_base64sha256
-  timeout          = 30
-  memory_size      = 256
+  # A batch of 25 chunks of about 90 workloads, written 10 at a time, takes seconds; the margin is for a throttled table
+  # draining a backlog.
+  timeout     = 120
+  memory_size = 256
 
   environment {
     variables = {
@@ -135,12 +137,12 @@ resource "aws_lambda_function" "fleet" {
   depends_on = [aws_cloudwatch_log_group.fleet, aws_iam_role_policy.fleet]
 }
 
-# Batches of up to 100 events within 1 s; a failed event comes back alone (partial batch response); at most 5 batches at
+# Batches of up to 25 events within 1 s; a failed event comes back alone (partial batch response); at most 5 batches at
 # once.
 resource "aws_lambda_event_source_mapping" "router_events" {
   event_source_arn                   = aws_sqs_queue.router_events.arn
   function_name                      = aws_lambda_function.fleet.arn
-  batch_size                         = 100
+  batch_size                         = 25
   maximum_batching_window_in_seconds = 1
   function_response_types            = ["ReportBatchItemFailures"]
   scaling_config {
