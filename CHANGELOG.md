@@ -17,6 +17,10 @@ upgrade the routers to 0.26.0; older routers' history is kept too, dated less ex
   and longest), a row per day of the phases, what started each one (a request, the idle check, a manager user, a
   failure), and the transitions.
 - Routers 0.26.0 date each state change and say who asked a nap or a wake from the manager.
+- Routers have their own view, reached from Routers (no row expands any more), Workloads, the workload view, the Overview
+  and alerts: version and upgrade, health and alert, workloads by state, pauses, figures, and the configuration with
+  where each setting is changed. A router installed by the manager no longer shows its configuration as Terraform's.
+- The IP lists panel says what the lists are and what defer and ignore do.
 
 ## 0.5.0 — 2026-10-08 (not published: in 0.6.0)
 
