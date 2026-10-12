@@ -92,7 +92,7 @@ describe('the refresh of forwarded events', () => {
     s.scanned.length = 0;
     s.advance(60_000);
     const out = await refreshAccounts(s.deps, Array.from({ length: 300 }, (_, i) => event(A.id, 'eu-west-3', i)));
-    expect(out).toEqual({ skipped: false, pairs: [`${A.id}/eu-west-3`] });
+    expect(out).toEqual({ skipped: false, pairs: [`${A.id}/eu-west-3`], retry: [] });
     expect(s.scanned).toEqual([`${A.id}/eu-west-3`]);
     const after = await s.store.getAccountScan(A.id);
     expect(after!.runId).toBe(before!.runId);
@@ -123,7 +123,7 @@ describe('the refresh of forwarded events', () => {
     await runDiscovery(s.deps, { source: 'manual' });
     expect(await s.store.acquireLock('2026-10-06T12:00:00.000Z')).toBe(true);
     s.scanned.length = 0;
-    expect(await refreshAccounts(s.deps, [event(A.id, 'eu-west-3')])).toEqual({ skipped: true, pairs: [] });
+    expect(await refreshAccounts(s.deps, [event(A.id, 'eu-west-3')])).toEqual({ skipped: true, pairs: [], retry: [] });
     expect(s.scanned).toEqual([]);
   });
 
@@ -133,8 +133,46 @@ describe('the refresh of forwarded events', () => {
     await runDiscovery(s.deps, { source: 'manual' });
     s.scanned.length = 0;
     const out = await refreshAccounts(s.deps, [event('999999999999', 'eu-west-3'), event(A.id, 'ap-south-1'), { account: 'x', region: 'y' } as never, {} as never]);
-    expect(out).toEqual({ skipped: false, pairs: [] });
+    expect(out).toEqual({ skipped: false, pairs: [], retry: [] });
     expect(s.scanned).toEqual([]);
+  });
+
+  // R5c review I1 and I2: a refresh has its own short lease; it never drops a batch for another refresh, never holds
+  // discovery's run lock, and returns what it could not reach in its time.
+  const withId = (id: string, account: string, region: string) => ({ id, ...event(account, region) });
+
+  it('two batches at once: the second returns its events to the queue, never drops them', async () => {
+    const s = setup({ cfg: ON, regions: ['eu-west-1', 'eu-west-3'] });
+    await s.ready;
+    await runDiscovery(s.deps, { source: 'manual' });
+    expect(await s.store.acquireRefresh('refresh other', 15 * 60_000)).toBe(true);
+    s.scanned.length = 0;
+    expect(await refreshAccounts(s.deps, [withId('m1', A.id, 'eu-west-3'), withId('m2', B.id, 'eu-west-1')])).toEqual({ skipped: false, pairs: [], retry: ['m1', 'm2'] });
+    expect(s.scanned).toEqual([]);
+    // Its lease is short: a refresh that died frees it within minutes.
+    s.advance(16 * 60_000);
+    expect((await refreshAccounts(s.deps, [withId('m1', A.id, 'eu-west-3')])).pairs).toEqual([`${A.id}/eu-west-3`]);
+  });
+
+  it('Run now is never refused while a refresh runs', async () => {
+    const s = setup({ cfg: ON });
+    await s.ready;
+    expect(await s.store.acquireRefresh('refresh now', 15 * 60_000)).toBe(true);
+    expect(await s.store.acquireLock('2026-10-06T13:00:00.000Z')).toBe(true);
+  });
+
+  it('a batch out of time returns the events of the accounts it did not reach', async () => {
+    const s = setup({ cfg: ON, regions: ['eu-west-1', 'eu-west-3'] });
+    await s.ready;
+    await runDiscovery(s.deps, { source: 'manual' });
+    s.scanned.length = 0;
+    const events = [withId('m1', A.id, 'eu-west-3'), withId('m2', A.id, 'eu-west-1'), withId('m3', B.id, 'eu-west-3')];
+    const late = await refreshAccounts(s.deps, events, { deadline: Date.parse('2026-01-01T00:00:00.000Z') });
+    expect(late).toEqual({ skipped: false, pairs: [], retry: ['m1', 'm2', 'm3'] });
+    expect(s.scanned).toEqual([]);
+    const done = await refreshAccounts(s.deps, events, { deadline: Date.parse('2030-01-01T00:00:00.000Z') });
+    expect(done.retry).toEqual([]);
+    expect([...done.pairs].sort()).toEqual([`${A.id}/eu-west-1`, `${A.id}/eu-west-3`, `${B.id}/eu-west-3`]);
   });
 });
 

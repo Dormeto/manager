@@ -74,6 +74,11 @@ run "event_driven_refresh" {
     values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-discovery" }
   }
   override_resource {
+    target          = aws_sqs_queue.refresh_failed
+    override_during = plan
+    values          = { arn = "arn:aws:sqs:eu-west-1:111122223333:dmt-test-manager-refresh-failed" }
+  }
+  override_resource {
     target          = aws_lambda_function.operations
     override_during = plan
     values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-operations" }
@@ -84,8 +89,13 @@ run "event_driven_refresh" {
     error_message = "The manager's bus sends the forwarded load balancer changes to the refresh queue."
   }
   assert {
-    condition     = aws_lambda_event_source_mapping.refresh.maximum_batching_window_in_seconds == 300 && aws_lambda_event_source_mapping.refresh.batch_size == 10000 && aws_lambda_event_source_mapping.refresh.scaling_config[0].maximum_concurrency == 2
-    error_message = "Discovery reads the refresh queue in 5-minute batches."
+    condition     = aws_lambda_event_source_mapping.refresh.maximum_batching_window_in_seconds == 300 && aws_lambda_event_source_mapping.refresh.batch_size == 10000 && aws_lambda_event_source_mapping.refresh.scaling_config[0].maximum_concurrency == 2 && aws_lambda_event_source_mapping.refresh.function_response_types == toset(["ReportBatchItemFailures"])
+    error_message = "Discovery reads the refresh queue in 5-minute batches, giving back the events it could not handle."
+  }
+  assert {
+    # Above the discovery Lambda's timeout and the batching window (R5c review I2).
+    condition     = aws_sqs_queue.refresh.visibility_timeout_seconds >= 1200 && jsondecode(aws_sqs_queue.refresh.redrive_policy).maxReceiveCount >= 5
+    error_message = "A batch being handled is never delivered twice; an event given back is retried before its dead-letter queue."
   }
   assert {
     condition     = length([for s in data.aws_iam_policy_document.discovery.statement : s if s.sid == "RefreshQueue"]) == 1

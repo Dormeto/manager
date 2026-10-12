@@ -41,11 +41,11 @@ type Event =
   | { step: 'abandon'; plan: RunPlan; error?: string }
   | { step?: undefined; source?: string; by?: string; action?: string }
   // Forwarded load balancer changes, in batches from the refresh queue (packaging design §5).
-  | { step?: undefined; Records: { body: string }[] };
+  | { step?: undefined; Records: { messageId: string; body: string }[] };
 
 const trigger = (e: { source?: string; by?: string } = {}) => ({ source: e.source === 'manual' ? 'manual' as const : 'schedule' as const, ...(e.by ? { by: e.by } : {}) });
 
-export const handler = async (event: Event = {}) => {
+export const handler = async (event: Event = {}, context?: { getRemainingTimeInMillis(): number }) => {
   managerAccount ??= (await sts.send(new GetCallerIdentityCommand({}))).Account ?? '';
   const deps: RunDeps = {
     store,
@@ -67,8 +67,10 @@ export const handler = async (event: Event = {}) => {
   }
   if (event.step === 'account') return scanAccount(deps, { runId: event.runId, account: event.account });
   if ('Records' in event) {
-    const events = event.Records.map((r) => { try { return JSON.parse(r.body) as { account?: unknown; region?: unknown }; } catch { return {}; } });
-    return refreshAccounts(deps, events);
+    // The events not handled (another refresh runs, out of time) go back to the queue (ReportBatchItemFailures).
+    const events = event.Records.map((r) => { try { return { id: r.messageId, ...(JSON.parse(r.body) as { account?: unknown; region?: unknown }) }; } catch { return { id: r.messageId }; } });
+    const out = await refreshAccounts(deps, events, { deadline: Date.now() + (context?.getRemainingTimeInMillis() ?? 900_000) });
+    return { batchItemFailures: out.retry.map((itemIdentifier) => ({ itemIdentifier })) };
   }
   const run = event.step === 'finalize' ? await finalizeRun(deps, event.plan)
     : event.step === 'abandon' ? await abandonRun(deps, event.plan, event.error ?? 'unknown error')

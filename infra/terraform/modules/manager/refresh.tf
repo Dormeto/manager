@@ -17,11 +17,12 @@ resource "aws_sqs_queue" "refresh_failed" {
 
 resource "aws_sqs_queue" "refresh" {
   name = "${local.name}-refresh"
-  # Above the discovery Lambda's timeout (900 s): a batch being rescanned is never delivered twice.
-  visibility_timeout_seconds = 960
+  # Above the discovery Lambda's timeout (900 s) and the batching window (300 s): a batch being rescanned is never
+  # delivered twice; an event given back (another refresh, out of time) comes back after it.
+  visibility_timeout_seconds = 1800
   message_retention_seconds  = 86400
   sqs_managed_sse_enabled    = true
-  redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.refresh_failed.arn, maxReceiveCount = 3 })
+  redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.refresh_failed.arn, maxReceiveCount = 5 })
 }
 
 data "aws_iam_policy_document" "refresh_queue" {
@@ -57,6 +58,8 @@ resource "aws_lambda_event_source_mapping" "refresh" {
   function_name                      = aws_lambda_function.discovery.arn
   batch_size                         = 10000
   maximum_batching_window_in_seconds = 300
+  # The events a batch could not handle (another refresh runs, out of time) go back to the queue, the others are deleted.
+  function_response_types = ["ReportBatchItemFailures"]
   scaling_config {
     maximum_concurrency = 2
   }

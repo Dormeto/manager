@@ -25,6 +25,10 @@ export interface DiscoveryStore {
   putConfig(config: DiscoveryConfig, by: string): Promise<void>;
   acquireLock(runId: string): Promise<boolean>;
   releaseLock(runId: string): Promise<void>;
+  // A refresh of forwarded events (packaging design §5): its own short lease, never the run's lock (R5c review I1, I2).
+  acquireRefresh(id: string, ms: number): Promise<boolean>;
+  releaseRefresh(id: string): Promise<void>;
+  runActive(): Promise<boolean>;
   lastRun(options?: { completed?: boolean }): Promise<RunRecord | null>;
   getRun(startedAt: string): Promise<RunRecord | null>;
   putRun(run: RunRecord): Promise<void>;
@@ -214,6 +218,31 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
         if ((err as Error).name === 'ConditionalCheckFailedException') return false;
         throw err;
       }
+    },
+    async acquireRefresh(id, ms) {
+      try {
+        await dynamo.send(new PutItemCommand({
+          TableName: table,
+          Item: { ...key('DISC#REFRESH'), runId: { S: id }, expiresAt: { N: String(seconds(now() + ms)) } },
+          ConditionExpression: 'attribute_not_exists(sk) OR expiresAt < :now',
+          ExpressionAttributeValues: { ':now': { N: String(seconds(now())) } },
+        }));
+        return true;
+      } catch (err) {
+        if ((err as Error).name === 'ConditionalCheckFailedException') return false;
+        throw err;
+      }
+    },
+    async releaseRefresh(id) {
+      try {
+        await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key('DISC#REFRESH'), ConditionExpression: 'runId = :id', ExpressionAttributeValues: { ':id': { S: id } } }));
+      } catch (err) {
+        if ((err as Error).name !== 'ConditionalCheckFailedException') throw err;
+      }
+    },
+    async runActive() {
+      const lock = await get('DISC#LOCK');
+      return Boolean(lock && Number(lock.expiresAt?.N ?? 0) >= seconds(now()));
     },
     async releaseLock(runId) {
       try {

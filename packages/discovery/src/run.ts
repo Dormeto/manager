@@ -327,36 +327,58 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
 }
 
-// The account-regions forwarded events name (packaging design §5), each rescanned once per batch; skipped while a full run
-// holds the lock (it covers them). Events of accounts or regions outside the perimeter are ignored.
-export async function refreshAccounts(deps: RunDeps, events: { account?: unknown; region?: unknown }[]): Promise<{ skipped: boolean; pairs: string[] }> {
+// The account-regions forwarded events name (packaging design §5), each rescanned once per batch. While a run is active
+// the refresh is skipped (the run covers them); while another refresh holds its lease, or past the batch's time, the
+// events are given back (retry: their ids) rather than dropped (R5c review I1, I2). Events of accounts or regions the last
+// run did not scan are ignored.
+const REFRESH_LEASE = 15 * 60_000; // the discovery Lambda's timeout
+const REFRESH_MARGIN = 120_000; // an account's rescan, at most
+export async function refreshAccounts(deps: RunDeps, events: { id?: string; account?: unknown; region?: unknown }[], { deadline = Number.POSITIVE_INFINITY }: { deadline?: number } = {}): Promise<{ skipped: boolean; pairs: string[]; retry: string[] }> {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? silent;
-  const byAccount = new Map<string, Set<string>>();
+  const byAccount = new Map<string, { regions: Set<string>; ids: string[] }>();
   for (const e of events) {
     if (typeof e?.account !== 'string' || !/^\d{12}$/.test(e.account) || typeof e.region !== 'string' || !/^[a-z]{2}(-[a-z]+)+-\d{1,2}$/.test(e.region)) continue;
-    byAccount.set(e.account, (byAccount.get(e.account) ?? new Set()).add(e.region));
+    const entry = byAccount.get(e.account) ?? { regions: new Set<string>(), ids: [] };
+    entry.regions.add(e.region);
+    if (e.id) entry.ids.push(e.id);
+    byAccount.set(e.account, entry);
   }
-  const id = `refresh ${iso(now())}`;
-  if (!(await deps.store.acquireLock(id))) {
-    log.info('DiscoveryRefreshSkipped', { accounts: byAccount.size, reason: 'a run holds the lock' });
-    return { skipped: true, pairs: [] };
+  const all = [...byAccount.values()].flatMap((e) => e.ids);
+  if (await deps.store.runActive()) {
+    log.info('DiscoveryRefreshSkipped', { accounts: byAccount.size, reason: 'a run is active: it covers them' });
+    return { skipped: true, pairs: [], retry: [] };
   }
+  const id = `refresh ${iso(now())} ${Math.random().toString(36).slice(2, 8)}`;
+  if (!(await deps.store.acquireRefresh(id, REFRESH_LEASE))) {
+    log.info('DiscoveryRefreshDeferred', { accounts: byAccount.size, reason: 'another refresh runs' });
+    return { skipped: false, pairs: [], retry: all };
+  }
+  const pairs: string[] = [];
+  const retry: string[] = [];
   try {
-    const pairs: string[] = [];
-    for (const [account, regions] of byAccount) {
-      const state = await deps.store.getAccountScan(account);
-      // Only the accounts and regions the last run scanned: the perimeter as it is.
-      if (!state || state.retiredAt) continue;
-      const known = [...regions].filter((r) => r in (state.regions ?? {}));
-      if (!known.length) continue;
-      await scanAccount(deps, { runId: state.runId ?? '', account, only: known });
-      pairs.push(...known.map((r) => `${account}/${r}`));
-    }
-    log.info('DiscoveryRefresh', { pairs });
-    return { skipped: false, pairs };
+    await pool([...byAccount.entries()], 4, async ([account, { regions, ids }]) => {
+      if (now() > deadline - REFRESH_MARGIN) {
+        retry.push(...ids);
+        return;
+      }
+      try {
+        const state = await deps.store.getAccountScan(account);
+        // Only the accounts and regions the last run scanned: the perimeter as it is.
+        if (!state || state.retiredAt) return;
+        const known = [...regions].filter((r) => r in (state.regions ?? {}));
+        if (!known.length) return;
+        await scanAccount(deps, { runId: state.runId ?? '', account, only: known });
+        pairs.push(...known.map((r) => `${account}/${r}`));
+      } catch (err) {
+        log.warn('DiscoveryRefreshFailed', { account, error: errorText(err) });
+        retry.push(...ids);
+      }
+    });
+    log.info('DiscoveryRefresh', { pairs, retried: retry.length });
+    return { skipped: false, pairs, retry: retry.sort() };
   } finally {
-    await deps.store.releaseLock(id);
+    await deps.store.releaseRefresh(id);
   }
 }
 
