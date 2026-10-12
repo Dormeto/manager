@@ -68,8 +68,9 @@ data "aws_iam_policy_document" "operations" {
     }
   }
   statement {
+    # The access check function runs as this role too.
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${aws_cloudwatch_log_group.operations.arn}:*"]
+    resources = ["${aws_cloudwatch_log_group.operations.arn}:*", "${aws_cloudwatch_log_group.access_check.arn}:*"]
   }
 }
 

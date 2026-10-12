@@ -29,3 +29,12 @@ test('the manager\'s own account gets the organization roles from the access mod
   assert.match(platform('variables.tf'), /variable "create_organization_roles"/);
   assert.match(platform('variables.tf'), /variable "organization_role_envs"/);
 });
+
+test('the access check function, running as the operations role, may write its logs', () => {
+  // Found live after the R5a fix pass: the role's logs statement named the operations log group only.
+  const operations = platform('operations.tf');
+  const policy = operations.slice(operations.indexOf('data "aws_iam_policy_document" "operations"'), operations.indexOf('resource "aws_iam_role_policy" "operations"'));
+  const logs = policy.slice(policy.lastIndexOf('statement {', policy.indexOf('logs:PutLogEvents'))).split('statement {')[1];
+  assert.match(logs, /aws_cloudwatch_log_group\.access_check\.arn/);
+  assert.match(logs, /aws_cloudwatch_log_group\.operations\.arn/);
+});
