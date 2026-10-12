@@ -274,3 +274,18 @@ describe('review fixes', () => {
     expect(await s.records.acquireLock(`LB#${LB}`, 'intruder', 60_000)).toBe(false);
   });
 });
+
+describe('transient errors', () => {
+  it('waits and retries a step on a transient AWS error instead of failing the operation', async () => {
+    const s = setup();
+    const update = s.account.ports.dynamodb.updateContinuousBackups;
+    let refused = 2;
+    s.account.ports.dynamodb.updateContinuousBackups = async (input) => {
+      if (refused-- > 0) throw Object.assign(new Error('Backups are being enabled for the table: dmtr-dev-router. Please retry later'), { name: 'ContinuousBackupsUnavailableException' });
+      return update(input);
+    };
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect((await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'install table')!.attempts).toBeGreaterThan(3);
+  });
+});

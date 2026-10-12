@@ -14,6 +14,11 @@ const BUSY_MAX = 30 * MINUTE;
 const PENDING_MAX = 30 * MINUTE;
 const SLOTS = 3;
 const RETRY_MAX = 30;
+// AWS errors that pass: the step waits and runs again (a resource being updated, a throttled API).
+const TRANSIENT = new Set([
+  'ContinuousBackupsUnavailableException', 'ResourceInUseException', 'LimitExceededException', 'TooManyRequestsException', 'ThrottlingException', 'Throttling',
+  'ResourceConflictException', 'ConcurrentModificationException', 'ServiceUnavailableException', 'InternalFailure',
+]);
 const WAKE_GRACE = 2 * MINUTE;
 
 export interface RouterRef {
@@ -367,10 +372,10 @@ export function createEngine(deps: EngineDeps) {
         await records.putOperation(op);
         return { done: false, waitSeconds: 10 };
       }
-      if (err instanceof RetryLater && step.attempts <= RETRY_MAX) {
-        step.detail = err.message;
+      if ((err instanceof RetryLater || TRANSIENT.has((err as Error).name)) && step.attempts <= RETRY_MAX) {
+        step.detail = (err as Error).message;
         await records.putOperation(op);
-        return { done: false, waitSeconds: err.seconds };
+        return { done: false, waitSeconds: err instanceof RetryLater ? err.seconds : 10 };
       }
       const message = err instanceof Busy ? `${err.message} since more than ${BUSY_MAX / MINUTE} minutes` : (err as Error).message;
       step.status = 'failed';
