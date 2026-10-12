@@ -1,7 +1,21 @@
 # Changelog
 
 Versions of the Dormeto manager, each with the router version it installs. Releases:
-https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.html).
+https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.html). An **Access** line says when the
+member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
+CLI script, of the same release).
+
+## 0.2.2 — 2026-10-06
+
+Router 0.22.6. Access: nothing to apply again.
+
+- Without an SES identity, invitations from the dashboard go out at once through Cognito (no SES identity created, no
+  SES permission).
+- `deletion_protection` protects the table (installed routers, operations, audit) as well as the users.
+- The functions' code ships zipped in the release: nothing is written in your configuration at plan time, so a plan
+  applied in another job or by HCP Terraform works.
+- The organization module keeps the organization's other statements of its one delegation policy
+  (`additional_statements`); the website's procedure merges with the current policy and removes Dormeto's statement only.
 
 ## 0.2.1 — 2026-10-06
 
