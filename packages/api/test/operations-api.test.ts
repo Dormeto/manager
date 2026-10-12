@@ -34,7 +34,7 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
       throw new RouterError('unexpected');
     },
     audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
-    now: () => NOW, newId: () => 'id-1', version: '0.2.0',
+    now: () => NOW, newId: () => 'id-1', version: '0.2.0', routerVersion: '0.18.0',
     discovery: { store: memoryStore([candidate(TG, { targetGroupArn: TG, region: 'eu-west-3' })]), run: async () => {} },
     operations,
   });
@@ -110,5 +110,12 @@ describe('operations', () => {
       ['dmt-dev', 'eu-west-1', 'terraform'], ['dmt-dev-eu-west-3', 'eu-west-3', 'manager'], ['dmt-dev-038606077307-eu-west-3', 'eu-west-3', 'manager'],
     ]);
     expect(calls.map(([name]) => name).sort()).toEqual(['dmt-dev', 'dmt-dev-038606077307-eu-west-3', 'dmt-dev-eu-west-3']);
+  });
+});
+
+describe('router version', () => {
+  it('gives the router version the manager installs, the available upgrade', async () => {
+    const { api } = setup();
+    expect(json(await api(event('GET', '/api/routers'))).available).toEqual({ version: '0.18.0' });
   });
 });

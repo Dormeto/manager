@@ -99,6 +99,7 @@ export interface RouterInfo {
   name: string;
   region: string;
   account?: string;
+  source?: 'terraform' | 'manager';
   version?: string | null;
   build?: string | null;
   workloads?: number;
@@ -163,4 +164,23 @@ export interface Exclusion {
   expired?: boolean;
   liftedAt?: string;
   lifting?: boolean; // lifted, some workloads not resumed yet: Lift again retries
+}
+
+// Operations (onboarding, R4b): run by the workflow, step by step.
+export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard';
+export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+
+export interface Operation {
+  id: string;
+  type: OperationType;
+  target: Record<string, string>;
+  input: Record<string, unknown>;
+  status: 'running' | 'succeeded' | 'failed';
+  steps: { name: string; status: StepStatus; startedAt?: string; finishedAt?: string; detail?: string; attempts?: number }[];
+  cursor: number;
+  by: string;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+  error?: string;
 }

@@ -2,7 +2,7 @@
 // Routers (router management): version, health, idle check, workloads per state and pauses; pause and resume.
 import { ref } from 'vue';
 import { useDisplay } from 'vuetify';
-import { mdiPause, mdiPlay } from '@mdi/js';
+import { mdiArrowUpBoldCircleOutline, mdiDeleteOutline, mdiPause, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { relative, stateColor } from '../format';
@@ -22,9 +22,27 @@ const routers = ref<RouterInfo[]>([]);
 const expanded = ref<string[]>([]);
 const pausing = ref<RouterInfo | null>(null);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
+const available = ref<string | null>(null);
+const installOpen = ref(false);
+const install = ref({ account: '', region: '' });
+const removing = ref<RouterInfo | null>(null);
 const { error, loading, nextAt, run } = usePoll(async () => {
-  routers.value = (await api<{ routers: RouterInfo[] }>('/routers')).routers;
+  const result = await api<{ routers: RouterInfo[]; available?: { version: string } }>('/routers');
+  routers.value = result.routers;
+  available.value = result.available?.version ?? null;
 });
+
+// Router operations (administrators): run by the workflow, followed in Operations.
+async function operation(body: Record<string, unknown>, what: string) {
+  installOpen.value = false;
+  removing.value = null;
+  try {
+    const { operation: op } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify(body) });
+    notice.value = { type: 'success', text: `${what} started (operation ${op.id}): follow it in Operations.` };
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
 
 async function pause(router: RouterInfo, body: { reason: string; until?: string; keepAsleep: boolean }) {
   pausing.value = null;
@@ -63,6 +81,7 @@ const headers = [
   <div class="d-flex flex-wrap align-center ga-4 mb-2">
     <h1 class="text-headline-small">Routers</h1>
     <v-spacer />
+    <v-btn v-if="session.isAdmin" :prepend-icon="mdiPlusCircleOutline" variant="tonal" @click="installOpen = true">Install a router</v-btn>
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
   </div>
   <p class="text-medium-emphasis mb-4">One router per account and region naps and wakes its workloads. A paused router never naps any of
@@ -103,6 +122,11 @@ const headers = [
       </template>
       <template #[`item.pauses`]="{ item }"><PauseChip :pauses="item.pauses" /></template>
       <template #[`item.actions`]="{ item }">
+        <template v-if="session.isAdmin && item.source === 'manager'">
+          <v-btn v-if="available && item.version !== available" :prepend-icon="mdiArrowUpBoldCircleOutline" variant="tonal" size="small" class="mr-1"
+            @click="operation({ type: 'upgrade-router', router: item.name }, `Upgrade of ${item.name} to ${available}`)">Upgrade to {{ available }}</v-btn>
+          <v-btn :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Uninstall ${item.name}`" class="mr-1" @click="removing = item" />
+        </template>
         <template v-if="session.canOperate && item.health">
           <v-btn v-if="item.pauses?.length" :prepend-icon="mdiPlay" variant="tonal" size="small" @click="resume(item)">Resume</v-btn>
           <v-btn v-else :prepend-icon="mdiPause" variant="tonal" size="small" @click="pausing = item">Pause</v-btn>
@@ -113,5 +137,31 @@ const headers = [
       </template>
     </v-data-table>
   </v-card>
+  <v-dialog v-model="installOpen" max-width="480">
+    <v-card title="Install a router">
+      <v-card-text>
+        <p class="mb-4">Dormeto creates the router in the account and region by API calls, through its DmtCommandRole there. Onboarding a
+          workload installs it on its own when needed.</p>
+        <v-text-field v-model="install.account" label="Account ID" maxlength="12" />
+        <v-text-field v-model="install.region" label="Region" placeholder="eu-west-3" />
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="installOpen = false">Cancel</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="!/^\d{12}$/.test(install.account) || !install.region"
+          @click="operation({ type: 'install-router', ...install }, `Installation in ${install.account}/${install.region}`)">Install</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+  <v-dialog :model-value="removing !== null" max-width="460" @update:model-value="removing = null">
+    <v-card :title="`Uninstall ${removing?.name}?`">
+      <v-card-text>Every resource of the router is deleted. Refused while it has workloads: offboard them first.</v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="removing = null">Cancel</v-btn>
+        <v-btn color="error" variant="flat" @click="operation({ type: 'uninstall-router', router: removing!.name }, `Uninstallation of ${removing!.name}`)">Uninstall</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
   <PauseDialog :model-value="pausing !== null" :subject="pausing?.name ?? ''" router @update:model-value="pausing = null" @submit="pause(pausing!, $event)" />
 </template>

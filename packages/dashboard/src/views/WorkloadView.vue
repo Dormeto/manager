@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiInformationOutline, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiInformationOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
@@ -21,7 +21,7 @@ const props = defineProps<{ router: string; id: string }>();
 const session = useSession();
 const status = ref<WorkloadStatus | null>(null);
 const url = ref<string | null>(null);
-const confirm = ref<'nap' | 'wake' | null>(null);
+const confirm = ref<'nap' | 'wake' | 'offboard' | null>(null);
 const acting = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 const pauseOpen = ref(false);
@@ -36,8 +36,17 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   }
 });
 
-async function act(action: 'nap' | 'wake') {
+async function act(action: 'nap' | 'wake' | 'offboard') {
   confirm.value = null;
+  if (action === 'offboard') {
+    try {
+      const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: props.router, workloadId: props.id }) });
+      notice.value = { type: 'success', text: `Offboarding started (operation ${operation.id}): the workload is woken, then its instrumentation removed. Follow it in Operations.` };
+    } catch (err) {
+      notice.value = { type: 'error', text: (err as Error).message };
+    }
+    return;
+  }
   acting.value = true;
   try {
     await api(`${path.value}/${action}`, { method: 'POST' });
@@ -130,6 +139,7 @@ const summary = computed(() => {
       <v-btn v-if="ownPause" :prepend-icon="mdiPlay" variant="tonal" :disabled="acting" @click="change('resume')">Resume</v-btn>
       <v-btn v-else :prepend-icon="mdiPause" variant="tonal" :disabled="acting" @click="pauseOpen = true">Pause</v-btn>
       <v-btn v-if="!excluded && excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" :disabled="acting" @click="excludeOpen = true">Exclude</v-btn>
+      <v-btn :prepend-icon="mdiLogoutVariant" variant="tonal" :disabled="acting" @click="confirm = 'offboard'">Offboard</v-btn>
       <v-btn :prepend-icon="mdiPowerSleep" variant="tonal" :disabled="status.state !== 'AWAKE' || pauses.length > 0 || acting" @click="confirm = 'nap'">Nap</v-btn>
       <v-btn :prepend-icon="mdiWeatherSunny" color="primary" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state) || acting" @click="confirm = 'wake'">Wake</v-btn>
     </template>
@@ -262,14 +272,16 @@ const summary = computed(() => {
   <PauseDialog v-model="pauseOpen" :subject="id" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
-    <v-card :title="confirm === 'nap' ? `Nap ${id}?` : `Wake ${id}?`">
+    <v-card :title="confirm === 'nap' ? `Nap ${id}?` : confirm === 'offboard' ? `Offboard ${id}?` : `Wake ${id}?`">
       <v-card-text>{{ confirm === 'nap'
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
-        : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
+        : confirm === 'offboard'
+          ? 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
+          : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
       <v-card-actions>
         <v-spacer />
         <v-btn variant="text" @click="confirm = null">Cancel</v-btn>
-        <v-btn :color="confirm === 'nap' ? stateColor('ASLEEP') : 'primary'" variant="flat" @click="act(confirm!)">{{ confirm === 'nap' ? 'Nap' : 'Wake' }}</v-btn>
+        <v-btn :color="confirm === 'nap' ? stateColor('ASLEEP') : 'primary'" variant="flat" @click="act(confirm!)">{{ confirm === 'nap' ? 'Nap' : confirm === 'offboard' ? 'Offboard' : 'Wake' }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

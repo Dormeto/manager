@@ -133,4 +133,5 @@ export const handler = createApi({
   discovery,
   operations: process.env.OPERATIONS ? operations : undefined,
   managerAccount: process.env.MANAGER_ACCOUNT,
+  routerVersion: process.env.ROUTER_VERSION,
 });

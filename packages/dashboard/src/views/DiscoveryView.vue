@@ -2,10 +2,13 @@
 // Organization discovery: the last run (scanned, skipped and failed account-regions, lint) and the candidate rules.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useDisplay } from 'vuetify';
-import { mdiCancel, mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiPlay } from '@mdi/js';
+import { mdiCancel, mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiLogoutVariant, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
+import OnboardDialog from '../components/OnboardDialog.vue';
+import { getConfig } from '../config';
+import type { RouterInfo } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
@@ -30,6 +33,8 @@ const selected = ref<string[]>([]);
 const dismissDialog = ref(false);
 const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
+const onboardOpen = ref(false);
+const routerName = `dmt-${getConfig().env}`;
 const excludeOpen = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 let poll: number | undefined;
@@ -114,6 +119,37 @@ async function lift(e: Exclusion) {
   }
 }
 
+// Onboarding and offboarding: operations run by the workflow (Operations view).
+const single = computed(() => (selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined));
+const onboardable = computed(() => single.value?.status === 'pending-onboarding');
+const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status));
+
+async function startOperation(body: Record<string, unknown>, what: string) {
+  try {
+    const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify(body) });
+    notice.value = { type: 'success', text: `${what} started (operation ${operation.id}): follow it in Operations.` };
+    selected.value = [];
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
+async function onboard(form: { workloadId: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }) {
+  onboardOpen.value = false;
+  await startOperation({ type: 'onboard', candidateId: single.value!.id, ...form }, `Onboarding of ${form.workloadId}`);
+}
+
+async function offboard() {
+  const c = single.value!;
+  const routers = (await api<{ routers: RouterInfo[] }>('/routers')).routers;
+  const router = routers.find((r) => r.account === c.account && r.region === c.region);
+  if (!router) {
+    notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
+    return;
+  }
+  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, `Offboarding of ${c.workloadId}`);
+}
+
 onMounted(load);
 onBeforeUnmount(() => window.clearInterval(poll));
 
@@ -181,6 +217,8 @@ const headers = [
     </v-chip-group>
     <v-spacer />
     <template v-if="session.canOperate && selected.length">
+      <v-btn v-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="tonal" @click="onboardOpen = true">Onboard…</v-btn>
+      <v-btn v-if="offboardable" :prepend-icon="mdiLogoutVariant" variant="tonal" @click="offboard">Offboard</v-btn>
       <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
       <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
       <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
@@ -245,6 +283,7 @@ const headers = [
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :suggested-id="single?.suggestedId ?? null" :router-name="routerName" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card title="Dismiss candidates">

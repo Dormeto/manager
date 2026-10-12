@@ -138,6 +138,7 @@ export interface ApiOptions {
   discovery?: DiscoveryApi;
   operations?: OperationsApi;
   managerAccount?: string;
+  routerVersion?: string; // the router version the manager installs and upgrades to
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -190,7 +191,7 @@ function roleIn(body: Record<string, unknown>): Role {
 const WORKLOAD_ID = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
-export function createApi({ routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount }: ApiOptions) {
+export function createApi({ routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
   let routers: Router[] = terraformRouters;
@@ -326,7 +327,9 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
       }
     }
 
-    if (method === 'GET' && resource === 'routers' && !a) return reply(200, { routers: await Promise.all(routers.map(routerRow)) });
+    if (method === 'GET' && resource === 'routers' && !a) {
+      return reply(200, { routers: await Promise.all(routers.map(routerRow)), ...(routerVersion ? { available: { version: routerVersion } } : {}) });
+    }
     if (resource === 'routers' && a) {
       const router = routerOf(a);
       if (method === 'GET' && !b) return reply(200, { ...where(router), ...(await invokeNew(router, { action: 'router' }, 'router details') as object) });
