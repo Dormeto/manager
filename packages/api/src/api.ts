@@ -718,7 +718,14 @@ export function createApi({
         throw err;
       }
       const shown = page.candidates.filter((c) => visible(identity, { account: c.account, region: c.region }));
-      return reply(200, { candidates: await Promise.all(shown.map(withWorkload)), cursor: page.cursor });
+      // The onboarding or offboarding running on a candidate (the dashboard shows it in progress).
+      const running = shown.length ? ((await operations?.list()) ?? []).filter((op) => op.status === 'running' && (op.type === 'onboard' || op.type === 'offboard')) : [];
+      const operationOf = (c: Candidate) => {
+        const op = running.find((o) => o.target.account === c.account && o.target.region === c.region
+          && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
+        return op ? { operation: { id: op.id, type: op.type } } : {};
+      };
+      return reply(200, { candidates: await Promise.all(shown.map(async (c) => ({ ...(await withWorkload(c)), ...operationOf(c) }))), cursor: page.cursor });
     }
     if (method === 'POST' && sub === 'run') {
       need(identity, 'operator');

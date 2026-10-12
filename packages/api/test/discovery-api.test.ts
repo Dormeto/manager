@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { Candidate, DiscoveryConfig, RunRecord } from '@dormeto/discovery';
-import { createApi, type ApiEvent, type AuditEntry } from '../src/api.js';
+import { createApi, type ApiEvent, type AuditEntry, type OperationsApi } from '../src/api.js';
 import { NOW, candidate, memoryStore } from './memory-store.js';
 
 const RUN: RunRecord = { startedAt: '2026-10-04T11:00:00.000Z', finishedAt: '2026-10-04T11:00:05.000Z', trigger: 'schedule', status: 'ok', targets: [], counts: { 'pending-onboarding': 2 }, lint: [] };
 
+const NOW_ISO = new Date(NOW).toISOString();
 const R2 = candidate('r2', { region: 'eu-west-3', status: 'ineligible', statusReason: 'fixed response', eligibility: 'ineligible', backend: null });
 
-function setup(candidates = [candidate('r1'), R2], { visible, workloads = [] }: {
-  visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; workloads?: Record<string, unknown>[];
+function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], operations }: {
+  visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; workloads?: Record<string, unknown>[]; operations?: OperationsApi;
 } = {}) {
   const audit: AuditEntry[] = [];
   const runs: string[] = [];
@@ -23,7 +24,7 @@ function setup(candidates = [candidate('r1'), R2], { visible, workloads = [] }: 
       listRouters: async () => [], listWorkloads: async () => { throw new Error('the Discovery view never lists every workload'); },
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
-    ...(visible ? { visible } : {}),
+    ...(visible ? { visible } : {}), ...(operations ? { operations } : {}),
   });
   return { api, audit, runs, store };
 }
@@ -84,6 +85,20 @@ describe('discovery routes', () => {
     const { api } = setup([managed], { workloads: [{ account: '121014831971', region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' }] });
     const [c] = json(await api(event('GET', '/api/discovery/candidates', '', undefined, { status: 'managed' }))).candidates;
     expect(c.workload).toEqual({ router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' });
+  });
+
+  it('names the onboarding or offboarding running on a candidate (the dashboard shows it in progress), not the others', async () => {
+    const op = (id: string, type: string, status: string, target: Record<string, string>) => ({
+      id, type, status, target: { account: '121014831971', region: 'eu-west-1', ...target }, input: {}, steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: '',
+      context: {}, by: 'ops@example.com', createdAt: NOW_ISO, updatedAt: NOW_ISO,
+    });
+    const list = [op('op-on', 'onboard', 'running', { targetGroupArn: 'tg-a' }), op('op-done', 'onboard', 'failed', { targetGroupArn: 'tg-b' }), op('op-off', 'offboard', 'running', { router: 'dmt-dev', workloadId: 'w-c' })];
+    const operations: OperationsApi = { create: async () => { throw new Error('unused'); }, list: async () => list as never, get: async () => null, installedRouters: async () => [] };
+    const { api } = setup([candidate('a', { targetGroupArn: 'tg-a' }), candidate('b', { targetGroupArn: 'tg-b' }), candidate('c', { targetGroupArn: 'tg-c', workloadId: 'w-c' })], { operations });
+    const listed = json(await api(event('GET', '/api/discovery/candidates', '', undefined, { status: 'pending-onboarding' }))).candidates;
+    expect(listed.map((c: { id: string; operation?: unknown }) => [c.id, c.operation ?? null])).toEqual([
+      ['a', { id: 'op-on', type: 'onboard' }], ['b', null], ['c', { id: 'op-off', type: 'offboard' }],
+    ]);
   });
 
   it('dismissing and restoring move the counts per status', async () => {
