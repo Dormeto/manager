@@ -141,3 +141,23 @@ describe('discovery routes', () => {
     expect((await api(event('GET', '/api/discovery/dmt-dev'))).statusCode).toBe(404);
   });
 });
+
+describe('counts with the real store', () => {
+  it('an expired exclusion settled by concurrent reads (the Discovery view loads /discovery and /exclusions at once) moves the counts once', async () => {
+    const { createStore } = await import('@dormeto/discovery');
+    const { fakeDynamo } = await import('../../discovery/test/dynamo-fake.js');
+    const ACC = '121014831971';
+    const store = createStore({ dynamo: fakeDynamo(), table: 't', now: () => NOW });
+    await store.putConfig({ version: 1, mode: 'organization', regions: ['eu-west-1'], refreshHours: 24, globalExcludes: [], filters: [{ name: 'a', include: [{ accountIds: [ACC] }], exclude: [] }] }, 'admin');
+    await store.putInventory({ accounts: [{ id: ACC, name: 'dormeto', ouPath: ['r-1'], tags: {} }], ous: { 'r-1': { name: 'Root', parent: null } } });
+    const arn = (i: number) => `arn:aws:elasticloadbalancing:eu-west-1:${ACC}:targetgroup/t${i}/000000000000000${i}`;
+    await store.putCandidates([1, 2, 3].map((i) => candidate(arn(i), { scope: 'excluded', scopeReason: 'excluded: test', status: 'excluded', statusReason: 'excluded: test' })));
+    await store.putExclusion({ id: 'x1', target: { kind: 'account', account: ACC, name: 'dormeto' }, reason: 'test', by: 'ops', at: '2026-10-01T00:00:00.000Z', expiresAt: '2026-10-03T00:00:00.000Z' });
+    await store.putCounts({ excluded: 3 });
+    const api = createApi({ routers: [], invoke: async () => ({}), audit: { write: async () => {}, list: async () => [] }, now: () => NOW, version: 't', discovery: { store, run: async () => {} } });
+    const responses = await Promise.all([api(event('GET', '/api/discovery')), api(event('GET', '/api/exclusions')), api(event('GET', '/api/discovery'))]);
+    expect(responses.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+    expect((await store.getCounts())!.counts).toEqual(await store.countCandidates());
+    expect((await store.getExclusion('x1'))!.lapsedAt).toBe(new Date(NOW).toISOString());
+  });
+});

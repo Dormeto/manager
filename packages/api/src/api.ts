@@ -713,9 +713,19 @@ export function createApi({
     const exclusions = await d.store.listExclusions();
     const lapsed = exclusions.filter((e) => e.expiresAt && Date.parse(e.expiresAt) <= now() && !e.lapsedAt);
     if (!lapsed.length) return exclusions;
-    await rescoped(d, [...new Set(lapsed.map((e) => e.target.account))]);
+    // Claimed first, by one caller each (the Discovery view reads /discovery and /exclusions at once): only the caller
+    // that marks it lapsed re-scopes, so the counts move once.
     const at = new Date(now()).toISOString();
-    for (const e of lapsed) await d.store.putExclusion({ ...e, lapsedAt: at });
+    const claimed: Exclusion[] = [];
+    for (const e of lapsed) {
+      let mine = false;
+      await d.store.updateExclusion(e.id, (x) => {
+        mine = !x.lapsedAt;
+        return mine ? { ...x, lapsedAt: at } : x;
+      });
+      if (mine) claimed.push(e);
+    }
+    if (claimed.length) await rescoped(d, [...new Set(claimed.map((e) => e.target.account))]);
     return d.store.listExclusions();
   }
 
