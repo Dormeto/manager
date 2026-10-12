@@ -12,6 +12,8 @@ import { createStore } from './store.js';
 
 const region = process.env.AWS_REGION ?? 'eu-west-1';
 const roleName = process.env.ROLE_NAME ?? 'DmtDiscoveryRole';
+// The command role of each account, only assumed to check it (packaging design §3).
+const commandRole = process.env.COMMAND_ROLE ?? 'DmtCommandRole';
 // A run holds its lock for the state machine's whole time limit (3 hours).
 const store = createStore({ dynamo: new DynamoDBClient({}), table: process.env.TABLE ?? '', lockMs: 3 * 3_600_000 });
 const sts = new STSClient({ region });
@@ -40,6 +42,7 @@ export const handler = async (event: Event = {}) => {
     managerAccount,
     roleName,
     assumeRole: createAssumeRole({ sts, roleName, sessionName: `dmt-${process.env.ENV ?? 'dev'}-discovery` }),
+    assumeCommand: createAssumeRole({ sts, roleName: commandRole, sessionName: `dmt-${process.env.ENV ?? 'dev'}-access` }),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
     scan: (credentials, where) => scanRegion(scanPorts(regionalClients(credentials as Credentials, where.region)), where),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),

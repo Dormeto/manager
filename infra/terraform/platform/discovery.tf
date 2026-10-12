@@ -13,9 +13,10 @@ data "aws_iam_policy_document" "discovery" {
     resources = ["*"]
   }
   statement {
-    sid       = "AssumeDiscoveryRoles"
-    actions   = ["sts:AssumeRole"]
-    resources = ["arn:aws:iam::*:role/${var.discovery_role_name}"]
+    sid     = "AssumeDiscoveryRoles"
+    actions = ["sts:AssumeRole"]
+    # The command role too, only assumed to check it (packaging design §3).
+    resources = ["arn:aws:iam::*:role/${var.discovery_role_name}", "arn:aws:iam::*:role/${var.command_role_name}"]
     condition {
       test     = "StringEquals"
       variable = "aws:ResourceOrgID"
@@ -65,9 +66,10 @@ resource "aws_lambda_function" "discovery" {
 
   environment {
     variables = {
-      TABLE     = aws_dynamodb_table.manager.name
-      ENV       = var.env
-      ROLE_NAME = var.discovery_role_name
+      TABLE        = aws_dynamodb_table.manager.name
+      ENV          = var.env
+      ROLE_NAME    = var.discovery_role_name
+      COMMAND_ROLE = var.command_role_name
       # Dev only: a synthetic organization added to the real one (acceptance at scale, scale design §7).
       SYNTHETIC_ACCOUNTS = tostring(var.discovery_synthetic_accounts)
     }

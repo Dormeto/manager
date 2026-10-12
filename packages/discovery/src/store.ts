@@ -2,7 +2,7 @@
 // T#default; candidates in the partition of their account (CAND#<account>), indexed by status on gsi1 (scale design §4).
 import { BatchGetItemCommand, BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { CANDIDATE_STATUSES, type AccountScan, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
+import { CANDIDATE_STATUSES, type AccessReport, type AccessSummary, type AccountScan, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
 
 const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
@@ -49,6 +49,9 @@ export interface DiscoveryStore {
   countCandidates(): Promise<Partial<Record<Status, number>>>;
   getInventory(): Promise<OrgInventory | null>;
   putInventory(inventory: OrgInventory): Promise<void>;
+  getAccess(): Promise<AccessSummary | null>;
+  putAccess(summary: AccessSummary): Promise<void>;
+  accessReport(page: { cursor?: string; limit: number }): Promise<AccessReport>;
   listExclusions(): Promise<Exclusion[]>;
   getExclusion(id: string): Promise<Exclusion | null>;
   putExclusion(exclusion: Exclusion): Promise<void>;
@@ -331,6 +334,20 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     },
     async getInventory() {
       return data<OrgInventory>(await get('DISC#ORG'));
+    },
+    // Organization access of the last run (packaging design §3), paged by account.
+    async getAccess() {
+      return data<AccessSummary>(await get('DISC#ACCESS'));
+    },
+    async putAccess(summary) {
+      await put({ ...key('DISC#ACCESS'), data: packed(summary) });
+    },
+    async accessReport({ cursor, limit }) {
+      const summary = data<AccessSummary>(await get('DISC#ACCESS'));
+      if (!summary) return { counts: { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 }, accounts: [], cursor: null, delegation: null, checkedAt: null };
+      const after = cursor ? summary.accounts.filter((a) => a.account > cursor) : summary.accounts;
+      const accounts = after.slice(0, limit);
+      return { ...summary, accounts, cursor: after.length > limit ? accounts.at(-1)!.account : null };
     },
     async putInventory(inventory) {
       await put({ ...key('DISC#ORG'), data: packed(inventory), updatedAt: { S: new Date(now()).toISOString() } });

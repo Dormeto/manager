@@ -22,8 +22,9 @@ export function organizationsOf(inventory: OrgInventory) {
   return { port, calls };
 }
 
-export function setup({ cfg, deny = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false }: {
-  cfg?: DiscoveryConfig; deny?: string[]; failScan?: string[]; regions?: string[]; delayMs?: number; laggingIndex?: boolean;
+// deny: accounts refusing the discovery role; denyCommand: accounts refusing the command role (packaging design §3).
+export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false }: {
+  cfg?: DiscoveryConfig; deny?: string[]; denyCommand?: string[]; failScan?: string[]; regions?: string[]; delayMs?: number; laggingIndex?: boolean;
 } = {}) {
   const dynamo = fakeDynamo({ laggingIndex });
   let now = T0;
@@ -43,6 +44,9 @@ export function setup({ cfg, deny = [], failScan = [], regions = ['eu-west-1', '
       assumed.push(account);
       if (deny.includes(account)) throw Object.assign(new Error('not authorized to perform: sts:AssumeRole'), { name: 'AccessDenied' });
       return { account };
+    },
+    async assumeCommand(account) {
+      if (denyCommand.includes(account)) throw Object.assign(new Error(`User is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::${account}:role/DmtCommandRole`), { name: 'AccessDenied' });
     },
     async enabledRegions() { return regions; },
     async scan(credentials, where): Promise<ScannedRule[]> {

@@ -108,6 +108,12 @@ variable "discovery_role_name" {
   default     = "DmtDiscoveryRole"
 }
 
+variable "command_role_name" {
+  description = "Role the manager assumes in each account to install routers and act on their rules (DmtCommandRole, modules/command-role); a path may precede the name."
+  type        = string
+  default     = "DmtCommandRole"
+}
+
 variable "discovery_synthetic_accounts" {
   description = "Dev only: a synthetic organization of this many accounts added to the real one by discovery (acceptance at scale); 0 in every other environment."
   type        = number

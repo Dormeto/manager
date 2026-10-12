@@ -135,6 +135,9 @@ export const CANDIDATE_STATUSES: readonly Status[] = ['pending-onboarding', 'pen
 
 // Scan state of an account (R4.5): when it and each of its regions were last scanned, and for how many successive runs a
 // region had no application load balancer (scanned less often).
+// Organization access (packaging design §3): whether the manager can assume a role in an account.
+export type AccessState = { ok: true } | { ok: false; reason: string };
+
 export interface AccountScan {
   account: string;
   scannedAt: string;
@@ -144,6 +147,37 @@ export interface AccountScan {
   retiredAt?: string; // left the perimeter: its candidates were decided again, once
   result?: AccountResult;
   synthetic?: boolean; // written by the synthetic scanner (dev): deleted with its candidates once it is turned off
+  // Both organization roles, checked at each scan (a synthetic account has none).
+  access?: { discovery: AccessState; command: AccessState; checkedAt: string; trails?: Record<string, boolean> };
+}
+
+// An account of the perimeter whose access is not complete, for the Organization access panel.
+export interface AccessRow {
+  account: string;
+  name: string;
+  discovery: AccessState;
+  command: AccessState;
+  forwarder?: 'connected' | 'missing' | 'impossible';
+  reason?: string;
+}
+
+export interface AccessCounts {
+  ready: number;
+  discoveryMissing: number;
+  commandMissing: number;
+  unchecked: number;
+}
+
+// Computed at the end of each run: the counts, every account not ready, the delegation policy.
+export interface AccessSummary {
+  counts: AccessCounts;
+  accounts: AccessRow[]; // sorted by account
+  delegation: 'ok' | 'missing' | null;
+  checkedAt: string | null;
+}
+
+export interface AccessReport extends AccessSummary {
+  cursor: string | null;
 }
 
 // What an account step of a run found, for the run record (scale design §5).
@@ -206,4 +240,5 @@ export interface RunRecord {
   skipped?: { reason: string; accounts: number; pairs: number }[]; // skipped pairs per reason (absent in older records)
   counts: Partial<Record<Status, number>>;
   lint: LintFinding[];
+  delegation?: 'ok' | 'missing'; // organization mode: the delegation policy of the management account answered
 }

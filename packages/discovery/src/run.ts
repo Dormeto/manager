@@ -10,7 +10,7 @@ import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
 import { loadInventory, type OrganizationsPort } from './org.js';
 import type { DiscoveryStore } from './store.js';
 import { SYNTHETIC_REGIONS, isSynthetic, syntheticInventory, syntheticRules } from './synthetic.js';
-import type { AccountResult, Candidate, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
+import type { AccessRow, AccessState, AccessSummary, AccountResult, AccountScan, Candidate, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
 
 const HOUR_MS = 3_600_000;
 // A region without any rule in EMPTY_RUNS successive scans is scanned once every SKIP_RUNS + 1 runs.
@@ -33,6 +33,7 @@ export interface RunDeps {
   managerAccount: string;
   roleName?: string;
   assumeRole(account: string): Promise<unknown>; // credentials for the account's discovery role
+  assumeCommand?(account: string): Promise<unknown>; // the account's command role, only to check it (packaging design §3)
   enabledRegions(credentials: unknown): Promise<string[]>;
   scan(credentials: unknown, where: { account: string; region: string }): Promise<ScannedRule[]>;
   now?: () => number;
@@ -48,6 +49,7 @@ export interface RunPlan {
   trigger: 'schedule' | 'manual';
   by?: string;
   accounts: string[]; // to scan, one step each
+  delegation?: 'ok' | 'missing'; // organization mode: the delegation policy answered
   skipped: NonNullable<RunRecord['skipped']>; // accounts not scanned, per reason
   record?: RunRecord; // when skipped or failed
 }
@@ -64,6 +66,11 @@ async function pool<T>(items: T[], size: number, work: (item: T) => Promise<void
 }
 
 const errorText = (err: unknown) => `${(err as Error).name ?? 'Error'}: ${(err as Error).message ?? String(err)}`;
+// Organization access (packaging design §3): a refusal means the role (or policy) is absent or does not trust the manager.
+const denied = (err: unknown) => /^AccessDenied/.test((err as Error).name ?? '') || /not authorized|permissions to access/i.test((err as Error).message ?? '');
+const ACCESS_DENIED = 'access denied: the role is missing or does not trust the manager';
+const ORGANIZATION_ACCESS = 'organization access missing: the delegation policy of the management account (see the Organization access page)';
+const accessOf = (err: unknown): AccessState => ({ ok: false, reason: denied(err) ? ACCESS_DENIED : errorText(err) });
 
 const usesAccountTags = (config: DiscoveryConfig) =>
   [...config.globalExcludes, ...config.filters.flatMap((f) => [...f.include, ...f.exclude])].some((c) => c.accountTags !== undefined);
@@ -138,17 +145,32 @@ export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manu
   }
   try {
     if (!deps.synthetic?.accounts) await deleteSynthetic(deps);
-    const inventory = await inventoryOf(deps, config);
+    let inventory: OrgInventory;
+    try {
+      inventory = await inventoryOf(deps, config);
+    } catch (err) {
+      // Without the delegation policy, organization mode cannot list the accounts.
+      if (config.mode === 'organization' && denied(err)) throw Object.assign(new Error(ORGANIZATION_ACCESS), { delegation: 'missing' as const });
+      throw err;
+    }
+    const delegation = config.mode === 'organization' ? { delegation: 'ok' as const } : {};
     await deps.store.putInventory(inventory);
     const plans = scanAccounts(config, inventory);
     const pairsOf = config.regions.includes('*') ? 1 : config.regions.length;
     const skipped = bySkipReason(plans.filter((p) => !p.scan).map((p) => ({ account: p.account, reason: p.reason, pairs: pairsOf })));
     const accounts = plans.filter((p) => p.scan).map((p) => p.account);
-    await deps.store.putRun(record({ status: 'running', finishedAt: runId, skipped }));
+    await deps.store.putRun(record({ status: 'running', finishedAt: runId, skipped, ...delegation }));
     log.info('DiscoveryPlanned', { runId, accounts: accounts.length });
-    return { runId, status: 'planned', ...who, accounts, skipped };
+    return { runId, status: 'planned', ...who, accounts, skipped, ...delegation };
   } catch (err) {
-    const failed = record({ status: 'failed', error: errorText(err) });
+    const missing = (err as { delegation?: 'missing' }).delegation;
+    const failed = record({ status: 'failed', error: missing ? ORGANIZATION_ACCESS : errorText(err), ...(missing ? { delegation: missing } : {}) });
+    // The Organization access panel says so at once, with the accounts of the last complete run.
+    if (missing) {
+      const prior = await deps.store.getAccess().catch(() => null);
+      await deps.store.putAccess({ counts: { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 }, accounts: [], ...prior, delegation: missing, checkedAt: runId })
+        .catch((e) => log.warn('AccessNotStored', { error: errorText(e) }));
+    }
     log.error('DiscoveryRunFailed', { error: failed.error });
     await deps.store.putRun(failed);
     await deps.store.releaseLock(runId);
@@ -179,15 +201,22 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
   const synthetic = isSynthetic(account);
 
   let credentials: unknown = null;
+  let discoveryAccess: AccessState = { ok: true };
   let error: string | undefined;
   let enabled: string[] = [];
   try {
     if (!synthetic) credentials = await deps.assumeRole(account);
     if (allRegions) enabled = synthetic ? SYNTHETIC_REGIONS : await deps.enabledRegions(credentials);
   } catch (err) {
-    const denied = (err as Error).name === 'AccessDenied' || /not authorized/i.test((err as Error).message ?? '');
-    error = denied ? `no access: deploy ${deps.roleName ?? 'DmtDiscoveryRole'} to this account` : `assume role failed: ${errorText(err)}`;
+    discoveryAccess = credentials ? { ok: true } : accessOf(err);
+    error = denied(err) ? `no access: deploy ${deps.roleName ?? 'DmtDiscoveryRole'} to this account` : `assume role failed: ${errorText(err)}`;
     log.warn('DiscoveryAccountFailed', { account, error });
+  }
+  // The command role, only assumed: onboarding, router installs and forwarders need it (packaging design §3).
+  let access: AccountScan['access'];
+  if (!synthetic && deps.assumeCommand) {
+    const command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), accessOf);
+    access = { discovery: discoveryAccess, command, checkedAt: at };
   }
 
   const regions = { ...(state?.regions ?? {}) };
@@ -263,8 +292,31 @@ export async function scanAccount(deps: RunDeps, { runId, account }: { runId: st
     lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
     written: changed.length,
   };
-  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}) });
+  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}), ...(access ? { access } : {}) });
   return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+}
+
+// Organization access of a run's accounts (packaging design §3): counted, those not ready listed; an account without a
+// check in this run (a synthetic one, or a step that did not finish) is unchecked.
+function accessSummary(plan: RunPlan, scans: AccountScan[], inventory: OrgInventory, at: string): AccessSummary {
+  const byAccount = new Map(scans.filter((s) => s.access).map((s) => [s.account, s.access!]));
+  const counts = { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 };
+  const accounts: AccessRow[] = [];
+  for (const account of [...plan.accounts].sort()) {
+    const access = byAccount.get(account);
+    if (!access) {
+      counts.unchecked += 1;
+      continue;
+    }
+    if (access.discovery.ok && access.command.ok) {
+      counts.ready += 1;
+      continue;
+    }
+    if (!access.discovery.ok) counts.discoveryMissing += 1;
+    if (!access.command.ok) counts.commandMissing += 1;
+    accounts.push({ account, name: inventory.accounts.find((a) => a.id === account)?.name ?? account, discovery: access.discovery, command: access.command });
+  }
+  return { counts, accounts, delegation: plan.delegation ?? null, checkedAt: at };
 }
 
 // The end of a run: the candidates of accounts that left the perimeter decided again (once), the run record from the
@@ -291,7 +343,8 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
       await deps.store.putAccountScan({ ...left, retiredAt: plan.runId });
     }
 
-    const results = new Map((await deps.store.getAccountScans(plan.accounts)).filter((s) => s.runId === plan.runId && s.result).map((s) => [s.account, s.result!]));
+    const ofRun = (await deps.store.getAccountScans(plan.accounts)).filter((s) => s.runId === plan.runId);
+    const results = new Map(ofRun.filter((s) => s.result).map((s) => [s.account, s.result!]));
     const targets: RunTarget[] = [];
     const skippedPairs: { account: string; reason: string; pairs: number }[] = [];
     const counters: LintCounters[] = [];
@@ -318,9 +371,11 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const record: RunRecord = {
       startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,
       counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),
+      ...(plan.delegation ? { delegation: plan.delegation } : {}),
     };
     await deps.store.putRun(record);
     await deps.store.putCounts(record.counts);
+    await deps.store.putAccess(accessSummary(plan, ofRun, inventory, iso(now())));
     log.info('DiscoveryRun', { status, accounts: plan.accounts.length, errors, counts: record.counts });
     return record;
   } catch (err) {

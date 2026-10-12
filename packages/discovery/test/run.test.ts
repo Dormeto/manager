@@ -156,7 +156,8 @@ describe('runDiscovery', () => {
     await s.ready;
     s.deps.organizations = { ...s.org.port, listRoots: async () => { throw Object.assign(new Error('no delegation'), { name: 'AccessDeniedException' }); } };
     const run = await runDiscovery(s.deps, { source: 'manual' });
-    expect([run.status, run.error]).toEqual(['failed', 'AccessDeniedException: no delegation']);
+    // Explained (packaging design §3): organization mode needs the delegation policy.
+    expect([run.status, run.error]).toEqual(['failed', 'organization access missing: the delegation policy of the management account (see the Organization access page)']);
     expect(await s.store.acquireLock('next')).toBe(true);
   });
 

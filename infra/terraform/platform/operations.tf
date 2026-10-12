@@ -161,8 +161,8 @@ resource "aws_sfn_state_machine" "operations" {
   role_arn = aws_iam_role.workflow.arn
   type     = "STANDARD"
   definition = jsonencode({
-    Comment        = "Dormeto operation: the next step until done, waiting as each step asks"
-    StartAt        = "Next"
+    Comment = "Dormeto operation: the next step until done, waiting as each step asks"
+    StartAt = "Next"
     # Slot waits end 24 hours after the operation started (engine.ts SLOT_WAIT_MAX); the steps after them fit in the hour left.
     TimeoutSeconds = 25 * 3600
     States = {
