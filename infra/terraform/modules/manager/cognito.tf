@@ -29,7 +29,7 @@ resource "aws_cognito_user_pool" "main" {
   name                     = local.name
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
-  mfa_configuration        = "OPTIONAL"
+  mfa_configuration        = var.mfa == "required" ? "ON" : "OPTIONAL"
   user_pool_tier           = "ESSENTIALS"
   deletion_protection      = var.deletion_protection ? "ACTIVE" : "INACTIVE"
 
@@ -89,16 +89,17 @@ resource "aws_cognito_user_pool_client" "dashboard" {
   generate_secret                      = false
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
-  allowed_oauth_scopes                 = ["openid", "email", "profile"]
-  supported_identity_providers         = ["COGNITO"]
-  callback_urls                        = concat(["https://${local.dashboard_host}/callback"], local.local_callbacks)
-  logout_urls                          = concat(["https://${local.dashboard_host}/"], local.local_logouts)
-  explicit_auth_flows                  = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
-  prevent_user_existence_errors        = "ENABLED"
-  enable_token_revocation              = true
-  access_token_validity                = 1
-  id_token_validity                    = 1
-  refresh_token_validity               = 12
+  # aws.cognito.signin.user.admin: the user sets up their own authenticator from the Account page (R6c).
+  allowed_oauth_scopes          = ["openid", "email", "profile", "aws.cognito.signin.user.admin"]
+  supported_identity_providers  = ["COGNITO"]
+  callback_urls                 = concat(["https://${local.dashboard_host}/callback"], local.local_callbacks)
+  logout_urls                   = concat(["https://${local.dashboard_host}/"], local.local_logouts)
+  explicit_auth_flows           = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+  prevent_user_existence_errors = "ENABLED"
+  enable_token_revocation       = true
+  access_token_validity         = 1
+  id_token_validity             = 1
+  refresh_token_validity        = 12
 
   token_validity_units {
     access_token  = "hours"
@@ -213,4 +214,17 @@ resource "aws_ssm_parameter" "smoke" {
     username = aws_cognito_user.smoke[0].username
     password = random_password.smoke[0].result
   })
+}
+
+# The smoke user's authenticator secret (R6c): written by the smoke script when it enrolls the user ("none" until then),
+# removed with the module.
+resource "aws_ssm_parameter" "smoke_totp" {
+  count = var.smoke_user ? 1 : 0
+  name  = "/dmt-${var.env}/manager/smoke-totp"
+  type  = "SecureString"
+  value = "none"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 }

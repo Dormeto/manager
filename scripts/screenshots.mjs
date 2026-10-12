@@ -10,8 +10,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CognitoIdentityProviderClient, InitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
-import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
+import { smokeTokens } from './smoke-signin.mjs';
 import { fromIni } from '@aws-sdk/credential-providers';
 import { exampleAccount, identifiers, maskText } from './mask.mjs';
 
@@ -38,15 +37,12 @@ const region = 'eu-west-1';
 const credentials = fromIni({ profile: process.env.AWS_PROFILE ?? 'kloudy-dormeto-prd' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const smoke = JSON.parse((await new SSMClient({ region, credentials }).send(new GetParameterCommand({ Name: `/dmt-${env}/manager/smoke`, WithDecryption: true }))).Parameter.Value);
-const tokens = (await new CognitoIdentityProviderClient({ region, credentials }).send(new InitiateAuthCommand({
-  ClientId: smoke.clientId, AuthFlow: 'USER_PASSWORD_AUTH', AuthParameters: { USERNAME: smoke.username, PASSWORD: smoke.password },
-}))).AuthenticationResult;
+const { tokens } = await smokeTokens({ env, region, credentials });
 const config = await (await fetch(`${base}/config.json`)).json();
 const profile = JSON.parse(Buffer.from(tokens.IdToken.split('.')[1], 'base64url').toString());
 const user = {
   id_token: tokens.IdToken, access_token: tokens.AccessToken, refresh_token: tokens.RefreshToken, token_type: 'Bearer',
-  scope: 'openid email profile', profile, expires_at: Math.floor(Date.now() / 1000) + tokens.ExpiresIn,
+  scope: 'openid email profile aws.cognito.signin.user.admin', profile, expires_at: Math.floor(Date.now() / 1000) + tokens.ExpiresIn,
 };
 
 const port = 9333;

@@ -61,6 +61,16 @@ variable "ip_lists" {
   }
 }
 
+variable "mfa" {
+  description = "The MFA policy (two-step verification with an authenticator app, set up from the dashboard's Account page): optional (any user may turn it on); operators (administrators and operators must use it, viewer rights until they do); required (everyone: managed login asks for it at sign-in, the API refuses without it)."
+  type        = string
+  default     = "operators"
+  validation {
+    condition     = contains(["optional", "operators", "required"], var.mfa)
+    error_message = "mfa must be optional, operators or required."
+  }
+}
+
 variable "domain" {
   description = "A custom domain: the dashboard host, the sign-in host under it (auth.<dashboard>), their certificate in us-east-1 (both names), and optionally the Route 53 zone where the records are created. Null: CloudFront's and Cognito's own domains."
   type = object({

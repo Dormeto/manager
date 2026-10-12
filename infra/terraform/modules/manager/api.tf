@@ -88,6 +88,8 @@ data "aws_iam_policy_document" "api" {
       "cognito-idp:ListUsers", "cognito-idp:ListUsersInGroup", "cognito-idp:AdminCreateUser",
       "cognito-idp:AdminAddUserToGroup", "cognito-idp:AdminRemoveUserFromGroup", "cognito-idp:AdminDisableUser",
       "cognito-idp:AdminEnableUser", "cognito-idp:AdminGetUser",
+      # The MFA policy (R6c): a user's reset by an administrator.
+      "cognito-idp:AdminSetUserMFAPreference", "cognito-idp:AdminDeleteSoftwareToken",
     ]
     resources = [aws_cognito_user_pool.main.arn]
   }
@@ -165,6 +167,7 @@ resource "aws_lambda_function" "api" {
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
       ALERTS_TOPIC            = aws_sns_topic.alerts.arn
       LISTS_BUCKET            = aws_s3_bucket.lists.id
+      MFA_MODE                = var.mfa
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name
       COMMAND_ROLE   = var.command_role_name

@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Smoke test of a deployed manager: signs in as the smoke user (dev only) and checks the API through CloudFront,
 // as the dashboard calls it. Usage: node scripts/smoke.mjs [--env dev] [--wake <router>/<workload>]
-import { CognitoIdentityProviderClient, InitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
-import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { fromIni } from '@aws-sdk/credential-providers';
+import { smokeTokens } from './smoke-signin.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -28,11 +27,9 @@ async function call(path, { token, method = 'GET' } = {}) {
   return { status: res.status, body, ms: Math.round(performance.now() - started) };
 }
 
-const smoke = JSON.parse((await new SSMClient({ region, credentials }).send(new GetParameterCommand({ Name: `/dmt-${env}/manager/smoke`, WithDecryption: true }))).Parameter.Value);
-const auth = await new CognitoIdentityProviderClient({ region, credentials }).send(new InitiateAuthCommand({
-  ClientId: smoke.clientId, AuthFlow: 'USER_PASSWORD_AUTH', AuthParameters: { USERNAME: smoke.username, PASSWORD: smoke.password },
-}));
-const token = auth.AuthenticationResult.IdToken;
+// Its password, then its authenticator's code (the MFA policy, R6c): enrolled at its first run.
+const { smoke, tokens } = await smokeTokens({ env, region, credentials });
+const token = tokens.IdToken;
 console.log(`Manager ${base} · signed in as ${smoke.username}`);
 
 const health = await call('/health');
@@ -41,6 +38,8 @@ const anonymous = await call('/workloads');
 check(anonymous.status === 401, 'workloads without token are refused', String(anonymous.status));
 const me = await call('/me', { token });
 check(me.status === 200 && me.body?.role === 'admin', 'identity and role', `${me.body?.email} ${me.body?.role}`);
+// The MFA policy (R6c): an administrator acts as one once their authenticator is set up.
+check(me.body?.effectiveRole === 'admin', 'acting as admin', `MFA ${me.body?.mfa?.mode ?? '—'}, ${me.body?.mfa?.enabled ? 'on' : 'off'}`);
 const routers = await call('/routers', { token });
 check(routers.status === 200 && routers.body?.routers?.every((r) => !r.error), 'routers reachable', (routers.body?.routers ?? []).map((r) => `${r.name} ${r.version} (${r.workloads})`).join(', '));
 const workloads = await call('/workloads', { token });

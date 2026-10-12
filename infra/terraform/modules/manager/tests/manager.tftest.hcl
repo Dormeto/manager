@@ -281,3 +281,43 @@ run "ip_lists_are_validated" {
   }
   expect_failures = [var.ip_lists]
 }
+
+# The MFA policy (R6c): operators by default (the user pool optional, the API enforces it for administrators and
+# operators); required turns the user pool's MFA on; the dashboard may set up the user's own authenticator.
+run "mfa_operators_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_cognito_user_pool.main.mfa_configuration == "OPTIONAL" && aws_lambda_function.api.environment[0].variables.MFA_MODE == "operators"
+    error_message = "By default the user pool's MFA is optional and the API enforces it for administrators and operators."
+  }
+  assert {
+    condition     = contains(aws_cognito_user_pool_client.dashboard.allowed_oauth_scopes, "aws.cognito.signin.user.admin")
+    error_message = "The dashboard's access token may set up the user's own authenticator."
+  }
+  assert {
+    condition     = length(setsubtract(["cognito-idp:AdminSetUserMFAPreference", "cognito-idp:AdminDeleteSoftwareToken"], flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "Users"]))) == 0
+    error_message = "An administrator resets another user's MFA through the API."
+  }
+}
+
+run "mfa_required" {
+  command = plan
+
+  variables {
+    mfa = "required"
+  }
+  assert {
+    condition     = aws_cognito_user_pool.main.mfa_configuration == "ON" && aws_lambda_function.api.environment[0].variables.MFA_MODE == "required"
+    error_message = "required: managed login asks everyone for an authenticator."
+  }
+}
+
+run "mfa_is_validated" {
+  command = plan
+
+  variables {
+    mfa = "sometimes"
+  }
+  expect_failures = [var.mfa]
+}
