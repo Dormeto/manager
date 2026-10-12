@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessLine, countsLine, forwardersLine, PROCEDURE_URL, procedureLink } from '../src/access';
+import { accessLine, countsLine, forwardersLine, onboardRefusal, PROCEDURE_URL, procedureLink } from '../src/access';
 
 const DENIED = 'access denied: the role is missing or does not trust the manager';
 const row = (discovery: boolean, command: boolean) => ({
@@ -14,6 +14,14 @@ describe('organization access', () => {
     expect(accessLine(row(true, false))).toBe(`no command role (${DENIED}): onboarding and router installs are refused`);
     expect(accessLine(row(false, false))).toBe(`no discovery role, no command role (${DENIED}): the account is not scanned, onboarding and router installs are refused`);
   });
+  it('says why onboarding is not possible in an account, before trying: discovery only, or the command role missing', () => {
+    const report = { counts: { ready: 0, discoveryMissing: 0, commandMissing: 1, unchecked: 0 }, accounts: [row(true, false)], cursor: null, delegation: 'ok' as const, checkedAt: null, discoveryOnly: ['333333333333'] };
+    expect(onboardRefusal(report, '333333333333')).toBe('Its account is set up for discovery only (no command role): onboarding is not possible there.');
+    expect(onboardRefusal(report, '222222222222')).toBe(`Its account has no command role: ${DENIED}. See Organization access.`);
+    expect(onboardRefusal(report, '111111111111')).toBeNull();
+    expect(onboardRefusal(null, '222222222222')).toBeNull();
+  });
+
   it('counts the accounts ready, missing a role, set up for discovery only, or not checked yet', () => {
     expect(countsLine({ ready: 3, discoveryMissing: 0, commandMissing: 0, unchecked: 0 })).toBe('3 ready.');
     expect(countsLine({ ready: 3, discoveryMissing: 1, commandMissing: 2, discoveryOnly: 4, unchecked: 1 }))

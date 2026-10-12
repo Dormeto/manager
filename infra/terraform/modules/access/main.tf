@@ -45,7 +45,7 @@ variable "command_role_name" {
 }
 
 variable "create_command_role" {
-  description = "Create the command role and its boundary (false where they exist already, as in the manager's account)."
+  description = "False: an account discovered but never napped (no command role, no boundary); its discovery role is then tagged dormeto:command-role = none, and the manager counts it as discovery only."
   type        = bool
   default     = true
 }

@@ -22,6 +22,7 @@ function setup({ visible, discoveryOnly = false }: { visible?: (identity: unknow
   const summary: AccessSummary = {
     counts: { ready: 1, discoveryMissing: 0, commandMissing: 2, unchecked: 1 }, accounts: [row(NO_COMMAND, false), row('444444444444', false)], delegation: 'ok', checkedAt: new Date(NOW).toISOString(),
     forwarders: { connected: 1, connecting: 0, impossible: [{ account: NO_COMMAND, name: 'shop', reason: 'no command role' }], failed: [{ account: '444444444444', name: 'data', reason: 'AccessDenied' }] },
+    discoveryOnly: [NO_COMMAND, '555555555555'],
   };
   const pages: { cursor?: string; limit: number }[] = [];
   store.accessReport = async (page) => {
@@ -60,6 +61,7 @@ describe('organization access', () => {
     // The forwarders' accounts too (R5c review I6).
     const forwarders = json(await hidden.api(event('GET', '/api/discovery/access'))).forwarders;
     expect([forwarders.impossible, forwarders.failed.map((f: { account: string }) => f.account)]).toEqual([[], ['444444444444']]);
+    expect(json(await hidden.api(event('GET', '/api/discovery/access'))).discoveryOnly).toEqual(['555555555555']);
     const none = setup({ visible: () => false });
     expect(json(await none.api(event('GET', '/api/discovery/access'))).forwarders).toMatchObject({ impossible: [], failed: [] });
   });

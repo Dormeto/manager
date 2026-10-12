@@ -98,7 +98,24 @@ describe('organization access', () => {
     const summary = (await s.store.getAccess())!;
     expect(summary.counts).toEqual({ ready: 1, discoveryMissing: 0, commandMissing: 1, discoveryOnly: 1, unchecked: 0 });
     expect(summary.accounts.map((a) => a.account)).toEqual([C.id]);
+    // By id, so that the Discovery view says why Onboard is not possible (review of 4e1ee10, item 1).
+    expect(summary.discoveryOnly).toEqual([B.id]);
     expect(summary.forwarders!.impossible.map((f) => f.account)).toEqual([C.id]);
     expect(run.connections!.connect.map((c) => c.account)).toEqual([A.id]);
+  });
+
+  it('a tag read that does not answer is no verdict: a discovery-only account stays so; refused, the account is not tagged', async () => {
+    const s = setup({ cfg: ALL, regions: ['eu-west-1'], denyCommand: [B.id, C.id], discoveryOnly: [B.id, C.id] });
+    await s.ready;
+    await runDiscovery(s.deps, { source: 'manual' });
+    expect((await s.store.getAccess())!.discoveryOnly).toEqual([B.id, C.id]);
+    const again = setup({ cfg: ALL, regions: ['eu-west-1'], denyCommand: [B.id, C.id], discoveryOnlyErrors: { [B.id]: 'Throttling', [C.id]: 'AccessDenied' } });
+    // The same store: the previous run's verdicts.
+    again.deps.store = s.store;
+    s.advance(60_000);
+    again.deps.now = () => Date.parse('2026-10-04T13:00:00.000Z');
+    await runDiscovery(again.deps, { source: 'manual' });
+    expect((await s.store.getAccountScan(B.id))!.access!.command).toMatchObject({ discoveryOnly: true });
+    expect((await s.store.getAccountScan(C.id))!.access!.command).toEqual({ ok: false, reason: DENIED });
   });
 });

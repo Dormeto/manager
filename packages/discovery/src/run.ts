@@ -225,9 +225,18 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   if (!only && !synthetic && deps.assumeCommand) {
     // A check that does not answer is no verdict: the last one stands (none: the account stays unchecked).
     let command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? state?.access?.command : accessOf(err)));
-    // Refused: an account set up for discovery only says so on its discovery role.
-    if (command && !command.ok && !command.discoveryOnly && credentials && deps.discoveryOnly && (await deps.discoveryOnly(credentials).catch(() => false))) {
-      command = { ok: false, reason: DISCOVERY_ONLY, discoveryOnly: true };
+    // Refused: an account set up for discovery only says so on its discovery role. A read refused means no such role
+    // (a role given otherwise, or the access not applied again yet); a read that does not answer is no verdict.
+    if (command && !command.ok && !command.discoveryOnly && credentials && deps.discoveryOnly) {
+      const declared = await deps.discoveryOnly(credentials).catch((err) => {
+        if (denied(err)) {
+          log.info('DiscoveryRoleUnreadable', { account, error: errorText(err) });
+          return false;
+        }
+        log.warn('DiscoveryRoleNotRead', { account, error: errorText(err) });
+        return state?.access?.command.ok === false && state.access.command.discoveryOnly === true;
+      });
+      if (declared) command = { ok: false, reason: DISCOVERY_ONLY, discoveryOnly: true };
     }
     if (command) access = { discovery: discoveryAccess, command, checkedAt: at };
     else log.warn('AccessCheckUnavailable', { account });
@@ -436,6 +445,7 @@ async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPl
 function accessSummary(plan: RunPlan, scans: AccountScan[], inventory: OrgInventory, at: string): AccessSummary {
   const byAccount = new Map(scans.filter((s) => s.access).map((s) => [s.account, s.access!]));
   const counts: AccessSummary['counts'] = { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 };
+  const discoveryOnly: string[] = [];
   const accounts: AccessRow[] = [];
   for (const account of [...plan.accounts].sort()) {
     const access = byAccount.get(account);
@@ -449,13 +459,14 @@ function accessSummary(plan: RunPlan, scans: AccountScan[], inventory: OrgInvent
     }
     if (access.discovery.ok && !access.command.ok && access.command.discoveryOnly) {
       counts.discoveryOnly = (counts.discoveryOnly ?? 0) + 1;
+      discoveryOnly.push(account);
       continue;
     }
     if (!access.discovery.ok) counts.discoveryMissing += 1;
     if (!access.command.ok) counts.commandMissing += 1;
     accounts.push({ account, name: inventory.accounts.find((a) => a.id === account)?.name ?? account, discovery: access.discovery, command: access.command });
   }
-  return { counts, accounts, delegation: plan.delegation ?? null, checkedAt: at };
+  return { counts, accounts, delegation: plan.delegation ?? null, checkedAt: at, ...(discoveryOnly.length ? { discoveryOnly } : {}) };
 }
 
 // The end of a run: the candidates of accounts that left the perimeter decided again (once), the run record from the

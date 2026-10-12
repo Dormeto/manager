@@ -686,7 +686,10 @@ export function createApi({
         impossible: report.forwarders.impossible.filter((f) => sees(identity, f.account, '')),
         failed: (report.forwarders.failed ?? []).filter((f) => sees(identity, f.account, '')),
       };
-      return reply(200, { ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')), ...(forwarders ? { forwarders } : {}) });
+      return reply(200, {
+        ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')), ...(forwarders ? { forwarders } : {}),
+        ...(report.discoveryOnly ? { discoveryOnly: report.discoveryOnly.filter((account) => sees(identity, account, '')) } : {}),
+      });
     }
     if (method === 'GET' && sub === 'candidates') {
       const q = event.queryStringParameters ?? {};

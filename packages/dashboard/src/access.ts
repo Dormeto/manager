@@ -18,6 +18,7 @@ export interface AccessReport {
   checkedAt: string | null;
   // Event-driven refresh on (packaging design §5).
   forwarders?: Forwarders;
+  discoveryOnly?: string[];
 }
 
 export interface Forwarders {
@@ -38,6 +39,14 @@ export function forwardersLine(f: Forwarders | undefined): string | null {
 
 // The website's page, with the roles' Terraform modules and AWS CLI commands.
 export const PROCEDURE_URL = 'https://dormeto.com/organization-access.html';
+
+// Why onboarding is refused in an account (the API refuses it too): said before trying. Null: let through.
+export function onboardRefusal(report: AccessReport | null, account: string | undefined): string | null {
+  if (!report || !account) return null;
+  if (report.discoveryOnly?.includes(account)) return 'Its account is set up for discovery only (no command role): onboarding is not possible there.';
+  const row = report.accounts.find((a) => a.account === account && !a.command.ok);
+  return row && !row.command.ok ? `Its account has no command role: ${row.command.reason}. See Organization access.` : null;
+}
 
 export function countsLine(c: AccessReport['counts']): string {
   const parts = [`${c.ready} ready`, ...(c.discoveryMissing ? [`${c.discoveryMissing} without the discovery role`] : []), ...(c.commandMissing ? [`${c.commandMissing} without the command role`] : []),

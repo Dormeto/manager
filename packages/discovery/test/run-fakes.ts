@@ -25,9 +25,9 @@ export function organizationsOf(inventory: OrgInventory) {
 // deny: accounts refusing the discovery role; denyCommand: accounts refusing the command role (packaging design §3).
 // trails: the regions of each account a CloudTrail trail covers (absent: none); 'denied' when the role cannot read them.
 // discoveryOnly: accounts whose discovery role is tagged dormeto:command-role = none (set up without the command role).
-export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false, trails = {}, discoveryOnly = [] }: {
+export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false, trails = {}, discoveryOnly = [], discoveryOnlyErrors = {} }: {
   cfg?: DiscoveryConfig; deny?: string[]; denyCommand?: string[]; failScan?: string[]; regions?: string[]; delayMs?: number; laggingIndex?: boolean;
-  trails?: Record<string, string[] | 'denied'>; discoveryOnly?: string[];
+  trails?: Record<string, string[] | 'denied'>; discoveryOnly?: string[]; discoveryOnlyErrors?: Record<string, string>;
 } = {}) {
   const dynamo = fakeDynamo({ laggingIndex });
   let now = T0;
@@ -57,6 +57,7 @@ export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions
     async discoveryOnly(credentials) {
       const account = (credentials as { account: string }).account;
       roleReads.push(account);
+      if (discoveryOnlyErrors[account]) throw Object.assign(new Error(`${discoveryOnlyErrors[account]} reading the role`), { name: discoveryOnlyErrors[account] });
       return discoveryOnly.includes(account);
     },
     async trails(credentials, region) {

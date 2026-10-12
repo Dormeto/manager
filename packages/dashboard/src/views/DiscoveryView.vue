@@ -11,7 +11,7 @@ import OnboardDialog from '../components/OnboardDialog.vue';
 import type { RouterInfo } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import OrganizationAccess from '../components/OrganizationAccess.vue';
-import type { AccessReport } from '../access';
+import { onboardRefusal, type AccessReport } from '../access';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
 import { STATUSES, cursorPages, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
@@ -196,8 +196,9 @@ async function lift(e: Exclusion) {
 // Onboarding and offboarding: operations run by the workflow (Operations view).
 const single = computed(() => (selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined));
 const onboardable = computed(() => single.value?.status === 'pending-onboarding');
-// Refused by the API where the last run found the account's command role missing: said here, before trying.
-const noCommand = computed(() => access.value?.accounts.find((a) => a.account === single.value?.account && !a.command.ok) ?? null);
+// Refused by the API where the last run found the account's command role missing, or the account set up for discovery
+// only: said here, before trying.
+const noCommand = computed(() => onboardRefusal(access.value, single.value?.account));
 const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status));
 
 async function startOperation(body: Record<string, unknown>, what: string) {
@@ -298,7 +299,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
     </v-chip-group>
     <v-spacer />
     <template v-if="session.canOperate && selected.length">
-      <v-tooltip v-if="onboardable && noCommand" location="top" max-width="380" :text="`Its account has no command role: ${noCommand.command.ok ? '' : noCommand.command.reason}. See Organization access.`">
+      <v-tooltip v-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
         <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
       </v-tooltip>
       <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="tonal" @click="onboardOpen = true">Onboard…</v-btn>

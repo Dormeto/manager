@@ -195,6 +195,8 @@ export interface AccessSummary {
   // one is not possible, with the reason.
   // failed: a connect or disconnect that failed within the last day (not created again until then), with its error.
   forwarders?: { connected: number; connecting: number; impossible: { account: string; name: string; reason: string }[]; failed?: { account: string; name: string; reason: string }[] };
+  // The accounts set up for discovery only, by id: the Discovery view says why Onboard is not possible there.
+  discoveryOnly?: string[];
 }
 
 export interface AccessReport extends AccessSummary {
