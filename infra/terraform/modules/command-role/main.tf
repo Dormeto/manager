@@ -1,7 +1,8 @@
 # DmtCommandRole and DmtRouterBoundary in one account (vision docs/specs/2026-10-05-onboarding-design.md, R4b): the
-# manager's operations assume the role to install, upgrade and remove routers by API calls. Every role it creates must carry
-# the boundary; it changes and deletes only resources tagged dormeto:router (what it installed), never a router written by
-# Terraform; it invokes any dmt-* function (onboarding through any router).
+# manager's operations assume the role to install, upgrade and remove routers by API calls. Installed routers are named
+# dmtr-<env> with roles under /dormeto/router/: the role reaches that namespace only, never a router written in Terraform
+# (dmt-<env>) nor the manager (dmt-<env>-manager); every role it creates carries the boundary. It invokes the controllers
+# and onboarders of every router (onboarding through a router written in Terraform).
 terraform {
   required_providers {
     aws = { source = "hashicorp/aws" }
@@ -24,7 +25,7 @@ data "aws_partition" "current" {}
 locals {
   account  = data.aws_caller_identity.current.account_id
   arn      = "arn:${data.aws_partition.current.partition}"
-  roles    = "${local.arn}:iam::${local.account}:role/dmt-*"
+  roles    = "${local.arn}:iam::${local.account}:role/dormeto/router/*"
   boundary = "${local.arn}:iam::${local.account}:policy/DmtRouterBoundary"
 }
 
@@ -63,29 +64,9 @@ data "aws_iam_policy_document" "command" {
     }
   }
   statement {
-    sid       = "RouterRolesRead"
-    actions   = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies"]
+    sid       = "RouterRoles"
+    actions   = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:DeleteRole"]
     resources = [local.roles]
-  }
-  statement {
-    sid       = "RouterRolesTag"
-    actions   = ["iam:TagRole"]
-    resources = [local.roles]
-    condition {
-      test     = "Null"
-      variable = "aws:RequestTag/dormeto:router"
-      values   = ["false"]
-    }
-  }
-  statement {
-    sid       = "RouterRolesInstalled"
-    actions   = ["iam:UpdateAssumeRolePolicy", "iam:DeleteRole"]
-    resources = [local.roles]
-    condition {
-      test     = "Null"
-      variable = "iam:ResourceTag/dormeto:router"
-      values   = ["false"]
-    }
   }
   statement {
     sid       = "PassRouterRoles"
@@ -98,64 +79,33 @@ data "aws_iam_policy_document" "command" {
     }
   }
   statement {
-    sid       = "RouterFunctionsCreate"
-    actions   = ["lambda:CreateFunction", "lambda:TagResource"]
-    resources = ["${local.arn}:lambda:*:${local.account}:function:dmt-*"]
-    condition {
-      test     = "Null"
-      variable = "aws:RequestTag/dormeto:router"
-      values   = ["false"]
-    }
+    sid = "RouterFunctions"
+    actions = [
+      "lambda:CreateFunction", "lambda:TagResource", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration", "lambda:GetFunctionEventInvokeConfig", "lambda:PutFunctionEventInvokeConfig", "lambda:GetPolicy",
+      "lambda:AddPermission", "lambda:DeleteFunction", "lambda:InvokeFunction",
+    ]
+    resources = ["${local.arn}:lambda:*:${local.account}:function:dmtr-*"]
   }
   statement {
-    sid       = "RouterFunctionsInstalled"
-    actions   = ["lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:PutFunctionEventInvokeConfig", "lambda:AddPermission", "lambda:DeleteFunction"]
-    resources = ["${local.arn}:lambda:*:${local.account}:function:dmt-*"]
-    condition {
-      test     = "Null"
-      variable = "aws:ResourceTag/dormeto:router"
-      values   = ["false"]
-    }
-  }
-  statement {
-    sid       = "RouterFunctionsReadInvoke"
-    actions   = ["lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:GetFunctionEventInvokeConfig", "lambda:GetPolicy", "lambda:InvokeFunction"]
-    resources = ["${local.arn}:lambda:*:${local.account}:function:dmt-*"]
+    sid       = "InvokeRouters"
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["${local.arn}:lambda:*:${local.account}:function:dmt-*-controller", "${local.arn}:lambda:*:${local.account}:function:dmt-*-onboarder"]
   }
   statement {
     sid       = "RouterTables"
-    actions   = ["dynamodb:CreateTable", "dynamodb:TagResource", "dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive", "dynamodb:DescribeContinuousBackups"]
-    resources = ["${local.arn}:dynamodb:*:${local.account}:table/dmt-*"]
-  }
-  statement {
-    sid       = "RouterTablesInstalled"
-    actions   = ["dynamodb:UpdateTimeToLive", "dynamodb:UpdateContinuousBackups", "dynamodb:DeleteTable"]
-    resources = ["${local.arn}:dynamodb:*:${local.account}:table/dmt-*"]
-    condition {
-      test     = "Null"
-      variable = "aws:ResourceTag/dormeto:router"
-      values   = ["false"]
-    }
+    actions   = ["dynamodb:CreateTable", "dynamodb:TagResource", "dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive", "dynamodb:UpdateTimeToLive", "dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups", "dynamodb:DeleteTable"]
+    resources = ["${local.arn}:dynamodb:*:${local.account}:table/dmtr-*"]
   }
   statement {
     sid       = "RouterQueues"
-    actions   = ["sqs:CreateQueue", "sqs:TagQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes"]
-    resources = ["${local.arn}:sqs:*:${local.account}:dmt-*"]
-  }
-  statement {
-    sid       = "RouterQueuesInstalled"
-    actions   = ["sqs:DeleteQueue"]
-    resources = ["${local.arn}:sqs:*:${local.account}:dmt-*"]
-    condition {
-      test     = "Null"
-      variable = "aws:ResourceTag/dormeto:router"
-      values   = ["false"]
-    }
+    actions   = ["sqs:CreateQueue", "sqs:TagQueue", "sqs:GetQueueUrl", "sqs:GetQueueAttributes", "sqs:DeleteQueue"]
+    resources = ["${local.arn}:sqs:*:${local.account}:dmtr-*"]
   }
   statement {
     sid       = "RouterLogs"
     actions   = ["logs:CreateLogGroup", "logs:TagResource", "logs:TagLogGroup", "logs:PutRetentionPolicy", "logs:DeleteLogGroup"]
-    resources = ["${local.arn}:logs:*:${local.account}:log-group:/aws/lambda/dmt-*"]
+    resources = ["${local.arn}:logs:*:${local.account}:log-group:/aws/lambda/dmtr-*"]
   }
   statement {
     sid       = "DescribeLogGroups"
@@ -165,7 +115,7 @@ data "aws_iam_policy_document" "command" {
   statement {
     sid       = "RouterSchedules"
     actions   = ["scheduler:CreateSchedule", "scheduler:GetSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule"]
-    resources = ["${local.arn}:scheduler:*:${local.account}:schedule/default/dmt-*"]
+    resources = ["${local.arn}:scheduler:*:${local.account}:schedule/default/dmtr-*"]
   }
 }
 

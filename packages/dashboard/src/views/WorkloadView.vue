@@ -139,7 +139,7 @@ const summary = computed(() => {
       <v-btn v-if="ownPause" :prepend-icon="mdiPlay" variant="tonal" :disabled="acting" @click="change('resume')">Resume</v-btn>
       <v-btn v-else :prepend-icon="mdiPause" variant="tonal" :disabled="acting" @click="pauseOpen = true">Pause</v-btn>
       <v-btn v-if="!excluded && excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" :disabled="acting" @click="excludeOpen = true">Exclude</v-btn>
-      <v-btn :prepend-icon="mdiLogoutVariant" variant="tonal" :disabled="acting" @click="confirm = 'offboard'">Offboard</v-btn>
+      <v-btn v-if="status.source !== 'terraform'" :prepend-icon="mdiLogoutVariant" variant="tonal" :disabled="acting" @click="confirm = 'offboard'">Offboard</v-btn>
       <v-btn :prepend-icon="mdiPowerSleep" variant="tonal" :disabled="status.state !== 'AWAKE' || pauses.length > 0 || acting" @click="confirm = 'nap'">Nap</v-btn>
       <v-btn :prepend-icon="mdiWeatherSunny" color="primary" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state) || acting" @click="confirm = 'wake'">Wake</v-btn>
     </template>

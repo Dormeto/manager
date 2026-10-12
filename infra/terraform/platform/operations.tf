@@ -105,8 +105,9 @@ resource "aws_lambda_function" "operations" {
   handler          = "index.handler"
   filename         = data.archive_file.operations.output_path
   source_code_hash = data.archive_file.operations.output_base64sha256
-  # One step per invocation: the longest is a function create or code update (zip upload).
-  timeout     = 120
+  # One step per invocation: the longest are the onboarder's preview and onboard (300 s at most, it lists every Auto
+  # Scaling group and ECS service of the region), plus a margin.
+  timeout     = 360
   memory_size = 512
 
   environment {

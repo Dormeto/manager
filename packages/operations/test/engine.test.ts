@@ -33,13 +33,15 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
   const discovery = { getCandidate: async (id: string) => items.get(id) ?? null, putCandidates: async (list: Candidate[]) => { for (const c of list) items.set(c.id, c); } } as unknown as DiscoveryStore;
   // The router functions of the target account: onboarder and controller actions.
   const invocations: [string, Record<string, unknown>][] = [];
-  const router = { state: 'AWAKE', previewOk: true, workloads: 0 };
+  const router = { state: 'AWAKE', previewOk: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600 };
+  const invocationsPaused: Record<string, unknown>[] = [];
   const answers: Record<string, (p: Record<string, unknown>) => unknown> = {
     preview: () => (router.previewOk ? { ok: true, problems: [] } : { ok: false, problems: ['no backend: no instance, Auto Scaling group or ECS service feeds the target group'] }),
     onboard: (p) => ({ steps: [{ name: 'tag backends', status: 'done' }], workload: { workloadId: p.workloadId, wakerTargetGroupArn: 'arn:waker' } }),
     offboard: () => ({ steps: [{ name: 'restore rules', status: 'done' }] }),
-    status: () => ({ state: router.state, route: 'app', issues: [], targetGroupArn: TG, rules: [{ arn: RULE }], settings: { wakeTimeoutSeconds: 600 } }),
+    status: () => ({ state: router.state, source: router.source, route: 'app', issues: [], targetGroupArn: TG, rules: [{ arn: RULE }], settings: { wakeTimeoutSeconds: router.wakeTimeout } }),
     'force-wake': () => { router.state = 'WAKING'; return { state: 'WAKING' }; },
+    pause: (p) => { invocationsPaused.push(p); if (router.state === 'ASLEEP') router.state = 'WAKING'; return { pause: {}, woken: [] }; },
     list: () => ({ workloads: Array.from({ length: router.workloads }, (_, i) => ({ workloadId: `w${i}` })) }),
     router: () => ({ router: { name: 'dmt-dev', version: '0.17.0', build: '1d50494cac65' } }),
   };
@@ -51,6 +53,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
       installer: (options) => createInstaller(account.ports, options),
       invoke: async (functionArn, payload) => {
         invocations.push([functionArn, payload]);
+        if (router.controllerGone && functionArn.endsWith('-controller')) throw Object.assign(new Error(`Function not found: ${functionArn}`), { name: 'ResourceNotFoundException' });
         return answers[payload.action as string]!(payload);
       },
     }),
@@ -69,7 +72,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
     }
     throw new Error('the operation never finished');
   }
-  return { engine, records, account, invocations, router, items, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { engine, records, account, invocations, invocationsPaused, router, items, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 const DEV_ROUTER: RouterRef = {
@@ -105,10 +108,10 @@ describe('operations engine', () => {
     expect(stored.steps.filter((x) => x.name.startsWith('install ')).map((x) => x.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'done', 'done']);
     expect(stored.steps.find((x) => x.name === 'install functions')!.attempts).toBeGreaterThan(1);
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toMatchObject({
-      name: 'dmt-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmt-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmt-dev-onboarder`,
-      version: '0.17.0', build: '1d50494cac65', installedBy: 'ops@example.com',
+      name: 'dmtr-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`,
+      version: '0.18.2', build: 'c4e866ca4535', installedBy: 'ops@example.com',
     });
-    expect([...s.account.state.functions.keys()]).toEqual(['dmt-dev-controller', 'dmt-dev-waker', 'dmt-dev-onboarder']);
+    expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
   });
 
   it('a second request for the same target is a conflict naming the running operation', async () => {
@@ -155,10 +158,12 @@ describe('operations engine', () => {
     const result = await s.drive(op.id, { between: () => { if (s.router.state === 'WAKING' && (polls += 1) > 3) s.router.state = 'AWAKE'; } });
     expect(result).toEqual({ done: true, status: 'succeeded' });
     expect((await s.records.getOperation(op.id))!.steps.map((x) => [x.name, x.status])).toEqual([
-      ['locate', 'done'], ['lock load balancer', 'done'], ['slot', 'done'], ['wake', 'done'], ['wait awake', 'done'], ['offboard', 'done'], ['candidate', 'done'],
+      ['locate', 'done'], ['lock load balancer', 'done'], ['slot', 'done'], ['pause', 'done'], ['wait awake', 'done'], ['offboard', 'done'], ['candidate', 'done'],
     ]);
+    // Paused (it wakes an asleep workload): no nap can start while the instrumentation goes.
+    expect(s.invocationsPaused).toEqual([{ action: 'pause', workloadId: 'paris', by: 'ops', reason: 'offboarding', keepAsleep: false }]);
     const actions = s.invocations.map(([, p]) => p.action);
-    expect(actions.slice(0, 2)).toEqual(['status', 'force-wake']);
+    expect(actions.slice(0, 2)).toEqual(['status', 'pause']);
     expect(actions.at(-1)).toBe('offboard');
     expect(new Set(actions.slice(2, -1))).toEqual(new Set(['status']));
     expect(actions.length).toBeGreaterThan(4);
@@ -173,7 +178,7 @@ describe('operations engine', () => {
     s.router.workloads = 1;
     const refused = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
     expect(await s.drive(refused.id)).toEqual({ done: true, status: 'failed' });
-    expect((await s.records.getOperation(refused.id))!.error).toBe('check empty: router dmt-dev still has 1 workload: offboard it first');
+    expect((await s.records.getOperation(refused.id))!.error).toBe('check empty: router dmtr-dev still has 1 workload: offboard it first');
     s.router.workloads = 0;
     const uninstall = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
     expect(await s.drive(uninstall.id)).toEqual({ done: true, status: 'succeeded' });
@@ -210,6 +215,62 @@ describe('pending steps', () => {
     s.account.ports.dynamodb.describeTable = async () => ({ Table: { TableStatus: 'CREATING' } });
     s.account.ports.dynamodb.createTable = async () => ({});
     expect(await s.drive(op.id, { maxIterations: 1000 })).toEqual({ done: true, status: 'failed' });
-    expect((await s.records.getOperation(op.id))!.error).toBe('install table: still pending after 30 minutes (table dmt-dev-router CREATING)');
+    expect((await s.records.getOperation(op.id))!.error).toBe('install table: still pending after 30 minutes (table dmtr-dev-router CREATING)');
+  });
+});
+
+describe('review fixes', () => {
+  it('refuses to offboard a workload written in Terraform before waking it', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    s.router.source = 'terraform';
+    s.router.state = 'ASLEEP';
+    const op = await s.engine.create('offboard', { router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-3', workloadId: 'demo' }, 'ops');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toBe('locate: workload demo was written in Terraform: remove its workload module instead');
+    expect(s.invocations.map(([, p]) => p.action)).toEqual(['status']);
+  });
+
+  it('an uninstall that failed after deleting the controller can run again to the end', async () => {
+    const s = setup();
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    await s.account.ports.lambda.deleteFunction({ FunctionName: 'dmtr-dev-controller' });
+    s.router.controllerGone = true;
+    const op = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toBeNull();
+  });
+
+  it('an uninstall waits for the operations running on the router, and onboarding refuses a router being uninstalled', async () => {
+    const s = setup();
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    await s.records.acquireSlot(`${ACCOUNT}#eu-west-3`, 'running-onboarding', 3, 60 * 60_000);
+    const uninstall = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    for (let i = 0; i < 6; i += 1) {
+      const r = await s.engine.next(uninstall.id);
+      s.advance((r.waitSeconds ?? 0) * 1000);
+    }
+    const waiting = (await s.records.getOperation(uninstall.id))!;
+    expect(waiting.steps[waiting.cursor]!.name).toBe('check empty');
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.uninstalling).toBe(true);
+    const onboard = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
+    expect(await s.drive(onboard.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(onboard.id))!.error).toBe('find router: router dmtr-dev is being uninstalled');
+    await s.records.releaseSlot(`${ACCOUNT}#eu-west-3`, 'running-onboarding');
+    expect(await s.drive(uninstall.id)).toEqual({ done: true, status: 'succeeded' });
+  });
+
+  it('renews the locks it holds while it runs, so that a long wait never lets another operation in', async () => {
+    const s = setup({ routers: [DEV_ROUTER], candidates: [candidate({ eligibility: 'managed', workloadId: 'paris', status: 'managed' })] });
+    s.router.state = 'ASLEEP';
+    s.router.wakeTimeout = 3600;
+    const op = await s.engine.create('offboard', { router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-3', workloadId: 'paris' }, 'ops');
+    for (let i = 0; i < 4; i += 1) await s.engine.next(op.id);
+    // Waking for 61 minutes, longer than the 60-minute lease: the lock is renewed at each step.
+    for (let i = 0; i < 244; i += 1) {
+      s.advance(15_000);
+      await s.engine.next(op.id);
+    }
+    expect((await s.records.getOperation(op.id))!.status).toBe('running');
+    expect(await s.records.acquireLock(`LB#${LB}`, 'intruder', 60_000)).toBe(false);
   });
 });

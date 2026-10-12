@@ -25,6 +25,7 @@ export interface RouterRef {
   source: 'terraform' | 'manager';
   version?: string;
   build?: string;
+  uninstalling?: boolean;
 }
 
 export interface TargetAccess {
@@ -63,9 +64,10 @@ const uninstallSteps = UNINSTALL_STEPS.map((s) => `uninstall ${s}`);
 const PLANS: Record<OperationType, string[]> = {
   'install-router': ['find router', 'lock router', ...installSteps, 'register router', 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', 'verify router'],
-  'uninstall-router': ['find router', 'lock router', 'check empty', ...uninstallSteps, 'unregister router'],
+  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', ...uninstallSteps, 'unregister router'],
   onboard: ['find router', 'lock router', ...installSteps, 'register router', 'lock load balancer', 'slot', 'preview', 'onboard', 'verify', 'candidate'],
-  offboard: ['locate', 'lock load balancer', 'slot', 'wake', 'wait awake', 'offboard', 'candidate'],
+  // Paused first (that wakes an asleep workload): no nap starts or commits while the instrumentation goes.
+  offboard: ['locate', 'lock load balancer', 'slot', 'pause', 'wait awake', 'offboard', 'candidate'],
 };
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -75,7 +77,8 @@ export function createEngine(deps: EngineDeps) {
   const { records } = deps;
   const now = deps.now ?? Date.now;
   const newId = deps.newId ?? (() => crypto.randomUUID());
-  const routerName = `dmt-${deps.settings.env}`;
+  // Installed routers are named dmtr-<env>: DmtCommandRole and DmtRouterBoundary are scoped to that namespace.
+  const routerName = `dmtr-${deps.settings.env}`;
 
   // The target of an operation, and the key no second operation may claim at the same time.
   async function targetOf(type: OperationType, input: Record<string, unknown>): Promise<{ target: Record<string, string>; activeKey: string }> {
@@ -174,6 +177,7 @@ export function createEngine(deps: EngineDeps) {
           return { status: 'done', detail: `no router in ${where}` };
         }
         if (op.type === 'onboard') {
+          if (router?.uninstalling) throw new Error(`router ${router.name} is being uninstalled`);
           if (router) {
             op.context.router = router;
             return { status: 'done', detail: `router ${router.name}` };
@@ -206,8 +210,23 @@ export function createEngine(deps: EngineDeps) {
         const info = await invokeRouter(op, 'controller', { action: 'router' });
         return { status: 'done', detail: `router ${info?.router?.version} build ${info?.router?.build}` };
       }
+      case 'mark uninstalling': {
+        const installed = await records.getRouter(op.target.account!, op.target.region!);
+        if (installed && !installed.uninstalling) await records.putRouter({ ...installed, uninstalling: true });
+        return { status: 'done' };
+      }
       case 'check empty': {
-        const count = ((await invokeRouter(op, 'controller', { action: 'list' }))?.workloads ?? []).length;
+        // Operations still running on the router (onboardings that found it before the mark) finish first.
+        if ((await records.slotHolders(`${op.target.account}#${op.target.region}`)).length) throw new Busy('operations are still running on the router');
+        let listed;
+        try {
+          listed = await invokeRouter(op, 'controller', { action: 'list' });
+        } catch (err) {
+          // A controller deleted by an earlier attempt of this uninstall: nothing left to offboard.
+          if ((err as Error).name !== 'ResourceNotFoundException') throw err;
+          return { status: 'done', detail: 'controller already deleted' };
+        }
+        const count = (listed?.workloads ?? []).length;
         if (count) throw new Error(`router ${(op.context.router as RouterRef).name} still has ${count} workload${count === 1 ? '' : 's'}: offboard ${count === 1 ? 'it' : 'them'} first`);
         return { status: 'done' };
       }
@@ -219,6 +238,8 @@ export function createEngine(deps: EngineDeps) {
         if (!router) throw new Error(`no router in ${op.target.account}/${op.target.region}`);
         op.context.router = router;
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.target.workloadId });
+        // Refused before waking it: the onboarder only offboards what the manager onboarded.
+        if (status?.source === 'terraform') throw new Error(`workload ${op.target.workloadId} was written in Terraform: remove its workload module instead`);
         const ruleArn = status?.rules?.[0]?.arn as string | undefined;
         op.context.targetGroupArn = status?.targetGroupArn;
         op.context.loadBalancerArn = ruleArn ? loadBalancerOfRule(ruleArn) : null;
@@ -234,6 +255,9 @@ export function createEngine(deps: EngineDeps) {
         const key = `${op.target.account}#${op.target.region}`;
         if (!(await records.acquireSlot(key, op.id, SLOTS, LOCK_LEASE))) throw new Busy(`${SLOTS} operations already run in ${op.target.account}/${op.target.region}`);
         if (!op.holds.slots.includes(key)) op.holds.slots.push(key);
+        // An uninstall marked after this operation found the router: stop (it waits for the slots to be released).
+        const current = await routerOf(op);
+        if (current?.uninstalling) throw new Error(`router ${current.name} is being uninstalled`);
         return { status: 'done' };
       }
       case 'preview': {
@@ -253,9 +277,9 @@ export function createEngine(deps: EngineDeps) {
         if (status?.route !== 'app' || (status?.issues ?? []).length) throw new Error(`route ${status?.route}${status?.issues?.length ? `, issues: ${status.issues.join('; ')}` : ''}`);
         return { status: 'done', detail: `${op.input.workloadId} ${status.state}, route app` };
       }
-      case 'wake': {
-        const result = await invokeRouter(op, 'controller', { action: 'force-wake', workloadId: op.target.workloadId, by: op.by });
-        return { status: 'done', detail: result?.state };
+      case 'pause': {
+        const result = await invokeRouter(op, 'controller', { action: 'pause', workloadId: op.target.workloadId, by: op.by, reason: 'offboarding', keepAsleep: false });
+        return { status: 'done', ...(result?.woken?.length ? { detail: 'woken' } : {}) };
       }
       case 'wait awake': {
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.target.workloadId });
@@ -308,6 +332,9 @@ export function createEngine(deps: EngineDeps) {
       await finish(op, 'succeeded');
       return { done: true, status: 'succeeded' };
     }
+    // Leases of what it holds are renewed at each step: a long wait never lets another operation in.
+    for (const key of op.holds.locks) await records.acquireLock(key, op.id, LOCK_LEASE);
+    for (const key of op.holds.slots) await records.acquireSlot(key, op.id, SLOTS, LOCK_LEASE);
     step.status = 'running';
     step.startedAt ??= iso(now());
     step.attempts = (step.attempts ?? 0) + 1;

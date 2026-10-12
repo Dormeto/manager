@@ -8,7 +8,7 @@ const error = (name: string, message = name) => Object.assign(new Error(message)
 
 export function fakeInstallAccount() {
   const state = {
-    roles: new Map<string, { trust: string; boundary?: string; tags: Record<string, string>; policies: Map<string, string> }>(),
+    roles: new Map<string, { path?: string; trust: string; boundary?: string; tags: Record<string, string>; policies: Map<string, string> }>(),
     tables: new Map<string, { status: string; ttl?: string; pitr: boolean; tags: Record<string, string> }>(),
     queues: new Map<string, { attributes: Record<string, string>; tags: Record<string, string> }>(),
     logGroups: new Map<string, { retention?: number; tags: Record<string, string> }>(),
@@ -27,9 +27,9 @@ export function fakeInstallAccount() {
         if (!r) throw error('NoSuchEntityException');
         return { Role: { RoleName, AssumeRolePolicyDocument: encodeURIComponent(r.trust), ...(r.boundary ? { PermissionsBoundary: { PermissionsBoundaryArn: r.boundary } } : {}) } };
       },
-      async createRole({ RoleName, AssumeRolePolicyDocument, PermissionsBoundary, Tags = [] }) {
+      async createRole({ RoleName, Path, AssumeRolePolicyDocument, PermissionsBoundary, Tags = [] }) {
         call('createRole');
-        state.roles.set(RoleName, { trust: AssumeRolePolicyDocument, boundary: PermissionsBoundary, tags: Object.fromEntries(Tags.map((t: { Key: string; Value: string }) => [t.Key, t.Value])), policies: new Map() });
+        state.roles.set(RoleName, { path: Path, trust: AssumeRolePolicyDocument, boundary: PermissionsBoundary, tags: Object.fromEntries(Tags.map((t: { Key: string; Value: string }) => [t.Key, t.Value])), policies: new Map() });
         state.newRoles.add(RoleName);
         return {};
       },

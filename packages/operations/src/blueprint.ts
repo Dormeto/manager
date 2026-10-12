@@ -7,7 +7,7 @@ export interface Policy {
 export interface Blueprint {
   router: { name: string; region: string; account: string; version: string; build: string };
   tags: Record<string, string>;
-  roles: { key: string; name: string; trust: Policy; policyName: string; policy: Policy }[];
+  roles: { key: string; path: string; name: string; trust: Policy; policyName: string; policy: Policy }[];
   table: { name: string; hashKey: string; rangeKey: string; ttlAttribute: string; pointInTimeRecovery: boolean };
   queues: { key: string; name: string; retentionSeconds: number; managedEncryption: boolean }[];
   logGroups: { name: string; retentionDays: number }[];

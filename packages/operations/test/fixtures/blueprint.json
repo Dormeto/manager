@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.17.0",
-    "build": "1d50494cac65"
+    "version": "0.18.2",
+    "build": "c4e866ca4535"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -12,6 +12,7 @@
   "roles": [
     {
       "key": "controller",
+      "path": "/dormeto/router/",
       "name": "${name}-${region}-controller",
       "trust": {
         "Version": "2012-10-17",
@@ -51,7 +52,8 @@
               "elasticloadbalancing:DescribeTargetGroups",
               "elasticloadbalancing:DescribeListeners",
               "elasticloadbalancing:DescribeTags",
-              "cloudwatch:GetMetricData"
+              "cloudwatch:GetMetricData",
+              "lambda:GetAccountSettings"
             ],
             "Resource": [
               "*"
@@ -200,6 +202,7 @@
     },
     {
       "key": "waker",
+      "path": "/dormeto/router/",
       "name": "${name}-${region}-waker",
       "trust": {
         "Version": "2012-10-17",
@@ -252,6 +255,7 @@
     },
     {
       "key": "scheduler",
+      "path": "/dormeto/router/",
       "name": "${name}-${region}-scheduler",
       "trust": {
         "Version": "2012-10-17",
@@ -300,6 +304,7 @@
     },
     {
       "key": "onboarder",
+      "path": "/dormeto/router/",
       "name": "${name}-${region}-onboarder",
       "trust": {
         "Version": "2012-10-17",
@@ -491,8 +496,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.17.0",
-        "DMT_BUILD": "1d50494cac65",
+        "DMT_VERSION": "0.18.2",
+        "DMT_BUILD": "c4e866ca4535",
         "DMT_IP_LISTS": "${ipLists}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_CHECK_SCHEDULE": "${checkSchedule}",
@@ -505,7 +510,7 @@
         "maximumEventAgeInSeconds": 120,
         "onFailure": "arn:${partition}:sqs:${region}:${account}:${name}-controller-failures"
       },
-      "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-controller",
+      "roleArn": "arn:${partition}:iam::${account}:role/dormeto/router/${name}-${region}-controller",
       "runtime": "nodejs24.x",
       "architectures": [
         "arm64"
@@ -521,14 +526,14 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.17.0",
-        "DMT_BUILD": "1d50494cac65",
+        "DMT_VERSION": "0.18.2",
+        "DMT_BUILD": "c4e866ca4535",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
         "DMT_IP_LISTS": "${ipLists}"
       },
-      "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-waker",
+      "roleArn": "arn:${partition}:iam::${account}:role/dormeto/router/${name}-${region}-waker",
       "runtime": "nodejs24.x",
       "architectures": [
         "arm64"
@@ -544,12 +549,12 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.17.0",
-        "DMT_BUILD": "1d50494cac65",
+        "DMT_VERSION": "0.18.2",
+        "DMT_BUILD": "c4e866ca4535",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },
-      "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-onboarder",
+      "roleArn": "arn:${partition}:iam::${account}:role/dormeto/router/${name}-${region}-onboarder",
       "runtime": "nodejs24.x",
       "architectures": [
         "arm64"
@@ -560,7 +565,7 @@
     "name": "${name}-check",
     "expression": "${checkSchedule}",
     "target": "arn:${partition}:lambda:${region}:${account}:function:${name}-controller",
-    "roleArn": "arn:${partition}:iam::${account}:role/${name}-${region}-scheduler",
+    "roleArn": "arn:${partition}:iam::${account}:role/dormeto/router/${name}-${region}-scheduler",
     "input": "{\"action\":\"check\",\"source\":\"schedule\"}",
     "deadLetter": "arn:${partition}:sqs:${region}:${account}:${name}-check-failures",
     "maximumRetryAttempts": 0

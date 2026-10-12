@@ -72,6 +72,7 @@ export interface WorkloadStatus {
   pendingWake: boolean;
   pauses?: Pause[];
   targetGroupArn?: string;
+  source?: 'terraform' | 'manager'; // routers 0.18.2 and later
   lastRequestAt: string | null;
   nap: { eligibleAt: string; latestAt: string; inSeconds: number } | null;
   route: string; // over all the rules: app, waker, mixed, unknown

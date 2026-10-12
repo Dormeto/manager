@@ -19,7 +19,10 @@ export async function routersOf(terraform: TerraformRouter[], records: Pick<Reco
   }));
   for (const r of await records.listRouters()) {
     if (listed.some((x) => x.account === r.account && x.region === r.region)) continue;
-    listed.push({ name: r.name, account: r.account, region: r.region, controller: r.controller, onboarder: r.onboarder, source: 'manager', version: r.version, build: r.build });
+    listed.push({
+      name: r.name, account: r.account, region: r.region, controller: r.controller, onboarder: r.onboarder, source: 'manager', version: r.version, build: r.build,
+      ...(r.uninstalling ? { uninstalling: true } : {}),
+    });
   }
   return listed;
 }

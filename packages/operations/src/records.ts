@@ -38,6 +38,7 @@ export interface InstalledRouter {
   build: string;
   installedBy: string;
   installedAt: string;
+  uninstalling?: boolean; // an uninstall runs: no new onboarding
 }
 
 // Any DynamoDB client: only send() is used.
@@ -132,6 +133,10 @@ export function createRecords({ dynamo, table, now = Date.now }: { dynamo: Dynam
         if (await putIf(next, 'attribute_not_exists(sk) OR version = :version', { ':version': { N: String(version) } })) return true;
       }
       return false;
+    },
+    // Holders of a slot whose lease has not expired.
+    async slotHolders(slotKey: string) {
+      return Object.entries(data<Record<string, number>>(await get(`SLOT#${slotKey}`)) ?? {}).filter(([, expires]) => expires > now()).map(([owner]) => owner);
     },
     async releaseSlot(slotKey: string, owner: string) {
       for (let attempt = 0; attempt < 5; attempt += 1) {

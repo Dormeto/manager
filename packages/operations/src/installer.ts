@@ -67,7 +67,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
     for (const role of b.roles) {
       const existing = (await find(() => iam.getRole({ RoleName: role.name })))?.Role;
       if (!existing) {
-        await iam.createRole({ RoleName: role.name, AssumeRolePolicyDocument: JSON.stringify(role.trust), PermissionsBoundary: options.boundaryArn, Tags: tagList(b.tags) });
+        await iam.createRole({ RoleName: role.name, Path: role.path, AssumeRolePolicyDocument: JSON.stringify(role.trust), PermissionsBoundary: options.boundaryArn, Tags: tagList(b.tags) });
         changed.push(`role ${role.name}`);
       } else {
         if (existing.PermissionsBoundary?.PermissionsBoundaryArn !== options.boundaryArn) {

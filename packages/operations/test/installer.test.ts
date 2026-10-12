@@ -5,7 +5,7 @@ import { fill, type Blueprint } from '../src/blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, createInstaller } from '../src/installer.js';
 import { fakeInstallAccount } from './install-fake.js';
 
-const VALUES = { name: 'dmt-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false' };
+const VALUES = { name: 'dmtr-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false' };
 const BOUNDARY = 'arn:aws:iam::121014831971:policy/DmtRouterBoundary';
 const PRINCIPALS = ['arn:aws:iam::121014831971:role/dmt-dev-manager-api'];
 const ZIP = new Uint8Array([1, 2, 3]);
@@ -44,31 +44,32 @@ describe('installer', () => {
   it('installs every resource of the blueprint, roles within the boundary, waiting for the table and the IAM propagation', async () => {
     const s = setup();
     const b = blueprintOf();
-    expect(await s.installer.install('table', b)).toEqual({ status: 'pending', detail: 'table dmt-dev-router CREATING', changed: true });
+    expect(await s.installer.install('table', b)).toEqual({ status: 'pending', detail: 'table dmtr-dev-router CREATING', changed: true });
     expect(await installAll(s, b)).toEqual(INSTALL_STEPS.map(() => 'done'));
-    expect([...s.state.roles.keys()]).toEqual(['dmt-dev-eu-west-3-controller', 'dmt-dev-eu-west-3-waker', 'dmt-dev-eu-west-3-scheduler', 'dmt-dev-eu-west-3-onboarder']);
+    expect([...s.state.roles.keys()]).toEqual(['dmtr-dev-eu-west-3-controller', 'dmtr-dev-eu-west-3-waker', 'dmtr-dev-eu-west-3-scheduler', 'dmtr-dev-eu-west-3-onboarder']);
     for (const role of s.state.roles.values()) {
+      expect(role.path).toBe('/dormeto/router/');
       expect(role.boundary).toBe(BOUNDARY);
-      expect(role.tags).toEqual({ 'dormeto:router': 'dmt-dev' });
+      expect(role.tags).toEqual({ 'dormeto:router': 'dmtr-dev' });
       expect(role.policies.size).toBe(1);
     }
-    expect(JSON.parse(s.state.roles.get('dmt-dev-eu-west-3-onboarder')!.policies.get('onboarder')!)).toEqual(b.roles[3]!.policy);
-    expect(s.state.tables.get('dmt-dev-router')).toMatchObject({ status: 'ACTIVE', ttl: 'expiresAt', pitr: true, tags: { 'dormeto:router': 'dmt-dev' } });
-    expect([...s.state.queues.keys()]).toEqual(['dmt-dev-check-failures', 'dmt-dev-controller-failures']);
-    expect(s.state.queues.get('dmt-dev-check-failures')!.attributes).toEqual({ MessageRetentionPeriod: '1209600', SqsManagedSseEnabled: 'true' });
+    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-onboarder')!.policies.get('onboarder')!)).toEqual(b.roles[3]!.policy);
+    expect(s.state.tables.get('dmtr-dev-router')).toMatchObject({ status: 'ACTIVE', ttl: 'expiresAt', pitr: true, tags: { 'dormeto:router': 'dmtr-dev' } });
+    expect([...s.state.queues.keys()]).toEqual(['dmtr-dev-check-failures', 'dmtr-dev-controller-failures']);
+    expect(s.state.queues.get('dmtr-dev-check-failures')!.attributes).toEqual({ MessageRetentionPeriod: '1209600', SqsManagedSseEnabled: 'true' });
     expect([...s.state.logGroups].map(([n, g]) => [n, g.retention])).toEqual([
-      ['/aws/lambda/dmt-dev-controller', 14], ['/aws/lambda/dmt-dev-waker', 14], ['/aws/lambda/dmt-dev-onboarder', 14],
+      ['/aws/lambda/dmtr-dev-controller', 14], ['/aws/lambda/dmtr-dev-waker', 14], ['/aws/lambda/dmtr-dev-onboarder', 14],
     ]);
-    expect([...s.state.functions.keys()]).toEqual(['dmt-dev-controller', 'dmt-dev-waker', 'dmt-dev-onboarder']);
-    expect(s.state.functions.get('dmt-dev-controller')!.config).toMatchObject({
-      Role: 'arn:aws:iam::121014831971:role/dmt-dev-eu-west-3-controller', Handler: 'controller.handler', Runtime: 'nodejs24.x', Timeout: 900, MemorySize: 256, Architectures: ['arm64'],
+    expect([...s.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
+    expect(s.state.functions.get('dmtr-dev-controller')!.config).toMatchObject({
+      Role: 'arn:aws:iam::121014831971:role/dormeto/router/dmtr-dev-eu-west-3-controller', Handler: 'controller.handler', Runtime: 'nodejs24.x', Timeout: 900, MemorySize: 256, Architectures: ['arm64'],
     });
-    expect(s.state.functions.get('dmt-dev-controller')!.asyncInvoke).toMatchObject({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 120, DestinationConfig: { OnFailure: { Destination: 'arn:aws:sqs:eu-west-3:121014831971:dmt-dev-controller-failures' } } });
-    for (const f of ['dmt-dev-controller', 'dmt-dev-onboarder']) expect([...s.state.functions.get(f)!.permissions.values()]).toEqual(PRINCIPALS);
-    expect(s.state.functions.get('dmt-dev-waker')!.permissions.size).toBe(0);
-    expect(s.state.schedules.get('dmt-dev-check')).toMatchObject({
+    expect(s.state.functions.get('dmtr-dev-controller')!.asyncInvoke).toMatchObject({ MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 120, DestinationConfig: { OnFailure: { Destination: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-controller-failures' } } });
+    for (const f of ['dmtr-dev-controller', 'dmtr-dev-onboarder']) expect([...s.state.functions.get(f)!.permissions.values()]).toEqual(PRINCIPALS);
+    expect(s.state.functions.get('dmtr-dev-waker')!.permissions.size).toBe(0);
+    expect(s.state.schedules.get('dmtr-dev-check')).toMatchObject({
       ScheduleExpression: 'rate(5 minutes)', FlexibleTimeWindow: { Mode: 'OFF' },
-      Target: { Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmt-dev-controller', RetryPolicy: { MaximumRetryAttempts: 0 }, DeadLetterConfig: { Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmt-dev-check-failures' } },
+      Target: { Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-controller', RetryPolicy: { MaximumRetryAttempts: 0 }, DeadLetterConfig: { Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-check-failures' } },
     });
   });
 
@@ -97,16 +98,16 @@ describe('installer', () => {
     upgraded.state.roles = s.state.roles; upgraded.state.tables = s.state.tables; upgraded.state.queues = s.state.queues;
     upgraded.state.logGroups = s.state.logGroups; upgraded.state.functions = s.state.functions; upgraded.state.schedules = s.state.schedules;
     expect(await installAll(upgraded, next)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'done', 'skipped', 'skipped', 'skipped']);
-    expect(JSON.parse(s.state.roles.get('dmt-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(14);
-    const controller = s.state.functions.get('dmt-dev-controller')!;
+    expect(JSON.parse(s.state.roles.get('dmtr-dev-eu-west-3-controller')!.policies.get('controller')!).Statement).toHaveLength(14);
+    const controller = s.state.functions.get('dmtr-dev-controller')!;
     expect((controller.config.Environment as { Variables: Record<string, string> }).Variables).toMatchObject({ DMT_VERSION: '0.18.0', DMT_METRICS: 'true' });
     expect(controller.codeSha256).toBe(createHash('sha256').update(new Uint8Array([9, 9])).digest('base64'));
   });
 
   it('refuses to adopt a role that exists without the permissions boundary', async () => {
     const s = setup();
-    await s.ports.iam.createRole({ RoleName: 'dmt-dev-eu-west-3-controller', AssumeRolePolicyDocument: '{}' });
-    await expect(s.installer.install('roles', blueprintOf())).rejects.toThrow('role dmt-dev-eu-west-3-controller exists without the permissions boundary DmtRouterBoundary: not created by Dormeto');
+    await s.ports.iam.createRole({ RoleName: 'dmtr-dev-eu-west-3-controller', AssumeRolePolicyDocument: '{}' });
+    await expect(s.installer.install('roles', blueprintOf())).rejects.toThrow('role dmtr-dev-eu-west-3-controller exists without the permissions boundary DmtRouterBoundary: not created by Dormeto');
   });
 
   it('uninstalls every resource in reverse order, then finds nothing to do', async () => {

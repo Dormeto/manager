@@ -58,7 +58,7 @@ data "aws_iam_policy_document" "api" {
     # this role in other accounts).
     sid       = "RouterControllers"
     actions   = ["lambda:InvokeFunction"]
-    resources = concat([for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"], ["arn:aws:lambda:*:*:function:${local.name_prefix}-controller"])
+    resources = concat([for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"], ["arn:aws:lambda:*:*:function:dmtr-${var.env}-controller"])
   }
   statement {
     sid       = "Operations"
@@ -123,6 +123,7 @@ resource "aws_lambda_function" "api" {
       OPERATIONS         = aws_sfn_state_machine.operations.arn
       MANAGER_ACCOUNT    = var.account_id
       ENV                = var.env
+      ROUTER_VERSION     = local.router_version
       TABLE              = aws_dynamodb_table.manager.name
       VERSION            = local.version
       USER_POOL_ID       = aws_cognito_user_pool.main.id
