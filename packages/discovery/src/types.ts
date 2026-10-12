@@ -13,6 +13,22 @@ export interface Criterion {
   hosts?: string[]; // with *
   resourceTags?: Record<string, string[]>; // load balancer, rule or target group
   backendKinds?: BackendKind[];
+  targetGroups?: string[]; // names with * or full ARNs (manual exclusions only, not in the configuration)
+  label?: string; // set by manual exclusions: their reason in decisions and lint, instead of "global exclude N"
+}
+
+// A manual exclusion (router management): a target group, a load balancer or an account, kept away from Dormeto.
+export type ExclusionKind = 'target-group' | 'load-balancer' | 'account';
+export const EXCLUSION_KINDS: readonly ExclusionKind[] = ['target-group', 'load-balancer', 'account'];
+
+export interface Exclusion {
+  id: string;
+  target: { kind: ExclusionKind; arn?: string; account: string; region?: string; name: string };
+  reason: string;
+  by: string;
+  at: string;
+  expiresAt?: string;
+  paused?: { router: string; workloadId: string }[]; // managed workloads paused for it
 }
 
 export interface Filter {

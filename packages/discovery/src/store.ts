@@ -1,11 +1,13 @@
 // Discovery items of the manager table (spec section 6), partition T#default.
 import { BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { Candidate, DiscoveryConfig, OrgInventory, RunRecord } from './types.js';
+import type { Candidate, DiscoveryConfig, Exclusion, OrgInventory, RunRecord } from './types.js';
 
 const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
 const LOCK_MS = 15 * 60_000;
+// An expired exclusion stays listed (shown as expired) for 30 days.
+const EXPIRED_EXCLUSION_S = 30 * 86_400;
 type Item = Record<string, AttributeValue>;
 
 export interface StoredConfig {
@@ -27,6 +29,10 @@ export interface DiscoveryStore {
   deleteCandidates(ids: string[]): Promise<void>;
   getInventory(): Promise<OrgInventory | null>;
   putInventory(inventory: OrgInventory): Promise<void>;
+  listExclusions(): Promise<Exclusion[]>;
+  getExclusion(id: string): Promise<Exclusion | null>;
+  putExclusion(exclusion: Exclusion): Promise<void>;
+  deleteExclusion(id: string): Promise<void>;
 }
 
 // Any DynamoDB client: only send() is used.
@@ -140,6 +146,22 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     },
     async putInventory(inventory) {
       await put({ ...key('DISC#ORG'), data: packed(inventory), updatedAt: { S: new Date(now()).toISOString() } });
+    },
+    async listExclusions() {
+      return (await query('EXCL#')).map((item) => data<Exclusion>(item)!).filter(Boolean);
+    },
+    async getExclusion(id) {
+      return data<Exclusion>(await get(`EXCL#${id}`));
+    },
+    async putExclusion(exclusion) {
+      await put({
+        ...key(`EXCL#${exclusion.id}`),
+        data: { S: JSON.stringify(exclusion) },
+        ...(exclusion.expiresAt ? { expiresAt: { N: String(seconds(Date.parse(exclusion.expiresAt)) + EXPIRED_EXCLUSION_S) } } : {}),
+      });
+    },
+    async deleteExclusion(id) {
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(`EXCL#${id}`) }));
     },
   };
 }

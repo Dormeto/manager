@@ -98,6 +98,19 @@ export function nextCandidates({ previous, results, inventory, config, now }: {
   return out;
 }
 
+// Stored candidates decided again without a scan (an exclusion created or lifted): the changed ones, with history.
+export function rescope(candidates: Candidate[], config: DiscoveryConfig, inventory: OrgInventory, now: number): Candidate[] {
+  const at = new Date(now).toISOString();
+  const accounts = new Map(inventory.accounts.map((a) => [a.id, a]));
+  return candidates.flatMap((c) => {
+    const account = accounts.get(c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
+    const decision = outsidePerimeter(c, accounts, config) ?? decide(config, account, c, inventory);
+    const { status: _s, statusReason: _r, history: _h, ...rest } = c;
+    const next = settle({ ...rest, scope: decision.scope, scopeReason: decision.reason }, c, at);
+    return differs(next, c) ? [next] : [];
+  });
+}
+
 // A stored candidate whose dismissal changed (API dismiss and restore): status and history again, no scan needed.
 export function restatus(candidate: Omit<Candidate, 'dismissed'> & { dismissed?: Candidate['dismissed'] }, at: string): Candidate {
   const { status: _s, statusReason: _r, history: _h, ...rest } = candidate;

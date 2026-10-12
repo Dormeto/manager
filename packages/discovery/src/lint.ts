@@ -3,7 +3,7 @@
 import { describeCriterion, globMatches, globalAccountExclude, globalPairExclude, matches, matchesAccount, tagsMatch } from './filters.js';
 import type { Criterion, DiscoveryConfig, LintFinding, OrgInventory, ScannedRule } from './types.js';
 
-const DIMENSIONS = ['accountIds', 'ouIds', 'accountTags', 'regions', 'loadBalancers', 'hosts', 'resourceTags', 'backendKinds'] as const;
+const DIMENSIONS = ['accountIds', 'ouIds', 'accountTags', 'regions', 'loadBalancers', 'hosts', 'resourceTags', 'backendKinds', 'targetGroups'] as const;
 
 function isUnder(ou: string, ancestor: string, inventory: OrgInventory): boolean {
   for (let current: string | null = ou; current; current = inventory.ous[current]?.parent ?? null) {
@@ -56,7 +56,7 @@ export function covers(e: Criterion, i: Criterion, inventory: OrgInventory): boo
   if (!accountsCovered(e, i, inventory)) return false;
   if (e.regions && !subset(i.regions, e.regions)) return false;
   if (e.backendKinds && !subset(i.backendKinds, e.backendKinds)) return false;
-  for (const key of ['loadBalancers', 'hosts'] as const) {
+  for (const key of ['loadBalancers', 'hosts', 'targetGroups'] as const) {
     const outer = e[key];
     if (outer && !(i[key] !== undefined && i[key]!.every((p) => outer.some((q) => patternCovers(q, p))))) return false;
   }
@@ -86,7 +86,8 @@ export function lint(config: DiscoveryConfig, inventory: OrgInventory, last?: { 
       const global = config.globalExcludes.findIndex((g) => covers(g, include, inventory));
       if (global >= 0) {
         const g = config.globalExcludes[global]!;
-        findings.push({ code: 'include-shadowed-by-global-exclude', level: 'warning', ...base, by: `global exclude ${global + 1}`, message: `${at} can never match: global exclude ${global + 1}${noted(g)} covers it (${describeCriterion(g)})` });
+        const by = g.label ?? `global exclude ${global + 1}`;
+        findings.push({ code: 'include-shadowed-by-global-exclude', level: 'warning', ...base, by, message: `${at} can never match: ${by}${g.label ? '' : noted(g)} covers it (${describeCriterion(g)})` });
         return;
       }
       const own = f.exclude.findIndex((e) => covers(e, include, inventory));

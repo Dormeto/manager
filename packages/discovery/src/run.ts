@@ -1,6 +1,7 @@
 // One discovery run (spec section 3): lock, due check, organization inventory, accounts and pairs of the perimeter,
 // one AssumeRole per account, scans in parallel, candidate statuses, lint, run record.
 import { DEFAULT_CONFIG } from './config.js';
+import { withExclusions } from './exclusions.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
 import { lint } from './lint.js';
@@ -56,7 +57,8 @@ export async function runDiscovery(deps: RunDeps, event: { source: 'schedule' | 
   const record = (rest: Partial<RunRecord> & Pick<RunRecord, 'status'>): RunRecord => ({
     ...base, finishedAt: new Date(now()).toISOString(), targets: [], skipped: [], counts: {}, lint: [], ...rest,
   });
-  const config = (await deps.store.getConfig())?.config ?? DEFAULT_CONFIG;
+  // Manual exclusions act as global excludes (an excluded account is never read).
+  const config = withExclusions((await deps.store.getConfig())?.config ?? DEFAULT_CONFIG, await deps.store.listExclusions(), now());
 
   if (event.source === 'schedule') {
     const last = await deps.store.lastRun({ completed: true });

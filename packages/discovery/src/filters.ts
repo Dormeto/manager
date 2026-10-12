@@ -3,7 +3,7 @@
 import type { Account, AccountPlan, Criterion, Decision, DiscoveryConfig, OrgInventory, PairPlan, ScannedRule } from './types.js';
 
 const ACCOUNT_DIMENSIONS = ['accountIds', 'ouIds', 'accountTags'] as const;
-const RESOURCE_DIMENSIONS = ['loadBalancers', 'hosts', 'resourceTags', 'backendKinds'] as const;
+const RESOURCE_DIMENSIONS = ['loadBalancers', 'hosts', 'resourceTags', 'backendKinds', 'targetGroups'] as const;
 
 const isSet = (value: unknown): boolean => value !== undefined;
 const setsAny = (c: Criterion, dims: readonly (keyof Criterion)[]) => dims.some((d) => isSet(c[d]));
@@ -39,10 +39,13 @@ export function matches(c: Criterion, account: Account, rule: ScannedRule, inven
   if (c.hosts && !c.hosts.some((p) => rule.hosts.some((h) => globMatches(p, h)))) return false;
   if (c.resourceTags && !resourceTagsMatch(c.resourceTags, rule.tags)) return false;
   if (c.backendKinds && !(rule.backend && c.backendKinds.includes(rule.backend.kind))) return false;
+  if (c.targetGroups && !c.targetGroups.some((p) => (p.startsWith('arn:') ? p === rule.targetGroupArn : rule.targetGroup !== null && globMatches(p, rule.targetGroup)))) return false;
   return true;
 }
 
 const plural = (one: string, many: string, values: string[]) => `${values.length > 1 ? many : one} ${values.join(', ')}`;
+// Target group name of an ARN (arn:...:targetgroup/<name>/<id>), or the pattern itself.
+const targetGroupName = (p: string) => (p.startsWith('arn:') ? p.split(':').at(-1)!.split('/')[1] ?? p : p);
 const tagText = (tags: Record<string, string[]>) => Object.entries(tags).map(([k, v]) => (v.length ? `${k}=${v.join('|')}` : k)).join(', ');
 
 // "account 111111111111, region eu-west-1": what the criterion sets, for reasons and lint messages.
@@ -56,10 +59,11 @@ export function describeCriterion(c: Criterion): string {
   if (c.hosts) parts.push(plural('host', 'hosts', c.hosts));
   if (c.resourceTags) parts.push(`tags ${tagText(c.resourceTags)}`);
   if (c.backendKinds) parts.push(plural('backend', 'backends', c.backendKinds));
+  if (c.targetGroups) parts.push(plural('target group', 'target groups', c.targetGroups.map(targetGroupName)));
   return parts.join(', ') || 'everything';
 }
 
-const globalReason = (index: number, c: Criterion) => `excluded: global exclude ${index + 1}${c.note ? ` "${c.note}"` : ''} (${describeCriterion(c)})`;
+const globalReason = (index: number, c: Criterion) => (c.label ? `excluded: ${c.label}` : `excluded: global exclude ${index + 1}${c.note ? ` "${c.note}"` : ''} (${describeCriterion(c)})`);
 
 export function decide(config: DiscoveryConfig, account: Account, rule: ScannedRule, inventory: OrgInventory): Decision {
   const global = config.globalExcludes.findIndex((c) => matches(c, account, rule, inventory));
