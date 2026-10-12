@@ -21,7 +21,8 @@ the routers' roles in the Kubernetes group `dormeto:router` and `DmtDiscoveryRol
 else); the routers' permissions boundary allows `eks:DescribeCluster`. Then upgrade the routers to 0.29.0 (the upgrade
 makes the access entries in the account and region's clusters) and apply `dormeto-kubernetes-0.10.0.yaml` of the release
 in each cluster whose workloads Dormeto should nap (`kubectl apply -f`). Without them nothing changes for the other
-workloads: Kubernetes candidates are said not onboardable, with the reason.
+workloads: a router upgraded first skips its access entries and says what to apply, and Kubernetes candidates are not
+onboardable, with the reason.
 
 - Kubernetes workloads on Amazon EKS: a target group of the AWS Load Balancer Controller (from an Ingress or a
   TargetGroupBinding) serving the pods of one Deployment or StatefulSet is napped by scaling it to 0 and woken by giving
