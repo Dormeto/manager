@@ -51,12 +51,14 @@ export interface TargetAccess {
 
 export interface EngineDeps {
   records: Records;
-  discovery?: Pick<DiscoveryStore, 'getCandidate' | 'replaceCandidates' | 'accountCandidates' | 'getInventory' | 'getExclusion' | 'updateExclusion' | 'deleteExclusion'>;
+  discovery?: Pick<DiscoveryStore, 'getCandidate' | 'replaceCandidates' | 'accountCandidates' | 'getInventory' | 'getExclusion' | 'updateExclusion' | 'deleteExclusion'
+    | 'getConnection' | 'putConnection' | 'deleteConnection' | 'getAccountScan'>;
   routers(): Promise<RouterRef[]>;
   target(account: string, region: string): Promise<TargetAccess>;
   bundle(): Promise<{ blueprint: Blueprint; zip: Uint8Array; codeSha256: string }>;
   // managerBus: the manager's event bus, where the routers send their state (scale design §3).
-  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; noWakeRules: string; metrics: string; managerBus: string } };
+  // commandRole: the command role's name without its path; the forwarder ignores the manager's own calls (routers 0.23.0).
+  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
   start(op: Operation): Promise<string>; // starts the workflow execution, returns its ARN
   now?: () => number;
   newId?: () => string;
@@ -90,7 +92,12 @@ const PLANS: Record<OperationType, string[]> = {
   // Exclusions (scale design §6): the API answers at once; their workloads are paused or resumed here, in batches.
   exclude: ['pause workloads'],
   'lift-exclusion': ['resume workloads'],
+  // Event-driven discovery refresh (packaging design §5): one per account at a time; the rules before the role on removal.
+  'connect-account': ['forwarder role', 'forwarder rules', 'connected'],
+  'disconnect-account': ['remove forwarder rules', 'remove forwarder role', 'disconnected'],
 };
+const ACCOUNT_ID = /^\d{12}$/;
+const REGION_NAME = /^[a-z]{2}(-[a-z]+)+-\d$/;
 // Router calls per step of an exclusion: the step runs again until every workload is done.
 const EXCLUSION_BATCH = 25;
 const EXCLUDED = 'excluded: ';
@@ -244,6 +251,13 @@ export function createEngine(deps: EngineDeps) {
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
       return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn }, activeKey: `TG#${c.targetGroupArn}` };
     }
+    if (type === 'connect-account' || type === 'disconnect-account') {
+      const account = String(input.account);
+      if (!ACCOUNT_ID.test(account)) throw new Error(`bad account: ${input.account}`);
+      const regions = input.regions;
+      if (!Array.isArray(regions) || !regions.every((r) => typeof r === 'string' && REGION_NAME.test(r))) throw new Error(`bad regions: ${JSON.stringify(regions)}`);
+      return { target: { account }, activeKey: `ACCT#${account}` };
+    }
     const account = String(input.account);
     const region = String(input.region);
     if (type === 'offboard') return { target: { account, region, router: String(input.router), workloadId: String(input.workloadId) }, activeKey: `WL#${account}#${region}#${input.workloadId}` };
@@ -292,6 +306,23 @@ export function createEngine(deps: EngineDeps) {
     return { blueprint, run: target.installer({ boundaryArn, principals: deps.settings.principals, zip: async () => zip, codeSha256 }) };
   }
 
+  // The forwarder of the router bundle (routers 0.23.0 and later), filled for the operation's account.
+  async function forwarderOf(op: Operation) {
+    const { blueprint } = await deps.bundle();
+    if (!blueprint.forwarder) throw new Error(`the router bundle ${blueprint.router?.version ?? ''} has no forwarder: routers 0.23.0 or later`);
+    return fill(blueprint.forwarder, { name: routerName, account: op.target.account!, partition: 'aws', ...deps.settings.routerSettings });
+  }
+  // The installer of the account in a region (IAM is the account's: any region does for the role).
+  const regionsOf = (op: Operation) => (op.input.regions as string[]) ?? [];
+  async function regionInstaller(op: Operation, region: string) {
+    const target = await deps.target(op.target.account!, region);
+    return target.installer({ boundaryArn: `arn:aws:iam::${op.target.account}:policy/DmtRouterBoundary`, principals: deps.settings.principals, zip: async () => new Uint8Array(), codeSha256: '' });
+  }
+  const stepsOf = (results: StepResult[]): Outcome => {
+    const details = results.flatMap((r) => (r.status === 'done' && r.detail ? [r.detail] : []));
+    return details.length ? { status: 'done', detail: details.join('; ') } : { status: 'skipped' };
+  };
+
   async function lock(op: Operation, key: string, what: string): Promise<Outcome> {
     if (await records.acquireLock(key, op.id, LOCK_LEASE)) {
       if (!op.holds.locks.includes(key)) op.holds.locks.push(key);
@@ -327,6 +358,33 @@ export function createEngine(deps: EngineDeps) {
       return inst.uninstall(name.slice('uninstall '.length) as UninstallStep, blueprint);
     }
     switch (name) {
+      case 'forwarder role':
+        return (await regionInstaller(op, regionsOf(op)[0] ?? 'us-east-1')).forwarder.role(await forwarderOf(op));
+      case 'forwarder rules': {
+        const f = await forwarderOf(op);
+        const results: StepResult[] = [];
+        for (const region of regionsOf(op)) results.push(await (await regionInstaller(op, region)).forwarder.rule(f));
+        return stepsOf(results);
+      }
+      case 'connected':
+        await deps.discovery!.putConnection({ account: op.target.account!, regions: regionsOf(op), connectedAt: iso(now()) });
+        return { status: 'done' };
+      case 'remove forwarder rules': {
+        // Every region connected, whatever the operation names.
+        const connected = (await deps.discovery!.getConnection(op.target.account!))?.regions ?? [];
+        op.context.regions = [...new Set([...regionsOf(op), ...connected])];
+        const f = await forwarderOf(op);
+        const results: StepResult[] = [];
+        for (const region of op.context.regions as string[]) results.push(await (await regionInstaller(op, region)).forwarder.removeRule(f));
+        return stepsOf(results);
+      }
+      case 'remove forwarder role':
+        return (await regionInstaller(op, (op.context.regions as string[] | undefined)?.[0] ?? 'us-east-1')).forwarder.removeRole(await forwarderOf(op));
+      case 'disconnected': {
+        if (!(await deps.discovery!.getConnection(op.target.account!))) return { status: 'skipped' };
+        await deps.discovery!.deleteConnection(op.target.account!);
+        return { status: 'done' };
+      }
       case 'find router': {
         const router = await routerOf(op);
         const where = `${op.target.account}/${op.target.region}`;
@@ -575,7 +633,32 @@ export function createEngine(deps: EngineDeps) {
     await finish(op, 'failed', error);
   }
 
-  return { create, next, fail };
+  // The connections decided by a discovery run (packaging design §5): an operation per account, none for an account with
+  // one running, nor a connect where the last check found no command role (as onboardings are refused, R5a).
+  async function connections({ connect, disconnect }: { connect: { account: string; regions: string[] }[]; disconnect: string[] }, by: string) {
+    const created: string[] = [];
+    const skipped: { account: string; reason: string }[] = [];
+    const start = async (type: OperationType, input: { account: string; regions: string[] }) => {
+      try {
+        created.push((await create(type, input, by)).id);
+      } catch (err) {
+        if (!(err instanceof Conflict)) throw err;
+        skipped.push({ account: input.account, reason: 'another operation runs on this account' });
+      }
+    };
+    for (const c of connect) {
+      const command = (await deps.discovery?.getAccountScan(c.account))?.access?.command;
+      if (command && !command.ok) {
+        skipped.push({ account: c.account, reason: `no command role: ${command.reason}` });
+        continue;
+      }
+      await start('connect-account', c);
+    }
+    for (const account of disconnect) await start('disconnect-account', { account, regions: [] });
+    return { created, skipped };
+  }
+
+  return { create, next, fail, connections };
 }
 
 export type Engine = ReturnType<typeof createEngine>;

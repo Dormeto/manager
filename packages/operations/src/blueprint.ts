@@ -26,6 +26,13 @@ export interface Blueprint {
   schedule: { name: string; expression: string; target: string; roleArn: string; input: string; deadLetter: string; maximumRetryAttempts: number };
   // Routers 0.22.0 and later: the readers of the work and drift queues.
   eventSourceMappings?: { key: string; function: string; queue: string; batchSize: number; maximumBatchingWindowSeconds: number; maximumConcurrency: number; reportBatchItemFailures: boolean }[];
+  // Routers 0.23.0 and later: the forwarder of event-driven discovery refresh, installed per account (packaging design §5).
+  forwarder?: Forwarder;
+}
+
+export interface Forwarder {
+  role: { name: string; path: string; tags: Record<string, string>; trust: Policy; policyName: string; policy: Policy };
+  rule: { name: string; pattern: string; targetBus: string; roleArn: string; description: string };
 }
 
 // Replace every ${key} of the string values.

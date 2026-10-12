@@ -23,6 +23,19 @@ const candidate = (i: number, over: Partial<Candidate> = {}): Candidate => ({
 });
 
 describe('discovery store', () => {
+  it('records the accounts connected to event-driven refresh, with their regions, and forgets a disconnected one', async () => {
+    // Written by the connect and disconnect operations, read by finalize (packaging design §5).
+    const { store } = setup();
+    expect(await store.getConnection('111111111111')).toBeNull();
+    await store.putConnection({ account: '111111111111', regions: ['eu-west-1', 'eu-west-3'], connectedAt: '2026-10-06T12:00:00.000Z' });
+    await store.putConnection({ account: '222222222222', regions: ['us-east-1'], connectedAt: '2026-10-06T12:01:00.000Z' });
+    expect(await store.getConnection('111111111111')).toEqual({ account: '111111111111', regions: ['eu-west-1', 'eu-west-3'], connectedAt: '2026-10-06T12:00:00.000Z' });
+    expect((await store.listConnections()).map((c) => c.account)).toEqual(['111111111111', '222222222222']);
+    await store.deleteConnection('111111111111');
+    await store.deleteConnection('333333333333');
+    expect((await store.listConnections()).map((c) => c.account)).toEqual(['222222222222']);
+  });
+
   it('stores the configuration with who changed it and when', async () => {
     const { store, dynamo } = setup();
     expect(await store.getConfig()).toBeNull();

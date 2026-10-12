@@ -718,5 +718,53 @@
     "input": "{\"action\":\"check\",\"source\":\"schedule\"}",
     "deadLetter": "arn:${partition}:sqs:${region}:${account}:${name}-check-failures",
     "maximumRetryAttempts": 0
+  },
+  "forwarder": {
+    "role": {
+      "name": "${name}-forwarder",
+      "path": "/dormeto/router/",
+      "tags": {
+        "dormeto:router": "${name}"
+      },
+      "policyName": "forwarder",
+      "trust": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "events.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+              "StringEquals": {
+                "aws:SourceAccount": "${account}"
+              }
+            }
+          }
+        ]
+      },
+      "policy": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "events:PutEvents"
+            ],
+            "Resource": [
+              "${managerBus}"
+            ]
+          }
+        ]
+      }
+    },
+    "rule": {
+      "name": "${name}-discovery",
+      "pattern": "{\"source\":[\"aws.elasticloadbalancing\"],\"detail-type\":[\"AWS API Call via CloudTrail\"],\"detail\":{\"eventName\":[\"CreateLoadBalancer\",\"DeleteLoadBalancer\",\"CreateListener\",\"ModifyListener\",\"DeleteListener\",\"CreateRule\",\"ModifyRule\",\"DeleteRule\",\"SetRulePriorities\",\"CreateTargetGroup\",\"ModifyTargetGroup\",\"DeleteTargetGroup\",\"AddTags\",\"RemoveTags\"],\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":[\"arn:${partition}:sts::${account}:assumed-role/dmtr-\",\"arn:${partition}:sts::${account}:assumed-role/dmt-\",\"arn:${partition}:sts::${account}:assumed-role/${commandRole}/\"]}}]},\"errorCode\":[{\"exists\":false}]}}",
+      "targetBus": "${managerBus}",
+      "roleArn": "arn:${partition}:iam::${account}:role/dormeto/router/${name}-forwarder",
+      "description": "Dormeto: load balancer changes, to the manager's discovery"
+    }
   }
 }

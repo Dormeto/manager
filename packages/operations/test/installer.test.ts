@@ -8,6 +8,7 @@ import { fakeInstallAccount } from './install-fake.js';
 const VALUES = {
   name: 'dmtr-dev', region: 'eu-west-3', account: '121014831971', partition: 'aws', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false',
   managerBus: 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager',
+  commandRole: 'DmtCommandRole',
 };
 const BOUNDARY = 'arn:aws:iam::121014831971:policy/DmtRouterBoundary';
 const PRINCIPALS = ['arn:aws:iam::121014831971:role/dmt-dev-manager-api'];

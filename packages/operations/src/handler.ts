@@ -1,6 +1,8 @@
-// Operations Lambda: the tasks of the Step Functions workflow ({ task: 'next' | 'fail', operationId }).
+// Operations Lambda: the tasks of the Step Functions workflow ({ task: 'next' | 'fail', operationId }), and the
+// connections a discovery run decides ({ task: 'connections', connect, disconnect }, packaging design §5).
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
+import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { STSClient } from '@aws-sdk/client-sts';
 import { createStore } from '@dormeto/discovery';
 import { createBundle, createTargets } from './aws.js';
@@ -14,25 +16,33 @@ const table = process.env.TABLE ?? '';
 const records = createRecords({ dynamo, table });
 const write = (level: string) => (event: string, data: object = {}) => console.log(JSON.stringify({ level, event, ...data }));
 const log = { info: write('info'), warn: write('warn'), error: write('error') };
+const sfn = new SFNClient({});
+const commandRole = process.env.COMMAND_ROLE ?? 'DmtCommandRole';
 
 const engine = createEngine({
   records,
   discovery: createStore({ dynamo, table }),
   routers: () => routersOf(JSON.parse(process.env.ROUTERS ?? '[]'), records),
-  target: createTargets({ sts: new STSClient({}), roleName: process.env.COMMAND_ROLE ?? 'DmtCommandRole', sessionName: `dmt-${env}-operations` }),
+  target: createTargets({ sts: new STSClient({}), roleName: commandRole, sessionName: `dmt-${env}-operations` }),
   bundle: createBundle({ s3: new S3Client({}), bucket: process.env.ARTIFACTS_BUCKET ?? '', version: process.env.ROUTER_VERSION ?? '' }),
   settings: {
     env,
     principals: JSON.parse(process.env.MANAGER_PRINCIPALS ?? '[]'),
-    routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false', managerBus: process.env.MANAGER_BUS ?? '' },
+    routerSettings: {
+      checkSchedule: 'rate(5 minutes)', ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false', managerBus: process.env.MANAGER_BUS ?? '',
+      // The role's name in an assumed-role ARN, without its path.
+      commandRole: commandRole.split('/').at(-1)!,
+    },
   },
-  // Executions are started by the API; the workflow only runs tasks.
-  start: async () => { throw new Error('operations are created by the API'); },
+  // The connections a discovery run decides start their executions here, as the API's operations.
+  start: async (op) => (await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.OPERATIONS_STATE_MACHINE, name: op.id, input: JSON.stringify({ operationId: op.id }) }))).executionArn ?? '',
   log,
 });
 
-export const handler = async (event: { task: string; operationId?: string; account?: string; error?: { Error?: string; Cause?: string } }) => {
+type Connections = Parameters<typeof engine.connections>[0];
+export const handler = async (event: { task: string; operationId?: string; error?: { Error?: string; Cause?: string } } & Partial<Connections>) => {
   if (event.task === 'next') return engine.next(event.operationId!);
+  if (event.task === 'connections') return engine.connections({ connect: event.connect ?? [], disconnect: event.disconnect ?? [] }, 'discovery');
   if (event.task === 'fail') {
     await engine.fail(event.operationId!, [event.error?.Error, event.error?.Cause].filter(Boolean).join(': ') || 'workflow failed');
     return { done: true, status: 'failed' };

@@ -169,6 +169,13 @@ export interface AccessCounts {
 }
 
 // Computed at the end of each run: the counts, every account not ready, the delegation policy.
+// An account connected to event-driven refresh (packaging design §5): its forwarder role and a rule in each region.
+export interface Connection {
+  account: string;
+  regions: string[];
+  connectedAt: string;
+}
+
 export interface AccessSummary {
   counts: AccessCounts;
   accounts: AccessRow[]; // sorted by account

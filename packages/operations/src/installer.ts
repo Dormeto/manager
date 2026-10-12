@@ -2,7 +2,7 @@
 // each finding what exists before creating or updating it, so that a step can run again; `pending` asks the workflow to
 // come back (a table being created, a function being updated), RetryLater to retry after a delay (IAM propagation).
 import { createHash } from 'node:crypto';
-import type { Blueprint } from './blueprint.js';
+import type { Blueprint, Forwarder } from './blueprint.js';
 
 // Loose SDK shapes: the adapters (aws.ts) pass the commands' inputs and outputs through.
 type Call = (input: any) => Promise<any>;
@@ -64,30 +64,75 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
   const { iam, dynamodb, sqs, logs, lambda, scheduler, events } = ports;
   const boundaryName = options.boundaryArn.split('/').at(-1);
 
-  async function roles(b: Blueprint): Promise<StepResult> {
-    const changed: string[] = [];
-    for (const role of b.roles) {
-      const existing = (await find(() => iam.getRole({ RoleName: role.name })))?.Role;
-      if (!existing) {
-        await iam.createRole({ RoleName: role.name, Path: role.path, AssumeRolePolicyDocument: JSON.stringify(role.trust), PermissionsBoundary: options.boundaryArn, Tags: tagList(b.tags) });
-        changed.push(`role ${role.name}`);
-      } else {
-        if (existing.PermissionsBoundary?.PermissionsBoundaryArn !== options.boundaryArn) {
-          throw new Error(`role ${role.name} exists without the permissions boundary ${boundaryName}: not created by Dormeto`);
-        }
-        if (!same(policyOf(existing.AssumeRolePolicyDocument), role.trust)) {
-          await iam.updateAssumeRolePolicy({ RoleName: role.name, PolicyDocument: JSON.stringify(role.trust) });
-          changed.push(`trust of ${role.name}`);
-        }
+  // A role with the boundary, its trust and its inline policy: created, or brought in line.
+  async function putRole(role: Blueprint['roles'][number] | Forwarder['role'], tags: Record<string, string>, changed: string[]) {
+    const existing = (await find(() => iam.getRole({ RoleName: role.name })))?.Role;
+    if (!existing) {
+      await iam.createRole({ RoleName: role.name, Path: role.path, AssumeRolePolicyDocument: JSON.stringify(role.trust), PermissionsBoundary: options.boundaryArn, Tags: tagList(tags) });
+      changed.push(`role ${role.name}`);
+    } else {
+      if (existing.PermissionsBoundary?.PermissionsBoundaryArn !== options.boundaryArn) {
+        throw new Error(`role ${role.name} exists without the permissions boundary ${boundaryName}: not created by Dormeto`);
       }
-      const current = await find(() => iam.getRolePolicy({ RoleName: role.name, PolicyName: role.policyName }));
-      if (!current || !same(policyOf(current.PolicyDocument), role.policy)) {
-        await iam.putRolePolicy({ RoleName: role.name, PolicyName: role.policyName, PolicyDocument: JSON.stringify(role.policy) });
-        if (existing) changed.push(`policy of ${role.name}`);
+      if (!same(policyOf(existing.AssumeRolePolicyDocument), role.trust)) {
+        await iam.updateAssumeRolePolicy({ RoleName: role.name, PolicyDocument: JSON.stringify(role.trust) });
+        changed.push(`trust of ${role.name}`);
       }
     }
+    const current = await find(() => iam.getRolePolicy({ RoleName: role.name, PolicyName: role.policyName }));
+    if (!current || !same(policyOf(current.PolicyDocument), role.policy)) {
+      await iam.putRolePolicy({ RoleName: role.name, PolicyName: role.policyName, PolicyDocument: JSON.stringify(role.policy) });
+      if (existing) changed.push(`policy of ${role.name}`);
+    }
+  }
+
+  async function deleteRole(name: string): Promise<boolean> {
+    const names = (await find(() => iam.listRolePolicies({ RoleName: name })))?.PolicyNames;
+    if (!names) return false;
+    for (const PolicyName of names) await iam.deleteRolePolicy({ RoleName: name, PolicyName });
+    await iam.deleteRole({ RoleName: name });
+    return true;
+  }
+
+  async function roles(b: Blueprint): Promise<StepResult> {
+    const changed: string[] = [];
+    for (const role of b.roles) await putRole(role, b.tags, changed);
     return result(changed);
   }
+
+  // The forwarder of event-driven discovery refresh (packaging design §5): its role (once per account) and its rule in
+  // this installer's region, delivering to the manager's bus with that role.
+  const forwarder = {
+    async role(f: Forwarder): Promise<StepResult> {
+      const changed: string[] = [];
+      await putRole(f.role, f.role.tags, changed);
+      return result(changed);
+    },
+    async rule(f: Forwarder): Promise<StepResult> {
+      const r = f.rule;
+      const changed: string[] = [];
+      const current = await find(() => events.describeRule({ Name: r.name }));
+      if (!current || !same(JSON.parse(current.EventPattern), JSON.parse(r.pattern)) || current.State !== 'ENABLED') {
+        await events.putRule({ Name: r.name, EventPattern: r.pattern, State: 'ENABLED', Description: r.description, ...(current ? {} : { Tags: tagList(f.role.tags) }) });
+        changed.push(`rule ${r.name}`);
+      }
+      const targets = ((await events.listTargetsByRule({ Rule: r.name })).Targets ?? []) as { Id: string; Arn: string; RoleArn?: string }[];
+      if (!targets.some((t) => t.Id === 'manager' && t.Arn === r.targetBus && t.RoleArn === r.roleArn)) {
+        await events.putTargets({ Rule: r.name, Targets: [{ Id: 'manager', Arn: r.targetBus, RoleArn: r.roleArn }] });
+        changed.push(`target of ${r.name}`);
+      }
+      return result(changed);
+    },
+    async removeRule(f: Forwarder): Promise<StepResult> {
+      if (!(await find(() => events.describeRule({ Name: f.rule.name })))) return { status: 'skipped' };
+      await find(() => events.removeTargets({ Rule: f.rule.name, Ids: ['manager'] }));
+      await events.deleteRule({ Name: f.rule.name });
+      return { status: 'done', detail: `rule ${f.rule.name}` };
+    },
+    async removeRole(f: Forwarder): Promise<StepResult> {
+      return result((await deleteRole(f.role.name)) ? [`role ${f.role.name}`] : []);
+    },
+  };
 
   async function table(b: Blueprint): Promise<StepResult> {
     const t = b.table;
@@ -395,13 +440,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
     table: async (b) => result((await deleted(() => dynamodb.deleteTable({ TableName: b.table.name }))) ? [`table ${b.table.name}`] : []),
     roles: async (b) => {
       const changed: string[] = [];
-      for (const role of b.roles) {
-        const names = (await find(() => iam.listRolePolicies({ RoleName: role.name })))?.PolicyNames;
-        if (!names) continue;
-        for (const PolicyName of names) await iam.deleteRolePolicy({ RoleName: role.name, PolicyName });
-        await iam.deleteRole({ RoleName: role.name });
-        changed.push(`role ${role.name}`);
-      }
+      for (const role of b.roles) if (await deleteRole(role.name)) changed.push(`role ${role.name}`);
       return result(changed);
     },
   };
@@ -409,5 +448,6 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
   return {
     install: (step: InstallStep, b: Blueprint) => installSteps[step](b),
     uninstall: (step: UninstallStep, b: Blueprint) => uninstallSteps[step](b),
+    forwarder,
   };
 }

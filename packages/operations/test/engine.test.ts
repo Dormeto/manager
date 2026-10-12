@@ -69,7 +69,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
       },
     }),
     bundle: async () => ({ blueprint: published as unknown as Blueprint, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
-    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS } },
+    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
     start: async (op) => { started.push(op.id); return `arn:execution:${op.id}`; },
     now: () => now, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
   });

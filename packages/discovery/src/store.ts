@@ -2,7 +2,7 @@
 // T#default; candidates in the partition of their account (CAND#<account>), indexed by status on gsi1 (scale design §4).
 import { BatchGetItemCommand, BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { CANDIDATE_STATUSES, type AccessReport, type AccessSummary, type AccountScan, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
+import { CANDIDATE_STATUSES, type AccessReport, type AccessSummary, type AccountScan, type Connection, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
 
 const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
@@ -51,6 +51,11 @@ export interface DiscoveryStore {
   putInventory(inventory: OrgInventory): Promise<void>;
   getAccess(): Promise<AccessSummary | null>;
   putAccess(summary: AccessSummary): Promise<void>;
+  // Accounts connected to event-driven refresh (packaging design §5): written by the connect and disconnect operations.
+  getConnection(account: string): Promise<Connection | null>;
+  putConnection(connection: Connection): Promise<void>;
+  deleteConnection(account: string): Promise<void>;
+  listConnections(): Promise<Connection[]>;
   accessReport(page: { cursor?: string; limit: number }): Promise<AccessReport>;
   listExclusions(): Promise<Exclusion[]>;
   getExclusion(id: string): Promise<Exclusion | null>;
@@ -341,6 +346,18 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     },
     async putAccess(summary) {
       await put({ ...key('DISC#ACCESS'), data: packed(summary) });
+    },
+    async getConnection(account) {
+      return data<Connection>(await get(`CONN#${account}`));
+    },
+    async putConnection(connection) {
+      await put({ ...key(`CONN#${connection.account}`), data: { S: JSON.stringify(connection) } });
+    },
+    async deleteConnection(account) {
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(`CONN#${account}`) }));
+    },
+    async listConnections() {
+      return (await query('CONN#')).map((item) => JSON.parse(item.data!.S!) as Connection);
     },
     async accessReport({ cursor, limit }) {
       const summary = data<AccessSummary>(await get('DISC#ACCESS'));
