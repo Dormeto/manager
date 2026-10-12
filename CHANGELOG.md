@@ -5,6 +5,15 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## 0.8.1 — 2026-10-09
+
+Router 0.28.1. Access: nothing to apply again.
+
+- Every AWS call of the routers is bounded: connected within 3 seconds, answered within 10 seconds of silence, else
+  retried on a new connection. The AWS SDK waits forever by default: a scheduled check could wait 15 minutes for an
+  answer that never came (its function ending at its timeout, in the controller's failure queue), its lease skipping the
+  next three checks. Upgrade the routers to 0.28.1.
+
 ## 0.8.0 — 2026-10-09
 
 Router 0.28.0. Access: as 0.7.0, which was not published (its Access note and changes below ship in this version): apply
