@@ -76,9 +76,42 @@ function onlyExcludedPairs(config: DiscoveryConfig, include: Criterion, inventor
     || (regions !== null && regions.length > 0 && regions.every((r) => globalPairExclude(config, a, r, inventory) >= 0)));
 }
 
-export function lint(config: DiscoveryConfig, inventory: OrgInventory, last?: { rules: ScannedRule[] }): LintFinding[] {
-  const findings: LintFinding[] = [];
+// Per include ("<filter>#<include index>"), the rules of a run it matched and how many of them a global exclude matched:
+// each account step counts its own rules, the run sums them (scale design §5).
+export type LintCounters = Record<string, { matched: number; excluded: number }>;
+const includeKey = (filter: string, index: number) => `${filter}#${index + 1}`;
+
+export function lintCounters(config: DiscoveryConfig, inventory: OrgInventory, rules: ScannedRule[]): LintCounters {
   const accounts = new Map(inventory.accounts.map((a) => [a.id, a]));
+  const counters: LintCounters = {};
+  for (const f of config.filters) {
+    f.include.forEach((include, index) => {
+      const matched = rules.filter((r) => {
+        const account = accounts.get(r.account);
+        return account !== undefined && matches(include, account, r, inventory);
+      });
+      const excluded = matched.filter((r) => config.globalExcludes.some((g) => matches(g, accounts.get(r.account)!, r, inventory)));
+      counters[includeKey(f.name, index)] = { matched: matched.length, excluded: excluded.length };
+    });
+  }
+  return counters;
+}
+
+export function sumCounters(all: LintCounters[]): LintCounters {
+  const sum: LintCounters = {};
+  for (const counters of all) {
+    for (const [key, c] of Object.entries(counters)) {
+      const s = (sum[key] ??= { matched: 0, excluded: 0 });
+      s.matched += c.matched;
+      s.excluded += c.excluded;
+    }
+  }
+  return sum;
+}
+
+export function lint(config: DiscoveryConfig, inventory: OrgInventory, last?: { rules: ScannedRule[] } | { counters: LintCounters }): LintFinding[] {
+  const findings: LintFinding[] = [];
+  const counters = last && ('rules' in last ? lintCounters(config, inventory, last.rules) : last.counters);
   for (const f of config.filters) {
     f.include.forEach((include, index) => {
       const at = `filter "${f.name}", include ${index + 1}`;
@@ -102,12 +135,9 @@ export function lint(config: DiscoveryConfig, inventory: OrgInventory, last?: { 
         findings.push(onlyExcluded);
         return;
       }
-      const matched = last.rules.filter((r) => {
-        const account = accounts.get(r.account);
-        return account !== undefined && matches(include, account, r, inventory);
-      });
-      if (!matched.length) findings.push({ code: 'include-matches-nothing', level: 'info', ...base, message: `${at} matched no rule in the last run` });
-      else if (matched.every((r) => config.globalExcludes.some((g) => matches(g, accounts.get(r.account)!, r, inventory)))) findings.push(onlyExcluded);
+      const c = counters?.[includeKey(f.name, index)] ?? { matched: 0, excluded: 0 };
+      if (!c.matched) findings.push({ code: 'include-matches-nothing', level: 'info', ...base, message: `${at} matched no rule in the last run` });
+      else if (c.excluded === c.matched) findings.push(onlyExcluded);
     });
   }
   return findings;

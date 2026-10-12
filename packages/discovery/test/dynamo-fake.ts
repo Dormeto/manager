@@ -52,6 +52,10 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
         if (start) found = found.slice(found.findIndex((i) => keyOf(i) === keyOf(start)) + 1);
         const limit = Math.min(input.Limit ?? Infinity, pageSize);
         const page = found.slice(0, limit);
+        if (input.Select === 'COUNT') {
+          const lastCounted = page.at(-1);
+          return { Count: page.length, LastEvaluatedKey: lastCounted && found.length > limit ? { pk: lastCounted.pk ?? { S: 'T#default' }, sk: lastCounted.sk!, ...(index ? { gsi1pk: lastCounted.gsi1pk!, gsi1sk: lastCounted.gsi1sk! } : {}) } : undefined };
+        }
         const last = page.at(-1);
         const lastKey = last && found.length > limit
           ? { pk: last.pk ?? { S: 'T#default' }, sk: last.sk!, ...(index ? { gsi1pk: last.gsi1pk!, gsi1sk: last.gsi1sk! } : {}) }

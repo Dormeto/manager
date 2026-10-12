@@ -65,3 +65,27 @@ describe('loadInventory', () => {
     expect(inventory.accounts.find((a) => a.id === '100000000005')!.tags).toEqual({});
   });
 });
+
+describe('account tags', () => {
+  it('reads them 5 accounts at a time (Organizations allows 10 calls a second)', async () => {
+    const { port } = fakeOrganizations();
+    let running = 0;
+    let peak = 0;
+    const many: OrganizationsPort = {
+      ...port,
+      async listAccountsForParent({ ParentId }) {
+        return { Accounts: ParentId === 'r-1u0b' ? Array.from({ length: 23 }, (_, i) => ({ Id: String(200000000000 + i), Name: `a${i}`, State: 'ACTIVE' })) : [] };
+      },
+      async listTagsForResource({ ResourceId }) {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((r) => setTimeout(r, 2));
+        running -= 1;
+        return { Tags: [{ Key: 'id', Value: ResourceId }] };
+      },
+    };
+    const inventory = await loadInventory(many, { tags: true });
+    expect(peak).toBe(5);
+    expect(inventory.accounts.every((a) => a.tags.id === a.id)).toBe(true);
+  });
+});

@@ -60,21 +60,134 @@ resource "aws_lambda_function" "discovery" {
   source_code_hash = data.archive_file.discovery.output_base64sha256
   timeout          = 900
   memory_size      = 512
-  # One run at a time (the run lock covers the rest).
-  reserved_concurrent_executions = 1
+  # 20 account steps at once (the state machine's Map), plus a plan or a finalize; one run at a time (its lock).
+  reserved_concurrent_executions = 25
 
   environment {
     variables = {
       TABLE     = aws_dynamodb_table.manager.name
       ENV       = var.env
       ROLE_NAME = var.discovery_role_name
+      # Dev only: a synthetic organization added to the real one (acceptance at scale, scale design §7).
+      SYNTHETIC_ACCOUNTS = tostring(var.discovery_synthetic_accounts)
     }
   }
 
   depends_on = [aws_cloudwatch_log_group.discovery, aws_iam_role_policy.discovery]
 }
 
-# Hourly tick: the Lambda runs discovery when the refresh period of the configuration has elapsed.
+# A run (scale design §5): plan, the accounts 20 at a time in a Distributed Map (each child its own execution), finalize.
+# An account step that fails or times out is recorded by finalize as unfinished; the others go on.
+locals {
+  discovery_state_machine = "${local.name}-discovery"
+  discovery_retry = [{
+    ErrorEquals     = ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"]
+    IntervalSeconds = 2
+    MaxAttempts     = 4
+    BackoffRate     = 2
+  }]
+}
+
+resource "aws_iam_role" "discovery_run" {
+  name = "${local.name}-discovery-run"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "states.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = { StringEquals = { "aws:SourceAccount" = var.account_id } }
+    }]
+  })
+}
+
+data "aws_iam_policy_document" "discovery_run" {
+  statement {
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.discovery.arn, "${aws_lambda_function.discovery.arn}:*"]
+  }
+  # The Distributed Map runs each account as a child execution of this state machine.
+  statement {
+    actions   = ["states:StartExecution"]
+    resources = ["arn:aws:states:${var.region}:${var.account_id}:stateMachine:${local.discovery_state_machine}"]
+  }
+  statement {
+    actions   = ["states:DescribeExecution", "states:StopExecution"]
+    resources = ["arn:aws:states:${var.region}:${var.account_id}:execution:${local.discovery_state_machine}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "discovery_run" {
+  name   = "run"
+  role   = aws_iam_role.discovery_run.id
+  policy = data.aws_iam_policy_document.discovery_run.json
+}
+
+resource "aws_sfn_state_machine" "discovery" {
+  name     = local.discovery_state_machine
+  role_arn = aws_iam_role.discovery_run.arn
+  definition = jsonencode({
+    Comment        = "Dormeto discovery run: plan, one step per account, finalize"
+    StartAt        = "Plan"
+    TimeoutSeconds = 10800
+    States = {
+      Plan = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::lambda:invoke"
+        Parameters = { FunctionName = aws_lambda_function.discovery.arn, Payload = { step = "plan", "input.$" = "$" } }
+        OutputPath = "$.Payload"
+        Retry      = local.discovery_retry
+        Next       = "Planned"
+      }
+      Planned = {
+        Type    = "Choice"
+        Choices = [{ Variable = "$.status", StringEquals = "planned", Next = "Accounts" }]
+        Default = "Done"
+      }
+      Accounts = {
+        Type                       = "Map"
+        ItemsPath                  = "$.accounts"
+        ItemSelector               = { step = "account", "account.$" = "$$.Map.Item.Value", "runId.$" = "$.runId" }
+        MaxConcurrency             = 20
+        ToleratedFailurePercentage = 100
+        ItemProcessor = {
+          ProcessorConfig = { Mode = "DISTRIBUTED", ExecutionType = "STANDARD" }
+          StartAt         = "Account"
+          States = {
+            Account = {
+              Type           = "Task"
+              Resource       = "arn:aws:states:::lambda:invoke"
+              Parameters     = { FunctionName = aws_lambda_function.discovery.arn, "Payload.$" = "$" }
+              ResultSelector = { "ok.$" = "$.Payload.ok" }
+              Retry          = local.discovery_retry
+              End            = true
+            }
+          }
+        }
+        ResultPath = null
+        Catch      = [{ ErrorEquals = ["States.ALL"], ResultPath = null, Next = "Finalize" }]
+        Next       = "Finalize"
+      }
+      Finalize = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::lambda:invoke"
+        Parameters = { FunctionName = aws_lambda_function.discovery.arn, Payload = { step = "finalize", "plan.$" = "$" } }
+        OutputPath = "$.Payload"
+        Retry      = local.discovery_retry
+        End        = true
+      }
+      Done = { Type = "Succeed" }
+    }
+  })
+
+  depends_on = [aws_iam_role_policy.discovery_run]
+}
+
+output "discovery_state_machine_arn" {
+  value = aws_sfn_state_machine.discovery.arn
+}
+
+# Hourly tick: the state machine plans a run when the refresh period of the configuration has elapsed.
 resource "aws_sqs_queue" "discovery_failures" {
   name                      = "${local.name}-discovery-failures"
   message_retention_seconds = 1209600
@@ -109,8 +222,8 @@ resource "aws_iam_role" "discovery_scheduler" {
 
 data "aws_iam_policy_document" "discovery_scheduler" {
   statement {
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.discovery.arn]
+    actions   = ["states:StartExecution"]
+    resources = [aws_sfn_state_machine.discovery.arn]
   }
   statement {
     actions   = ["sqs:SendMessage"]
@@ -133,7 +246,7 @@ resource "aws_scheduler_schedule" "discovery" {
   }
 
   target {
-    arn      = aws_lambda_function.discovery.arn
+    arn      = aws_sfn_state_machine.discovery.arn
     role_arn = aws_iam_role.discovery_scheduler.arn
     input    = jsonencode({ source = "schedule" })
 

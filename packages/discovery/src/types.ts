@@ -138,7 +138,20 @@ export const CANDIDATE_STATUSES: readonly Status[] = ['pending-onboarding', 'pen
 export interface AccountScan {
   account: string;
   scannedAt: string;
-  regions: Record<string, { scannedAt: string; emptyRuns: number }>;
+  // emptyRuns: successive scans without any rule; skippedRuns: runs skipped since (scanned again at 6).
+  regions: Record<string, { scannedAt: string; emptyRuns: number; skippedRuns?: number }>;
+  runId?: string; // the run that scanned it last
+  retiredAt?: string; // left the perimeter: its candidates were decided again, once
+  result?: AccountResult;
+}
+
+// What an account step of a run found, for the run record (scale design §5).
+export interface AccountResult {
+  pairs: { region: string; ok: boolean; error?: string; rules: number; ms: number }[];
+  skipped: { reason: string; pairs: number }[];
+  error?: string; // the account could not be reached
+  lint: Record<string, { matched: number; excluded: number }>;
+  written: number;
 }
 
 export interface Candidate extends ScannedRule {
@@ -184,10 +197,11 @@ export interface RunRecord {
   finishedAt: string;
   trigger: 'schedule' | 'manual';
   by?: string;
-  status: 'ok' | 'partial' | 'failed' | 'skipped';
+  status: 'running' | 'ok' | 'partial' | 'failed' | 'skipped'; // running: planned, its accounts being scanned
   skippedReason?: string;
   error?: string;
-  targets: RunTarget[]; // scanned and failed account-regions
+  targets: RunTarget[]; // failed account-regions, and those where rules were found
+  emptyPairs?: number; // account-regions scanned without any rule (R4.5: not listed one by one)
   skipped?: { reason: string; accounts: number; pairs: number }[]; // skipped pairs per reason (absent in older records)
   counts: Partial<Record<Status, number>>;
   lint: LintFinding[];

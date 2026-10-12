@@ -102,10 +102,10 @@ data "aws_iam_policy_document" "api" {
     resources = ["*"]
   }
   statement {
-    # Discovery: run on demand (asynchronous invoke).
+    # Discovery: run on demand (the discovery state machine).
     sid       = "Discovery"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.discovery.arn]
+    actions   = ["states:StartExecution"]
+    resources = [aws_sfn_state_machine.discovery.arn]
   }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -134,16 +134,16 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = {
       # Routers run in the manager account until onboarding deploys them elsewhere (R4).
-      ROUTERS            = local.routers
-      OPERATIONS         = aws_sfn_state_machine.operations.arn
-      MANAGER_ACCOUNT    = var.account_id
-      ENV                = var.env
-      ROUTER_VERSION     = local.router_version
-      TABLE              = aws_dynamodb_table.manager.name
-      VERSION            = local.version
-      USER_POOL_ID       = aws_cognito_user_pool.main.id
-      DASHBOARD_URL      = "https://${var.dashboard_domain}/"
-      DISCOVERY_FUNCTION = aws_lambda_function.discovery.function_name
+      ROUTERS                 = local.routers
+      OPERATIONS              = aws_sfn_state_machine.operations.arn
+      MANAGER_ACCOUNT         = var.account_id
+      ENV                     = var.env
+      ROUTER_VERSION          = local.router_version
+      TABLE                   = aws_dynamodb_table.manager.name
+      VERSION                 = local.version
+      USER_POOL_ID            = aws_cognito_user_pool.main.id
+      DASHBOARD_URL           = "https://${var.dashboard_domain}/"
+      DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
     }
   }
 

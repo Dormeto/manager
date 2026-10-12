@@ -34,6 +34,8 @@ export interface DiscoveryStore {
   deleteCandidates(candidates: Pick<Candidate, 'id' | 'account' | 'region'>[]): Promise<void>;
   getAccountScan(account: string): Promise<AccountScan | null>;
   putAccountScan(scan: AccountScan): Promise<void>;
+  listAccountScans(): Promise<AccountScan[]>;
+  countCandidates(): Promise<Partial<Record<Status, number>>>;
   migrateCandidates(): Promise<number>;
   getInventory(): Promise<OrgInventory | null>;
   putInventory(inventory: OrgInventory): Promise<void>;
@@ -219,8 +221,31 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       const out = await dynamo.send(new GetItemCommand({ TableName: table, Key: { pk: { S: `CAND#${account}` }, sk: { S: ACCOUNT_SCAN } }, ConsistentRead: true }));
       return data<AccountScan>(out.Item);
     },
+    // Indexed (gsi1 ACCT): the run's finalize step reads every account's result.
     async putAccountScan(scan) {
-      await put({ pk: { S: `CAND#${scan.account}` }, sk: { S: ACCOUNT_SCAN }, data: { S: JSON.stringify(scan) } });
+      await put({ pk: { S: `CAND#${scan.account}` }, sk: { S: ACCOUNT_SCAN }, gsi1pk: { S: 'ACCT' }, gsi1sk: { S: scan.account }, data: { S: JSON.stringify(scan) } });
+    },
+    async listAccountScans() {
+      const items = await queryAll({ IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': { S: 'ACCT' } } });
+      return items.map((item) => data<AccountScan>(item)!).filter(Boolean);
+    },
+    // Candidates per status, counted on the index (no item read back).
+    async countCandidates() {
+      const counts: Partial<Record<Status, number>> = {};
+      await Promise.all(CANDIDATE_STATUSES.map(async (status) => {
+        let n = 0;
+        let start: Item | undefined;
+        do {
+          const page = await dynamo.send(new QueryCommand({
+            TableName: table, IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': { S: `CS#${status}` } }, Select: 'COUNT',
+            ...(start ? { ExclusiveStartKey: start } : {}),
+          }));
+          n += page.Count ?? 0;
+          start = page.LastEvaluatedKey;
+        } while (start);
+        if (n) counts[status] = n;
+      }));
+      return Object.fromEntries(CANDIDATE_STATUSES.filter((st) => counts[st]).map((st) => [st, counts[st]!])) as Partial<Record<Status, number>>;
     },
     // Candidates of versions before R4.5 (partition T#default): moved to their account partition, once (dev migration).
     async migrateCandidates() {

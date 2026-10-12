@@ -1,15 +1,23 @@
-// One discovery run (spec section 3): lock, due check, organization inventory, accounts and pairs of the perimeter,
-// one AssumeRole per account, scans in parallel, candidate statuses, lint, run record.
+// A discovery run in steps (scale design §5): plan (lock, due check, organization inventory, the accounts of the
+// perimeter), one step per account (its role assumed, its regions scanned 8 at a time, the candidates that changed
+// written, its result recorded), finalize (accounts that left the perimeter, run record, lint, lock released). Step
+// Functions runs the account steps in a Distributed Map; runDiscovery runs the three in process.
 import { DEFAULT_CONFIG } from './config.js';
 import { withExclusions } from './exclusions.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
-import { lint } from './lint.js';
+import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
 import { loadInventory, type OrganizationsPort } from './org.js';
 import type { DiscoveryStore } from './store.js';
-import type { Candidate, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule, Status } from './types.js';
+import { SYNTHETIC_REGIONS, isSynthetic, syntheticInventory, syntheticRules } from './synthetic.js';
+import type { AccountResult, Candidate, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
 
 const HOUR_MS = 3_600_000;
+// A region without any rule in EMPTY_RUNS successive scans is scanned once every SKIP_RUNS + 1 runs.
+const EMPTY_RUNS = 3;
+const SKIP_RUNS = 6;
+const EMPTY_REASON = 'no load balancer in 3 runs: scanned every 7th run';
+const UNFINISHED = 'the account step did not finish (timed out or failed)';
 
 export interface Logger {
   info(event: string, data?: object): void;
@@ -26,11 +34,23 @@ export interface RunDeps {
   enabledRegions(credentials: unknown): Promise<string[]>;
   scan(credentials: unknown, where: { account: string; region: string }): Promise<ScannedRule[]>;
   now?: () => number;
-  concurrency?: number;
+  concurrency?: number; // regions of an account scanned at once (8)
+  synthetic?: { accounts: number }; // dev only: a synthetic organization added to the real one (acceptance at scale)
   log?: Logger;
 }
 
+export interface RunPlan {
+  runId: string; // the run's start time
+  status: 'planned' | 'skipped' | 'failed';
+  trigger: 'schedule' | 'manual';
+  by?: string;
+  accounts: string[]; // to scan, one step each
+  skipped: NonNullable<RunRecord['skipped']>; // accounts not scanned, per reason
+  record?: RunRecord; // when skipped or failed
+}
+
 const silent: Logger = { info() {}, warn() {}, error() {} };
+const iso = (ms: number) => new Date(ms).toISOString();
 
 // Run work on the items with at most `size` running at a time.
 async function pool<T>(items: T[], size: number, work: (item: T) => Promise<void>): Promise<void> {
@@ -49,87 +69,149 @@ function singleAccount(id: string): OrgInventory {
   return { accounts: [{ id, name: id, ouPath: [], tags: {} }], ous: {} };
 }
 
-export async function runDiscovery(deps: RunDeps, event: { source: 'schedule' | 'manual'; by?: string }): Promise<RunRecord> {
+// Manual exclusions act as global excludes (an excluded account is never read).
+async function currentConfig(deps: RunDeps, now: () => number): Promise<DiscoveryConfig> {
+  return withExclusions((await deps.store.getConfig())?.config ?? DEFAULT_CONFIG, await deps.store.listExclusions(), now());
+}
+
+async function inventoryOf(deps: RunDeps, config: DiscoveryConfig): Promise<OrgInventory> {
+  const inventory = config.mode === 'organization'
+    ? await loadInventory(requireOrganizations(deps), { tags: usesAccountTags(config) })
+    : singleAccount(deps.managerAccount);
+  if (!deps.synthetic?.accounts) return inventory;
+  const synthetic = syntheticInventory(deps.synthetic.accounts, Object.keys(inventory.ous).find((id) => inventory.ous[id]!.parent === null));
+  return { accounts: [...inventory.accounts, ...synthetic.accounts], ous: { ...synthetic.ous, ...inventory.ous } };
+}
+
+// Reasons, with the accounts and account-regions each one concerns.
+function bySkipReason(entries: { account: string; reason: string; pairs: number }[]): NonNullable<RunRecord['skipped']> {
+  const out = new Map<string, { accounts: Set<string>; pairs: number }>();
+  for (const e of entries) {
+    const entry = out.get(e.reason) ?? { accounts: new Set<string>(), pairs: 0 };
+    entry.accounts.add(e.account);
+    entry.pairs += e.pairs;
+    out.set(e.reason, entry);
+  }
+  return [...out].map(([reason, e]) => ({ reason, accounts: e.accounts.size, pairs: e.pairs }));
+}
+
+export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manual'; by?: string }): Promise<RunPlan> {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? silent;
-  const startedAt = new Date(now()).toISOString();
-  const base = { startedAt, trigger: event.source, ...(event.by ? { by: event.by } : {}) };
+  const runId = iso(now());
+  const who = { trigger: event.source, ...(event.by ? { by: event.by } : {}) };
   const record = (rest: Partial<RunRecord> & Pick<RunRecord, 'status'>): RunRecord => ({
-    ...base, finishedAt: new Date(now()).toISOString(), targets: [], skipped: [], counts: {}, lint: [], ...rest,
+    startedAt: runId, ...who, finishedAt: iso(now()), targets: [], skipped: [], counts: {}, lint: [], ...rest,
   });
-  // Manual exclusions act as global excludes (an excluded account is never read).
-  const config = withExclusions((await deps.store.getConfig())?.config ?? DEFAULT_CONFIG, await deps.store.listExclusions(), now());
+  const ended = (status: 'skipped' | 'failed', rec: RunRecord): RunPlan => ({ runId, status, ...who, accounts: [], skipped: [], record: rec });
+  const config = await currentConfig(deps, now);
 
   if (event.source === 'schedule') {
     const last = await deps.store.lastRun({ completed: true });
     // A failed run is retried at the next tick; a successful one waits for the refresh period.
     if (last && last.status !== 'failed' && now() - Date.parse(last.startedAt) < config.refreshHours * HOUR_MS) {
-      return record({ status: 'skipped', skippedReason: 'not due' });
+      return ended('skipped', record({ status: 'skipped', skippedReason: 'not due' }));
     }
   }
-  if (!(await deps.store.acquireLock(startedAt))) {
+  if (!(await deps.store.acquireLock(runId))) {
     const skipped = record({ status: 'skipped', skippedReason: 'another run is in progress' });
     if (event.source === 'manual') await deps.store.putRun(skipped);
-    return skipped;
+    return ended('skipped', skipped);
   }
-
   try {
-    const run = await scanPerimeter(deps, config, now, log);
-    const result = record(run);
-    await deps.store.putRun(result);
-    log.info('DiscoveryRun', { status: result.status, targets: result.targets.length, counts: result.counts });
-    return result;
+    const inventory = await inventoryOf(deps, config);
+    await deps.store.putInventory(inventory);
+    const plans = scanAccounts(config, inventory);
+    const pairsOf = config.regions.includes('*') ? 1 : config.regions.length;
+    const skipped = bySkipReason(plans.filter((p) => !p.scan).map((p) => ({ account: p.account, reason: p.reason, pairs: pairsOf })));
+    const accounts = plans.filter((p) => p.scan).map((p) => p.account);
+    await deps.store.putRun(record({ status: 'running', finishedAt: runId, skipped }));
+    log.info('DiscoveryPlanned', { runId, accounts: accounts.length });
+    return { runId, status: 'planned', ...who, accounts, skipped };
   } catch (err) {
     const failed = record({ status: 'failed', error: errorText(err) });
     log.error('DiscoveryRunFailed', { error: failed.error });
     await deps.store.putRun(failed);
-    return failed;
-  } finally {
-    await deps.store.releaseLock(startedAt);
+    await deps.store.releaseLock(runId);
+    return ended('failed', failed);
   }
 }
 
-async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => number, log: Logger): Promise<Pick<RunRecord, 'status' | 'targets' | 'skipped' | 'counts' | 'lint'>> {
-  const concurrency = deps.concurrency ?? 8;
-  const allRegions = config.regions.includes('*');
-  const inventory = config.mode === 'organization'
-    ? await loadInventory(requireOrganizations(deps), { tags: usesAccountTags(config) })
-    : singleAccount(deps.managerAccount);
-
-  // Credentials first, only for the accounts of the perimeter: never for an excluded one.
-  const credentials = new Map<string, unknown>();
-  const accountErrors = new Map<string, string>();
-  const enabled: Record<string, string[]> = {};
-  await pool(scanAccounts(config, inventory).filter((p) => p.scan), concurrency, async ({ account }) => {
-    try {
-      const c = await deps.assumeRole(account);
-      credentials.set(account, c);
-      if (allRegions) enabled[account] = await deps.enabledRegions(c);
-    } catch (err) {
-      const denied = (err as Error).name === 'AccessDenied' || /not authorized/i.test((err as Error).message ?? '');
-      accountErrors.set(account, denied ? `no access: deploy ${deps.roleName ?? 'DmtDiscoveryRole'} to this account` : `assume role failed: ${errorText(err)}`);
-      log.warn('DiscoveryAccountFailed', { account, error: accountErrors.get(account) });
-    }
-  });
-
-  const pairs = targetPairs(config, inventory, enabled);
-  const results: PairResult[] = [];
-  for (const p of pairs) {
-    const error = accountErrors.get(p.account);
-    if (p.scan && error) results.push({ account: p.account, region: p.region, ok: false, error, rules: [], ms: 0 });
+// Candidates compared without the time they were last seen (the account scan state keeps it per region).
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).filter((k) => k !== 'lastSeenAt' && (value as Record<string, unknown>)[k] !== undefined).sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`).join(',')}}`;
   }
-  await pool(pairs.filter((p) => p.scan && credentials.has(p.account)), concurrency, async ({ account, region }) => {
+  return JSON.stringify(value);
+}
+
+// One account of a run: its role, its regions (8 at a time, an empty one every 7th run only), the candidates that
+// changed written, its result recorded with its scan state. A failed account changes none of its candidates.
+export async function scanAccount(deps: RunDeps, { runId, account }: { runId: string; account: string }): Promise<{ account: string; ok: boolean; written: number }> {
+  const now = deps.now ?? Date.now;
+  const log = deps.log ?? silent;
+  const at = iso(now());
+  const config = await currentConfig(deps, now);
+  const inventory = (await deps.store.getInventory()) ?? singleAccount(deps.managerAccount);
+  const state = await deps.store.getAccountScan(account);
+  const allRegions = config.regions.includes('*');
+  const synthetic = isSynthetic(account);
+
+  let credentials: unknown = null;
+  let error: string | undefined;
+  let enabled: string[] = [];
+  try {
+    if (!synthetic) credentials = await deps.assumeRole(account);
+    if (allRegions) enabled = synthetic ? SYNTHETIC_REGIONS : await deps.enabledRegions(credentials);
+  } catch (err) {
+    const denied = (err as Error).name === 'AccessDenied' || /not authorized/i.test((err as Error).message ?? '');
+    error = denied ? `no access: deploy ${deps.roleName ?? 'DmtDiscoveryRole'} to this account` : `assume role failed: ${errorText(err)}`;
+    log.warn('DiscoveryAccountFailed', { account, error });
+  }
+
+  const regions = { ...(state?.regions ?? {}) };
+  const results: PairResult[] = [];
+  const skipped: { reason: string; pairs: number }[] = [];
+  const skip = (reason: string) => {
+    const entry = skipped.find((x) => x.reason === reason);
+    if (entry) entry.pairs += 1;
+    else skipped.push({ reason, pairs: 1 });
+  };
+  const toScan: string[] = [];
+  const own = { accounts: inventory.accounts.filter((a) => a.id === account), ous: inventory.ous };
+  for (const p of targetPairs(config, own, { [account]: enabled })) {
+    if (!p.scan) {
+      skip(p.reason);
+      continue;
+    }
+    if (error) {
+      results.push({ account, region: p.region, ok: false, error, rules: [], ms: 0 });
+      continue;
+    }
+    const prior = regions[p.region];
+    if (prior && prior.emptyRuns >= EMPTY_RUNS && (prior.skippedRuns ?? 0) < SKIP_RUNS) {
+      regions[p.region] = { ...prior, skippedRuns: (prior.skippedRuns ?? 0) + 1 };
+      skip(EMPTY_REASON);
+      continue;
+    }
+    toScan.push(p.region);
+  }
+  await pool(toScan, deps.concurrency ?? 8, async (region) => {
     const started = now();
     try {
-      const rules = await deps.scan(credentials.get(account), { account, region });
+      const rules = synthetic ? syntheticRules(account, region) : await deps.scan(credentials, { account, region });
       results.push({ account, region, ok: true, rules, ms: now() - started });
+      regions[region] = { scannedAt: at, emptyRuns: rules.length ? 0 : (regions[region]?.emptyRuns ?? 0) + 1, skippedRuns: 0 };
     } catch (err) {
       results.push({ account, region, ok: false, error: errorText(err), rules: [], ms: now() - started });
       log.warn('DiscoveryPairFailed', { account, region, error: errorText(err) });
     }
   });
 
-  const previous = new Map((await deps.store.listCandidates()).map((c) => [c.id, c]));
+  const stored = new Map((await deps.store.accountCandidates(account)).map((c) => [c.id, c]));
+  const previous = new Map(stored);
   // A rule candidate (earlier versions, or a rule that rejoined a target group) now inside a target group candidate is
   // merged into it: its dismissal, first seen date and history carry over, and it is deleted rather than gone.
   const groupOf = new Map(results.flatMap((r) => r.rules.flatMap((c) => (c.rules ?? []).filter((x) => x.id !== c.id).map((x) => [x.id, c.id] as const))));
@@ -139,43 +221,98 @@ async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => 
   }
   const supersededCandidates = superseded.map((id) => previous.get(id)!);
   for (const id of superseded) previous.delete(id);
+  // With regions ["*"], an account without credentials has no known regions: its candidates' regions count as failed.
+  const reported = [...results];
+  if (allRegions && error) {
+    for (const region of new Set([...previous.values()].map((c) => c.region))) results.push({ account, region, ok: false, error, rules: [], ms: 0 });
+  }
+
+  const next = nextCandidates({ previous, results, inventory, config, now: now() });
+  const changed = next.filter((c) => {
+    const before = stored.get(c.id);
+    return !before || canonical(before) !== canonical(c);
+  });
+  await deps.store.putCandidates(changed);
   if (superseded.length) {
     await deps.store.deleteCandidates(supersededCandidates);
-    log.info('DiscoveryCandidatesMerged', { count: superseded.length });
+    log.info('DiscoveryCandidatesMerged', { account, count: superseded.length });
   }
-  // With regions ["*"], an account without credentials has no known regions: its candidates' regions count as failed.
-  const failedRegions = allRegions ? [...accountErrors.keys()].flatMap((account) => [...new Set([...previous.values()].filter((c) => c.account === account).map((c) => c.region))].map((region) => ({ account, region }))) : [];
-  for (const { account, region } of failedRegions) results.push({ account, region, ok: false, error: accountErrors.get(account)!, rules: [], ms: 0 });
+  const result: AccountResult = {
+    pairs: reported.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms })),
+    skipped,
+    ...(error ? { error } : {}),
+    lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
+    written: changed.length,
+  };
+  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result });
+  return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+}
 
-  const changed = nextCandidates({ previous, results, inventory, config, now: now() });
-  await deps.store.putCandidates(changed);
-  await deps.store.putInventory(inventory);
+// The end of a run: the candidates of accounts that left the perimeter decided again (once), the run record from the
+// account results (an account without one did not finish), the counts from the index, the lint, the lock released.
+export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunRecord> {
+  const now = deps.now ?? Date.now;
+  const log = deps.log ?? silent;
+  if (plan.status !== 'planned') return plan.record!;
+  const who = { trigger: plan.trigger, ...(plan.by ? { by: plan.by } : {}) };
+  try {
+    const config = await currentConfig(deps, now);
+    const inventory = (await deps.store.getInventory()) ?? singleAccount(deps.managerAccount);
+    const scans = await deps.store.listAccountScans();
+    const inRun = new Set(plan.accounts);
+    for (const left of scans.filter((s) => !inRun.has(s.account) && !s.retiredAt)) {
+      const previous = new Map((await deps.store.accountCandidates(left.account)).map((c) => [c.id, c]));
+      await deps.store.putCandidates(nextCandidates({ previous, results: [], inventory, config, now: now() }));
+      await deps.store.putAccountScan({ ...left, retiredAt: plan.runId });
+    }
 
-  const merged = new Map<string, Candidate>(previous);
-  for (const c of changed) merged.set(c.id, c);
-  const counts: Partial<Record<Status, number>> = {};
-  for (const c of merged.values()) counts[c.status] = (counts[c.status] ?? 0) + 1;
-
-  // Skipped pairs are summarized per reason: listing them all would not fit an item for a large organization.
-  const skippedByReason = new Map<string, { accounts: Set<string>; pairs: number }>();
-  for (const p of pairs.filter((p) => !p.scan)) {
-    const entry = skippedByReason.get(p.reason) ?? { accounts: new Set<string>(), pairs: 0 };
-    entry.accounts.add(p.account);
-    entry.pairs += 1;
-    skippedByReason.set(p.reason, entry);
+    const results = new Map(scans.filter((s) => s.runId === plan.runId && inRun.has(s.account)).map((s) => [s.account, s.result!]));
+    const targets: RunTarget[] = [];
+    const skippedPairs: { account: string; reason: string; pairs: number }[] = [];
+    const counters: LintCounters[] = [];
+    let emptyPairs = 0;
+    for (const account of plan.accounts) {
+      const r = results.get(account);
+      if (!r) {
+        targets.push({ account, region: '*', status: 'error', error: UNFINISHED });
+        continue;
+      }
+      if (r.error && !r.pairs.length) targets.push({ account, region: '*', status: 'error', error: r.error });
+      for (const p of r.pairs) {
+        if (!p.ok) targets.push({ account, region: p.region, status: 'error', error: p.error ?? 'failed', ms: p.ms });
+        else if (p.rules) targets.push({ account, region: p.region, status: 'ok', ms: p.ms, rules: p.rules });
+        else emptyPairs += 1;
+      }
+      for (const s of r.skipped) skippedPairs.push({ account, ...s });
+      counters.push(r.lint);
+    }
+    targets.sort((a, b) => a.account.localeCompare(b.account) || a.region.localeCompare(b.region));
+    const errors = targets.filter((t) => t.status === 'error').length;
+    const status = errors === 0 ? 'ok' : errors === targets.length + emptyPairs ? 'failed' : 'partial';
+    const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
+    const record: RunRecord = {
+      startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,
+      counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),
+    };
+    await deps.store.putRun(record);
+    log.info('DiscoveryRun', { status, accounts: plan.accounts.length, errors, counts: record.counts });
+    return record;
+  } catch (err) {
+    const failed: RunRecord = { startedAt: plan.runId, ...who, finishedAt: iso(now()), status: 'failed', error: errorText(err), targets: [], skipped: plan.skipped, counts: {}, lint: [] };
+    log.error('DiscoveryRunFailed', { error: failed.error });
+    await deps.store.putRun(failed);
+    return failed;
+  } finally {
+    await deps.store.releaseLock(plan.runId);
   }
-  const skipped = [...skippedByReason].map(([reason, e]) => ({ reason, accounts: e.accounts.size, pairs: e.pairs }));
+}
 
-  const targets: RunTarget[] = [
-    ...(allRegions ? [...accountErrors].map(([account, error]): RunTarget => ({ account, region: '*', status: 'error', error })) : []),
-    ...results.filter((r) => !failedRegions.some((f) => f.account === r.account && f.region === r.region)).map((r): RunTarget => (
-      r.ok ? { account: r.account, region: r.region, status: 'ok', ms: r.ms, rules: r.rules.length } : { account: r.account, region: r.region, status: 'error', error: r.error!, ms: r.ms }
-    )),
-  ].sort((a, b) => a.account.localeCompare(b.account) || a.region.localeCompare(b.region));
-
-  const errors = targets.filter((t) => t.status === 'error').length;
-  const status = errors === 0 ? 'ok' : errors === targets.length ? 'failed' : 'partial';
-  return { status, targets, skipped, counts, lint: lint(config, inventory, { rules: results.flatMap((r) => r.rules) }) };
+// The three steps in process, the accounts one after another.
+export async function runDiscovery(deps: RunDeps, event: { source: 'schedule' | 'manual'; by?: string }): Promise<RunRecord> {
+  const plan = await planRun(deps, event);
+  if (plan.status !== 'planned') return plan.record!;
+  for (const account of plan.accounts) await scanAccount(deps, { runId: plan.runId, account });
+  return finalizeRun(deps, plan);
 }
 
 // The previous record of a target group candidate built from the rule candidates merged into it.

@@ -94,21 +94,18 @@ const ses: SesPort = {
   createEmailIdentity: (input) => sesClient.send(new CreateEmailIdentityCommand(input)),
 };
 
-// Discovery: items of the manager table, runs on demand by the discovery Lambda (asynchronous).
+const sfn = new SFNClient({});
+
+// Discovery: items of the manager table, runs on demand by the discovery state machine (plan, accounts, finalize).
 const discovery = {
   store: createStore({ dynamo, table }),
   async run(by: string) {
-    await lambdaFor(process.env.AWS_REGION ?? 'eu-west-1').send(new InvokeCommand({
-      FunctionName: process.env.DISCOVERY_FUNCTION,
-      InvocationType: 'Event',
-      Payload: Buffer.from(JSON.stringify({ source: 'manual', by })),
-    }));
+    await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.DISCOVERY_STATE_MACHINE, input: JSON.stringify({ source: 'manual', by }) }));
   },
 };
 
 // Operations: the API creates them and starts the workflow; the operations Lambda runs their steps.
 const records = createRecords({ dynamo, table });
-const sfn = new SFNClient({});
 const unused = () => { throw new Error('steps run in the operations Lambda'); };
 const engine = createEngine({
   records,

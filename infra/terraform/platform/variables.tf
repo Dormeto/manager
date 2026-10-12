@@ -107,3 +107,13 @@ variable "discovery_role_name" {
   type        = string
   default     = "DmtDiscoveryRole"
 }
+
+variable "discovery_synthetic_accounts" {
+  description = "Dev only: a synthetic organization of this many accounts added to the real one by discovery (acceptance at scale); 0 in every other environment."
+  type        = number
+  default     = 0
+  validation {
+    condition     = var.discovery_synthetic_accounts >= 0 && var.discovery_synthetic_accounts <= 1000
+    error_message = "discovery_synthetic_accounts must be between 0 and 1000."
+  }
+}

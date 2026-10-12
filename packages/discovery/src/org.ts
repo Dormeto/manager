@@ -2,6 +2,8 @@
 // (root first) and, when a criterion needs them, their tags.
 import type { Account, OrgInventory } from './types.js';
 
+const TAG_READS = 5;
+
 type Page<K extends string, T> = { [key in K]?: T[] } & { NextToken?: string };
 
 export interface OrganizationsPort {
@@ -48,10 +50,15 @@ export async function loadInventory(org: OrganizationsPort, { tags = false }: { 
     }
   }
   if (tags) {
-    for (const account of accounts) {
-      const list = await pages<{ Key?: string; Value?: string }>((t) => org.listTagsForResource({ ResourceId: account.id, NextToken: t }), 'Tags');
-      account.tags = Object.fromEntries(list.map((t) => [t.Key ?? '', t.Value ?? '']));
-    }
+    // 5 accounts at a time: Organizations allows 10 calls a second (the SDK retries a throttled one).
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(TAG_READS, accounts.length) }, async () => {
+      while (next < accounts.length) {
+        const account = accounts[next++]!;
+        const list = await pages<{ Key?: string; Value?: string }>((t) => org.listTagsForResource({ ResourceId: account.id, NextToken: t }), 'Tags');
+        account.tags = Object.fromEntries(list.map((t) => [t.Key ?? '', t.Value ?? '']));
+      }
+    }));
   }
   return { accounts, ous };
 }

@@ -25,6 +25,8 @@ export function memoryStore(candidates: Candidate[] = [], run: RunRecord | null 
     async accountCandidates(account: string) { return [...items.values()].filter((c) => c.account === account); },
     async getAccountScan() { return null; },
     async putAccountScan() {},
+    async listAccountScans() { return []; },
+    async countCandidates() { return {}; },
     async migrateCandidates() { return 0; },
     async getInventory(): Promise<OrgInventory | null> { return { accounts: [{ id: '121014831971', name: 'dormeto', ouPath: ['r-1u0b'], tags: {} }], ous: { 'r-1u0b': { name: 'Root', parent: null } } }; },
     async putInventory() {},
