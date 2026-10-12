@@ -20,7 +20,7 @@ const target = (e: Estimate) => (e.organization
 export function summaryLines(e: Estimate): string[] {
   const t = e.totals;
   const lines = [
-    `About ${usd(t.usdMonthWindow)} a month at a ${windowAdjective(e.options.window)} idle window (${usd(t.usdMonthRecommended)} at the recommended windows) for ${n(t.workloads, 'workload')} in ${restricted(e) ? `${e.accounts} of the organization's ${n(e.accountsListed, 'account')}` : n(e.accounts, 'account')}; Dormeto costs about ${usd(t.dormetoMonth)} a month: net about ${usd(net(t))}.`,
+    `About ${usd(t.usdMonthWindow)} a month at a ${windowAdjective(e.options.window)} idle window (${usd(t.usdMonthRecommended)} at the recommended windows) for ${n(t.workloads, 'workload')} in ${restricted(e) ? `${e.accounts} of the organization's ${n(e.accountsListed, 'account')}` : n(e.accounts, 'account')}; Dormeto costs about ${usd(t.dormetoMonth)} a month${costParts(e)}: net about ${usd(net(t))}.`,
   ];
   if (e.why) lines.push(e.why);
   const top = [...e.workloads].sort((a, b) => b.atWindow.usdMonth - a.atWindow.usdMonth).slice(0, 10);
@@ -37,8 +37,40 @@ export function summaryLines(e: Estimate): string[] {
   return lines;
 }
 
-const totalsHead = (label: string, e: Estimate) => `| ${label} | Workloads | At ${windowWords(e.options.window)} | At the recommended windows | Dormeto |`;
-const totalsRow = (label: string, t: Totals) => `| ${label} | ${t.workloads} | ${usd(t.usdMonthWindow)} | ${usd(t.usdMonthRecommended)} | ${usd(t.dormetoMonth)} |`;
+// The accounts' totals, a row each, and the total (the manager in its Dormeto cost).
+function accountsTable(e: Estimate): string[] {
+  const at = `At ${windowWords(e.options.window)}`;
+  const name = (account: string) => (e.accountNames[account] && e.accountNames[account] !== account ? cell(e.accountNames[account]!) : '');
+  const t = e.totals;
+  return [
+    `| Account | Name | Workloads | ${at} | At the recommended windows | Dormeto | Net ${at.toLowerCase()} |`, '|---|---|---|---|---|---|---|',
+    ...Object.entries(e.byAccount).map(([account, a]) => `| ${account} | ${name(account)} | ${a.workloads} | ${usd(a.usdMonthWindow)} | ${usd(a.usdMonthRecommended)} | ${usd(a.dormetoMonth)} | ${usd(net(a))} |`),
+    `| **Total** | | **${t.workloads}** | **${usd(t.usdMonthWindow)}** | **${usd(t.usdMonthRecommended)}** | **${usd(t.dormetoMonth)}** | **${usd(net(t))}** |`,
+    ...(e.dormeto.manager.count ? ['', `The total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation.`] : []),
+  ];
+}
+
+// Each account and region with a router, while they are few enough to read.
+const ROUTERS_LISTED = 6;
+// Dormeto's cost by part, each with its computation, and the total.
+function costTable(e: Estimate): string[] {
+  const { manager, routers, workloads } = e.dormeto;
+  const times = (p: { count: number; unitMonth: number }) => `${p.count} × ${usd(p.unitMonth)}`;
+  const where = routers.where.length && routers.where.length <= ROUTERS_LISTED ? ` (${routers.where.map((w) => `${w.account} ${w.region}`).join(', ')})` : '';
+  return [
+    '| Part | Computation | A month |', '|---|---|---|',
+    `| Manager | ${times(manager)}: one per installation, whatever the number of accounts and workloads | ${usd(manager.usdMonth)} |`,
+    `| Routers | ${times(routers)}: one per account and region with workloads${where} | ${usd(routers.usdMonth)} |`,
+    `| Workloads | ${times(workloads)}: each workload's naps, wakes and idle checks | ${usd(workloads.usdMonth)} |`,
+    `| **Total** | | **${usd(e.dormeto.usdMonth)}** |`,
+  ];
+}
+
+// The summary's computation of Dormeto's cost.
+const costParts = (e: Estimate) => {
+  const { manager, routers, workloads } = e.dormeto;
+  return manager.count ? ` (${usd(manager.usdMonth)} for the manager, ${n(routers.count, 'router')} × ${usd(routers.unitMonth)}, ${n(workloads.count, 'workload')} × ${usd(workloads.unitMonth)})` : '';
+};
 
 export function markdownReport(e: Estimate): string {
   const t = e.totals;
@@ -50,11 +82,9 @@ export function markdownReport(e: Estimate): string {
     '## Totals', '',
     `Dormeto would save about **${usd(t.usdMonthWindow)} a month** with a ${windowAdjective(o.window)} idle window (${usd(t.usdMonthRecommended)} with each workload's recommended window), for ${n(t.workloads, 'workload')}. Dormeto itself costs about ${usd(t.dormetoMonth)} a month: **net about ${usd(net(t))}**.`, '',
     '### By account', '',
-    totalsHead('Account', e), '|---|---|---|---|---|',
-    ...Object.entries(e.byAccount).map(([account, a]) => totalsRow(account, a)), '',
-    '### By region', '',
-    totalsHead('Region', e), '|---|---|---|---|---|',
-    ...Object.entries(e.byRegion).map(([region, r]) => totalsRow(region, r)), '',
+    ...accountsTable(e), '',
+    '### Dormeto\'s cost', '',
+    ...costTable(e), '',
     '## Workloads', '',
     `| Account | Region | Load balancer | Hosts | Backend | At ${windowWords(o.window)} | Wakes a day | Recommended | Saving | Wakes a day |`, '|---|---|---|---|---|---|---|---|---|---|',
     ...[...e.workloads].sort((a, b) => b.atWindow.usdMonth - a.atWindow.usdMonth).map((x) => {

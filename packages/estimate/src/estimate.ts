@@ -19,6 +19,9 @@ export interface WorkloadEstimate {
 }
 export interface LeftOut { workload: Workload; reason: string }
 export interface Totals { workloads: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number }
+// Dormeto's cost by part: how many, the cost of one a month, theirs.
+export interface CostPart { count: number; unitMonth: number; usdMonth: number }
+export interface DormetoCost { manager: CostPart; routers: CostPart & { where: { account: string; region: string }[] }; workloads: CostPart; usdMonth: number }
 export interface Estimate {
   generatedAt: string;
   organization: string | null;
@@ -27,7 +30,9 @@ export interface Estimate {
   accounts: number;
   // The accounts reached before --accounts restricted them.
   accountsListed: number;
+  accountNames: Record<string, string>;
   totals: Totals;
+  dormeto: DormetoCost;
   byAccount: Record<string, Totals>;
   byRegion: Record<string, Totals>;
   workloads: WorkloadEstimate[];
@@ -134,9 +139,17 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
     }
   }
   if (workloads.length) totals.dormetoMonth += DORMETO_COST.manager;
+  const part = (count: number, unitMonth: number): CostPart => ({ count, unitMonth, usdMonth: count * unitMonth });
+  const dormeto: DormetoCost = {
+    manager: part(workloads.length ? 1 : 0, DORMETO_COST.manager),
+    routers: { ...part(routed.size, DORMETO_COST.router), where: [...routed].map((w) => ({ account: w.split('#')[0]!, region: w.split('#')[1]! })) },
+    workloads: part(workloads.length, DORMETO_COST.workload),
+    usdMonth: totals.dormetoMonth,
+  };
   return {
     generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length, accountsListed: reached.listed,
-    totals, byAccount, byRegion, workloads, leftOut,
+    accountNames: Object.fromEntries(reached.accounts.map((a) => [a.account, a.name])),
+    totals, dormeto, byAccount, byRegion, workloads, leftOut,
     ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
     unreachable: reached.unreachable,
     failedRegions: regions.filter((r) => r.error).map((r) => ({ account: r.account, region: r.region, error: r.error! })),

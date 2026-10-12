@@ -83,6 +83,14 @@ describe('the estimate', () => {
     expect(e.byRegion['eu-west-1']).toMatchObject({ workloads: 3 });
     expect(e.byRegion['eu-west-1']!.dormetoMonth).toBeCloseTo(2 * DORMETO_COST.router + 3 * DORMETO_COST.workload, 9);
     expect(e).toMatchObject({ organization: 'o-abc123', accounts: 2, generatedAt: new Date(NOW).toISOString() });
+    expect(e.accountNames).toEqual({ [A]: 'prod', [B]: 'staging' });
+    // Dormeto's cost by part, each with its computation: the manager once, a router per account and region with workloads.
+    expect(e.dormeto).toMatchObject({
+      manager: { count: 1, unitMonth: DORMETO_COST.manager, usdMonth: DORMETO_COST.manager },
+      routers: { count: 2, unitMonth: DORMETO_COST.router, usdMonth: 2 * DORMETO_COST.router, where: [{ account: A, region: 'eu-west-1' }, { account: B, region: 'eu-west-1' }] },
+      workloads: { count: 3, unitMonth: DORMETO_COST.workload, usdMonth: 3 * DORMETO_COST.workload },
+    });
+    expect(e.dormeto.usdMonth).toBeCloseTo(e.totals.dormetoMonth, 9);
     expect(e.assumptions.join(' ')).toContain('Every request counts');
   });
 
@@ -98,6 +106,11 @@ describe('the estimate', () => {
     const merged = [...daily, ...evening].sort((x, y) => x[0] - y[0]);
     expect(e.workloads[0]!.atWindow.usdMonth).toBeCloseTo(row(await advise(merged, [T3]), 60).usdMonth!, 9);
     expect(e.leftOut).toEqual([{ workload: b, reason: 'its backend (asg shared-asg) also serves shop-a: estimated there, with every target group\'s requests' }]);
+  });
+
+  it('no workload to estimate: Dormeto costs nothing, not even the manager', async () => {
+    const e = await run({ regions: [] });
+    expect(e.dormeto).toMatchObject({ manager: { count: 0, usdMonth: 0 }, routers: { count: 0, usdMonth: 0, where: [] }, workloads: { count: 0, usdMonth: 0 }, usdMonth: 0 });
   });
 
   it('prices that could not be read are said so, never as a missing list price', async () => {
