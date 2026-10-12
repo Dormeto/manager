@@ -5,6 +5,7 @@ import type { BackendKind, RuleRef, ScannedRule } from './types.js';
 
 const WORKLOAD_TAG = 'dormeto:workload';
 const ROLE_TAG = 'dormeto:role';
+const SHADOWS_TAG = 'dormeto:shadows'; // a Dormeto rule before a customer rule (R4c)
 const HOUR_MS = 3_600_000;
 const IDLE_WINDOW_HOURS = 168;
 
@@ -186,6 +187,7 @@ interface Row {
   rule: Rule;
   forward: Forward;
   managed?: string; // workload of a rule tagged dormeto:workload
+  shadowedBy?: string; // workload whose shadow rule (dormeto:shadows) covers this customer rule
   app?: TargetGroup; // the one application target group it forwards to
 }
 
@@ -218,6 +220,12 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
       const g = groups.get(row.forward.groups[0]!);
       if (g && g.TargetType !== 'lambda' && g.TargetType !== 'alb') row.app = g;
     }
+  }
+  // Customer rules covered by a workload's shadow (R4c): left untouched, they are part of the workload.
+  for (const row of visible) {
+    const covered = row.managed ? tags.get(row.rule.RuleArn ?? '')?.[SHADOWS_TAG] : undefined;
+    const customer = covered ? visible.find((r) => r.rule.RuleArn === covered) : undefined;
+    if (customer) customer.shadowedBy = row.managed;
   }
   // Target groups receiving traffic from a weighted forward of several target groups (canary, blue-green).
   const weighted = new Set(visible.filter((r) => !r.managed && r.forward.type === 'forward' && r.forward.groups.length > 1).flatMap((r) => r.forward.groups));
@@ -271,10 +279,11 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
   };
   // What keeps the group from being napped as one workload, in order.
   const workloads = [...new Set(managedRules.map((m) => m.managed!))];
+  const outside = members.filter((m) => !m.managed && !(m.shadowedBy && workloads.includes(m.shadowedBy)));
   const issue = members.some((m) => m.rule.IsDefault) ? 'listener default action (not supported yet)'
     // Napping one workload would leave the other's rules in front of a stopped backend.
     : workloads.length > 1 ? `rules of ${workloads.length} workloads share the target group (${workloads.join(', ')})`
-    : managedRules.length && managedRules.length < members.length ? `${members.length - managedRules.length} of ${members.length} rules sharing the target group are not part of the workload`
+    : managedRules.length && outside.length ? `${outside.length} of ${members.length} rules sharing the target group are not part of the workload`
     : ctx.weighted.has(arn) ? 'target group also in a weighted forward'
     : new Set(members.map((m) => m.lb.LoadBalancerArn)).size > 1 ? 'target group used by several load balancers'
     : members.length > MAX_RULES ? `more than ${MAX_RULES} rules`

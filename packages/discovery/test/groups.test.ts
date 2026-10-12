@@ -88,6 +88,16 @@ describe('candidates by target group', () => {
     expect(crowded.app!.reason).toBe('more than 10 rules');
   });
 
+  it('counts a customer rule covered by a shadow of the workload as part of it', async () => {
+    const customer = rule('p20', '20', [host('a.example.com')], to(['app', 1]));
+    const shadow = rule('p19', '19', [host('a.example.com')], to(['app', 1], ['dmt-dev-a', 0]));
+    const [group] = await scan(ports({
+      lbs: { web: { listeners: { l443: [shadow, customer] } } }, groups: { app: {}, 'dmt-dev-a': { type: 'lambda' } }, asgs: { app: 'a-asg' },
+      tags: { [shadow.RuleArn]: { 'dormeto:workload': 'a', 'dormeto:shadows': customer.RuleArn } },
+    }));
+    expect([group!.eligibility, group!.workloadId, group!.reason]).toEqual(['managed', 'a', undefined]);
+  });
+
   it('flags a managed group where some rules are not part of the workload', async () => {
     const rules = [rule('p10', '10', [host('a.example.com')], to(['app', 1], ['dmt-dev-a', 0])), rule('p20', '20', [host('a.example.com'), path('/static/*')], to(['app', 1]))];
     const [group] = await scan(ports({
