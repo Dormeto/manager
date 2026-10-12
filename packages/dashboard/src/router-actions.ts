@@ -1,6 +1,4 @@
 // The Routers view's actions, explained in their tooltips: what each does, and whether it asks first.
-import type { RouterOperationType } from './types';
-
 export const upgradeHelp = (router: string, from: string, to: string) =>
   `Upgrade ${router} from ${from} to ${to}: Dormeto updates its functions, roles and settings in place by AWS API calls, through `
   + 'the command role; its workloads keep their state, settings and pauses. Starts at once when clicked, as an operation followed in Operations.';
@@ -8,12 +6,6 @@ export const upgradeHelp = (router: string, from: string, to: string) =>
 export const upgradingHelp = (router: string, to: string | null) =>
   `Upgrading ${router}${to ? ` to ${to}` : ''}: Dormeto updates its functions, roles and settings in place; its workloads keep their state. `
   + 'Open its steps in Operations.';
-
-const OPERATION_LABEL: Record<RouterOperationType, string> = { 'install-router': 'Installation', 'upgrade-router': 'Upgrade', 'uninstall-router': 'Uninstallation' };
-
-// How a router operation ended, for the toast that says it.
-export const operationEnded = (type: RouterOperationType, router: string, op: { status: string; error?: string }) =>
-  op.status === 'succeeded' ? `${OPERATION_LABEL[type]} of ${router} succeeded.` : `${OPERATION_LABEL[type]} of ${router} failed: ${op.error ?? 'see its steps'}.`;
 
 export const uninstallHelp = (router: string) =>
   `Uninstall ${router}: deletes every resource of the router (functions, table, queues, rules, roles) by AWS API calls. Asks for `

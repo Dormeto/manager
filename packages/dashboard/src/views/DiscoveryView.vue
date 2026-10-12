@@ -14,7 +14,9 @@ import OrganizationAccess from '../components/OrganizationAccess.vue';
 import { onboardRefusal, type AccessReport } from '../access';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
+import type { Notice } from '../components/NoticeAlert.vue';
+import NoticeToast from '../components/NoticeToast.vue';
+import { operationLabel, operationWatch } from '../operation-watch';
 import { cursorPages, visibleStatuses, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative } from '../format';
 import BackendLabel from '../components/BackendLabel.vue';
@@ -30,8 +32,9 @@ const now = useNow();
 const session = useSession();
 const badge = useDiscoveryBadge();
 const { smAndDown } = useDisplay();
-// A managed candidate carries its workload's name and router (from its summary).
-type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string } };
+// A managed candidate carries its workload's name and router (from its summary), and the onboarding or offboarding
+// running on it.
+type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string }; operation?: { id: string; type: 'onboard' | 'offboard' } };
 const PAGE = 50;
 const lastRun = ref<RunRecord | null>(null);
 // Organization access of the last run (packaging design §3), and the roles set in the manager's Terraform.
@@ -60,10 +63,26 @@ const onboardOpen = ref(false);
 const excludeOpen = ref(false);
 const notice = ref<Notice | null>(null);
 let poll: number | undefined;
+// Onboardings and offboardings running on the candidates shown: the page is refreshed every 10 s while one runs, and a
+// toast says how each one ended (the candidate then moves to its status).
+const watch = operationWatch((n) => {
+  notice.value = n;
+  void load();
+});
+let following: number | undefined;
+function follow() {
+  if (following !== undefined || !watch.active) return;
+  following = window.setInterval(() => {
+    if (watch.active) return void loadPage({ keep: true });
+    window.clearInterval(following);
+    following = undefined;
+  }, 10_000);
+}
+const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
 const filtered = computed(() => /^\d{12}$/.test(account.value));
 
-// One page of the shown status, within the account (and region) when given.
-async function loadPage() {
+// One page of the shown status, within the account (and region) when given; a refresh keeps what is selected.
+async function loadPage({ keep = false } = {}) {
   if (!status.value) return;
   const query = new URLSearchParams({ status: status.value, limit: String(PAGE) });
   if (filtered.value) {
@@ -78,7 +97,9 @@ async function loadPage() {
   pages.loaded(at, answer.value.cursor);
   hasNext.value = pages.hasNext(at);
   candidates.value = answer.value.candidates;
-  selected.value = [];
+  selected.value = keep ? selected.value.filter((id) => candidates.value.some((c) => c.id === id)) : [];
+  watch.refreshed(candidates.value.flatMap((c) => (c.operation ? [{ ...c.operation, subject: subjectOf(c) }] : [])));
+  follow();
 }
 
 async function load() {
@@ -202,10 +223,14 @@ const onboardable = computed(() => single.value?.status === 'pending-onboarding'
 const noCommand = computed(() => onboardRefusal(access.value, single.value?.account));
 const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status));
 
-async function startOperation(body: Record<string, unknown>, what: string) {
+async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<string, unknown>, c: Listed, subject: string) {
   try {
     const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify(body) });
-    notice.value = { type: 'success', text: `${what} started (operation ${operation.id}).`, operation: operation.id };
+    notice.value = { type: 'success', text: `${operationLabel(body.type, subject)} started (operation ${operation.id}).`, operation: operation.id };
+    // Shown running at once (the next refresh confirms it).
+    c.operation = { id: operation.id, type: body.type };
+    watch.watch(operation.id, body.type, subject);
+    follow();
     selected.value = [];
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -214,7 +239,8 @@ async function startOperation(body: Record<string, unknown>, what: string) {
 
 async function onboard(form: { name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }) {
   onboardOpen.value = false;
-  await startOperation({ type: 'onboard', candidateId: single.value!.id, ...form }, `Onboarding of ${form.name ?? single.value!.targetGroup ?? 'the candidate'}`);
+  const c = single.value!;
+  await startOperation({ type: 'onboard', candidateId: c.id, ...form }, c, form.name ?? subjectOf(c));
 }
 
 async function offboard() {
@@ -225,12 +251,13 @@ async function offboard() {
     notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
     return;
   }
-  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, `Offboarding of ${c.workload?.name ?? c.workloadId}`);
+  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, c, subjectOf(c));
 }
 
 onMounted(load);
 onBeforeUnmount(() => {
   window.clearInterval(poll);
+  window.clearInterval(following);
   window.clearTimeout(typing);
 });
 
@@ -267,7 +294,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
   <p class="text-medium-emphasis mb-4">Load balancer rules of every account and region of the perimeter, read with the read-only
     <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</p>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
-  <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
+  <NoticeToast :notice="notice" @close="notice = null" />
 
   <v-card class="mb-4" :loading="loading">
     <v-card-text v-if="!lastRun" class="text-medium-emphasis">No discovery run yet.</v-card-text>
@@ -300,11 +327,16 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
     </v-chip-group>
     <v-spacer />
     <template v-if="session.canOperate && selected.length">
-      <v-tooltip v-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
+      <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
+        <template #activator="{ props }">
+          <span v-bind="props"><v-btn variant="tonal" disabled><template #prepend><v-progress-circular indeterminate size="16" width="2" /></template>{{ single.operation.type === 'onboard' ? 'Onboarding…' : 'Offboarding…' }}</v-btn></span>
+        </template>
+      </v-tooltip>
+      <v-tooltip v-else-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
         <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
       </v-tooltip>
       <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="tonal" @click="onboardOpen = true">Onboard…</v-btn>
-      <v-btn v-if="offboardable" :prepend-icon="mdiLogoutVariant" variant="tonal" @click="offboard">Offboard</v-btn>
+      <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" variant="tonal" @click="offboard">Offboard</v-btn>
       <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
       <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
       <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
@@ -319,7 +351,17 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
   <v-card>
     <v-data-table v-model="selected" :mobile="smAndDown" :headers="headers" :items="candidates" :loading="loading" item-value="id"
       :show-select="session.canOperate" :items-per-page="-1" hide-default-footer>
-      <template #[`item.status`]="{ item }"><DiscoveryStatusChip :status="item.status" /></template>
+      <template #[`item.status`]="{ item }">
+        <v-tooltip v-if="item.operation" location="top" max-width="380" :text="`${operationLabel(item.operation.type, subjectOf(item))} is running: open its steps in Operations.`">
+          <template #activator="{ props }">
+            <router-link v-bind="props" :to="{ path: '/operations', query: { id: item.operation.id } }" class="running"
+              :aria-label="`${operationLabel(item.operation.type, subjectOf(item))} running: follow it in Operations`">
+              <v-chip color="primary" variant="tonal" label><v-progress-circular indeterminate size="14" width="2" class="mr-2" />{{ item.operation.type === 'onboard' ? 'onboarding' : 'offboarding' }}</v-chip>
+            </router-link>
+          </template>
+        </v-tooltip>
+        <DiscoveryStatusChip v-else :status="item.status" />
+      </template>
       <template #[`item.account`]="{ item }">
         <div>{{ item.accountName }}</div>
         <div class="text-body-small text-medium-emphasis mono">{{ item.account }}</div>
@@ -392,3 +434,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+.running { text-decoration: none; }
+</style>

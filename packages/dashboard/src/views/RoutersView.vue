@@ -10,7 +10,8 @@ import { relative, stateColor } from '../format';
 import { healthColor } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
-import { operationEnded, pauseHelp, resumeHelp, uninstallHelp, upgradeHelp, upgradingHelp, workloadsHelp } from '../router-actions';
+import { pauseHelp, resumeHelp, uninstallHelp, upgradeHelp, upgradingHelp, workloadsHelp } from '../router-actions';
+import { operationWatch } from '../operation-watch';
 import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import PauseChip from '../components/PauseChip.vue';
@@ -32,29 +33,14 @@ const available = ref<string | null>(null);
 const installOpen = ref(false);
 const install = ref({ account: '', region: '' });
 const removing = ref<RouterInfo | null>(null);
-// Router operations running at the last refresh, by id: one no longer running gets a toast saying how it ended.
-const watched = new Map<string, { type: RouterOperationType; router: string }>();
+// Router operations running at the last refresh: a toast says how each one ended.
+const watch = operationWatch((n) => { notice.value = n; });
 const { error, loading, nextAt, run } = usePoll(async () => {
   const result = await api<{ routers: RouterInfo[]; available?: { version: string } }>('/routers');
   routers.value = result.routers;
   available.value = result.available?.version ?? null;
-  const running = new Set(result.routers.flatMap((r) => (r.operation ? [r.operation.id] : [])));
-  for (const [id, op] of watched) {
-    if (running.has(id)) continue;
-    watched.delete(id);
-    void ended(id, op);
-  }
-  for (const r of result.routers) if (r.operation) watched.set(r.operation.id, { type: r.operation.type, router: r.name });
+  watch.refreshed(result.routers.flatMap((r) => (r.operation ? [{ ...r.operation, subject: r.name }] : [])));
 });
-
-async function ended(id: string, { type, router }: { type: RouterOperationType; router: string }) {
-  try {
-    const op = await api<{ status: string; error?: string }>(`/operations/${encodeURIComponent(id)}`);
-    if (op.status !== 'running') notice.value = { type: op.status === 'succeeded' ? 'success' : 'error', text: operationEnded(type, router, op), operation: id };
-  } catch {
-    // Its steps stay in Operations.
-  }
-}
 
 // Router operations (administrators): run by the workflow, followed in Operations.
 async function operation(body: Record<string, unknown>, what: string) {
@@ -67,7 +53,7 @@ async function operation(body: Record<string, unknown>, what: string) {
     const row = routers.value.find((r) => r.name === body.router);
     if (row) {
       row.operation = { id: op.id, type: body.type as RouterOperationType };
-      watched.set(op.id, { type: row.operation.type, router: row.name });
+      watch.watch(op.id, row.operation.type, row.name);
     }
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
