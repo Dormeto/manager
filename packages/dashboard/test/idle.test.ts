@@ -11,11 +11,11 @@ const advice = (current: number, recommended: number, windows: IdleWindowRow[], 
 
 describe('the idle window advice in a sentence', () => {
   it('a shorter window: more savings, more wakes, how long each', () => {
-    expect(adviceSentence(advice(15, 10, [row(10, 32, 5), row(15, 20, 2)]))).toBe('Recommended: 10 minutes, about $12.00 a month more than now and 3 more wakes a day (about 25 seconds each)');
+    expect(adviceSentence(advice(15, 10, [row(10, 32, 5), row(15, 20, 2)]))).toBe('Recommended: 10 minutes, saves about $12.00 a month more than now, with 3 more wakes a day (about 25 seconds each)');
   });
 
   it('a longer window: fewer wakes, less savings', () => {
-    expect(adviceSentence(advice(15, 30, [row(15, 20, 12), row(30, 16, 2)]))).toBe('Recommended: 30 minutes, about $4.00 a month less than now and 10 fewer wakes a day');
+    expect(adviceSentence(advice(15, 30, [row(15, 20, 12), row(30, 16, 2)]))).toBe('Recommended: 30 minutes, saves about $4.00 a month less than now, with 10 fewer wakes a day');
   });
 
   it('the current window recommended', () => {
@@ -24,6 +24,6 @@ describe('the idle window advice in a sentence', () => {
 
   it('not priced: hours asleep instead of dollars; no wake measured: no wait', () => {
     const a = advice(15, 5, [row(5, null, 2.5, 22.25), row(15, null, 1, 21)], { priced: false, wakeSeconds: null });
-    expect(adviceSentence(a)).toBe('Recommended: 5 minutes, about 1.3 more hours asleep a day and 1.5 more wakes a day');
+    expect(adviceSentence(a)).toBe('Recommended: 5 minutes, about 1.3 more hours asleep a day, with 1.5 more wakes a day');
   });
 });

@@ -23,7 +23,7 @@ const ENTRIES = [
   entry('WAKING', NOW - 2 * DAY), entry('AWAKE', NOW - 2 * DAY + 50_000, { durationMs: 50_000 }), entry('ASLEEP', NOW - 2 * DAY + 3_600_000, { stopped: [T3] }),
 ];
 
-function setup({ summary = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', state: 'ASLEEP', targetGroupArn: APP, settings: { idleMinutes: 15 } } as Record<string, unknown> | null, requests = { from: iso(MINUTE - 14 * DAY), to: iso(MINUTE), minutes: [] as [number, number][], wakerTargetGroupArn: 'arn:waker' } as RequestMinutes & { wakerTargetGroupArn: string | null }, fail = null as string | null, withSavings = true } = {}) {
+function setup({ summary = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', state: 'ASLEEP', targetGroupArn: APP, settings: { idleMinutes: 15 } } as Record<string, unknown> | null, requests = { from: iso(MINUTE - 14 * DAY), to: iso(MINUTE), minutes: [] as [number, number][], wakerTargetGroupArn: 'arn:waker' } as RequestMinutes & { wakerTargetGroupArn: string | null }, fail = null as string | null, withSavings = true, entries = ENTRIES as ReturnType<typeof entry>[], truncated = false } = {}) {
   let t = NOW;
   const asked: { requests: unknown[][]; history: string[] } = { requests: [], history: [] };
   const kept = new Map<string, { advice: IdleWindowAdvice; until: number }>();
@@ -36,8 +36,8 @@ function setup({ summary = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt
     fleet: {
       listRouters: async () => [{ account: ACCOUNT, region: 'eu-west-1', name: 'dmt-dev', version: '0.28.1', build: null, checkSchedule: 'rate(10 minutes)', checkedAt: iso(NOW), durationMs: 1, health: null, pauses: [], counts: {} }] as never,
       listWorkloads: async () => [], getWorkload: async () => summary as never,
-      listHistory: async (_a: string, _r: string, _id: string, from: string, to: string) => { asked.history.push(from); return { entries: ENTRIES.filter((e) => e.at >= from && e.at < to) as never, truncated: false }; },
-      historyBefore: async (_a: string, _r: string, _id: string, at: string) => (ENTRIES.filter((e) => e.at < at).at(-1) ?? null) as never,
+      listHistory: async (_a: string, _r: string, _id: string, from: string, to: string) => { asked.history.push(from); return { entries: entries.filter((e) => e.at >= from && e.at < to) as never, truncated }; },
+      historyBefore: async (_a: string, _r: string, _id: string, at: string) => (entries.filter((e) => e.at < at).at(-1) ?? null) as never,
       getIdleWindow: async (account: string, region: string, id: string) => { const k = kept.get(`${account}#${region}#${id}`); return k && k.until > t ? k.advice : null; },
       putIdleWindow: async (account: string, region: string, id: string, advice: IdleWindowAdvice) => { puts.push(id); kept.set(`${account}#${region}#${id}`, { advice, until: t + DAY }); },
     },
@@ -91,6 +91,18 @@ describe('a workload\'s idle window advice (R10)', () => {
     expect(s.puts).toEqual([]);
     await s.api(event(PATH));
     expect(s.asked.requests).toHaveLength(2);
+  });
+
+  it('compares the real wakes with the replay only over the time the history knows (onboarded during the 14 days)', async () => {
+    const FROM14 = MINUTE - 14 * DAY;
+    // A request a day at 10:00 for 14 days; the manager first saw the workload on day 11, and it woke on days 11 to 13.
+    const daily = { from: iso(FROM14), to: iso(MINUTE), minutes: Array.from({ length: 14 }, (_, d) => [600 + d * 1440, 1] as [number, number]), wakerTargetGroupArn: 'arn:waker' };
+    const seen = [entry('AWAKE', FROM14 + 11 * DAY), ...[11, 12, 13].flatMap((d) => [entry('ASLEEP', FROM14 + d * DAY + 60_000, { stopped: [T3] }), entry('WAKING', FROM14 + d * DAY + 600 * 60_000), entry('AWAKE', FROM14 + d * DAY + 600 * 60_000 + 30_000, { durationMs: 30_000 })])];
+    const s = setup({ requests: daily, entries: seen });
+    expect((json(await s.api(event(PATH))) as IdleWindowAdvice).actual).toEqual({ wakes: 3, replayedWakes: 3, noisy: false });
+    // A capped history knows only its newest entries: no comparison.
+    const capped = setup({ requests: daily, entries: seen, truncated: true });
+    expect((json(await capped.api(event(PATH))) as IdleWindowAdvice).actual.noisy).toBe(false);
   });
 
   it('an unknown workload or an unseen router: 404', async () => {

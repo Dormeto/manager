@@ -1,4 +1,5 @@
-// The Idle window card's words (R10): the recommended window against the current one, either way.
+// The Idle window card's words (R10): the recommended window against the current one, either way; the money is what it
+// saves (a longer window saves less), never read as a cost.
 import { usd } from './format';
 import type { IdleWindowAdvice } from './types';
 
@@ -12,10 +13,10 @@ export function adviceSentence(a: IdleWindowAdvice): string {
   const c = a.windows.find((w) => w.minutes === a.current);
   if (!r || !c) return `Recommended: ${a.recommended} minutes`;
   const gain = a.priced && r.usdMonth !== null && c.usdMonth !== null
-    ? `about ${usd(Math.abs(r.usdMonth - c.usdMonth))} a month ${r.usdMonth >= c.usdMonth ? 'more' : 'less'} than now`
+    ? `saves about ${usd(Math.abs(r.usdMonth - c.usdMonth))} a month ${r.usdMonth >= c.usdMonth ? 'more' : 'less'} than now`
     : `about ${perDay(Math.abs(r.asleepHours - c.asleepHours))} ${r.asleepHours >= c.asleepHours ? 'more' : 'fewer'} hours asleep a day`;
   const more = r.wakesPerDay - c.wakesPerDay;
   const wakes = more === 0 ? 'the same wakes' : `${perDay(Math.abs(more))} ${more > 0 ? 'more' : 'fewer'} wakes a day`;
   const wait = more > 0 && a.wakeSeconds !== null ? ` (about ${Math.round(a.wakeSeconds)} seconds each)` : '';
-  return `Recommended: ${a.recommended} minutes, ${gain} and ${wakes}${wait}`;
+  return `Recommended: ${a.recommended} minutes, ${gain}, with ${wakes}${wait}`;
 }

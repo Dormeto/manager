@@ -41,7 +41,7 @@ export interface ScanPorts {
     describeServices(input: { cluster: string; services: string[] }): Promise<{ services?: { serviceArn?: string; loadBalancers?: { targetGroupArn?: string }[] }[] }>;
   };
   cloudwatch?: {
-    getMetricData(input: { StartTime: Date; EndTime: Date; MetricDataQueries: MetricQuery[]; NextToken?: string; ScanBy?: 'TimestampAscending' | 'TimestampDescending' }): Promise<{ MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[] }[]; NextToken?: string }>;
+    getMetricData(input: { StartTime: Date; EndTime: Date; MetricDataQueries: MetricQuery[]; NextToken?: string; ScanBy?: 'TimestampAscending' | 'TimestampDescending' }): Promise<{ MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[]; StatusCode?: string; Messages?: { Code?: string; Value?: string }[] }[]; NextToken?: string }>;
   };
 }
 

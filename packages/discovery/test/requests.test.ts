@@ -20,7 +20,7 @@ const weighted = (arn: string, groups: [string, number][]): Rule => ({
   RuleArn: arn, Priority: '10', Actions: [{ Type: 'forward', Order: 1, ForwardConfig: { TargetGroups: groups.map(([TargetGroupArn, Weight]) => ({ TargetGroupArn, Weight })) } }],
 });
 const plain = (arn: string, tg: string, IsDefault = false): Rule => ({ RuleArn: arn, Priority: IsDefault ? 'default' : '20', IsDefault, Actions: [{ Type: 'forward', Order: 1, TargetGroupArn: tg }] });
-type Page = { MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[]; StatusCode?: string }[]; NextToken?: string };
+type Page = { MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[]; StatusCode?: string; Messages?: { Code?: string; Value?: string }[] }[]; NextToken?: string };
 
 function ports({ loadBalancers = [LB], rules = { [L1]: [[weighted('r1', [[APP, 1], [WAKER, 0]])]] } as Record<string, Rule[][]>, pages = [{}] as Page[] } = {}) {
   const metrics: Record<string, unknown>[] = [];
@@ -75,6 +75,13 @@ describe('a workload\'s requests per minute', () => {
     const out = await requestMinutes(p, { targetGroupArn: APP, days: 14, now: NOW });
     expect(out).toMatchObject({ minutes: [[3, 2]], wakerTargetGroupArn: null });
     expect((p.metrics[0]!.MetricDataQueries as unknown[])).toHaveLength(1);
+  });
+
+  it('a metric CloudWatch could not read is an error, never silence', async () => {
+    for (const StatusCode of ['Forbidden', 'InternalError']) {
+      const p = ports({ pages: [{ MetricDataResults: [{ Id: 'tg0', Timestamps: [], Values: [], StatusCode, Messages: [{ Code: StatusCode, Value: 'not allowed or failed' }] }, { Id: 'tg1', Timestamps: [], Values: [], StatusCode: 'Complete' }] }] });
+      await expect(requestMinutes(p, { targetGroupArn: APP, days: 14, now: NOW })).rejects.toThrow(`CloudWatch could not read the requests (${StatusCode}: not allowed or failed)`);
+    }
   });
 
   it('a target group on no load balancer cannot be read', async () => {

@@ -938,6 +938,8 @@ export function createApi({
         const advice = await idleWindowAdvice({
           requests, current, checkMinutes: checkMinutesOf(routerSummary?.checkSchedule ?? null), wakeMs: month.view.wakes.medianMs,
           startAsleep: period.view.phases[0]?.state === 'ASLEEP', actualWakes: period.view.wakes.count,
+          // The real wakes are compared from when the history knows the period (onboarded during it: later; capped: never).
+          actualFrom: period.truncated ? null : period.view.phases.find((p) => p.state !== 'UNKNOWN')?.from ?? null,
           stopped: savings && discounts ? last?.stopped ?? null : null,
           hourly: (item) => (savings && discounts ? savings.hourly(router.region, item, discounts).catch(() => null) : Promise.resolve(null)),
           baseline: savings?.baseline ?? { kind: 'always' }, wakerTargetGroup: requests.wakerTargetGroupArn !== null, now: t,

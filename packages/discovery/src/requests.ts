@@ -52,6 +52,11 @@ export async function requestMinutes(ports: RequestsPorts, { targetGroupArn, day
     const page = await ports.cloudwatch.getMetricData({ StartTime: new Date(from), EndTime: new Date(to), MetricDataQueries: queries, ScanBy: 'TimestampAscending', ...(token ? { NextToken: token } : {}) });
     // By each value's timestamp, whatever the order of the pages and their values.
     for (const result of page.MetricDataResults ?? []) {
+      // A metric CloudWatch could not read (Forbidden, InternalError) has no values: an error, never silence.
+      if (result.StatusCode && result.StatusCode !== 'Complete' && result.StatusCode !== 'PartialData') {
+        const why = result.Messages?.map((m) => m.Value ?? m.Code).filter(Boolean).join('; ');
+        throw new Error(`CloudWatch could not read the requests (${result.StatusCode}${why ? `: ${why}` : ''})`);
+      }
       (result.Timestamps ?? []).forEach((timestamp, i) => {
         const value = result.Values?.[i] ?? 0;
         const minute = Math.round((new Date(timestamp).getTime() - from) / MIN_MS);

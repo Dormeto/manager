@@ -24,7 +24,7 @@ const hourly = async (item: StoppedItem) => (item.kind === 'ec2' ? 0.0456 : null
 const ALWAYS = { kind: 'always' as const };
 const PARIS = { kind: 'business-hours' as const, timeZone: 'Europe/Paris' };
 const advice = (over: Partial<Parameters<typeof idleWindowAdvice>[0]> = {}) => idleWindowAdvice({
-  requests: daily, current: 15, checkMinutes: 5, wakeMs: 30_000, startAsleep: false, actualWakes: 14, stopped: [T3], hourly,
+  requests: daily, current: 15, checkMinutes: 5, wakeMs: 30_000, startAsleep: false, actualWakes: 14, actualFrom: FROM, stopped: [T3], hourly,
   baseline: ALWAYS, wakerTargetGroup: true, now: Date.parse(TO), ...over,
 });
 const row = (a: IdleWindowAdvice, minutes: number) => a.windows.find((w) => w.minutes === minutes)!;
@@ -72,7 +72,7 @@ describe('the replay of an idle window', () => {
   });
 
   it('asleep from the start without any request: no wake, asleep the 14 days', () => {
-    expect(replay([], 15)).toEqual({ minutes: 15, wakes: 0, asleep: [{ from: FROM, to: TO }] });
+    expect(replay([], 15)).toEqual({ minutes: 15, wakes: 0, wokeAt: [], asleep: [{ from: FROM, to: TO }] });
   });
 
   it('a request starting at the check that naps comes after the nap: a wake', () => {
@@ -83,11 +83,11 @@ describe('the replay of an idle window', () => {
 
   it('a window of a day over a request every 6 hours: never asleep', () => {
     const every6h: [number, number][] = Array.from({ length: END / 360 }, (_, k) => [k * 360, 1]);
-    expect(replay(every6h, 1440, { startAsleep: false })).toEqual({ minutes: 1440, wakes: 0, asleep: [] });
+    expect(replay(every6h, 1440, { startAsleep: false })).toEqual({ minutes: 1440, wakes: 0, wokeAt: [], asleep: [] });
   });
 
   it('a request in the last minute wakes it', () => {
-    expect(replay([[END - 1, 1]], 15)).toEqual({ minutes: 15, wakes: 1, asleep: [{ from: FROM, to: at(END - 1) }] });
+    expect(replay([[END - 1, 1]], 15)).toEqual({ minutes: 15, wakes: 1, wokeAt: [at(END - 1)], asleep: [{ from: FROM, to: at(END - 1) }] });
   });
 
   it('minutes out of order or repeated are added up', () => {
@@ -172,6 +172,13 @@ describe('the advice of a workload', () => {
     // Few wakes: 4 replayed for 2 real is not noisy (at least 3 more).
     const four = requests([600, 2040, 3480, 4920].map((m) => [m, 1]));
     expect((await advice({ requests: four, actualWakes: 2 })).actual).toEqual({ wakes: 2, replayedWakes: 4, noisy: false });
+  });
+
+  it('compares only over the time the history knows: onboarded 5 days into the 14, or a capped history', async () => {
+    // The history starts on day 5: the replay's wakes from then on (days 5 to 13), against the 9 real ones.
+    expect((await advice({ actualFrom: at(5 * 1440), actualWakes: 9 })).actual).toEqual({ wakes: 9, replayedWakes: 9, noisy: false });
+    // A history that knows none of the period, or only its newest entries: no comparison.
+    expect((await advice({ actualFrom: null, actualWakes: 2 })).actual).toEqual({ wakes: 2, replayedWakes: 14, noisy: false });
   });
 
   it('a current window of a day is shown, never recommended', async () => {
