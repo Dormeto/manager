@@ -3,6 +3,10 @@ export const upgradeHelp = (router: string, from: string, to: string) =>
   `Upgrade ${router} from ${from} to ${to}: Dormeto updates its functions, roles and settings in place by AWS API calls, through `
   + 'the command role; its workloads keep their state, settings and pauses. Starts at once when clicked, as an operation followed in Operations.';
 
+export const terraformUpgradeHelp = (router: string, from: string, to: string) =>
+  `${to} is available; ${router} runs ${from}. ${router} is written in Terraform, so the manager never changes it: apply its Terraform `
+  + 'with the router module of the new version to upgrade it.';
+
 export const upgradingHelp = (router: string, to: string | null) =>
   `Upgrading ${router}${to ? ` to ${to}` : ''}: Dormeto updates its functions, roles and settings in place; its workloads keep their state. `
   + 'Open its steps in Operations.';

@@ -214,4 +214,15 @@ describe('Routers view', () => {
     expect(document.body.textContent).toContain(`warning: ${DRIFT}`);
     wrapper.unmount();
   });
+
+  it('says that a router written in Terraform has a newer version, upgraded with its Terraform rather than from here', async () => {
+    const wrapper = await mountView();
+    const versionCell = rowOf(wrapper, 'dmt-dev').findAll('td').find((td) => td.text().includes('0.22.6'))!;
+    expect(versionCell.find('button').exists()).toBe(false);
+    const hint = versionCell.find('[aria-label="dmt-dev: 0.23.0 available, upgraded with Terraform"]');
+    expect(hint.exists()).toBe(true);
+    await hover(hint);
+    expect(document.body.textContent).toMatch(/dmt-dev is written in Terraform.*apply its Terraform/);
+    wrapper.unmount();
+  });
 });

@@ -29,6 +29,8 @@ that authenticates with Amazon Cognito).
 - The views take the whole width of the window.
 - A workload's state shows with an icon and a tooltip saying what it means, dated from when it began (Awake since, Asleep
   since…), not from its last write; Routers names its Actions column and cuts a long health problem short.
+- Routers: a router written in Terraform with an older version says that a newer one is available, upgraded by applying
+  its Terraform.
 - Organization access says its status with an icon, the counts and event-driven refresh explained in its tooltip; the
   panel lists only what needs attention.
 

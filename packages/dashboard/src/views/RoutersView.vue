@@ -10,7 +10,7 @@ import { relative, stateColor } from '../format';
 import { healthColor } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
-import { pauseHelp, resumeHelp, uninstallHelp, upgradeHelp, upgradingHelp, workloadsHelp } from '../router-actions';
+import { pauseHelp, resumeHelp, terraformUpgradeHelp, uninstallHelp, upgradeHelp, upgradingHelp, workloadsHelp } from '../router-actions';
 import { operationWatch } from '../operation-watch';
 import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
@@ -141,6 +141,13 @@ const headers = [
               <v-btn v-bind="props" :icon="mdiArrowUpBoldCircleOutline" variant="text" size="small" density="comfortable" color="primary"
                 :aria-label="`Upgrade ${item.name} to ${available}`"
                 @click="operation({ type: 'upgrade-router', router: item.name }, `Upgrade of ${item.name} to ${available}`)" />
+            </template>
+          </v-tooltip>
+          <v-tooltip v-else-if="item.source === 'terraform' && available && item.version !== available" location="top" max-width="380"
+            :text="terraformUpgradeHelp(item.name, item.version, available)">
+            <template #activator="{ props }">
+              <v-icon v-bind="props" :icon="mdiArrowUpBoldCircleOutline" size="small" class="text-medium-emphasis" tabindex="0"
+                :aria-label="`${item.name}: ${available} available, upgraded with Terraform`" />
             </template>
           </v-tooltip>
         </div>
