@@ -34,7 +34,8 @@ Requirements: Node.js ≥ 24, Terraform 1.16.5 (tfenv reads `.terraform-version`
 ```bash
 npm install
 npm test && npm run typecheck
-npm run build                                   # API bundle and dashboard (published by Terraform)
+npm run build                                   # API, discovery and operations bundles, dashboard (published by Terraform)
+(cd ../router && npm run package)               # the router bundle the manager installs (sibling repository)
 cd infra/terraform/platform
 echo 'admin_emails = ["you@example.com"]' > env/dev.local.tfvars
 tfenv exec init -backend-config=env/dev.backend.hcl
@@ -45,6 +46,17 @@ npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://loca
 
 While SES is in the sandbox, an invited address must be a verified SES identity: inviting from the dashboard creates
 the identity (AWS sends a verification email), and the administrator resends the invitation once it is verified.
+
+## Operations (onboarding)
+
+Operators onboard a discovered candidate and offboard a workload; administrators install, upgrade and uninstall routers
+(Discovery, workload and Routers views, `POST /api/operations`). Each operation runs in the Step Functions state machine
+`dmt-<env>-manager-operations`, one step at a time in the operations Lambda, and is listed in the Operations view with
+its steps. Routers are installed by AWS API calls from the router blueprint of the manager's router version (artifacts
+bucket), through `DmtCommandRole` in the target account: it may only create `dmt-*` roles carrying the permissions
+boundary `DmtRouterBoundary`, and change or delete only what it installed (tag `dormeto:router`), never a router written
+in Terraform. In the manager's account both are created by `infra/terraform/modules/command-role`; one operation at a
+time per target group, router or workload, one per load balancer (lock), three per account and region.
 
 ## Organization access (discovery)
 
