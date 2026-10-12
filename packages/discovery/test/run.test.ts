@@ -89,6 +89,26 @@ describe('runDiscovery', () => {
     expect(run.counts).toEqual({ 'pending-onboarding': 1 });
   });
 
+  it('carries the dismissal, first seen date and history of merged rule candidates into their target group candidate', async () => {
+    const s = setup({ cfg: config({ regions: ['eu-west-1'], filters: [filter('a', [{ accountIds: [A.id] }])] }) });
+    await s.ready;
+    const ruleRef = (id: string) => ({ id, listener: 'HTTPS:443', priority: '10', conditions: 'host shop.example.com', hosts: ['shop.example.com'], managed: false });
+    s.deps.scan = async (_c, where) => [rule({ id: `tg-${where.account}`, account: where.account, region: where.region, rules: [ruleRef('rule-a'), ruleRef('rule-b')] })];
+    const stored = (id: string, firstSeenAt: string, extra: object) => ({
+      ...rule({ id, account: A.id, region: 'eu-west-1', rules: [] }), accountName: 'tools', ouPath: A.ouPath, scope: 'in' as const, scopeReason: 'in',
+      status: 'ineligible' as const, statusReason: 'target group shared by 2 rules', firstSeenAt, lastSeenAt: firstSeenAt,
+      history: [{ at: firstSeenAt, status: 'ineligible' as const, reason: 'target group shared by 2 rules' }], ...extra,
+    });
+    await s.store.putCandidates([
+      stored('rule-a', '2026-10-02T12:00:00.000Z', {}),
+      stored('rule-b', '2026-10-01T12:00:00.000Z', { dismissed: { by: 'ops@example.com', at: '2026-10-03T12:00:00.000Z', note: 'legacy' } }),
+    ]);
+    await runDiscovery(s.deps, { source: 'manual' });
+    const [merged] = await s.store.listCandidates();
+    expect([merged!.id, merged!.status, merged!.firstSeenAt, merged!.dismissed?.note]).toEqual([`tg-${A.id}`, 'dismissed', '2026-10-01T12:00:00.000Z', 'legacy']);
+    expect(merged!.history.map((h) => h.status)).toEqual(['ineligible', 'ineligible', 'dismissed']);
+  });
+
   it('never assumes a role in a globally excluded account', async () => {
     const s = setup({ cfg: { ...AB, globalExcludes: [{ accountIds: [B.id] }] } });
     await s.ready;

@@ -98,6 +98,15 @@ describe('candidates by target group', () => {
     expect(group!.rules.map((r) => r.managed)).toEqual([true, false]);
   });
 
+  it('flags rules of several workloads sharing one target group', async () => {
+    const rules = [rule('p10', '10', [host('a.example.com')], to(['app', 1], ['dmt-dev-a', 0])), rule('p20', '20', [host('b.example.com')], to(['app', 1], ['dmt-dev-b', 0]))];
+    const [group] = await scan(ports({
+      lbs: { web: { listeners: { l443: rules } } }, groups: { app: {}, 'dmt-dev-a': { type: 'lambda' }, 'dmt-dev-b': { type: 'lambda' } }, asgs: { app: 'a-asg' },
+      tags: { [rules[0]!.RuleArn]: { 'dormeto:workload': 'a' }, [rules[1]!.RuleArn]: { 'dormeto:workload': 'b' } },
+    }));
+    expect([group!.eligibility, group!.reason]).toEqual(['managed', 'rules of 2 workloads share the target group (a, b)']);
+  });
+
   it('keeps a fully managed group managed, asleep or awake', async () => {
     const asleep = to(['app', 0], ['dmt-dev-a', 1]);
     const rules = [rule('p10', '10', [host('a.example.com')], asleep), rule('p20', '20', [host('a.example.com'), path('/static/*')], asleep)];

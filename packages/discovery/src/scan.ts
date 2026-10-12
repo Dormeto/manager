@@ -270,7 +270,10 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
     requests7d: null,
   };
   // What keeps the group from being napped as one workload, in order.
+  const workloads = [...new Set(managedRules.map((m) => m.managed!))];
   const issue = members.some((m) => m.rule.IsDefault) ? 'listener default action (not supported yet)'
+    // Napping one workload would leave the other's rules in front of a stopped backend.
+    : workloads.length > 1 ? `rules of ${workloads.length} workloads share the target group (${workloads.join(', ')})`
     : managedRules.length && managedRules.length < members.length ? `${members.length - managedRules.length} of ${members.length} rules sharing the target group are not part of the workload`
     : ctx.weighted.has(arn) ? 'target group also in a weighted forward'
     : new Set(members.map((m) => m.lb.LoadBalancerArn)).size > 1 ? 'target group used by several load balancers'

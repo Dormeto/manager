@@ -128,9 +128,13 @@ async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => 
   });
 
   const previous = new Map((await deps.store.listCandidates()).map((c) => [c.id, c]));
-  // Earlier versions had one candidate per rule: a rule now inside a target group candidate is deleted, not gone.
-  const grouped = new Set(results.flatMap((r) => r.rules.flatMap((c) => (c.rules ?? []).filter((x) => x.id !== c.id).map((x) => x.id))));
-  const superseded = [...previous.keys()].filter((id) => grouped.has(id));
+  // A rule candidate (earlier versions, or a rule that rejoined a target group) now inside a target group candidate is
+  // merged into it: its dismissal, first seen date and history carry over, and it is deleted rather than gone.
+  const groupOf = new Map(results.flatMap((r) => r.rules.flatMap((c) => (c.rules ?? []).filter((x) => x.id !== c.id).map((x) => [x.id, c.id] as const))));
+  const superseded = [...previous.keys()].filter((id) => groupOf.has(id));
+  for (const [group, merged] of Map.groupBy(superseded.map((id) => previous.get(id)!), (c) => groupOf.get(c.id)!)) {
+    if (!previous.has(group)) previous.set(group, mergedCandidate(group, merged));
+  }
   for (const id of superseded) previous.delete(id);
   if (superseded.length) {
     await deps.store.deleteCandidates(superseded);
@@ -169,6 +173,15 @@ async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => 
   const errors = targets.filter((t) => t.status === 'error').length;
   const status = errors === 0 ? 'ok' : errors === targets.length ? 'failed' : 'partial';
   return { status, targets, skipped, counts, lint: lint(config, inventory, { rules: results.flatMap((r) => r.rules) }) };
+}
+
+// The previous record of a target group candidate built from the rule candidates merged into it.
+function mergedCandidate(id: string, merged: Candidate[]): Candidate {
+  const oldest = [...merged].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt))[0]!;
+  const dismissed = merged.find((c) => c.dismissed)?.dismissed;
+  const history = merged.flatMap((c) => c.history).sort((a, b) => a.at.localeCompare(b.at)).slice(-20);
+  const { dismissed: _, ...rest } = oldest;
+  return { ...rest, id, history, ...(dismissed ? { dismissed } : {}) };
 }
 
 function requireOrganizations(deps: RunDeps): OrganizationsPort {
