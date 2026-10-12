@@ -135,6 +135,22 @@ describe('actions', () => {
     expect(audit[0]).toMatchObject({ action: 'wake', target: 'dmt-dev/demo', result: 'WAKING' });
   });
 
+  it('rename gives a workload a new name for people, checked, audited; a Terraform workload is a conflict', async () => {
+    const calls: Record<string, unknown>[] = [];
+    const { api, audit } = setup(async (_router, payload) => {
+      calls.push(payload);
+      if (payload.workloadId === 'tf') throw new RouterError('workload tf was written by Terraform: set name in its workload module');
+      return { workloadId: payload.workloadId, name: payload.name };
+    });
+    expect((await api(event('POST', '/api/workloads/dmt-dev/demo/rename', 'dmt-viewer', { name: 'Shop' }))).statusCode).toBe(403);
+    const res = await api(event('POST', '/api/workloads/dmt-dev/demo/rename', 'dmt-operator', { name: '  Shop front ' }));
+    expect([res.statusCode, json(res)]).toEqual([200, { workloadId: 'demo', name: 'Shop front' }]);
+    expect(calls).toEqual([{ action: 'rename', workloadId: 'demo', name: 'Shop front', by: 'ops@example.com' }]);
+    expect(audit.at(-1)).toMatchObject({ action: 'rename', target: 'dmt-dev/demo', result: 'Shop front' });
+    for (const name of ['  ', 'x'.repeat(65), 42]) expect((await api(event('POST', '/api/workloads/dmt-dev/demo/rename', 'dmt-operator', { name }))).statusCode).toBe(400);
+    expect((await api(event('POST', '/api/workloads/dmt-dev/tf/rename', 'dmt-operator', { name: 'x' }))).statusCode).toBe(409);
+  });
+
   it('a failed action is audited with its error', async () => {
     const { api, audit } = setup(async () => { throw new RouterError('throttled'); });
     expect((await api(event('POST', '/api/workloads/dmt-dev/demo/wake', 'dmt-operator'))).statusCode).toBe(502);

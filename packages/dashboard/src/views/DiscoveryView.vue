@@ -7,12 +7,11 @@ import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import OnboardDialog from '../components/OnboardDialog.vue';
-import { getConfig } from '../config';
-import type { RouterInfo } from '../types';
+import type { RouterInfo, WorkloadSummary } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import { STATUSES, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
+import { STATUSES, ruleLines, statusColor, statusLabel, targetText, workloadOf } from '../discovery';
 import { relative } from '../format';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -38,10 +37,20 @@ const dismissDialog = ref(false);
 const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
 const onboardOpen = ref(false);
-const routerName = `dmt-${getConfig().env}`;
 const excludeOpen = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 let poll: number | undefined;
+// Managed candidates link to their workload, by its name (the workload id is not for people).
+const workloadFor = ref<ReturnType<typeof workloadOf>>(() => null);
+
+async function loadWorkloads() {
+  try {
+    const [{ routers }, { workloads }] = await Promise.all([api<{ routers: RouterInfo[] }>('/routers'), api<{ workloads: WorkloadSummary[] }>('/workloads')]);
+    workloadFor.value = workloadOf(routers, workloads);
+  } catch {
+    // Names are a convenience: the candidates show without them.
+  }
+}
 
 async function load() {
   loading.value = true;
@@ -138,9 +147,9 @@ async function startOperation(body: Record<string, unknown>, what: string) {
   }
 }
 
-async function onboard(form: { workloadId: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }) {
+async function onboard(form: { name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }) {
   onboardOpen.value = false;
-  await startOperation({ type: 'onboard', candidateId: single.value!.id, ...form }, `Onboarding of ${form.workloadId}`);
+  await startOperation({ type: 'onboard', candidateId: single.value!.id, ...form }, `Onboarding of ${form.name ?? single.value!.targetGroup ?? 'the candidate'}`);
 }
 
 async function offboard() {
@@ -151,10 +160,11 @@ async function offboard() {
     notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
     return;
   }
-  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, `Offboarding of ${c.workloadId}`);
+  const name = workloadFor.value(c)?.name;
+  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId, ...(name ? { name } : {}) }, `Offboarding of ${name ?? 'the workload'}`);
 }
 
-onMounted(load);
+onMounted(() => { load(); loadWorkloads(); });
 onBeforeUnmount(() => window.clearInterval(poll));
 
 const order = (s: Status) => STATUSES.indexOf(s);
@@ -250,13 +260,15 @@ const headers = [
       </template>
       <template #[`item.backend`]="{ item }">
         <BackendLabel v-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
-        <span v-else-if="item.workloadId" class="text-medium-emphasis">workload <span class="mono">{{ item.workloadId }}</span></span>
+        <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ workloadFor(item)?.name ?? '' }}</span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
         <IdleBar v-if="item.idleHours7d !== null" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
       </template>
       <template #[`item.statusReason`]="{ item }">
-        <span class="text-medium-emphasis">{{ item.statusReason }}</span>
+        <span v-if="item.status === 'managed' && workloadFor(item)" class="text-medium-emphasis">managed as
+          <router-link :to="`/workloads/${workloadFor(item)!.router}/${workloadFor(item)!.workloadId}`">{{ workloadFor(item)!.name }}</router-link></span>
+        <span v-else class="text-medium-emphasis">{{ item.statusReason }}</span>
       </template>
       <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap">{{ relative(item.firstSeenAt, now) }}</span></template>
     </v-data-table>
@@ -282,7 +294,7 @@ const headers = [
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :suggested-id="single?.suggestedId ?? null" :router-name="routerName" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card title="Dismiss candidates">

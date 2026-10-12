@@ -215,6 +215,20 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
         }
       }
     }
+    // The load balancers invoke the waker from the router's waker target groups (routers 0.20.0 and later).
+    const waker = b.wakerPermission;
+    if (waker) {
+      const policy = await find(() => lambda.getPolicy({ FunctionName: waker.function }));
+      const sids = new Set(((policy ? JSON.parse(policy.Policy) : { Statement: [] }).Statement as { Sid: string }[]).map((st) => st.Sid));
+      if (!sids.has(waker.statementId)) {
+        try {
+          await lambda.addPermission({ FunctionName: waker.function, StatementId: waker.statementId, Action: 'lambda:InvokeFunction', Principal: waker.principal, SourceArn: waker.sourceArn });
+          changed.push(`invoke permission of ${waker.function}`);
+        } catch (err) {
+          if ((err as Error).name !== 'ResourceConflictException') throw err;
+        }
+      }
+    }
     return result(changed);
   }
 

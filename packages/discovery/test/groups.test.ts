@@ -62,7 +62,7 @@ describe('candidates by target group', () => {
     expect(group.priority).toBe('10');
     expect(group.conditions).toBe('host saas.ligoj.io, path /logout.html | /main/public/* (+4 rules)');
     expect(group.hosts).toEqual(['saas.ligoj.io']);
-    expect(group.suggestedId).toBe('ligoj');
+    expect(group.targetGroup).toBe('ligoj');
     expect(byTarget(candidates)[LIGOJ[5]!.RuleArn]!.rules).toHaveLength(1);
   });
 

@@ -32,7 +32,7 @@ export function rule(over: Partial<ScannedRule> = {}): ScannedRule {
     hosts: ['shop.example.com'],
     targetGroup: 'shop',
     targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-1:111111111111:targetgroup/shop/1',
-    suggestedId: 'shop',
+   
     backend: { kind: 'instance', id: 'i-1' },
     tags: { env: ['preview'] },
     rules: [],

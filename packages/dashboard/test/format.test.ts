@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendArn, checkHealth, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { backendArn, checkHealth, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -75,5 +75,12 @@ describe('backendArn', () => {
     expect(backendArn({ kind: 'instance', id: 'i-1' }, { account: '1', region: 'cn-north-1' })).toBe('arn:aws-cn:ec2:cn-north-1:1:instance/i-1');
     expect(backendArn({ kind: 'ecs', id: 'arn:aws:ecs:eu-west-1:121014831971:service/main/api' }, where)).toBe('arn:aws:ecs:eu-west-1:121014831971:service/main/api');
     expect(backendArn({ kind: 'asg', id: 'web-asg' }, where)).toBeNull();
+  });
+});
+
+describe('nameRule', () => {
+  it('accepts a workload name of at most 64 characters without control characters, empty meaning the default', () => {
+    expect([nameRule('Shop (front)'), nameRule(''), nameRule('x'.repeat(64))]).toEqual([true, true, true]);
+    expect([nameRule('x'.repeat(65)), nameRule('a\tb')]).toEqual(['at most 64 characters', 'no control characters']);
   });
 });

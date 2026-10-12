@@ -34,6 +34,16 @@ export function backendArn(backend: { kind: string; id: string; arn?: string }, 
   return backend.kind === 'instance' ? `arn:${partitionOf(where.region)}:ec2:${where.region}:${where.account}:instance/${backend.id}` : null;
 }
 
+// A workload name (routers 0.20.0 and later): for people only, at most 64 characters without control characters; empty
+// means the default (the target group name) at onboarding.
+export function nameRule(value: string): true | string {
+  const name = value.trim();
+  if (name.length > 64) return 'at most 64 characters';
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(name)) return 'no control characters';
+  return true;
+}
+
 // "service/cluster/name" → "name"; ARNs are long.
 export const shortId = (id: string): string => (id.startsWith('arn:') ? id.split('/').at(-1) ?? id : id);
 

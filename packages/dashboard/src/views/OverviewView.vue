@@ -84,7 +84,7 @@ const weekly = computed(() => [
       <v-card title="Needs attention">
         <v-list v-if="attention.length" lines="two">
           <v-list-item v-for="w in attention" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${w.router}/${w.workloadId}`"
-            :title="w.workloadId" :subtitle="`${w.router} · changed ${relative(w.updatedAt, now)}`">
+            :title="w.name ?? w.workloadId" :subtitle="`${w.router} · changed ${relative(w.updatedAt, now)}`">
             <template #append><span class="d-inline-flex align-center ga-1"><PauseChip :pauses="w.pauses" /><StateChip :state="w.state" /></span></template>
           </v-list-item>
         </v-list>

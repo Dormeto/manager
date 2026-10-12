@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiInformationOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiInformationOutline, mdiPencilOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
@@ -12,6 +12,7 @@ import { pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
+import RenameDialog from '../components/RenameDialog.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { Counts, WorkloadStatus, WorkloadSummary } from '../types';
@@ -26,6 +27,9 @@ const acting = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 const pauseOpen = ref(false);
 const excludeOpen = ref(false);
+const renameOpen = ref(false);
+// The name people gave the workload (routers 0.20.0 and later), else its id.
+const title = computed(() => status.value?.name ?? props.id);
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
 
 const { error, loading, nextAt, run } = usePoll(async () => {
@@ -36,11 +40,22 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   }
 });
 
+async function rename(name: string) {
+  renameOpen.value = false;
+  try {
+    await api(`${path.value}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
+    notice.value = { type: 'success', text: `Renamed ${name}.` };
+    await run();
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
 async function act(action: 'nap' | 'wake' | 'offboard') {
   confirm.value = null;
   if (action === 'offboard') {
     try {
-      const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: props.router, workloadId: props.id }) });
+      const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: props.router, workloadId: props.id, name: title.value }) });
       notice.value = { type: 'success', text: `Offboarding started (operation ${operation.id}): the workload is woken, then its instrumentation removed. Follow it in Operations.` };
     } catch (err) {
       notice.value = { type: 'error', text: (err as Error).message };
@@ -121,6 +136,7 @@ const summary = computed(() => {
     { label: 'Wakes', value: String(s.wakeCount) },
     { label: 'Held requests', value: String(s.holders) },
     { label: 'Pending wake', value: s.pendingWake ? 'yes' : 'no' },
+    { label: 'Workload id', value: s.workloadId },
   ];
 });
 </script>
@@ -128,7 +144,8 @@ const summary = computed(() => {
 <template>
   <div class="d-flex flex-wrap align-center ga-3 mb-4">
     <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
-    <h1 class="text-headline-small">{{ id }}</h1>
+    <h1 class="text-headline-small">{{ title }}</h1>
+    <v-btn v-if="session.canOperate && status?.source === 'manager'" :icon="mdiPencilOutline" variant="text" size="small" aria-label="Rename" @click="renameOpen = true" />
     <StateChip v-if="status" :state="status.state" />
     <PauseChip :pauses="pauses" />
     <span class="text-medium-emphasis">{{ router }}</span>
@@ -278,7 +295,7 @@ const summary = computed(() => {
   <PauseDialog v-model="pauseOpen" :subject="id" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
-    <v-card :title="confirm === 'nap' ? `Nap ${id}?` : confirm === 'offboard' ? `Offboard ${id}?` : `Wake ${id}?`">
+    <v-card :title="confirm === 'nap' ? `Nap ${title}?` : confirm === 'offboard' ? `Offboard ${title}?` : `Wake ${title}?`">
       <v-card-text>{{ confirm === 'nap'
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
         : confirm === 'offboard'
@@ -291,4 +308,5 @@ const summary = computed(() => {
       </v-card-actions>
     </v-card>
   </v-dialog>
+  <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
 </template>

@@ -11,7 +11,7 @@ const TG2 = `arn:aws:elasticloadbalancing:eu-west-1:${ACCOUNT}:targetgroup/dmt-d
 
 const managed = (id: string, workloadId: string, targetGroupArn: string, over: Partial<Candidate> = {}) => candidate(id, {
   loadBalancerArn: LB, loadBalancer: 'dmt-dev', targetGroupArn, eligibility: 'managed', workloadId, backend: null,
-  status: 'managed', statusReason: `managed as workload ${workloadId}`, ...over,
+  status: 'managed', statusReason: 'managed', ...over,
 });
 
 type Answer = (router: string, payload: Record<string, unknown>) => unknown;

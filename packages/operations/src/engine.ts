@@ -266,21 +266,28 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done' };
       }
       case 'preview': {
-        const preview = await invokeRouter(op, 'onboarder', { action: 'preview', workloadId: op.input.workloadId, targetGroupArn: op.target.targetGroupArn, settings: op.input.settings ?? {}, databases: op.input.databases ?? [] });
-        if (!preview?.ok) throw new Error((preview?.problems ?? ['refused']).join('; '));
-        return { status: 'done' };
+        // The onboarder derives the workload id from the target group (routers 0.20.0 and later); the name is for people.
+        const preview = await invokeRouter(op, 'onboarder', {
+          action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [],
+        });
+        if (!preview?.workloadId) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.20.0: upgrade it to onboard`);
+        if (!preview.ok) throw new Error((preview.problems ?? ['refused']).join('; '));
+        op.context.workloadId = preview.workloadId;
+        op.context.name = preview.name;
+        return { status: 'done', detail: `${preview.name} (${preview.workloadId})` };
       }
       case 'onboard': {
         const result = await invokeRouter(op, 'onboarder', {
-          action: 'onboard', workloadId: op.input.workloadId, targetGroupArn: op.target.targetGroupArn, settings: op.input.settings ?? {}, databases: op.input.databases ?? [], by: op.by,
+          action: 'onboard', workloadId: op.context.workloadId, targetGroupArn: op.target.targetGroupArn, name: op.context.name,
+          settings: op.input.settings ?? {}, databases: op.input.databases ?? [], by: op.by,
         });
         op.context.wakerTargetGroupArn = result?.workload?.wakerTargetGroupArn;
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
       }
       case 'verify': {
-        const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.input.workloadId });
+        const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
         if (status?.route !== 'app' || (status?.issues ?? []).length) throw new Error(`route ${status?.route}${status?.issues?.length ? `, issues: ${status.issues.join('; ')}` : ''}`);
-        return { status: 'done', detail: `${op.input.workloadId} ${status.state}, route app` };
+        return { status: 'done', detail: `${op.context.name} ${status.state}, route app` };
       }
       case 'pause': {
         const result = await invokeRouter(op, 'controller', { action: 'pause', workloadId: op.target.workloadId, by: op.by, reason: 'offboarding', keepAsleep: false });
@@ -301,7 +308,7 @@ export function createEngine(deps: EngineDeps) {
         return op.type === 'onboard'
           ? updateCandidate(op, (c) => {
             const { reason: _r, ...rest } = c;
-            return { ...rest, eligibility: 'managed', workloadId: String(op.input.workloadId) };
+            return { ...rest, eligibility: 'managed', workloadId: String(op.context.workloadId) };
           })
           : updateCandidate(op, (c) => {
             const { workloadId: _w, ...rest } = c;

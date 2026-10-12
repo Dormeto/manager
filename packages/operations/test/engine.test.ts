@@ -18,7 +18,7 @@ const ZIP = new Uint8Array([1, 2, 3]);
 
 const candidate = (over: Partial<Candidate> = {}): Candidate => ({
   id: TG, account: ACCOUNT, region: 'eu-west-3', loadBalancer: 'paris', loadBalancerArn: LB, listener: 'HTTPS:443', priority: '10', conditions: 'host paris.example.com',
-  hosts: ['paris.example.com'], targetGroup: 'paris-app', targetGroupArn: TG, suggestedId: 'paris', backend: { kind: 'instance', id: 'i-1' }, tags: {}, rules: [],
+  hosts: ['paris.example.com'], targetGroup: 'paris-app', targetGroupArn: TG, backend: { kind: 'instance', id: 'i-1' }, tags: {}, rules: [],
   eligibility: 'eligible', idleHours7d: 150, requests7d: 3, accountName: 'dormeto', ouPath: [], scope: 'in', scopeReason: 'in scope: filter "a", include 1',
   status: 'pending-onboarding', statusReason: 'eligible: instance i-1', firstSeenAt: '2026-10-05T10:00:00.000Z', lastSeenAt: '2026-10-05T10:00:00.000Z', history: [], ...over,
 });
@@ -36,7 +36,8 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
   const router = { state: 'AWAKE', previewOk: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600 };
   const invocationsPaused: Record<string, unknown>[] = [];
   const answers: Record<string, (p: Record<string, unknown>) => unknown> = {
-    preview: () => (router.previewOk ? { ok: true, problems: [] } : { ok: false, problems: ['no backend: no instance, Auto Scaling group or ECS service feeds the target group'] }),
+    // Routers 0.20.0 and later derive the workload id from the target group (vision onboarding design, section 7).
+    preview: (p) => (router.previewOk ? { ok: true, problems: [], workloadId: WORKLOAD_ID, name: p.name ?? 'paris-app' } : { ok: false, workloadId: WORKLOAD_ID, name: 'paris-app', problems: ['no backend: no instance, Auto Scaling group or ECS service feeds the target group'] }),
     onboard: (p) => ({ steps: [{ name: 'tag backends', status: 'done' }], workload: { workloadId: p.workloadId, wakerTargetGroupArn: 'arn:waker' } }),
     offboard: () => ({ steps: [{ name: 'restore rules', status: 'done' }] }),
     status: () => ({ state: router.state, source: router.source, route: 'app', issues: [], targetGroupArn: TG, rules: [{ arn: RULE }], settings: { wakeTimeoutSeconds: router.wakeTimeout } }),
@@ -72,7 +73,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
     }
     throw new Error('the operation never finished');
   }
-  return { engine, records, account, invocations, invocationsPaused, router, items, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { engine, records, account, invocations, invocationsPaused, router, answers, items, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 const DEV_ROUTER: RouterRef = {
@@ -80,10 +81,12 @@ const DEV_ROUTER: RouterRef = {
   onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmt-dev-onboarder`, source: 'terraform',
 };
 
+const WORKLOAD_ID = '7010ea54b5c02245';
+
 describe('operations engine', () => {
   it('onboards a candidate with an existing router: lock, slot, preview, onboard, verify, candidate managed, everything released', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
-    const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris', settings: { idleMinutes: 30 } }, 'ops@example.com');
+    const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: { idleMinutes: 30 } }, 'ops@example.com');
     expect(s.started).toEqual([op.id]);
     const result = await s.drive(op.id);
     expect(result).toEqual({ done: true, status: 'succeeded' });
@@ -93,9 +96,12 @@ describe('operations engine', () => {
       ['register router', 'skipped'], ['lock load balancer', 'done'], ['slot', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
     ]);
     expect(s.invocations.map(([fn, p]) => [fn.split(':').at(-1), p.action])).toEqual([['dmt-dev-onboarder', 'preview'], ['dmt-dev-onboarder', 'onboard'], ['dmt-dev-controller', 'status']]);
-    expect(s.invocations[1]![1]).toEqual({ action: 'onboard', workloadId: 'paris', targetGroupArn: TG, settings: { idleMinutes: 30 }, databases: [], by: 'ops@example.com' });
+    // The onboarder derives the id at the preview; the onboard step passes it back with the name.
+    expect(s.invocations[0]![1]).toEqual({ action: 'preview', targetGroupArn: TG, name: 'Paris', settings: { idleMinutes: 30 }, databases: [] });
+    expect(s.invocations[1]![1]).toEqual({ action: 'onboard', workloadId: WORKLOAD_ID, targetGroupArn: TG, name: 'Paris', settings: { idleMinutes: 30 }, databases: [], by: 'ops@example.com' });
+    expect(stored.steps.find((x) => x.name === 'preview')!.detail).toBe(`Paris (${WORKLOAD_ID})`);
     expect(s.account.state.roles.size, 'a Terraform router is never touched').toBe(0);
-    expect(s.items.get(TG)).toMatchObject({ eligibility: 'managed', workloadId: 'paris', status: 'managed' });
+    expect(s.items.get(TG)).toMatchObject({ eligibility: 'managed', workloadId: WORKLOAD_ID, status: 'managed' });
     expect(await s.records.acquireLock(`LB#${LB}`, 'other', 60_000)).toBe(true);
     expect(await s.records.claimActive(`TG#${TG}`, 'other', 60_000)).toEqual({ ok: true });
   });
@@ -109,7 +115,7 @@ describe('operations engine', () => {
     expect(stored.steps.find((x) => x.name === 'install functions')!.attempts).toBeGreaterThan(1);
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toMatchObject({
       name: 'dmtr-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`,
-      version: '0.19.0', build: '748e369d260e', installedBy: 'ops@example.com',
+      version: '0.20.0', build: '7ed106f07b2e', installedBy: 'ops@example.com',
     });
     expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
   });
@@ -151,7 +157,7 @@ describe('operations engine', () => {
   });
 
   it('offboards: wakes the workload, waits until awake, offboards, and the candidate is onboardable again', async () => {
-    const s = setup({ routers: [DEV_ROUTER], candidates: [candidate({ eligibility: 'managed', workloadId: 'paris', status: 'managed', statusReason: 'managed as workload paris' })] });
+    const s = setup({ routers: [DEV_ROUTER], candidates: [candidate({ eligibility: 'managed', workloadId: 'paris', status: 'managed', statusReason: 'managed' })] });
     s.router.state = 'ASLEEP';
     const op = await s.engine.create('offboard', { router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-3', workloadId: 'paris' }, 'ops');
     let polls = 0;
@@ -287,5 +293,15 @@ describe('transient errors', () => {
     const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
     expect((await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'install table')!.attempts).toBeGreaterThan(3);
+  });
+});
+
+describe('onboarding on a router older than 0.20.0', () => {
+  it('fails at the preview, asking for an upgrade (the router cannot derive the workload id)', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    s.answers.preview = () => ({ ok: false, problems: ['workload id: lowercase letters, digits and hyphens, not starting or ending with a hyphen'] });
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toMatch(/router dmt-dev is older than 0.20.0: upgrade it to onboard/);
   });
 });

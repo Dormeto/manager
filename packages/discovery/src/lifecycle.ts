@@ -14,7 +14,8 @@ export function computeStatus(c: StatusInput): { status: Status; statusReason: s
     if (c.scope !== 'in') return { status: 'pending-offboarding', statusReason: c.scopeReason };
     // A managed rule with an eligibility issue (its action or target group changed) waits for offboarding too.
     if (c.reason) return { status: 'pending-offboarding', statusReason: `ineligible: ${c.reason}` };
-    return { status: 'managed', statusReason: `managed as workload ${c.workloadId ?? '?'}` };
+    // The dashboard shows the workload's name (the id is not for people).
+    return { status: 'managed', statusReason: 'managed' };
   }
   if (c.dismissed) return { status: 'dismissed', statusReason: `dismissed by ${c.dismissed.by}${c.dismissed.note ? `: ${c.dismissed.note}` : ''}` };
   if (c.scope === 'excluded') return { status: 'excluded', statusReason: c.scopeReason };

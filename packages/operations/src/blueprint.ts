@@ -17,6 +17,8 @@ export interface Blueprint {
     asyncInvoke?: { maximumRetryAttempts: number; maximumEventAgeInSeconds: number; onFailure: string };
   }[];
   eventRule: { name: string; pattern: string; target: string; description: string };
+  // Routers 0.20.0 and later: one permission for every waker target group of the router.
+  wakerPermission?: { function: string; statementId: string; principal: string; sourceArn: string };
   schedule: { name: string; expression: string; target: string; roleArn: string; input: string; deadLetter: string; maximumRetryAttempts: number };
 }
 

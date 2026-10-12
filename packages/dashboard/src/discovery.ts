@@ -79,6 +79,16 @@ export function idleText(c: { idleHours7d: number; requests7d: number | null }):
 // From red (always busy) through amber to green (always idle: the most to save).
 export const idleColor = (idleHours7d: number): string => `hsl(${Math.round((120 * Math.min(Math.max(idleHours7d, 0), 168)) / 168)} 70% 42%)`;
 
+// The workload of a managed candidate, for its name and link: its router by account (when known) and region, then its id.
+export function workloadOf(routers: { name: string; region: string; account?: string }[], workloads: { router: string; workloadId: string; name?: string }[]) {
+  return (c: { account: string; region: string; workloadId?: string }): { router: string; workloadId: string; name: string } | null => {
+    if (!c.workloadId) return null;
+    const here = new Set(routers.filter((r) => r.region === c.region && (!r.account || r.account === c.account)).map((r) => r.name));
+    const w = workloads.find((x) => here.has(x.router) && x.workloadId === c.workloadId);
+    return w ? { router: w.router, workloadId: w.workloadId, name: w.name ?? w.workloadId } : null;
+  };
+}
+
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;
 export const BACKEND_KINDS: BackendKind[] = ['instance', 'asg', 'ecs'];
 

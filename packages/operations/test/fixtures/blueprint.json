@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.19.0",
-    "build": "748e369d260e"
+    "version": "0.20.0",
+    "build": "7ed106f07b2e"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -418,7 +418,8 @@
                 "aws:TagKeys": [
                   "dormeto:workload",
                   "dormeto:tagged",
-                  "dormeto:router"
+                  "dormeto:router",
+                  "dormeto:shadows"
                 ]
               }
             }
@@ -447,7 +448,8 @@
                 "aws:TagKeys": [
                   "dormeto:workload",
                   "dormeto:tagged",
-                  "dormeto:router"
+                  "dormeto:router",
+                  "dormeto:shadows"
                 ]
               }
             }
@@ -455,7 +457,6 @@
           {
             "Effect": "Allow",
             "Action": [
-              "lambda:AddPermission",
               "lambda:RemovePermission"
             ],
             "Resource": [
@@ -522,8 +523,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.19.0",
-        "DMT_BUILD": "748e369d260e",
+        "DMT_VERSION": "0.20.0",
+        "DMT_BUILD": "7ed106f07b2e",
         "DMT_IP_LISTS": "${ipLists}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_CHECK_SCHEDULE": "${checkSchedule}",
@@ -553,8 +554,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.19.0",
-        "DMT_BUILD": "748e369d260e",
+        "DMT_VERSION": "0.20.0",
+        "DMT_BUILD": "7ed106f07b2e",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
@@ -576,8 +577,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.19.0",
-        "DMT_BUILD": "748e369d260e",
+        "DMT_VERSION": "0.20.0",
+        "DMT_BUILD": "7ed106f07b2e",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },
@@ -588,9 +589,15 @@
       ]
     }
   ],
+  "wakerPermission": {
+    "function": "${name}-waker",
+    "statementId": "alb-waker",
+    "principal": "elasticloadbalancing.amazonaws.com",
+    "sourceArn": "arn:${partition}:elasticloadbalancing:${region}:${account}:targetgroup/${name}-*/*"
+  },
   "eventRule": {
     "name": "${name}-drift",
-    "pattern": "{\"detail-type\":[\"AWS API Call via CloudTrail\"],\"$or\":[{\"source\":[\"aws.elasticloadbalancing\"],\"detail\":{\"eventName\":[\"ModifyRule\",\"CreateRule\",\"DeleteRule\",\"SetRulePriorities\",\"DeleteTargetGroup\"],\"userIdentity\":{\"sessionContext\":{\"sessionIssuer\":{\"userName\":[{\"anything-but\":{\"prefix\":\"${name}-\"}}]}}}}},{\"source\":[\"aws.elasticloadbalancing\"],\"detail\":{\"eventName\":[\"RemoveTags\"],\"requestParameters\":{\"tagKeys\":[\"dormeto:workload\"]},\"userIdentity\":{\"sessionContext\":{\"sessionIssuer\":{\"userName\":[{\"anything-but\":{\"prefix\":\"${name}-\"}}]}}}}},{\"source\":[\"aws.ec2\"],\"detail\":{\"eventName\":[\"DeleteTags\"],\"requestParameters\":{\"tagSet\":{\"items\":{\"key\":[\"dormeto:workload\"]}}},\"userIdentity\":{\"sessionContext\":{\"sessionIssuer\":{\"userName\":[{\"anything-but\":{\"prefix\":\"${name}-\"}}]}}}}},{\"source\":[\"aws.autoscaling\"],\"detail\":{\"eventName\":[\"DeleteTags\"],\"requestParameters\":{\"tags\":{\"key\":[\"dormeto:workload\"]}},\"userIdentity\":{\"sessionContext\":{\"sessionIssuer\":{\"userName\":[{\"anything-but\":{\"prefix\":\"${name}-\"}}]}}}}},{\"source\":[\"aws.ecs\",\"aws.rds\"],\"detail\":{\"eventName\":[\"UntagResource\",\"RemoveTagsFromResource\"],\"requestParameters\":{\"tagKeys\":[\"dormeto:workload\"]},\"userIdentity\":{\"sessionContext\":{\"sessionIssuer\":{\"userName\":[{\"anything-but\":{\"prefix\":\"${name}-\"}}]}}}}}]}",
+    "pattern": "{\"detail-type\":[\"AWS API Call via CloudTrail\"],\"$or\":[{\"source\":[\"aws.elasticloadbalancing\"],\"detail\":{\"eventName\":[\"ModifyRule\",\"CreateRule\",\"DeleteRule\",\"SetRulePriorities\",\"DeleteTargetGroup\"],\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.elasticloadbalancing\"],\"detail\":{\"eventName\":[\"RemoveTags\"],\"requestParameters\":{\"tagKeys\":[\"dormeto:workload\"]},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.ec2\"],\"detail\":{\"eventName\":[\"DeleteTags\"],\"requestParameters\":{\"tagSet\":{\"items\":{\"key\":[\"dormeto:workload\"]}}},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.autoscaling\"],\"detail\":{\"eventName\":[\"DeleteTags\"],\"requestParameters\":{\"tags\":{\"key\":[\"dormeto:workload\"]}},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}},{\"source\":[\"aws.ecs\",\"aws.rds\"],\"detail\":{\"eventName\":[\"UntagResource\",\"RemoveTagsFromResource\"],\"requestParameters\":{\"tagKeys\":[\"dormeto:workload\"]},\"userIdentity\":{\"arn\":[{\"anything-but\":{\"prefix\":\"arn:${partition}:sts::${account}:assumed-role/${name}-\"}}]},\"errorCode\":[{\"exists\":false}]}}]}",
     "target": "arn:${partition}:lambda:${region}:${account}:function:${name}-onboarder",
     "description": "Dormeto: rules, target groups and workload tags changed outside the router"
   },

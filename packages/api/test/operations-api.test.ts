@@ -57,20 +57,26 @@ const installedParis: InstalledRouter = {
 describe('operations', () => {
   it('onboards a candidate for operators: 202 with the operation, audited', async () => {
     const { api, created, audit } = setup();
-    expect((await api(event('POST', '/api/operations', 'dmt-viewer', { type: 'onboard', candidateId: TG, workloadId: 'paris' }))).statusCode).toBe(403);
-    const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, workloadId: 'paris', settings: { idleMinutes: 30, wakeMode: 'browser' } }));
+    expect((await api(event('POST', '/api/operations', 'dmt-viewer', { type: 'onboard', candidateId: TG }))).statusCode).toBe(403);
+    // A name for people (optional, the target group name by default); the router derives the workload id.
+    const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, name: '  Paris (demo) ', settings: { idleMinutes: 30, wakeMode: 'browser' } }));
     expect(res.statusCode).toBe(202);
     expect(json(res).operation.id).toBe('op1');
-    expect(created).toEqual([['onboard', { candidateId: TG, workloadId: 'paris', settings: { idleMinutes: 30, wakeMode: 'browser' }, databases: [] }, 'ops@example.com']]);
-    expect(audit.at(-1)).toMatchObject({ action: 'operation-onboard', target: `${TG} as paris`, result: 'started op1' });
+    expect(created).toEqual([['onboard', { candidateId: TG, name: 'Paris (demo)', settings: { idleMinutes: 30, wakeMode: 'browser' }, databases: [] }, 'ops@example.com']]);
+    expect(audit.at(-1)).toMatchObject({ action: 'operation-onboard', target: `${TG} as Paris (demo)`, result: 'started op1' });
+    await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, workloadId: 'ignored' }));
+    expect(created.at(-1)![1]).toEqual({ candidateId: TG, settings: {}, databases: [] });
+    expect(audit.at(-1)).toMatchObject({ target: TG });
   });
 
-  it('refuses an invalid workload id, an unknown candidate and a wrong settings type', async () => {
+  it('refuses an invalid name, an unknown candidate and a wrong settings type', async () => {
     const { api, created } = setup();
     for (const body of [
-      { type: 'onboard', candidateId: TG, workloadId: 'Paris_1' },
-      { type: 'onboard', candidateId: 'arn:nope', workloadId: 'paris' },
-      { type: 'onboard', candidateId: TG, workloadId: 'paris', settings: 'fast' },
+      { type: 'onboard', candidateId: TG, name: 'x'.repeat(65) },
+      { type: 'onboard', candidateId: TG, name: 42 },
+      { type: 'onboard', candidateId: TG, name: 'a\u0007b' },
+      { type: 'onboard', candidateId: 'arn:nope' },
+      { type: 'onboard', candidateId: TG, settings: 'fast' },
       { type: 'unknown' },
     ]) expect((await api(event('POST', '/api/operations', 'dmt-operator', body))).statusCode).toBe(400);
     expect(created).toEqual([]);
@@ -87,6 +93,9 @@ describe('operations', () => {
     const { api, created } = setup({ installed: [installedParis] });
     expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev-eu-west-3', workloadId: 'paris' }))).statusCode).toBe(202);
     expect(created.at(-1)).toEqual(['offboard', { router: 'dmt-dev-eu-west-3', account: MANAGER, region: 'eu-west-3', workloadId: 'paris' }, 'ops@example.com']);
+    // The workload's name, for the operation's title and audit.
+    expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' }))).statusCode).toBe(202);
+    expect(created.at(-1)![1]).toEqual({ router: 'dmt-dev-eu-west-3', account: MANAGER, region: 'eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' });
     expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'install-router', account: MANAGER, region: 'eu-west-2' }))).statusCode).toBe(403);
     expect((await api(event('POST', '/api/operations', 'dmt-admin', { type: 'install-router', account: MANAGER, region: 'eu-west-2' }))).statusCode).toBe(202);
     expect(created.at(-1)).toEqual(['install-router', { account: MANAGER, region: 'eu-west-2' }, 'ops@example.com']);

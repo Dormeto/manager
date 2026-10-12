@@ -268,7 +268,6 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
     hosts: [...new Set(members.flatMap((m) => hostsOf(m.rule)))],
     targetGroup: app.TargetGroupName ?? null,
     targetGroupArn: arn,
-    suggestedId: managedRules.length ? null : app.TargetGroupName ?? null,
     backend: null,
     tags: tagValues([...new Set(members.map((m) => m.lb.LoadBalancerArn ?? ''))].map((a) => ctx.tags.get(a))
       .concat([ctx.tags.get(arn)], members.map((m) => ctx.tags.get(m.rule.RuleArn ?? '')))),
@@ -318,7 +317,6 @@ function ruleCandidate(row: Row, where: { account: string; region: string }, tag
     hosts: hostsOf(rule),
     targetGroup: group?.TargetGroupName ?? null,
     targetGroupArn: group?.TargetGroupArn ?? null,
-    suggestedId: null,
     backend: null,
     tags: tagValues([tags.get(lb.LoadBalancerArn ?? ''), group ? tags.get(group.TargetGroupArn ?? '') : undefined, tags.get(rule.RuleArn ?? '')]),
     rules: [ruleRef(row)],

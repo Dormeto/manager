@@ -1,6 +1,11 @@
 variable "env" {
   description = "Environment name: resource names dmt-<env>-manager-*."
   type        = string
+  validation {
+    # Installed routers are dmtr-<env>; their waker target groups dmtr-<env>-<16-character workload id> hold in 32.
+    condition     = can(regex("^[a-z0-9]{1,10}$", var.env))
+    error_message = "env must have 1 to 10 lowercase letters or digits (installed routers dmtr-<env>, waker target groups dmtr-<env>-<workload id>)."
+  }
 }
 
 variable "region" {

@@ -30,11 +30,13 @@ describe('computeStatus', () => {
     expect(computeStatus(input).status).toBe(status);
   });
 
-  it('gives the decision reason to a pending offboarding, and a pending onboarding is just eligible', () => {
+  it('gives the decision reason to a pending offboarding; pending onboarding and managed ones are just eligible and managed', () => {
     expect(computeStatus({ ...base, eligibility: 'managed', reason: 'redirect action' }).statusReason).toBe('ineligible: redirect action');
     expect(computeStatus({ ...base, eligibility: 'managed', scope: 'excluded', scopeReason: 'excluded: filter "a", exclude 1' }).statusReason).toBe('excluded: filter "a", exclude 1');
     // The backend has its own column: the reason is just "eligible".
     expect(computeStatus({ ...base, backend: { kind: 'asg', id: 'web-asg' } }).statusReason).toBe('eligible');
+    // The workload id is not for people: the dashboard shows the workload's name.
+    expect(computeStatus({ ...base, eligibility: 'managed', workloadId: '7010ea54b5c02245' }).statusReason).toBe('managed');
   });
 });
 

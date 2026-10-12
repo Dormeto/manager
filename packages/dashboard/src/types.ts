@@ -21,6 +21,7 @@ export interface Pause {
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
+  name?: string; // routers 0.20.0 and later: for people, the id otherwise
   state: string;
   url: string | null;
   wakeMode: string;
@@ -61,6 +62,7 @@ export interface Rule {
 
 export interface WorkloadStatus {
   workloadId: string;
+  name?: string; // routers 0.20.0 and later
   router: { version: string; build: string };
   state: string;
   updatedAt: string | null;
@@ -177,6 +179,7 @@ export interface Operation {
   type: OperationType;
   target: Record<string, string>;
   input: Record<string, unknown>;
+  context?: Record<string, unknown>; // learnt during the run: the workload id and name of an onboarding
   status: 'running' | 'succeeded' | 'failed';
   steps: { name: string; status: StepStatus; startedAt?: string; finishedAt?: string; detail?: string; attempts?: number }[];
   cursor: number;

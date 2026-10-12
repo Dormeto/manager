@@ -69,13 +69,23 @@ describe('installer', () => {
     expect([...s.state.functions.get('dmtr-dev-onboarder')!.permissions.values()]).toEqual([...PRINCIPALS, 'events.amazonaws.com arn:aws:events:eu-west-3:121014831971:rule/dmtr-dev-drift']);
     const drift = s.state.eventRules.get('dmtr-dev-drift')!;
     expect(drift.state).toBe('ENABLED');
-    expect(JSON.parse(drift.pattern).$or[0].detail.userIdentity.sessionContext.sessionIssuer.userName).toEqual([{ 'anything-but': { prefix: 'dmtr-dev-' } }]);
+    expect(JSON.parse(drift.pattern).$or[0].detail.userIdentity.arn).toEqual([{ 'anything-but': { prefix: 'arn:aws:sts::121014831971:assumed-role/dmtr-dev-' } }]);
     expect(drift.targets).toEqual([{ Id: 'onboarder', Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-onboarder' }]);
-    expect(s.state.functions.get('dmtr-dev-waker')!.permissions.size).toBe(0);
+    // One permission for every waker target group of the router (routers 0.20.0 and later).
+    expect([...s.state.functions.get('dmtr-dev-waker')!.permissions]).toEqual([
+      ['alb-waker', 'elasticloadbalancing.amazonaws.com arn:aws:elasticloadbalancing:eu-west-3:121014831971:targetgroup/dmtr-dev-*/*'],
+    ]);
     expect(s.state.schedules.get('dmtr-dev-check')).toMatchObject({
       ScheduleExpression: 'rate(5 minutes)', FlexibleTimeWindow: { Mode: 'OFF' },
       Target: { Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-controller', RetryPolicy: { MaximumRetryAttempts: 0 }, DeadLetterConfig: { Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-check-failures' } },
     });
+  });
+
+  it('adds no waker permission for a blueprint older than 0.20.0 (its onboarder adds one per workload)', async () => {
+    const s = setup();
+    const { wakerPermission: _w, ...older } = blueprintOf();
+    await installAll(s, older as Blueprint);
+    expect(s.state.functions.get('dmtr-dev-waker')!.permissions.size).toBe(0);
   });
 
   it('asks to retry when Lambda cannot assume a new role yet', async () => {

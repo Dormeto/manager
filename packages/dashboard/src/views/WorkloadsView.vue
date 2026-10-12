@@ -30,7 +30,7 @@ const { error, loading, nextAt, run } = usePoll(async () => {
 });
 
 const headers = [
-  { title: 'Workload', key: 'workloadId' },
+  { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId },
   { title: 'Router', key: 'router' },
   { title: 'State', key: 'state' },
   { title: 'Since', key: 'since', sortable: false },
@@ -53,9 +53,9 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
   <v-alert v-for="e in errors" :key="e.router" type="warning" class="mb-4" :title="`Router ${e.router} unreachable`" :text="e.message" />
   <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`" :text="`${checkHealth(r, now).text}.`" />
   <v-card>
-    <v-data-table :mobile="smAndDown" :headers="headers" :items="workloads" :search="search" :loading="loading && !workloads.length" item-value="workloadId" :items-per-page="25">
-      <template #[`item.workloadId`]="{ item }">
-        <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="font-weight-medium">{{ item.workloadId }}</router-link>
+    <v-data-table :mobile="smAndDown" :headers="headers" :items="workloads" :search="search" :loading="loading && !workloads.length" :item-value="(w: WorkloadSummary) => `${w.router}/${w.workloadId}`" :items-per-page="25">
+      <template #[`item.name`]="{ item }">
+        <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="font-weight-medium">{{ item.name ?? item.workloadId }}</router-link>
       </template>
       <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.since`]="{ item }"><span class="nowrap">{{ since(item) }}</span></template>

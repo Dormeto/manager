@@ -187,8 +187,19 @@ function roleIn(body: Record<string, unknown>): Role {
   return role;
 }
 
-// Workload ids of onboarded workloads (the waker finds a workload from its target group name).
-const WORKLOAD_ID = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
+// Workload names (routers 0.20.0 and later, vision onboarding design section 7): for people only, never in a resource
+// name; trimmed, at most 64 characters, no control characters. The router derives the workload id from the target group.
+const NAME_MAX = 64;
+function nameOf(value: unknown, { required }: { required: boolean }): string | undefined {
+  if (value === undefined && !required) return undefined;
+  if (typeof value !== 'string') throw new HttpError(400, 'bad_request', 'name must be text');
+  const name = value.trim();
+  if (!name && required) throw new HttpError(400, 'bad_request', 'name: required');
+  if (name.length > NAME_MAX) throw new HttpError(400, 'bad_request', `name: at most ${NAME_MAX} characters`);
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw new HttpError(400, 'bad_request', 'name: no control characters');
+  return name || undefined;
+}
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 export function createApi({ routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion }: ApiOptions) {
@@ -367,6 +378,21 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
         });
       }
       if (method === 'POST' && (action === 'pause' || action === 'resume') && !parts[4]) return pauseRoute(identity, event, router, action, id);
+      if (method === 'POST' && action === 'rename' && !parts[4]) {
+        need(identity, 'operator');
+        const name = nameOf(bodyOf(event).name, { required: true })!;
+        return audited(identity, 'rename', `${router.name}/${id}`, async () => {
+          try {
+            const result = await invoke(router, { action: 'rename', workloadId: id, name, by: identity.email }) as { workloadId: string; name: string };
+            return { result: result.name, response: reply(200, result) };
+          } catch (err) {
+            if (unknownAction(err, 'rename')) throw new HttpError(409, 'conflict', `router ${router.name} too old to rename, upgrade it to 0.20.0 or later`);
+            if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);
+            if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
+            throw err;
+          }
+        });
+      }
       if (method === 'POST' && action === 'wake' && !parts[4]) {
         need(identity, 'operator');
         return audited(identity, 'wake', `${router.name}/${id}`, async () => {
@@ -666,14 +692,13 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
     let input: Record<string, unknown>;
     let target: string;
     if (type === 'onboard') {
-      const workloadId = String(body.workloadId ?? '');
-      if (!WORKLOAD_ID.test(workloadId)) throw new HttpError(400, 'bad_request', 'workloadId: lowercase letters, digits and hyphens, not starting or ending with a hyphen');
+      const name = nameOf(body.name, { required: false });
       const candidateId = String(body.candidateId ?? '');
       if (!(await discovery?.store.getCandidate(candidateId))) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
-      input = { candidateId, workloadId, settings: body.settings ?? {}, databases: body.databases ?? [] };
-      target = `${candidateId} as ${workloadId}`;
+      input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [] };
+      target = name ? `${candidateId} as ${name}` : candidateId;
     } else if (type === 'install-router') {
       const account = String(body.account ?? '');
       const region = String(body.region ?? '');
@@ -686,8 +711,9 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
       if (type === 'offboard') {
         const workloadId = String(body.workloadId ?? '');
         if (!ID.test(workloadId)) throw new HttpError(400, 'bad_request', `invalid workload id: ${workloadId}`);
-        input = { router: router.name, account, region: router.region, workloadId };
-        target = `${router.name}/${workloadId}`;
+        const name = nameOf(body.name, { required: false });
+        input = { router: router.name, account, region: router.region, workloadId, ...(name ? { name } : {}) };
+        target = `${router.name}/${workloadId}${name ? ` (${name})` : ''}`;
       } else {
         input = { account, region: router.region };
         target = router.name;

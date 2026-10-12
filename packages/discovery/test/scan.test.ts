@@ -32,12 +32,13 @@ describe('scanRegion', () => {
     expect('r-admin' in found).toBe(false);
   });
 
-  it('stamps the account and region, and describes listener, conditions, target group and suggested id', async () => {
+  it('stamps the account and region, and describes listener, conditions and target group', async () => {
     const found = byKey(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
     const shop = found.shop!;
     expect([shop.id, shop.account, shop.region]).toEqual([TGS.shop!.TargetGroupArn, '111122223333', 'eu-west-1']);
-    expect({ lb: shop.loadBalancer, listener: shop.listener, priority: shop.priority, conditions: shop.conditions, tg: shop.targetGroup, id: shop.suggestedId })
-      .toEqual({ lb: 'web', listener: 'HTTPS:443', priority: '20', conditions: 'host shop.example.com | www.shop.example.com', tg: 'shop', id: 'shop' });
+    // No suggested workload id: the router derives it, and the target group name is the default name (router 0.20.0).
+    expect({ lb: shop.loadBalancer, listener: shop.listener, priority: shop.priority, conditions: shop.conditions, tg: shop.targetGroup, suggested: 'suggestedId' in shop })
+      .toEqual({ lb: 'web', listener: 'HTTPS:443', priority: '20', conditions: 'host shop.example.com | www.shop.example.com', tg: 'shop', suggested: false });
     expect(found.shared!.conditions).toBe('host a.example.com (+1 rules)');
     expect(found.api!.conditions).toBe('path /api/*');
     expect(found['r-default']!.conditions).toBe('default');
@@ -92,7 +93,7 @@ describe('scanRegion', () => {
     rule.Actions = [{ Type: 'forward', Order: 1, ForwardConfig: { TargetGroups: [{ TargetGroupArn: TGS.demo!.TargetGroupArn, Weight: 0 }, { TargetGroupArn: TGS.waker!.TargetGroupArn, Weight: 1 }] } }];
     try {
       const found = byKey(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
-      expect([found['demo-app']!.targetGroup, found['demo-app']!.suggestedId, found['demo-app']!.eligibility]).toEqual(['demo-app', null, 'managed']);
+      expect([found['demo-app']!.targetGroup, found['demo-app']!.eligibility]).toEqual(['demo-app', 'managed']);
     } finally {
       rule.Actions = awake;
     }
