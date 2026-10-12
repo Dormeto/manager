@@ -101,7 +101,7 @@ const headers = [
   { title: 'Idle check', key: 'lastScheduledCheckAt' },
   { title: 'Workloads', key: 'workloads', sortable: false },
   { title: 'Pause', key: 'pauses', sortable: false },
-  { title: '', key: 'actions', sortable: false, align: 'end' as const },
+  { title: 'Actions', key: 'actions', sortable: false, align: 'end' as const },
   { title: '', key: 'data-table-expand' },
 ];
 </script>
@@ -152,7 +152,9 @@ const headers = [
           <template #activator="{ props }">
             <span v-bind="props" class="d-inline-flex align-center ga-2" tabindex="0">
               <v-chip :color="healthColor(item.health.status)" variant="tonal" label>{{ item.health.status }}</v-chip>
-              <span v-if="item.health.problems.length" class="text-body-small text-medium-emphasis">{{ item.health.problems[0]!.text }}<template v-if="item.health.problems.length > 1"> (+{{ item.health.problems.length - 1 }})</template></span>
+              <!-- The first problem on one line, cut short: the tooltip has them all, in full. -->
+              <span v-if="item.health.problems.length" class="health-problem text-truncate text-body-small text-medium-emphasis">{{ item.health.problems[0]!.text }}</span>
+              <span v-if="item.health.problems.length > 1" class="text-body-small text-medium-emphasis nowrap">+{{ item.health.problems.length - 1 }}</span>
             </span>
           </template>
           <div v-for="p in item.health.problems" :key="p.text" class="text-body-medium">{{ p.level }}: {{ p.text }}</div>
@@ -179,10 +181,11 @@ const headers = [
       </template>
       <template #[`item.pauses`]="{ item }"><PauseChip :pauses="item.pauses" /></template>
       <template #[`item.actions`]="{ item }">
+        <div class="d-flex flex-nowrap align-center justify-end ga-1">
         <template v-if="session.isAdmin && item.source === 'manager'">
           <v-tooltip location="top" max-width="380" :text="uninstallHelp(item.name)">
             <template #activator="{ props }">
-              <v-btn v-bind="props" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Uninstall ${item.name}`" class="mr-1" @click="removing = item" />
+              <v-btn v-bind="props" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Uninstall ${item.name}`" @click="removing = item" />
             </template>
           </v-tooltip>
         </template>
@@ -194,6 +197,7 @@ const headers = [
             </template>
           </v-tooltip>
         </template>
+        </div>
       </template>
       <template #expanded-row="{ columns, item }">
         <tr><td :colspan="columns.length" class="pa-0"><RouterDetails :name="item.name" /></td></tr>
@@ -231,4 +235,5 @@ const headers = [
 
 <style scoped>
 .upgrading { display: inline-flex; text-decoration: none; }
+.health-problem { display: inline-block; max-width: 14rem; min-width: 0; }
 </style>

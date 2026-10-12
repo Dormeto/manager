@@ -10,6 +10,7 @@ import RoutersView from '../src/views/RoutersView.vue';
 import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
+const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
 vi.mock('../src/api', () => ({
@@ -26,7 +27,8 @@ vi.mock('../src/api', () => ({
       routers: [
         { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] },
           ...(server.running ? { operation: { id: server.running, type: 'upgrade-router' } } : {}) },
-        { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0, health: { status: 'ok', problems: [] },
+        { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0,
+          health: { status: 'warning', problems: [{ level: 'warning', text: DRIFT }] },
           pauses: [{ scope: 'router', reason: 'load test', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z' }] },
         { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, health: { status: 'ok', problems: [] } },
       ],
@@ -191,6 +193,25 @@ describe('Routers view', () => {
     expect(document.body.textContent).toMatch(/never naps its workloads/);
     await hover(rowOf(wrapper, 'dmtr-dev-eu-west-1').findAll('button').find((b) => b.text() === 'Resume')!);
     expect(document.body.textContent).toMatch(/nap again when idle/);
+    wrapper.unmount();
+  });
+
+  it('names the actions column, and keeps a router\'s actions on one line', async () => {
+    const wrapper = await mountView();
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    expect(headers.indexOf('Actions')).toBe(headers.indexOf('Pause') + 1);
+    const actions = rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('td')[headers.indexOf('Actions')]!;
+    expect(actions.find('.flex-nowrap').findAll('button').length).toBe(2);
+    wrapper.unmount();
+  });
+
+  it('shows a long health problem on one line, cut short, the whole of it in its tooltip', async () => {
+    const wrapper = await mountView();
+    const shown = rowOf(wrapper, 'dmtr-dev-eu-west-1').find('.health-problem');
+    expect(shown.classes()).toContain('text-truncate');
+    expect(shown.text()).toBe(DRIFT);
+    await hover(rowOf(wrapper, 'dmtr-dev-eu-west-1').find('[tabindex="0"]:has(.health-problem)'));
+    expect(document.body.textContent).toContain(`warning: ${DRIFT}`);
     wrapper.unmount();
   });
 });
