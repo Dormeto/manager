@@ -95,6 +95,24 @@ describe('the requests of every region', () => {
     expect(s.reads()).toBe(4);
   });
 
+  it('a region whose requests cannot be read at all: its workloads unreadable with AWS\'s reason, the others read, nothing kept', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+    let reads = 0;
+    const regions = [region([workload(0)]), region([{ ...workload(1), region: 'eu-west-3' }], { region: 'eu-west-3' })];
+    const run = () => requestsAll({
+      regions, cache: createCache({ dir, now: () => NOW }), refresh: null, now: () => NOW,
+      cloudwatchOf: async (_account, where) => {
+        if (where === R) throw Object.assign(new Error('User is not authorized to perform: cloudwatch:GetMetricData with an explicit deny in a service control policy'), { name: 'AccessDenied' });
+        return { getMetricData: async (input) => { reads += 1; return { MetricDataResults: input.MetricDataQueries.map((q) => ({ Id: q.Id, Timestamps: [], Values: [], StatusCode: 'Complete' })) }; } };
+      },
+    });
+    const out = await run();
+    expect(out[0]).toMatchObject({ region: R, unreadable: { [tg(0)]: 'AccessDenied: User is not authorized to perform: cloudwatch:GetMetricData with an explicit deny in a service control policy' } });
+    expect(out[1]!.minutes[tg(1)]).toEqual([]);
+    await run();
+    expect(reads).toBe(1);
+  });
+
   it('a region without workload or that failed asks nothing; a kept file missing a new workload is read again', async () => {
     const s = setup();
     const out = await s.run([region([]), region([], { region: 'eu-west-3', error: 'opt-in region' })]);

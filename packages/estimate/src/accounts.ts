@@ -17,7 +17,11 @@ export interface Reached { organization: string | null; why: string | null; acco
 
 const said = (err: unknown) => `${(err as Error).name}: ${(err as Error).message}`;
 
-export async function reachAccounts(ports: AccountsPorts, { role }: { role: string }): Promise<Reached> {
+// A role's credentials are assumed again this close to their expiry (sessions last an hour; a big organization's run
+// lasts longer).
+const RENEW_MS = 5 * 60_000;
+
+export async function reachAccounts(ports: AccountsPorts, { role, now = Date.now }: { role: string; now?: () => number }): Promise<Reached> {
   const self = await ports.whoami();
   const unreachable: Unreachable[] = [];
   const own = (name: string): ReachedAccount => ({ account: self, name, credentials: async () => null });
@@ -25,8 +29,10 @@ export async function reachAccounts(ports: AccountsPorts, { role }: { role: stri
   try {
     organization = await ports.organization();
   } catch (err) {
-    if ((err as Error).name !== 'AWSOrganizationsNotInUseException') throw err;
-    return { organization: null, why: `not in an organization: only the account ${self} is estimated`, accounts: [own(self)], unreachable };
+    if ((err as Error).name === 'AWSOrganizationsNotInUseException') return { organization: null, why: `not in an organization: only the account ${self} is estimated`, accounts: [own(self)], unreachable };
+    // Not allowed to describe it (a narrow read role): its own account, and why; anything else is the profile's failure.
+    if (!/AccessDenied/.test((err as Error).name)) throw err;
+    return { organization: null, why: `this profile cannot describe its organization (${said(err)}): only its account ${self} is estimated`, accounts: [own(self)], unreachable };
   }
   let inventory: OrgInventory;
   try {
@@ -40,12 +46,23 @@ export async function reachAccounts(ports: AccountsPorts, { role }: { role: stri
   const accounts = inventory.accounts.map((a): ReachedAccount => {
     if (a.id === self) return own(a.name);
     let assumed: Promise<Credentials> | undefined;
+    let until = Infinity;
+    let refused = false;
     return {
       account: a.id, name: a.name,
-      credentials: () => (assumed ??= ports.assume(a.id, role).catch((err: unknown) => {
-        unreachable.push({ account: a.id, name: a.name, reason: (err as Error).message, fix: `create a role this profile may assume, with read access, and name it with --role (tried ${role})` });
-        throw err;
-      })),
+      credentials: () => {
+        // Kept until five minutes before they expire; a refusal is said once and kept.
+        if (assumed && (refused || now() < until - RENEW_MS)) return assumed;
+        assumed = ports.assume(a.id, role).then((c) => {
+          until = c.expiration ? new Date(c.expiration).getTime() : Infinity;
+          return c;
+        }, (err: unknown) => {
+          refused = true;
+          unreachable.push({ account: a.id, name: a.name, reason: (err as Error).message, fix: `create a role this profile may assume, with read access, and name it with --role (tried ${role})` });
+          throw err;
+        });
+        return assumed;
+      },
     };
   });
   return { organization, why: null, accounts, unreachable };

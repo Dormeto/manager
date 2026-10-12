@@ -56,6 +56,19 @@ describe('a region\'s discovery', () => {
     expect(found.workloads[0]).toMatchObject({ account: A, region: R, loadBalancer: 'web', loadBalancerArn: LB, targetGroupArn: tg('web'), hosts: ['web.example.com'], backend: { kind: 'asg', id: 'web-asg' } });
   });
 
+  it('an instance that is already stopped stops nothing', async () => {
+    const { ports } = regionPorts([rule('admin', { backend: { kind: 'instance', id: 'i-9' } })]);
+    ports.ec2 = { describeInstances: async ({ InstanceIds }) => ({ Reservations: [{ Instances: InstanceIds.map((id) => ({ InstanceId: id, InstanceType: 'm5.large', PlatformDetails: 'Linux/UNIX', State: { Name: 'stopped' } })) }] }) };
+    expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.stopped).toEqual([]);
+  });
+
+  it('an instance Dormeto manages that is stopped is napping: still estimated (it runs when woken)', async () => {
+    const ruleArn = `arn:aws:elasticloadbalancing:${R}:${A}:listener-rule/app/web/0123456789abcdef/aaaa/cccc`;
+    const { ports } = regionPorts([rule('napping', { eligibility: 'managed', workloadId: 'abc', backend: { kind: 'instance', id: 'i-9' }, rules: [{ id: ruleArn, listener: 'HTTPS:443', priority: '10', conditions: '', hosts: [], managed: true }] })]);
+    ports.ec2 = { describeInstances: async ({ InstanceIds }) => ({ Reservations: [{ Instances: InstanceIds.map((id) => ({ InstanceId: id, InstanceType: 'm5.large', PlatformDetails: 'Linux/UNIX', State: { Name: 'stopped' } })) }] }) };
+    expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.stopped).toEqual([{ kind: 'ec2', type: 'm5.large', count: 1, os: 'Linux' }]);
+  });
+
   it('an Auto Scaling group at a desired capacity of 0 stops nothing', async () => {
     const { ports } = regionPorts([rule('web')], { desired: 0 });
     expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.stopped).toEqual([]);
@@ -85,11 +98,11 @@ describe('the discovery of every account and region', () => {
   const account = (id: string, credentials: () => Promise<null | { accessKeyId: string; secretAccessKey: string; sessionToken: string }> = async () => null) => ({ account: id, name: id, credentials });
   const reachedOf = (accounts: ReturnType<typeof account>[]): Reached => ({ organization: 'o-abc123', why: null, accounts, unreachable: [] });
 
-  function setup({ accounts = [account(A)], regions = [R, 'eu-west-3'], failing = new Set<string>(), delay = 0 } = {}) {
+  function setup({ accounts = [account(A)], regions = [R, 'eu-west-3'], failing = new Set<string>(), delay = 0, unreachable = [] as Reached['unreachable'] } = {}) {
     const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
     const calls = { scans: [] as string[], regions: 0, active: 0, most: 0 };
-    const run = (over: { refresh?: 'discovery' | 'metrics' | null } = {}) => discoverAll({
-      reached: reachedOf(accounts), cache: createCache({ dir, now: () => T }), refresh: over.refresh ?? null, now: () => T,
+    const run = (over: { refresh?: 'discovery' | 'metrics' | null; regions?: string[] | null } = {}) => discoverAll({
+      reached: { ...reachedOf(accounts), unreachable }, cache: createCache({ dir, now: () => T }), refresh: over.refresh ?? null, now: () => T, regions: over.regions ?? null,
       regionsOf: async () => { calls.regions += 1; return regions; },
       portsOf: (acct, region) => ({
         ...regionPorts([rule(`${acct}-${region}`)]).ports,
@@ -129,17 +142,42 @@ describe('the discovery of every account and region', () => {
 
   it('an account whose role cannot be assumed is not scanned; an account cached entirely assumes nothing', async () => {
     let assumed = 0;
-    const refused = account('222222222222', async () => { assumed += 1; throw new Error('not authorized to perform: sts:AssumeRole'); });
-    const s = setup({ accounts: [account(A), refused] });
+    // As reachAccounts does: a refusal is listed in reached.unreachable before it is thrown.
+    const unreachable: Reached['unreachable'] = [];
+    const refused = account('222222222222', async () => { assumed += 1; unreachable.push({ account: '222222222222', name: 'b', reason: 'denied', fix: 'create a role' }); throw new Error('not authorized to perform: sts:AssumeRole'); });
+    const s = setup({ accounts: [account(A), refused], unreachable });
     const { regions } = await s.run();
     expect(regions.map((r) => r.account)).toEqual([A, A]);
     expect(assumed).toBe(1);
     const cachedOnly = account(A, async () => { throw new Error('should not be asked'); });
     const again = await discoverAll({
-      reached: reachedOf([cachedOnly]), cache: createCache({ dir: s.dir, now: () => T }), refresh: null, now: () => T,
+      reached: reachedOf([cachedOnly]), cache: createCache({ dir: s.dir, now: () => T }), refresh: null, now: () => T, regions: null,
       regionsOf: async () => { throw new Error('should not be asked'); }, portsOf: () => { throw new Error('should not be asked'); },
     });
     expect(again.regions).toHaveLength(2);
+  });
+
+  it('--regions is used as given, whatever the cache holds, and never cached as the enabled regions', async () => {
+    const s = setup();
+    await s.run();
+    const only = await s.run({ regions: [R] });
+    expect(only.regions.map((r) => r.region)).toEqual([R]);
+    const t2 = setup();
+    await t2.run({ regions: [R] });
+    expect(t2.calls.regions).toBe(0);
+    const all = await t2.run();
+    expect(all.regions.map((r) => r.region)).toEqual([R, 'eu-west-3']);
+    expect(t2.calls.regions).toBe(1);
+  });
+
+  it('an account that fails for another reason than its role (its regions unreadable) is said, not dropped', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dormeto-estimate-'));
+    const out = await discoverAll({
+      reached: reachedOf([account(A)]), cache: createCache({ dir, now: () => T }), refresh: null, now: () => T, regions: null,
+      regionsOf: async () => { throw Object.assign(new Error('You are not authorized to perform this operation.'), { name: 'UnauthorizedOperation' }); },
+      portsOf: () => { throw new Error('not asked'); },
+    });
+    expect(out.regions).toEqual([{ account: A, region: '*', workloads: [], ineligible: [], error: 'UnauthorizedOperation: You are not authorized to perform this operation.' }]);
   });
 
   it('four accounts at a time at most', async () => {

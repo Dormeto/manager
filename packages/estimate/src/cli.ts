@@ -18,7 +18,8 @@ export interface EstimateAws {
   regionsOf(account: string, credentials: Credentials | null): Promise<string[]>;
   portsOf(account: string, region: string, credentials: Credentials | null): RegionPorts;
   cloudwatchOf(account: string, region: string, credentials: Credentials | null): CloudWatchPort;
-  prices(cache: PriceCache): { hourly(region: string, item: StoppedItem, discounts: Discounts): Promise<number | null> };
+  // failure: a price lookup AWS refused, if any (unpriced workloads then say so).
+  prices(cache: PriceCache): { hourly(region: string, item: StoppedItem, discounts: Discounts): Promise<number | null>; failure?(): string | null };
 }
 export interface CliDeps {
   now: () => number;
@@ -53,14 +54,17 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     if (reached.why) deps.log(reached.why);
     const progress: Progress = (p) => deps.log(`  ${p.phase} ${p.account} ${p.region}: ${p.error ? `failed (${p.error})` : `${p.workloads} workload${p.workloads === 1 ? '' : 's'}`}${p.from === 'cache' ? ' (cache)' : ''}`);
     deps.log('Phase 1: discovery');
-    const { regions } = await discoverAll({ reached, regionsOf: aws.regionsOf, portsOf: aws.portsOf, cache, refresh: options.refresh, now: deps.now, progress });
+    const { regions } = await discoverAll({ reached, regions: options.regions, regionsOf: aws.regionsOf, portsOf: aws.portsOf, cache, refresh: options.refresh, now: deps.now, progress });
     const credentialsOf = async (account: string) => (await reached.accounts.find((a) => a.account === account)?.credentials()) ?? null;
     deps.log('Phase 2: requests');
     const requests = await requestsAll({ regions, cloudwatchOf: async (account, region) => aws.cloudwatchOf(account, region, await credentialsOf(account)), cache, refresh: options.refresh, now: deps.now, progress });
     deps.log('Phase 3: estimate');
     const book = aws.prices(cache.prices);
     const { out, profile: _profile, ...kept } = options;
-    const estimate = await estimateAll({ reached, regions, requests, hourly: (region, item) => book.hourly(region, item, options.discounts), baseline: options.baseline, options: kept, now: deps.now() });
+    const estimate = await estimateAll({
+      reached, regions, requests, hourly: (region, item) => book.hourly(region, item, options.discounts), priceFailure: () => book.failure?.() ?? null,
+      baseline: options.baseline, options: kept, now: deps.now(),
+    });
     const date = new Date(deps.now()).toISOString().slice(0, 10);
     const md = join(out, `estimate-${date}.md`);
     const json = join(out, `estimate-${date}.json`);

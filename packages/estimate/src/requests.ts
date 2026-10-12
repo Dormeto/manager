@@ -84,8 +84,23 @@ export async function requestsAll({ regions, cloudwatchOf, cache, refresh, now, 
       progress({ phase: 'requests', account: region.account, region: region.region, from: 'cache', workloads: region.workloads.length });
       continue;
     }
-    const read = await readRequests(await cloudwatchOf(region.account, region.region), region.workloads, { days: 14, now: now() });
-    await cache.put(path, read);
+    let read: RegionRequests;
+    try {
+      read = await readRequests(await cloudwatchOf(region.account, region.region), region.workloads, { days: 14, now: now() });
+      await cache.put(path, read);
+    } catch (err) {
+      // A region whose requests cannot be read at all (a denial, throttling, expired credentials): its workloads are
+      // unreadable with AWS's reason, nothing is kept, and the run goes on.
+      const why = `${(err as Error).name}: ${(err as Error).message}`;
+      const to = Math.floor(now() / MIN_MS) * MIN_MS;
+      read = {
+        account: region.account, region: region.region, from: new Date(to - 14 * DAY_MS).toISOString(), to: new Date(to).toISOString(),
+        minutes: {}, unreadable: Object.fromEntries(region.workloads.map((w) => [w.targetGroupArn, why])),
+      };
+      progress({ phase: 'requests', account: region.account, region: region.region, from: 'aws', workloads: region.workloads.length, error: why });
+      out.push(read);
+      continue;
+    }
     out.push(read);
     progress({ phase: 'requests', account: region.account, region: region.region, from: 'aws', workloads: region.workloads.length });
   }

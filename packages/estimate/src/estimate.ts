@@ -36,7 +36,7 @@ export interface Estimate {
   assumptions: string[];
 }
 
-const NOTHING = 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or no instance)';
+const NOTHING = 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or a stopped instance)';
 
 function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profile'>): string[] {
   return [
@@ -51,11 +51,13 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
 
 const empty = (): Totals => ({ workloads: 0, usdMonth15: 0, usdMonthRecommended: 0, dormetoMonth: 0 });
 
-export async function estimateAll({ reached, regions, requests, hourly, baseline, options, now }: {
+export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now }: {
   reached: Reached;
   regions: RegionDiscovery[];
   requests: RegionRequests[];
   hourly: (region: string, item: StoppedItem) => Promise<number | null>;
+  // A price lookup AWS refused (the Price List API, Spot price history): unpriced workloads say so.
+  priceFailure?: () => string | null;
   baseline: Baseline;
   options: Omit<Options, 'out' | 'profile'>;
   now: number;
@@ -64,17 +66,30 @@ export async function estimateAll({ reached, regions, requests, hourly, baseline
   const leftOut: LeftOut[] = [];
   for (const region of regions) {
     const read = requests.find((r) => r.account === region.account && r.region === region.region);
+    // A backend behind several target groups is estimated once, at its first, with every target group's requests: it
+    // can nap only when none of them is called.
+    const key = (w: Workload) => `${w.backend.kind}#${w.backend.id}`;
+    const sharing = new Map<string, Workload[]>();
+    for (const workload of region.workloads) sharing.set(key(workload), [...(sharing.get(key(workload)) ?? []), workload]);
     for (const workload of region.workloads) {
+      const group = sharing.get(key(workload))!;
+      if (group[0] !== workload) {
+        leftOut.push({ workload, reason: `its backend (${workload.backend.kind} ${workload.backend.id}) also serves ${group[0]!.targetGroup}: estimated there, with every target group's requests` });
+        continue;
+      }
       if (!workload.stopped.length) {
         leftOut.push({ workload, reason: NOTHING });
         continue;
       }
-      const unreadable = read?.unreadable[workload.targetGroupArn];
-      const minutes = read?.minutes[workload.targetGroupArn];
-      if (unreadable || !read || !minutes) {
+      const unreadable = group.map((w) => read?.unreadable[w.targetGroupArn]).find(Boolean);
+      const series = group.map((w) => read?.minutes[w.targetGroupArn]);
+      if (unreadable || !read || series.some((m) => !m)) {
         leftOut.push({ workload, reason: `requests unreadable: ${unreadable ?? 'not read'}` });
         continue;
       }
+      const merged = new Map<number, number>();
+      for (const [minute, count] of series.flat() as [number, number][]) merged.set(minute, (merged.get(minute) ?? 0) + count);
+      const minutes = [...merged].sort((a, b) => a[0] - b[0]);
       const unknown = workload.stopped.find((i) => (i as { kind: string }).kind === 'unknown') as { reason?: string } | undefined;
       if (unknown) {
         leftOut.push({ workload, reason: `its backend could not be described (${unknown.reason ?? 'unknown'})` });
@@ -86,7 +101,8 @@ export async function estimateAll({ reached, regions, requests, hourly, baseline
         wakerTargetGroup: false, now,
       });
       if (!advice.priced) {
-        leftOut.push({ workload, reason: 'what it stops has no AWS list price' });
+        const failure = priceFailure();
+        leftOut.push({ workload, reason: failure ? `prices unreadable (${failure})` : 'what it stops has no AWS list price' });
         continue;
       }
       const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;

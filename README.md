@@ -240,6 +240,8 @@ npm run estimate -- --profile prospect [--regions eu-west-1,eu-west-3] [--role <
   account's regions for a day, requests while their 14 days end on the same UTC day, prices as the product's. An
   interrupted run resumes; `--refresh discovery` reads discovery and requests again, `--refresh metrics` the requests.
 - **Output:** the terminal summary, and `estimate-<date>.md` and `.json` in `--out` (the current directory by default).
+- **Needs the router checkout** next to the manager (`../router`, as the release does): the estimate bundles its
+  description of what a nap stops.
 - **Read-only:** `sts:GetCallerIdentity`, `sts:AssumeRole`, `organizations:DescribeOrganization`, `ListRoots`,
   `ListOrganizationalUnitsForParent`, `ListAccountsForParent`, `ec2:DescribeRegions`, `DescribeInstances`,
   `DescribeSpotPriceHistory`, `elasticloadbalancing:Describe*`, `autoscaling:DescribeAutoScalingGroups`,

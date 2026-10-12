@@ -42,7 +42,7 @@ const clusterOf = (serviceArn: string) => {
 
 // Discovery's backend as the router describes it: an Auto Scaling group's desired capacity and instances, an ECS
 // service's cluster and desired count, an instance.
-async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>): Promise<RouterBackend> {
+async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, managed: boolean): Promise<RouterBackend | null> {
   if (backend.kind === 'asg') {
     const { AutoScalingGroups: [group] = [] } = await ports.autoscaling.describeAutoScalingGroups({ AutoScalingGroupNames: [backend.id] });
     return { kind: 'asg', name: backend.id, desired: group?.DesiredCapacity ?? 0, instances: (group?.Instances ?? []).map((i) => i.InstanceId).filter((id): id is string => Boolean(id)) };
@@ -52,6 +52,12 @@ async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRul
     const { services: [service] = [] } = await ports.ecs.describeServices({ cluster, services: [backend.id] });
     return { kind: 'ecs', id: backend.id, cluster, desired: service?.desiredCount ?? 0 };
   }
+  // An instance already stopped stops nothing (as an Auto Scaling group at 0): never priced as running — unless Dormeto
+  // manages it, which stopped it for a nap (it runs when woken).
+  if (managed) return { kind: 'instance', id: backend.id };
+  const { Reservations = [] } = await ports.ec2.describeInstances({ InstanceIds: [backend.id] });
+  const state = Reservations.flatMap((r) => r.Instances ?? [])[0]?.State?.Name;
+  if (state && state !== 'running' && state !== 'pending') return null;
   return { kind: 'instance', id: backend.id };
 }
 
@@ -79,7 +85,8 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
     let stopped: StoppedItem[];
     try {
-      stopped = await describeStopped(ports, [await routerBackend(ports, rule.backend)]);
+      const running = await routerBackend(ports, rule.backend, managed !== null);
+      stopped = running ? await describeStopped(ports, [running]) : [];
     } catch (err) {
       // Never guessed: an item that cannot be priced, said in the estimate.
       stopped = [{ kind: 'unknown', backend: `${rule.backend.kind}:${rule.backend.id}`, reason: (err as Error).message.slice(0, 200) } as unknown as StoppedItem];
@@ -93,8 +100,10 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
   return { account, region, workloads, ineligible };
 }
 
-export async function discoverAll({ reached, regionsOf, portsOf, cache, refresh, now, progress = () => {}, concurrency = 4 }: {
+// regions: --regions, used as given (never cached as an account's enabled regions); null: each account's enabled ones.
+export async function discoverAll({ reached, regions: given, regionsOf, portsOf, cache, refresh, now, progress = () => {}, concurrency = 4 }: {
   reached: Reached;
+  regions: string[] | null;
   regionsOf: (account: string, credentials: Credentials | null) => Promise<string[]>;
   portsOf: (account: string, region: string, credentials: Credentials | null) => RegionPorts;
   cache: Cache;
@@ -113,7 +122,7 @@ export async function discoverAll({ reached, regionsOf, portsOf, cache, refresh,
       byAccount.set(account, found);
       try {
         const regionsPath = `regions/${account}.json`;
-        let regions = again ? null : await cache.get<string[]>(regionsPath, freshDiscovery(now()));
+        let regions = given ?? (again ? null : await cache.get<string[]>(regionsPath, freshDiscovery(now())));
         if (!regions) {
           regions = await regionsOf(account, await credentials());
           await cache.put(regionsPath, regions);
@@ -137,8 +146,11 @@ export async function discoverAll({ reached, regionsOf, portsOf, cache, refresh,
           found.push(result);
           progress({ phase: 'discovery', account, region, from: 'aws', workloads: result.workloads.length, ...(result.error ? { error: result.error } : {}) });
         }
-      } catch {
-        // The account's role was refused (listed in reached.unreachable): its regions are not scanned.
+      } catch (err) {
+        // A refused role is already in reached.unreachable; any other failure of the account is said, never dropped.
+        if (!reached.unreachable.some((u) => u.account === account)) {
+          found.push({ account, region: '*', workloads: [], ineligible: [], error: `${(err as Error).name}: ${(err as Error).message}` });
+        }
       }
     }
   };

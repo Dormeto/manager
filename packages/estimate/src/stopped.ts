@@ -9,7 +9,7 @@ export type RouterBackend =
   | { kind: 'asg'; name: string; desired: number; instances: string[] }
   | { kind: 'ecs'; id: string; cluster: string; desired: number };
 export interface StoppedPorts {
-  ec2: { describeInstances(input: { InstanceIds: string[] }): Promise<{ Reservations?: { Instances?: { InstanceId?: string; InstanceType?: string; PlatformDetails?: string; InstanceLifecycle?: string }[] }[] }> };
+  ec2: { describeInstances(input: { InstanceIds: string[] }): Promise<{ Reservations?: { Instances?: { InstanceId?: string; InstanceType?: string; PlatformDetails?: string; InstanceLifecycle?: string; State?: { Name?: string } }[] }[] }> };
   ecs: {
     describeServices(input: { cluster: string; services: string[] }): Promise<{ services?: { serviceArn?: string; desiredCount?: number; launchType?: string; capacityProviderStrategy?: { capacityProvider?: string; weight?: number; base?: number }[]; taskDefinition?: string }[] }>;
     describeTaskDefinition(input: { taskDefinition: string }): Promise<{ taskDefinition?: { cpu?: string; memory?: string; runtimePlatform?: { cpuArchitecture?: string; operatingSystemFamily?: string } } }>;

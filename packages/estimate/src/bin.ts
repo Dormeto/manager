@@ -33,7 +33,7 @@ function awsOf(options: Options): EstimateAws {
       inventory: () => loadInventory(organizationsPort(organizations)),
       assume: (account, role) => createAssumeRole({ sts, roleName: role, sessionName: 'dormeto-estimate' })(account),
     },
-    regionsOf: async (_account, credentials) => options.regions ?? enabledRegionsOf(new EC2Client({ region: 'us-east-1', credentials: creds(credentials) })),
+    regionsOf: (_account, credentials) => enabledRegionsOf(new EC2Client({ region: 'us-east-1', credentials: creds(credentials) })),
     portsOf: (account, region, credentials) => {
       const clients = regionalClients(creds(credentials) as Credentials, region);
       const ec2 = new EC2Client({ region, credentials: creds(credentials) });
@@ -51,11 +51,19 @@ function awsOf(options: Options): EstimateAws {
     cloudwatchOf: (_account, region, credentials) => scanPorts(regionalClients(creds(credentials) as Credentials, region)).cloudwatch!,
     prices: (cache) => {
       const pricing = new PricingClient({ region: 'us-east-1', credentials: profile });
-      return createPriceBook({
-        pricing: { getProducts: (input) => pricing.send(new GetProductsCommand(input as GetProductsCommandInput)) },
-        spot: createSpotPort((region) => new EC2Client({ region, credentials: profile })),
+      const spot = createSpotPort((region) => new EC2Client({ region, credentials: profile }));
+      // The price book takes a refused lookup as no price: the first refusal is kept, so the report says why.
+      let failure: string | null = null;
+      const record = (err: unknown): never => {
+        failure ??= `${(err as Error).name}: ${(err as Error).message}`;
+        throw err;
+      };
+      const book = createPriceBook({
+        pricing: { getProducts: (input) => pricing.send(new GetProductsCommand(input as GetProductsCommandInput)).catch(record) },
+        spot: { history: (region, input) => spot.history(region, input).catch(record) },
         store: cache,
       });
+      return { hourly: book.hourly, failure: () => failure };
     },
   };
 }

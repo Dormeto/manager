@@ -60,7 +60,7 @@ describe('the estimate', () => {
     const e = await run();
     expect(e.leftOut.map((l) => [l.workload.targetGroup, l.reason])).toEqual([
       ['gpu', 'what it stops has no AWS list price'],
-      ['batch', 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or no instance)'],
+      ['batch', 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or a stopped instance)'],
       ['blog', 'requests unreadable: CloudWatch could not read the requests (Forbidden)'],
     ]);
     expect(e.ineligible).toEqual([{ account: A, region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }]);
@@ -81,6 +81,26 @@ describe('the estimate', () => {
     expect(e.byRegion['eu-west-1']!.dormetoMonth).toBeCloseTo(2 * DORMETO_COST.router + 3 * DORMETO_COST.workload, 9);
     expect(e).toMatchObject({ organization: 'o-abc123', accounts: 2, generatedAt: new Date(NOW).toISOString() });
     expect(e.assumptions.join(' ')).toContain('Every request counts');
+  });
+
+  it('a backend behind two target groups is estimated once, with both target groups\' requests', async () => {
+    const a = { ...w(A, 'eu-west-1', 'shop-a', [T3]), backend: { kind: 'asg' as const, id: 'shared-asg' } };
+    const b = { ...w(A, 'eu-west-1', 'shop-b', [T3]), backend: { kind: 'asg' as const, id: 'shared-asg' } };
+    const evening: [number, number][] = Array.from({ length: 14 }, (_, d) => [1320 + d * 1440, 2]);
+    const e = await run({
+      regions: [{ account: A, region: 'eu-west-1', workloads: [a, b], ineligible: [] }],
+      requests: [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop-a': daily, 'arn:tg/shop-b': evening }, unreadable: {} }],
+    });
+    expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['shop-a']);
+    const merged = [...daily, ...evening].sort((x, y) => x[0] - y[0]);
+    expect(e.workloads[0]!.at15.usdMonth).toBeCloseTo(row(await advise(merged, [T3]), 15).usdMonth!, 9);
+    expect(e.leftOut).toEqual([{ workload: b, reason: 'its backend (asg shared-asg) also serves shop-a: estimated there, with every target group\'s requests' }]);
+  });
+
+  it('prices that could not be read are said so, never as a missing list price', async () => {
+    const e = await run({ hourly: async () => null, priceFailure: () => 'AccessDeniedException: not authorized to perform: pricing:GetProducts' });
+    expect(e.workloads).toEqual([]);
+    expect(e.leftOut.find((l) => l.workload.targetGroup === 'shop')!.reason).toBe('prices unreadable (AccessDeniedException: not authorized to perform: pricing:GetProducts)');
   });
 
   it('within the business-hours baseline, as the product prices it', async () => {
