@@ -259,7 +259,9 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   `ListOrganizationalUnitsForParent`, `ListAccountsForParent`, `ec2:DescribeRegions`, `DescribeInstances`,
   `DescribeSpotPriceHistory`, `elasticloadbalancing:Describe*`, `autoscaling:DescribeAutoScalingGroups`,
   `ecs:ListClusters`, `ListServices`, `DescribeServices`, `DescribeTaskDefinition`, `cloudwatch:GetMetricData`,
-  `pricing:GetProducts` (the `ReadOnlyAccess` managed policy covers them). CloudWatch costs about $0.01 per 1,000
+  `pricing:GetProducts`, `eks:ListClusters`, `DescribeCluster` (the `ReadOnlyAccess` managed policy covers them).
+  An EKS cluster's workloads are read through its Kubernetes API, which needs the profile's own access entry (the
+  view policy is enough); a cluster it cannot read is listed with the reason. CloudWatch costs about $0.01 per 1,000
   workloads.
 - **Conservative:** every request counts as activity and as a wake (no waker yet to set scanners apart), a wake lasts 60
   seconds, no visitors' wait, databases not counted (not attached to load balancers).
