@@ -14,7 +14,7 @@ export function globMatches(pattern: string, value: string): boolean {
   return re.test(value);
 }
 
-function tagsMatch(wanted: Record<string, string[]>, tags: Record<string, string>): boolean {
+export function tagsMatch(wanted: Record<string, string[]>, tags: Record<string, string>): boolean {
   return Object.entries(wanted).every(([key, values]) => key in tags && (values.length === 0 || values.includes(tags[key]!)));
 }
 
@@ -77,9 +77,17 @@ const excludesPair = (c: Criterion) => !setsAny(c, RESOURCE_DIMENSIONS);
 
 const includes = (config: DiscoveryConfig) => config.filters.flatMap((f) => f.include);
 
+// Index of the global exclude that removes the whole account before any call, or -1.
+export const globalAccountExclude = (config: DiscoveryConfig, account: Account, inventory: OrgInventory) =>
+  config.globalExcludes.findIndex((c) => excludesAccount(c) && matchesAccount(c, account, inventory));
+
+// Index of the global exclude that removes the account-region pair before any call, or -1.
+export const globalPairExclude = (config: DiscoveryConfig, account: Account, region: string, inventory: OrgInventory) =>
+  config.globalExcludes.findIndex((c) => excludesPair(c) && matchesAccount(c, account, inventory) && matchesRegion(c, region));
+
 export function scanAccounts(config: DiscoveryConfig, inventory: OrgInventory): AccountPlan[] {
   return inventory.accounts.map((account) => {
-    const global = config.globalExcludes.findIndex((c) => excludesAccount(c) && matchesAccount(c, account, inventory));
+    const global = globalAccountExclude(config, account, inventory);
     if (global >= 0) return { account: account.id, scan: false, reason: globalReason(global, config.globalExcludes[global]!) };
     const filter = config.filters.find((f) => f.include.some((c) => matchesAccount(c, account, inventory)));
     return filter
@@ -99,7 +107,7 @@ export function targetPairs(config: DiscoveryConfig, inventory: OrgInventory, en
     }
     const account = accounts.get(plan.account)!;
     for (const region of all ? enabledRegions[plan.account] ?? [] : config.regions) {
-      const global = config.globalExcludes.findIndex((c) => excludesPair(c) && matchesAccount(c, account, inventory) && matchesRegion(c, region));
+      const global = globalPairExclude(config, account, region, inventory);
       if (global >= 0) {
         pairs.push({ account: plan.account, region, scan: false, reason: globalReason(global, config.globalExcludes[global]!) });
         continue;
