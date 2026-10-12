@@ -5,6 +5,16 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+Router 0.23.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
+discovery role reads CloudTrail trails; the command role passes the forwarder's role to EventBridge).
+
+- Event-driven discovery refresh (off by default, Perimeter settings): the manager connects the ready accounts with a
+  CloudTrail trail (a forwarder: a role and a rule per region, by API calls through the command role); their load
+  balancer changes appear within about 5 minutes; turned off, the forwarders are removed. Before uninstalling, turn it off
+  and let a run disconnect the accounts.
+
 ## 0.2.2 — 2026-10-06
 
 Router 0.22.6. Access: nothing to apply again.

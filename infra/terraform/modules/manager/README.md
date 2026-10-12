@@ -23,6 +23,9 @@ roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRol
 (false for a second environment in an account whose roles another one creates), `deletion_protection` (true: the users and the table are protected; set
 it to false and apply before `terraform destroy`), `log_retention_days`.
 
+To uninstall: offboard the workloads and uninstall the routers from the manager, turn event-driven refresh off and let a
+discovery run disconnect the accounts (Run now), then set `deletion_protection = false`, apply, and `terraform destroy`.
+
 The module carries the release's built artifacts (`artifacts/`): nothing is fetched at plan or apply time. The member
 accounts get their roles from the `dormeto-access` module or the AWS CLI procedure of the same release
 (https://dormeto.com/organization-access.html).
