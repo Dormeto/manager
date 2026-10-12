@@ -84,7 +84,7 @@ describe('OnboardDialog', () => {
 
   it('says what the router lacks in the cluster, with the procedure; or that the check runs before onboarding', async () => {
     const missing = await openDialog({ kubernetes: kube(), access: { reachable: true, allowed: false, missing: ['get nodes', 'get, patch deployments/scale (apps)'] } });
-    expect(dialogText()).toContain('The router may not get nodes; get, patch deployments/scale (apps) in cluster eks-demo: apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router. The onboarding stops until then.');
+    expect(dialogText()).toContain('The router may not get nodes; get, patch deployments/scale (apps) in cluster eks-demo: apply dormeto-kubernetes-<version>.yaml of the release (the ClusterRole and its binding to the group dormeto:router): https://dormeto.com/organization-access.html#kubernetes. The onboarding stops until then.');
     missing.unmount();
     const unknown = await openDialog({ kubernetes: kube() });
     expect(dialogText()).toContain('The router checks its access to cluster eks-demo before onboarding.');

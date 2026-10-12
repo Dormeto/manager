@@ -515,7 +515,7 @@ export function createEngine(deps: EngineDeps) {
         // An onboarding stops on its candidate's cluster when the router may not use it.
         const own = kubernetes && checks.find((c) => c.cluster === kubernetes.cluster);
         if (own && !own.allowed) {
-          throw new Error(`cluster ${own.cluster}: ${own.missing?.length ? `the router may not ${own.missing.join('; ')}: apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router` : own.reason ?? 'not allowed'}`);
+          throw new Error(`cluster ${own.cluster}: ${own.missing?.length ? `the router may not ${own.missing.join('; ')}: apply dormeto-kubernetes-<version>.yaml of the release (the ClusterRole and its binding to the group dormeto:router): https://dormeto.com/organization-access.html#kubernetes` : own.reason ?? 'not allowed'}`);
         }
         const text = (c: (typeof checks)[number]) => `cluster ${c.cluster}: ${!c.reachable ? `unreachable (${c.reason})` : c.allowed ? 'reachable, every right' : `missing ${c.missing?.length ? c.missing.join('; ') : c.reason}`}`;
         return { status: 'done', detail: checks.map(text).join('; ') };

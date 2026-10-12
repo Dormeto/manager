@@ -15,7 +15,7 @@ export interface KubernetesCandidate {
 export interface ClusterAccess { reachable: boolean; allowed: boolean; missing: string[]; reason?: string }
 
 const ANNOTATION = 'alb.ingress.kubernetes.io/actions.dormeto';
-export const CLUSTER_ROLE = 'apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router';
+export const CLUSTER_ROLE = 'apply dormeto-kubernetes-<version>.yaml of the release (the ClusterRole and its binding to the group dormeto:router): https://dormeto.com/organization-access.html#kubernetes';
 
 // What onboarding adds, and what it leaves alone.
 export function onboardingTexts(k: KubernetesCandidate): string[] {

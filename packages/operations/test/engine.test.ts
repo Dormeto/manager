@@ -509,7 +509,7 @@ describe('cluster access', () => {
     const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
     const stored = (await s.records.getOperation(op.id))!;
-    expect(stored.error).toBe('check clusters: cluster eks-demo: the router may not get nodes; get, patch deployments/scale (apps): apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router');
+    expect(stored.error).toBe('check clusters: cluster eks-demo: the router may not get nodes; get, patch deployments/scale (apps): apply dormeto-kubernetes-<version>.yaml of the release (the ClusterRole and its binding to the group dormeto:router): https://dormeto.com/organization-access.html#kubernetes');
     expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
   });
 

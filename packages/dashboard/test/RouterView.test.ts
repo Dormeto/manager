@@ -116,7 +116,7 @@ describe('Router view', () => {
     await flushPromises();
     const text = wrapper.find('[data-test="clusters"]').findAll('tr').map((r) => `${r.find('th').text()} ${r.find('td').text()}`.replace(/\s+/g, ' ')).join(' | ');
     expect(text).toContain('eks-demo reachable, every right checked 1 h ago');
-    expect(text).toContain('eks-legacy missing get nodes: apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router');
+    expect(text).toContain('eks-legacy missing get nodes: apply dormeto-kubernetes-<version>.yaml of the release (the ClusterRole and its binding to the group dormeto:router): https://dormeto.com/organization-access.html#kubernetes');
     expect(text).toContain('eks-lab unreachable: GET /apis: no connection within 3000 ms');
     wrapper.unmount();
   });
