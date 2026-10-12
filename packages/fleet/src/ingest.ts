@@ -76,7 +76,10 @@ export function createIngest({ store, now = Date.now, log }: {
         const unlisted = (w: WorkloadSummary) => (w.checkedAt ?? '') < checkedAt && (w.stateAt ?? '') < checkedAt;
         for (const w of (await store.routerWorkloads(account, region)).filter(unlisted)) {
           const read = await store.readWorkload(account, region, w.workloadId);
-          if (read && unlisted(read.summary)) await store.deleteWorkload(read.summary, read.version);
+          if (!read || !unlisted(read.summary) || !(await store.deleteWorkload(read.summary, read.version))) continue;
+          // No longer managed (offboarded, or its target group gone): its failure leaves the index and its alert resolves.
+          const failure = await store.getFailure(account, region, w.workloadId);
+          if (failure) await store.deleteFailure(account, region, w.workloadId, failure.version);
         }
       }
       return;

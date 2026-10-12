@@ -6,7 +6,7 @@ import type { InstalledRouter } from '@dormeto/operations';
 import { fleetRouters, type TerraformRouter } from './routers.js';
 
 export type Level = 'warning' | 'error';
-export interface Subject { id: string; kind: 'router' | 'list'; name: string; account?: string; region?: string }
+export interface Subject { id: string; kind: 'router' | 'list' | 'workload'; name: string; account?: string; region?: string; router?: string; workloadId?: string; url?: string | null }
 export interface Problem { code: string; level: Level; text: string; hint?: string }
 export interface OpenProblem extends Problem { since: string }
 export interface Alarm {
@@ -24,7 +24,16 @@ export interface AlarmStore {
   put(alarm: Alarm, version: number): Promise<boolean>;
   remove(id: string, version: number): Promise<boolean>;
 }
-export interface Notification { subject: string; message: string; attributes: { level: Level | 'resolved'; kind: Subject['kind'] | 'digest' } }
+// chat: the custom notification of Amazon Q Developer in chat applications (Slack, Microsoft Teams), sent to https
+// subscriptions beside the text (R7b).
+export interface ChatNotification { version: '1.0'; source: 'custom'; content: { textType: 'client-markdown'; title: string; description: string; nextSteps?: string[] } }
+export interface Notification {
+  subject: string;
+  message: string;
+  chat?: ChatNotification;
+  // Message attributes, for subscription filter policies.
+  attributes: { level: Level | 'resolved'; kind: Subject['kind'] | 'digest'; account?: string; region?: string; router?: string; workload?: string };
+}
 export interface Observation { subject: Subject; problems: Problem[] }
 interface Log { info(event: string, data?: object): void; warn(event: string, data?: object): void; error(event: string, data?: object): void }
 
@@ -106,6 +115,35 @@ export function listObservations(status: { lists?: ListStatusLine[] } | null, no
   });
 }
 
+// Failed wakes (R7b), from the fleet's failure index: one subject per workload whose last wake failed, one problem per
+// kind (a retry failing the same way is the same problem; another kind, another alert).
+export interface FailureIndexEntry {
+  account: string; region: string; router: string; workloadId: string; name?: string; url?: string | null;
+  failure: { kind: string; step: string; backend?: string; message: string; at: string };
+  consecutiveFailures?: number; nextAttemptAt?: string;
+}
+const ADVICE: Record<string, string> = {
+  capacity: 'AWS had no capacity for it: Dormeto retried during the wake. Fallback instance types (EC2), a mixed instances policy or several subnets (Auto Scaling), or capacity providers (ECS) let it start elsewhere.',
+  quota: 'An AWS quota of the account and region was reached: raise it in Service Quotas.',
+  permission: "A permission refused it: the router's role or DmtRouterBoundary (apply the access module of the manager's release again), or the key policy of an encrypted volume or snapshot.",
+  configuration: 'Its configuration refused it: the launch template, image, subnet or task definition named in the message.',
+  unhealthy: "Its backends started but no target became healthy: the target group's health check and the application's logs.",
+  throttled: 'ELB throttled the rule switch: too many rule changes at once in this account and region.',
+  timeout: 'The start took longer than the wake timeout (wake_timeout_seconds), or the wake stopped.',
+  unknown: "Dormeto does not know this error: the router's logs (WakeFailed) have it whole.",
+};
+export function workloadObservations(entries: FailureIndexEntry[]): Observation[] {
+  return entries.map((e) => {
+    const next = e.nextAttemptAt ? `A request retries it, next attempt after ${time(e.nextAttemptAt)} (${e.consecutiveFailures ?? 1} failure${(e.consecutiveFailures ?? 1) === 1 ? '' : 's'} in a row).` : 'A request retries it.';
+    const hint = [`${e.failure.backend ? `Backend: ${e.failure.backend}. ` : ''}${next}`, ADVICE[e.failure.kind] ?? ADVICE.unknown,
+      'If its backends keep running without a healthy target, Dormeto stops them after its idle window.'].join('\n  ');
+    return {
+      subject: { id: `workload#${e.account}#${e.region}#${e.workloadId}`, kind: 'workload' as const, name: e.name ?? e.workloadId, account: e.account, region: e.region, router: e.router, workloadId: e.workloadId, url: e.url ?? null },
+      problems: [{ code: `${e.failure.step === 'nap' ? 'nap' : 'wake'}-failed:${e.failure.kind}`, level: 'error' as const, text: `${e.failure.step === 'nap' ? 'nap' : 'wake'} failed: ${e.failure.message}`, hint }],
+    };
+  });
+}
+
 interface Change { alarm: Alarm; version: number; opened: OpenProblem[]; raised: OpenProblem[]; resolved: boolean; remove: boolean }
 
 // The next state of one subject's alarm, and what changed; null when nothing is to be written.
@@ -140,26 +178,36 @@ export function evaluate(observation: Observation, previous: Alarm | null, versi
 function render(change: Change, dashboardUrl: string, env: string, at: string): Notification | null {
   const { alarm, opened, raised, resolved } = change;
   const s = alarm.subject;
-  const where = s.kind === 'router' ? `${s.name} (${s.account} ${s.region})` : `IP list ${s.name}`;
-  const link = `${dashboardUrl}/routers${s.kind === 'list' ? '#ip-lists' : ''}`;
+  const where = s.kind === 'list' ? `IP list ${s.name}` : `${s.name} (${s.account} ${s.region})`;
+  const link = s.kind === 'workload' ? `${dashboardUrl}/workloads/${s.router}/${s.workloadId}` : `${dashboardUrl}/routers${s.kind === 'list' ? '#ip-lists' : ''}`;
+  const attributes = {
+    kind: s.kind,
+    ...(s.account ? { account: s.account } : {}), ...(s.region ? { region: s.region } : {}),
+    ...(s.kind === 'router' ? { router: s.name } : s.router ? { router: s.router } : {}),
+    ...(s.workloadId ? { workload: s.workloadId } : {}),
+  };
   const line = (p: OpenProblem) => `- [${p.level}] ${p.text} (since ${time(p.since)})${p.hint ? `\n  ${p.hint}` : ''}`;
+  const chat = (title: string, description: string, nextSteps: string[] = []): ChatNotification => ({
+    version: '1.0', source: 'custom', content: { textType: 'client-markdown', title, description, ...(nextSteps.length ? { nextSteps } : {}) },
+  });
   if (resolved) {
-    return {
-      subject: snsSubject(`[Dormeto ${env}] ${where}: resolved`),
-      message: `${where}: every problem cleared at ${time(at)}.\n\nOpen the dashboard: ${link}\n`,
-      attributes: { level: 'resolved', kind: s.kind },
-    };
+    const subject = snsSubject(`[Dormeto ${env}] ${where}: ${s.kind === 'workload' ? 'woke again' : 'resolved'}`);
+    const text = s.kind === 'workload' ? `${where} woke again (no failure since ${time(at)}).` : `${where}: every problem cleared at ${time(at)}.`;
+    return { subject, message: `${text}\n\nOpen the dashboard: ${link}\n`, chat: chat(subject, `${text} [Open the dashboard](${link})`), attributes: { level: 'resolved', ...attributes } };
   }
   const news = [...raised, ...opened];
   if (!news.length) return null;
   const others = alarm.problems.filter((p) => !news.includes(p));
   const message = [
-    `${where}: ${alarm.level}`, '',
+    `${where}: ${alarm.level}`, ...(s.kind === 'workload' && s.url ? [`Application: ${s.url}`] : []), '',
     'New:', ...news.map(line),
     ...(others.length ? ['', 'Still open:', ...others.map(line)] : []),
     '', `Open the dashboard: ${link}`, '',
   ].join('\n');
-  return { subject: snsSubject(`[Dormeto ${env}] ${where}: ${news[0]!.text}`), message, attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', kind: s.kind } };
+  const subject = snsSubject(`[Dormeto ${env}] ${where}: ${news[0]!.text}`);
+  const description = [...news, ...others].map((p) => `*${p.level}* ${p.text}`).join('\n') + `\n[Open the dashboard](${link})`;
+  const nextSteps = news.flatMap((p) => (p.hint ? p.hint.split('\n').map((x) => x.trim()).filter(Boolean) : []));
+  return { subject, message, chat: chat(subject, description, nextSteps), attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', ...attributes } };
 }
 
 export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations }: {
@@ -191,9 +239,12 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
           log.error('SubjectsUnreadable', { error: extraUnread });
         }
       }
+      // A workload's router as the dashboard names it (one router per account and region; the index has its own name).
+      const named = fleetRouters(terraformRouters, installed, managerAccount);
+      const routerName = (account?: string, region?: string) => named.find((r) => (r.account ?? managerAccount) === account && r.region === region)?.name;
       const observations = [
         ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t }),
-        ...extra,
+        ...extra.map((o) => (o.subject.kind === 'workload' ? { ...o, subject: { ...o.subject, router: routerName(o.subject.account, o.subject.region) ?? o.subject.router } } : o)),
       ];
       const known = new Map(existing.map((x) => [x.alarm.subject.id, x]));
       const changes: Change[] = [];
@@ -206,6 +257,12 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       // Subjects no longer known (a router uninstalled, a list removed): their alarms leave without a message.
       for (const { alarm, version } of known.values()) {
         if (extraUnread !== null && alarm.subject.kind !== 'router') continue;
+        // A workload out of the failure index woke successfully: resolved, with its message (R7b).
+        if (alarm.subject.kind === 'workload') {
+          const change = evaluate({ subject: alarm.subject, problems: [] }, alarm, version, t);
+          if (change) changes.push(change);
+          continue;
+        }
         await alarms.remove(alarm.subject.id, version);
       }
 
@@ -256,5 +313,15 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       // The lists' status unread: the routers are done, and the run fails so that the watchdog's errors alarm says it.
       if (extraUnread !== null) throw new Error(`subjects unreadable: ${extraUnread}`);
     },
+  };
+}
+
+// The SNS Publish input of a notification (R7b): the text for email (and default), the chat body for https subscriptions
+// (Amazon Q Developer in chat applications), the attributes for subscription filter policies.
+export function snsInput(n: Notification, topicArn: string) {
+  const bodies = { default: n.message, email: n.message, ...(n.chat ? { https: JSON.stringify(n.chat) } : {}) };
+  return {
+    TopicArn: topicArn, Subject: n.subject, Message: JSON.stringify(bodies), MessageStructure: 'json',
+    MessageAttributes: Object.fromEntries(Object.entries(n.attributes).filter(([, v]) => typeof v === 'string' && v).map(([k, v]) => [k, { DataType: 'String', StringValue: v as string }])),
   };
 }

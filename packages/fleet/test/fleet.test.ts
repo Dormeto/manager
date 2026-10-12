@@ -296,6 +296,15 @@ describe('failure index (R7b)', () => {
     expect(await s.store.listFailures()).toEqual([]);
   });
 
+  it('a workload no longer managed (unlisted by a whole check) leaves the index, so its alert resolves', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP'), workload('b', 'ASLEEP')]));
+    await s.ingest(failed(at(T1, 10)));
+    await s.ingest(checked(T2, [workload('b', 'ASLEEP')]));
+    expect(await s.store.getWorkload(ACCOUNT, REGION, 'a')).toBeNull();
+    expect(await s.store.listFailures()).toEqual([]);
+  });
+
   it('keeps the failure fields in summaries, and drops what is not one', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a', 'FAILED', { failure: { ...failure, kind: 'bogus', message: 'x'.repeat(500) }, consecutiveFailures: 2, nextAttemptAt: at(T1, 120) })]));

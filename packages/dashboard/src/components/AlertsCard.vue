@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Health alarms (R6a): what the watchdog found open, errors first, and where alerts are sent.
+// Health alarms (R6a): what the watchdog found open (routers, IP lists, failed wakes), errors first, and where alerts are sent.
 import { computed } from 'vue';
 import { mdiAlertCircleOutline, mdiAlertOutline, mdiBellCheckOutline } from '@mdi/js';
 import { relative } from '../format';
@@ -10,9 +10,12 @@ const props = defineProps<{ alerts: AlertsInfo | null; now: number }>();
 const rank = { error: 0, warning: 1 } as const;
 const alarms = computed(() => [...(props.alerts?.alarms ?? [])].sort((a, b) => rank[a.level] - rank[b.level] || a.name.localeCompare(b.name)));
 const title = (a: AlarmInfo) => (a.kind === 'list' ? `IP list ${a.name}` : a.name);
-const where = (a: AlarmInfo) => (a.kind === 'router' ? `${a.account} · ${a.region}` : 'the manager\'s lists');
+const where = (a: AlarmInfo) => (a.kind === 'list' ? 'the manager\'s lists' : `${a.account} · ${a.region}`);
 const subtitle = (a: AlarmInfo) => `${a.problems[0]?.text ?? ''} · since ${relative(a.since, props.now)}`;
-const link = (a: AlarmInfo) => (a.kind === 'list' ? '/routers#ip-lists' : '/routers');
+const link = (a: AlarmInfo) => {
+  if (a.kind === 'workload' && a.router && a.workloadId) return `/workloads/${encodeURIComponent(a.router)}/${encodeURIComponent(a.workloadId)}`;
+  return a.kind === 'list' ? '/routers#ip-lists' : a.kind === 'workload' ? '/workloads' : '/routers';
+};
 const footer = computed(() => {
   const n = props.alerts?.notifications;
   if (!n) return '';
@@ -32,7 +35,7 @@ const endpoints = computed(() => (props.alerts?.notifications?.endpoints ?? []).
       </v-list-item>
     </v-list>
     <v-card-text v-else class="d-flex align-center ga-2 text-medium-emphasis">
-      <v-icon :icon="mdiBellCheckOutline" color="success" />No open alert: every router reports, and nothing it reports needs attention.
+      <v-icon :icon="mdiBellCheckOutline" color="success" />No open alert: every router reports, nothing it reports needs attention, and no wake failed.
     </v-card-text>
     <v-card-text class="text-body-small text-medium-emphasis pt-0" :title="endpoints">{{ footer }}</v-card-text>
   </v-card>

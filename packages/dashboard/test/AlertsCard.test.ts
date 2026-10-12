@@ -30,6 +30,17 @@ describe('AlertsCard', () => {
     ]);
   });
 
+  it('names a failed wake by its workload and account, and links to the workload (R7b)', () => {
+    const wrapper = mountCard({
+      alarms: [{ id: 'workload#2#eu-west-3#f1e2', kind: 'workload', name: 'shop', account: '2', region: 'eu-west-3', router: 'dmtr-dev-2-eu-west-3', workloadId: 'f1e2', level: 'error', since,
+        problems: [{ code: 'wake-failed:capacity', level: 'error', text: 'wake failed: no capacity for db.t4g.micro', since }] }],
+      notifications: { topicArn: 'arn', confirmed: 1, pending: 0 },
+    });
+    const item = wrapper.find('.v-list-item');
+    expect(item.text()).toMatch(/^shop \(2 · eu-west-3\)wake failed: no capacity for db.t4g.micro/);
+    expect(item.attributes('href')).toBe('/workloads/dmtr-dev-2-eu-west-3/f1e2');
+  });
+
   it('says where alerts are sent, and that a subscription waits for its confirmation', () => {
     expect(mountCard(ALERTS).text()).toContain('Alerts are sent to 2 subscriptions (1 pending confirmation)');
     const none = mountCard({ alarms: [], notifications: { topicArn: 'arn', confirmed: 0, pending: 0 } }).text();

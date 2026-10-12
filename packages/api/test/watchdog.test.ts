@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RouterSummary } from '@dormeto/fleet';
 import type { InstalledRouter } from '@dormeto/operations';
-import { createWatchdog, listObservations, problemCode, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
+import { createWatchdog, listObservations, problemCode, snsInput, workloadObservations, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0);
 const MIN = 60_000;
@@ -69,7 +69,7 @@ describe('watchdog: routers', () => {
     await silent.watchdog.run();
     expect(silent.sent).toHaveLength(1);
     expect(silent.sent[0]!.subject).toBe('[Dormeto dev] dmt-dev (121014831971 eu-west-1): no report for 22 minutes');
-    expect(silent.sent[0]!.attributes).toEqual({ level: 'error', kind: 'router' });
+    expect(silent.sent[0]!.attributes).toEqual({ level: 'error', kind: 'router', account: MANAGER, region: 'eu-west-1', router: 'dmt-dev' });
     expect(silent.sent[0]!.message).toContain('https://app.dev.dormeto.com/routers');
     const { alarm } = silent.alarms.items.get(`router#${MANAGER}#eu-west-1`)!;
     expect(alarm).toMatchObject({ level: 'error', since: iso(NOW), notified: ['silent'], subject: { kind: 'router', name: 'dmt-dev', account: MANAGER, region: 'eu-west-1' } });
@@ -116,7 +116,7 @@ describe('watchdog: routers', () => {
     s.state.summaries = [summary(MANAGER, 'eu-west-1', MIN)];
     s.advance(5 * MIN);
     await s.watchdog.run();
-    expect(s.sent[2]!.attributes).toEqual({ level: 'resolved', kind: 'router' });
+    expect(s.sent[2]!.attributes).toEqual({ level: 'resolved', kind: 'router', account: MANAGER, region: 'eu-west-1', router: 'dmt-dev' });
     expect(s.sent[2]!.subject).toBe('[Dormeto dev] dmt-dev (121014831971 eu-west-1): resolved');
     expect(s.alarms.items.get(`router#${MANAGER}#eu-west-1`)!.alarm.level).toBe('ok');
   });
@@ -260,5 +260,102 @@ describe('watchdog: review fixes', () => {
     await expect(watchdog.run()).rejects.toThrow('subjects unreadable: S3 SlowDown');
     expect(s.sent.at(-1)!.subject).toBe('[Dormeto dev] dmt-dev (121014831971 eu-west-1): resolved');
     expect(s.alarms.items.has('list#ipsum'), 'kept while its status cannot be read').toBe(true);
+  });
+});
+
+describe('watchdog: failed wakes (R7b)', () => {
+  const entry = (kind: string, over: Record<string, unknown> = {}) => ({
+    account: '038606077307', region: 'eu-west-3', router: 'dmtr-dev-038606077307-eu-west-3', workloadId: 'f1e2', name: 'shop', url: 'https://shop.example.com/',
+    failure: { kind, step: 'wake', backend: 'rds:shop-db', message: 'no capacity for your instance class db.t4g.micro in AZ eu-west-3a', at: iso(NOW - 2 * MIN) },
+    consecutiveFailures: 1, nextAttemptAt: iso(NOW + MIN), ...over,
+  });
+  const watchdogWith = (s: ReturnType<typeof setup>, entries: () => unknown[]) => createWatchdog({
+    env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [],
+    fleet: { listRouters: async () => [] }, registry: { listRouters: async () => [] }, alarms: s.alarms,
+    notify: { publish: async (n) => { s.sent.push(n); } }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
+    extraObservations: async () => workloadObservations(entries() as never),
+  });
+
+  it('names the router as the Routers view does (the index has the router\'s own name), in the link and the attributes', async () => {
+    const s = setup();
+    await createWatchdog({
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [],
+      fleet: { listRouters: async () => [] }, registry: { listRouters: async () => [installed('038606077307', 'eu-west-3')] }, alarms: s.alarms,
+      notify: { publish: async (n) => { s.sent.push(n); } }, now: () => NOW, log: { info: () => {}, warn: () => {}, error: () => {} },
+      extraObservations: async () => workloadObservations([entry('capacity', { router: 'dmtr-dev' })] as never),
+    }).run();
+    const n = s.sent.find((x) => x.attributes.kind === 'workload')!;
+    expect(n.attributes.router).toBe('dmtr-dev-038606077307-eu-west-3');
+    expect(n.message).toContain('https://app.dev.dormeto.com/workloads/dmtr-dev-038606077307-eu-west-3/f1e2');
+  });
+
+  it('a failed wake is an error alert naming the workload, its kind, backend, message, next attempt and advice', async () => {
+    const s = setup();
+    await watchdogWith(s, () => [entry('capacity')]).run();
+    const [n] = s.sent;
+    // Cut at SNS's 100 characters.
+    expect(n!.subject).toMatch(/^\[Dormeto dev\] shop \(038606077307 eu-west-3\): wake failed: no capacity for your instance class db\.+$/);
+    expect(n!.message).toContain('wake failed: no capacity for your instance class db.t4g.micro in AZ eu-west-3a');
+    expect(n!.attributes).toEqual({ level: 'error', kind: 'workload', account: '038606077307', region: 'eu-west-3', router: 'dmtr-dev-038606077307-eu-west-3', workload: 'f1e2' });
+    expect(n!.message).toContain('https://shop.example.com/');
+    expect(n!.message).toContain('rds:shop-db');
+    expect(n!.message).toMatch(/next attempt after \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
+    expect(n!.message).toMatch(/fallback instance types|several subnets/);
+    expect(n!.message).toContain('https://app.dev.dormeto.com/workloads/dmtr-dev-038606077307-eu-west-3/f1e2');
+  });
+
+  it('one alert across retries; a new kind is a new alert; a successful wake says it woke again', async () => {
+    const s = setup();
+    let entries = [entry('capacity')];
+    const watchdog = watchdogWith(s, () => entries);
+    await watchdog.run();
+    entries = [entry('capacity', { consecutiveFailures: 3, nextAttemptAt: iso(NOW + 4 * MIN) })];
+    await watchdog.run();
+    expect(s.sent).toHaveLength(1);
+    entries = [entry('quota')];
+    await watchdog.run();
+    expect(s.sent.map((n) => n.attributes.level)).toEqual(['error', 'error']);
+    entries = [];
+    // The index entry removed by a successful wake: the subject is no longer known, so it is resolved, not dropped.
+    await watchdog.run();
+    expect(s.sent.at(-1)!.subject).toBe('[Dormeto dev] shop (038606077307 eu-west-3): woke again');
+  });
+
+  it('every message has a chat body (Amazon Q Developer custom notification) beside its text', async () => {
+    const s = setup();
+    await watchdogWith(s, () => [entry('unhealthy', { failure: { kind: 'unhealthy', step: 'wake', message: '2 targets, none healthy: Target.FailedHealthChecks', at: iso(NOW) } })]).run();
+    const chat = s.sent[0]!.chat!;
+    expect(chat.version).toBe('1.0');
+    expect(chat.source).toBe('custom');
+    expect(chat.content.textType).toBe('client-markdown');
+    expect(chat.content.title).toBe(s.sent[0]!.subject);
+    expect(chat.content.description).toContain('Target.FailedHealthChecks');
+    expect(chat.content.nextSteps!.length).toBeGreaterThan(0);
+  });
+
+  it('1,000 workloads failing at once (a region without capacity) send 10 messages and a digest', async () => {
+    const s = setup();
+    const entries = Array.from({ length: 1000 }, (_, i) => entry('capacity', { workloadId: `w${i}`, name: `app-${i}` }));
+    await watchdogWith(s, () => entries).run();
+    expect(s.sent).toHaveLength(11);
+    expect(s.sent[10]!.attributes.kind).toBe('digest');
+  });
+});
+
+describe('watchdog: SNS input (R7b)', () => {
+  it('sends the text to email and the chat body to https subscriptions, with filterable attributes', () => {
+    const input = snsInput({
+      subject: 's', message: 'text',
+      chat: { version: '1.0', source: 'custom', content: { textType: 'client-markdown', title: 's', description: 'd' } },
+      attributes: { level: 'error', kind: 'workload', account: '1', region: 'eu-west-3', router: 'r', workload: 'w' },
+    }, 'arn:topic');
+    expect(input.MessageStructure).toBe('json');
+    const bodies = JSON.parse(input.Message);
+    expect([bodies.default, bodies.email]).toEqual(['text', 'text']);
+    expect(JSON.parse(bodies.https).source).toBe('custom');
+    expect(Object.fromEntries(Object.entries(input.MessageAttributes).map(([k, v]) => [k, (v as { StringValue: string }).StringValue])))
+      .toEqual({ level: 'error', kind: 'workload', account: '1', region: 'eu-west-3', router: 'r', workload: 'w' });
+    expect(input.TopicArn).toBe('arn:topic');
+    expect(input.Subject).toBe('s');
   });
 });

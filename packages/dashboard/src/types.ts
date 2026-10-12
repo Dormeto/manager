@@ -107,10 +107,13 @@ export interface Problem {
 // Health alarms (R6a): the watchdog's open alarms, and where the alert topic sends them.
 export interface AlarmInfo {
   id: string;
-  kind: 'router' | 'list';
+  kind: 'router' | 'list' | 'workload';
   name: string;
   account?: string;
   region?: string;
+  // A failed wake (R7b): the workload's router, as the Routers view names it, and its id.
+  router?: string;
+  workloadId?: string;
   level: 'warning' | 'error';
   since: string;
   problems: (Problem & { code: string; since: string; hint?: string })[];
