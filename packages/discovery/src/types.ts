@@ -42,8 +42,20 @@ export interface OrgInventory {
   ous: Record<string, { name: string; parent: string | null }>; // the root included, with parent null
 }
 
-export interface ScannedRule {
+// A listener rule of a candidate.
+export interface RuleRef {
   id: string; // rule ARN
+  listener: string;
+  priority: string;
+  conditions: string;
+  hosts: string[];
+  managed: boolean; // tagged dormeto:workload
+}
+
+// A candidate: an application target group with every rule forwarding to it (id = target group ARN), or a rule that
+// forwards to no single application target group (id = rule ARN).
+export interface ScannedRule {
+  id: string; // target group ARN, or rule ARN
   account: string;
   region: string;
   loadBalancer: string;
@@ -57,6 +69,7 @@ export interface ScannedRule {
   suggestedId: string | null;
   backend: { kind: BackendKind; id: string } | null;
   tags: Record<string, string[]>; // every value of each tag on the load balancer, the target group or the rule
+  rules: RuleRef[]; // sorted by priority; the first one gives priority, listener and conditions
   eligibility: 'managed' | 'eligible' | 'ineligible';
   reason?: string;
   workloadId?: string;

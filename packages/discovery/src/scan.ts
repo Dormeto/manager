@@ -1,7 +1,7 @@
 // One account and region: every rule of the application load balancers, with what Dormeto could do with it (managed,
 // eligible, ineligible and why), its host names and tags, and how idle its target group was over the last 7 days.
 // Ported from the router discovery (router lambda/src/lib/candidates.mjs).
-import type { BackendKind, ScannedRule } from './types.js';
+import type { BackendKind, RuleRef, ScannedRule } from './types.js';
 
 const WORKLOAD_TAG = 'dormeto:workload';
 const ROLE_TAG = 'dormeto:role';
@@ -167,10 +167,32 @@ async function idleHours(cloudwatch: NonNullable<ScanPorts['cloudwatch']>, pairs
   return out;
 }
 
+// A rule of a candidate, as listed on the dashboard.
+const ruleRef = (row: Row): RuleRef => ({
+  id: row.rule.RuleArn ?? '',
+  listener: `${row.listener.Protocol}:${row.listener.Port}`,
+  priority: row.rule.Priority ?? '',
+  conditions: conditionsOf(row.rule),
+  hosts: hostsOf(row.rule),
+  managed: Boolean(row.managed),
+});
+
+const MAX_RULES = 10;
+const rank = (priority: string | undefined) => (priority === undefined || priority === 'default' ? Infinity : Number(priority));
+
+interface Row {
+  lb: LoadBalancer;
+  listener: Listener;
+  rule: Rule;
+  forward: Forward;
+  managed?: string; // workload of a rule tagged dormeto:workload
+  app?: TargetGroup; // the one application target group it forwards to
+}
+
 export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now }: { now?: () => number } = {}): Promise<ScannedRule[]> {
   const { elbv2 } = ports;
   const lbs = (await all<LoadBalancer>((i) => elbv2.describeLoadBalancers(i), 'LoadBalancers')).filter((lb) => lb.Type === 'application');
-  const rows: { lb: LoadBalancer; listener: Listener; rule: Rule; forward: Forward }[] = [];
+  const rows: Row[] = [];
   for (const lb of lbs) {
     const listeners = await all<Listener>((i) => elbv2.describeListeners({ ...i, LoadBalancerArn: lb.LoadBalancerArn ?? '' }), 'Listeners');
     for (const listener of listeners.sort((a, b) => (a.Port ?? 0) - (b.Port ?? 0))) {
@@ -185,54 +207,114 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
     ...rows.flatMap((r) => r.forward.all),
   ].filter(Boolean));
   const visible = rows.filter((r) => tags.get(r.rule.RuleArn ?? '')?.[ROLE_TAG] !== 'admin');
-
-  const usage = new Map<string, number>();
-  for (const r of visible) for (const arn of r.forward.groups) usage.set(arn, (usage.get(arn) ?? 0) + 1);
   const owners = await backendOwners(ports);
 
-  const scanned: ScannedRule[] = [];
-  for (const { lb, listener, rule, forward } of visible) {
-    const ruleTags = tags.get(rule.RuleArn ?? '') ?? {};
-    const managed = ruleTags[WORKLOAD_TAG];
-    // The application target group of a managed rule, whatever the weights (asleep, the waker has weight 1).
-    const group = managed
-      ? forward.all.map((arn) => groups.get(arn)).find((g) => g && g.TargetType !== 'lambda')
-      : forward.groups.length === 1 ? groups.get(forward.groups[0]!) : undefined;
-    const base: ScannedRule = {
-      id: rule.RuleArn ?? '',
-      account: where.account,
-      region: where.region,
-      loadBalancer: lb.LoadBalancerName ?? '',
-      loadBalancerArn: lb.LoadBalancerArn ?? '',
-      listener: `${listener.Protocol}:${listener.Port}`,
-      priority: rule.Priority ?? '',
-      conditions: conditionsOf(rule),
-      hosts: hostsOf(rule),
-      targetGroup: group?.TargetGroupName ?? null,
-      targetGroupArn: group?.TargetGroupArn ?? null,
-      suggestedId: managed ? null : group?.TargetGroupName ?? null,
-      backend: null,
-      tags: tagValues([tags.get(lb.LoadBalancerArn ?? ''), group ? tags.get(group.TargetGroupArn ?? '') : undefined, ruleTags]),
-      eligibility: 'eligible',
-      idleHours7d: null,
-      requests7d: null,
-    };
-    if (managed) {
-      // Its backend too, so that backend type filters apply to managed workloads (pending offboarding).
-      const backend = group?.TargetGroupArn ? await backendOf(elbv2, group, owners) : null;
-      const issue = managedIssue(forward, group, usage);
-      scanned.push({ ...base, eligibility: 'managed', workloadId: managed, backend: typeof backend === 'string' ? null : backend, ...(issue ? { reason: issue } : {}) });
-      continue;
+  // The application target group of each rule: the one it forwards to, or, managed, its target group that is not the waker.
+  for (const row of visible) {
+    row.managed = tags.get(row.rule.RuleArn ?? '')?.[WORKLOAD_TAG];
+    if (row.forward.type !== 'forward') continue;
+    if (row.managed) row.app = row.forward.all.map((arn) => groups.get(arn)).find((g) => g && g.TargetType !== 'lambda');
+    else if (row.forward.groups.length === 1) {
+      const g = groups.get(row.forward.groups[0]!);
+      if (g && g.TargetType !== 'lambda' && g.TargetType !== 'alb') row.app = g;
     }
-    const verdict = await ineligibility(elbv2, forward, group, usage, owners);
-    scanned.push(typeof verdict === 'string' ? { ...base, eligibility: 'ineligible', reason: verdict } : { ...base, backend: verdict });
   }
+  // Target groups receiving traffic from a weighted forward of several target groups (canary, blue-green).
+  const weighted = new Set(visible.filter((r) => !r.managed && r.forward.type === 'forward' && r.forward.groups.length > 1).flatMap((r) => r.forward.groups));
+  const byGroup = new Map<string, Row[]>();
+  for (const row of visible) if (row.app?.TargetGroupArn) byGroup.set(row.app.TargetGroupArn, [...(byGroup.get(row.app.TargetGroupArn) ?? []), row]);
 
-  const measured = scanned.filter((r) => r.eligibility !== 'ineligible' && r.targetGroupArn);
-  const pairs = [...new Map(measured.map((r) => [r.targetGroupArn!, { lb: r.loadBalancerArn, tg: r.targetGroupArn! }])).values()];
+  const candidates: ScannedRule[] = [];
+  for (const [arn, members] of byGroup) {
+    candidates.push(await groupCandidate(arn, members.sort((a, b) => rank(a.rule.Priority) - rank(b.rule.Priority)), { where, tags, weighted, elbv2, owners }));
+  }
+  for (const row of visible.filter((r) => !r.app)) candidates.push(ruleCandidate(row, where, tags, groups));
+
+  const measured = candidates.filter((c) => c.eligibility !== 'ineligible' && c.targetGroupArn);
+  const pairs = [...new Map(measured.map((c) => [c.targetGroupArn!, { lb: c.loadBalancerArn, tg: c.targetGroupArn! }])).values()];
   const idle = pairs.length && ports.cloudwatch ? await idleHours(ports.cloudwatch, pairs, now) : new Map();
-  for (const r of measured) Object.assign(r, idle.get(r.targetGroupArn!) ?? {});
-  return scanned;
+  for (const c of measured) Object.assign(c, idle.get(c.targetGroupArn!) ?? {});
+  return candidates;
+}
+
+// One candidate per application target group, with every rule forwarding to it.
+async function groupCandidate(arn: string, members: Row[], ctx: {
+  where: { account: string; region: string };
+  tags: Map<string, Record<string, string>>;
+  weighted: Set<string>;
+  elbv2: ScanPorts['elbv2'];
+  owners: { groups: Map<string, string>; services: Map<string, string> };
+}): Promise<ScannedRule> {
+  const first = members[0]!;
+  const app = first.app!;
+  const managedRules = members.filter((m) => m.managed);
+  const base: ScannedRule = {
+    id: arn,
+    account: ctx.where.account,
+    region: ctx.where.region,
+    loadBalancer: first.lb.LoadBalancerName ?? '',
+    loadBalancerArn: first.lb.LoadBalancerArn ?? '',
+    listener: `${first.listener.Protocol}:${first.listener.Port}`,
+    priority: first.rule.Priority ?? '',
+    conditions: `${conditionsOf(first.rule)}${members.length > 1 ? ` (+${members.length - 1} rules)` : ''}`,
+    hosts: [...new Set(members.flatMap((m) => hostsOf(m.rule)))],
+    targetGroup: app.TargetGroupName ?? null,
+    targetGroupArn: arn,
+    suggestedId: managedRules.length ? null : app.TargetGroupName ?? null,
+    backend: null,
+    tags: tagValues([...new Set(members.map((m) => m.lb.LoadBalancerArn ?? ''))].map((a) => ctx.tags.get(a))
+      .concat([ctx.tags.get(arn)], members.map((m) => ctx.tags.get(m.rule.RuleArn ?? '')))),
+    rules: members.map(ruleRef),
+    eligibility: 'eligible',
+    idleHours7d: null,
+    requests7d: null,
+  };
+  // What keeps the group from being napped as one workload, in order.
+  const issue = members.some((m) => m.rule.IsDefault) ? 'listener default action (not supported yet)'
+    : managedRules.length && managedRules.length < members.length ? `${members.length - managedRules.length} of ${members.length} rules sharing the target group are not part of the workload`
+    : ctx.weighted.has(arn) ? 'target group also in a weighted forward'
+    : new Set(members.map((m) => m.lb.LoadBalancerArn)).size > 1 ? 'target group used by several load balancers'
+    : members.length > MAX_RULES ? `more than ${MAX_RULES} rules`
+    : null;
+  const backend = await backendOf(ctx.elbv2, app, ctx.owners);
+  if (managedRules.length) {
+    return { ...base, eligibility: 'managed', workloadId: managedRules[0]!.managed, backend: typeof backend === 'string' ? null : backend, ...(issue ? { reason: issue } : {}) };
+  }
+  if (issue) return { ...base, eligibility: 'ineligible', reason: issue };
+  return typeof backend === 'string' ? { ...base, eligibility: 'ineligible', reason: backend } : { ...base, backend };
+}
+
+// A rule that forwards to no single application target group: a candidate of its own, never eligible.
+function ruleCandidate(row: Row, where: { account: string; region: string }, tags: Map<string, Record<string, string>>, groups: Map<string, TargetGroup>): ScannedRule {
+  const { lb, rule, forward } = row;
+  const group = forward.groups.length === 1 ? groups.get(forward.groups[0]!) : undefined;
+  const reason = forward.type !== 'forward' ? REASONS[forward.type ?? ''] ?? `${forward.type} action`
+    : forward.groups.length !== 1 ? 'weighted forward to several target groups'
+    : !group ? 'target group not found'
+    : group.TargetType === 'lambda' ? 'Lambda target group'
+    : group.TargetType === 'alb' ? 'load balancer target group'
+    : 'application target group not found';
+  return {
+    id: rule.RuleArn ?? '',
+    account: where.account,
+    region: where.region,
+    loadBalancer: lb.LoadBalancerName ?? '',
+    loadBalancerArn: lb.LoadBalancerArn ?? '',
+    listener: `${row.listener.Protocol}:${row.listener.Port}`,
+    priority: rule.Priority ?? '',
+    conditions: conditionsOf(rule),
+    hosts: hostsOf(rule),
+    targetGroup: group?.TargetGroupName ?? null,
+    targetGroupArn: group?.TargetGroupArn ?? null,
+    suggestedId: null,
+    backend: null,
+    tags: tagValues([tags.get(lb.LoadBalancerArn ?? ''), group ? tags.get(group.TargetGroupArn ?? '') : undefined, tags.get(rule.RuleArn ?? '')]),
+    rules: [ruleRef(row)],
+    // A managed rule that no longer forwards to its application waits for offboarding.
+    ...(row.managed ? { eligibility: 'managed' as const, workloadId: row.managed, reason } : { eligibility: 'ineligible' as const, reason }),
+    idleHours7d: null,
+    requests7d: null,
+  };
 }
 
 // Every value of each tag over the load balancer, target group and rule: a tag criterion matches any of the three.
@@ -245,33 +327,6 @@ function tagValues(sets: (Record<string, string> | undefined)[]): Record<string,
     }
   }
   return out;
-}
-
-// What makes a managed rule no longer manageable (it then waits for offboarding), or null.
-function managedIssue(forward: Forward, group: TargetGroup | undefined, usage: Map<string, number>): string | null {
-  if (forward.type !== 'forward') return REASONS[forward.type ?? ''] ?? `${forward.type} action`;
-  if (!group?.TargetGroupArn) return 'application target group not found';
-  // Asleep, the rule sends no traffic to its application target group: other rules using it count, not this one.
-  const others = (usage.get(group.TargetGroupArn) ?? 0) - (forward.groups.includes(group.TargetGroupArn) ? 1 : 0);
-  return others > 0 ? `target group shared by ${others + 1} rules` : null;
-}
-
-// Why Dormeto cannot manage the rule, or its backend when it can.
-async function ineligibility(
-  elbv2: ScanPorts['elbv2'],
-  forward: Forward,
-  group: TargetGroup | undefined,
-  usage: Map<string, number>,
-  owners: { groups: Map<string, string>; services: Map<string, string> },
-): Promise<string | { kind: BackendKind; id: string }> {
-  if (forward.type !== 'forward') return REASONS[forward.type ?? ''] ?? `${forward.type} action`;
-  if (forward.groups.length !== 1) return 'weighted forward to several target groups';
-  if (!group?.TargetGroupArn) return 'target group not found';
-  if (group.TargetType === 'lambda') return 'Lambda target group';
-  if (group.TargetType === 'alb') return 'load balancer target group';
-  const shared = usage.get(group.TargetGroupArn) ?? 0;
-  if (shared > 1) return `target group shared by ${shared} rules`;
-  return backendOf(elbv2, group, owners);
 }
 
 // The backend behind a target group (Auto Scaling group, ECS service or instance), or why there is none.

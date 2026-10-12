@@ -17,6 +17,7 @@ function memoryStore(candidates: Candidate[] = [], run: RunRecord | null = null)
     async listCandidates() { return [...items.values()]; },
     async getCandidate(id: string) { return items.get(id) ?? null; },
     async putCandidates(list: Candidate[]) { for (const c of list) items.set(c.id, c); },
+    async deleteCandidates(ids: string[]) { for (const id of ids) items.delete(id); },
     async getInventory(): Promise<OrgInventory | null> { return { accounts: [{ id: '121014831971', name: 'dormeto', ouPath: ['r-1u0b'], tags: {} }], ous: { 'r-1u0b': { name: 'Root', parent: null } } }; },
     async putInventory() {},
   };
@@ -26,7 +27,7 @@ function memoryStore(candidates: Candidate[] = [], run: RunRecord | null = null)
 const candidate = (id: string, over: Partial<Candidate> = {}): Candidate => ({
   id, account: '121014831971', region: 'eu-west-1', loadBalancer: 'web', loadBalancerArn: 'lb', listener: 'HTTPS:443', priority: '10',
   conditions: 'host a.example.com', hosts: ['a.example.com'], targetGroup: 'a', targetGroupArn: 'tg', suggestedId: 'a',
-  backend: { kind: 'instance', id: 'i-1' }, tags: {}, eligibility: 'eligible', idleHours7d: 160, requests7d: 3,
+  backend: { kind: 'instance', id: 'i-1' }, tags: {}, rules: [], eligibility: 'eligible', idleHours7d: 160, requests7d: 3,
   accountName: 'dormeto', ouPath: ['r-1u0b'], scope: 'in', scopeReason: 'in scope: filter "a", include 1',
   status: 'pending-onboarding', statusReason: 'eligible: instance i-1', firstSeenAt: '2026-10-04T11:00:00.000Z', lastSeenAt: '2026-10-04T11:00:00.000Z',
   history: [{ at: '2026-10-04T11:00:00.000Z', status: 'pending-onboarding', reason: 'eligible: instance i-1' }],

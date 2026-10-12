@@ -61,6 +61,13 @@ describe('discovery store', () => {
     expect(await store.getCandidate('arn:rule/nope')).toBeNull();
   });
 
+  it('deletes candidates in batches of 25', async () => {
+    const { store } = setup();
+    await store.putCandidates(Array.from({ length: 30 }, (_, i) => candidate(i)));
+    await store.deleteCandidates(Array.from({ length: 28 }, (_, i) => `arn:rule/${String(i).padStart(3, '0')}`));
+    expect((await store.listCandidates()).map((c) => c.id)).toEqual(['arn:rule/028', 'arn:rule/029']);
+  });
+
   it('expires a gone candidate 90 days after it disappeared', async () => {
     const { store, dynamo } = setup();
     await store.putCandidates([candidate(1, { status: 'gone', goneAt: '2026-10-04T12:00:00.000Z' }), candidate(2)]);

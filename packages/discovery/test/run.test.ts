@@ -75,6 +75,20 @@ describe('runDiscovery', () => {
     expect((await s.store.getInventory())!.accounts.length).toBe(3);
   });
 
+  it('deletes the rule candidates of earlier versions that now belong to a target group candidate, without any gone', async () => {
+    const s = setup({ cfg: config({ regions: ['eu-west-1'], filters: [filter('a', [{ accountIds: [A.id] }])] }) });
+    await s.ready;
+    const ruleRef = (id: string) => ({ id, listener: 'HTTPS:443', priority: '10', conditions: 'host shop.example.com', hosts: ['shop.example.com'], managed: false });
+    s.deps.scan = async (_c, where) => [rule({ id: `tg-${where.account}`, account: where.account, region: where.region, rules: [ruleRef('rule-old'), ruleRef('rule-other')] })];
+    await s.store.putCandidates([{
+      ...rule({ id: 'rule-old', account: A.id, region: 'eu-west-1', rules: [] }), accountName: 'tools', ouPath: A.ouPath, scope: 'in', scopeReason: 'in',
+      status: 'pending-onboarding', statusReason: 'eligible', firstSeenAt: '2026-10-03T12:00:00.000Z', lastSeenAt: '2026-10-03T12:00:00.000Z', history: [],
+    }]);
+    const run = await runDiscovery(s.deps, { source: 'manual' });
+    expect((await s.store.listCandidates()).map((c) => [c.id, c.status])).toEqual([[`tg-${A.id}`, 'pending-onboarding']]);
+    expect(run.counts).toEqual({ 'pending-onboarding': 1 });
+  });
+
   it('never assumes a role in a globally excluded account', async () => {
     const s = setup({ cfg: { ...AB, globalExcludes: [{ accountIds: [B.id] }] } });
     await s.ready;

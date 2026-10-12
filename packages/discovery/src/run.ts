@@ -128,6 +128,14 @@ async function scanPerimeter(deps: RunDeps, config: DiscoveryConfig, now: () => 
   });
 
   const previous = new Map((await deps.store.listCandidates()).map((c) => [c.id, c]));
+  // Earlier versions had one candidate per rule: a rule now inside a target group candidate is deleted, not gone.
+  const grouped = new Set(results.flatMap((r) => r.rules.flatMap((c) => (c.rules ?? []).filter((x) => x.id !== c.id).map((x) => x.id))));
+  const superseded = [...previous.keys()].filter((id) => grouped.has(id));
+  for (const id of superseded) previous.delete(id);
+  if (superseded.length) {
+    await deps.store.deleteCandidates(superseded);
+    log.info('DiscoveryCandidatesMerged', { count: superseded.length });
+  }
   // With regions ["*"], an account without credentials has no known regions: its candidates' regions count as failed.
   const failedRegions = allRegions ? [...accountErrors.keys()].flatMap((account) => [...new Set([...previous.values()].filter((c) => c.account === account).map((c) => c.region))].map((region) => ({ account, region }))) : [];
   for (const { account, region } of failedRegions) results.push({ account, region, ok: false, error: accountErrors.get(account)!, rules: [], ms: 0 });

@@ -24,6 +24,7 @@ export interface DiscoveryStore {
   listCandidates(): Promise<Candidate[]>;
   getCandidate(id: string): Promise<Candidate | null>;
   putCandidates(candidates: Candidate[]): Promise<void>;
+  deleteCandidates(ids: string[]): Promise<void>;
   getInventory(): Promise<OrgInventory | null>;
   putInventory(inventory: OrgInventory): Promise<void>;
 }
@@ -62,6 +63,19 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       start = page.LastEvaluatedKey;
     } while (start && !stop?.(items));
     return items;
+  }
+
+  // BatchWriteItem by 25, retrying unprocessed requests with a backoff.
+  async function batchWrite(all: object[]): Promise<void> {
+    for (let i = 0; i < all.length; i += 25) {
+      let requests = all.slice(i, i + 25);
+      for (let attempt = 0; requests.length; attempt += 1) {
+        if (attempt > 5) throw new Error(`${requests.length} discovery items not written`);
+        const { UnprocessedItems } = await dynamo.send(new BatchWriteItemCommand({ RequestItems: { [table]: requests as never } }));
+        requests = (UnprocessedItems?.[table] ?? []) as object[];
+        if (requests.length) await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
+      }
+    }
   }
 
   const candidateItem = (c: Candidate): Item => ({
@@ -116,15 +130,10 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       return data<Candidate>(await get(`DISC#C#${id}`));
     },
     async putCandidates(candidates) {
-      for (let i = 0; i < candidates.length; i += 25) {
-        let requests = candidates.slice(i, i + 25).map((c) => ({ PutRequest: { Item: candidateItem(c) } }));
-        for (let attempt = 0; requests.length; attempt += 1) {
-          if (attempt > 5) throw new Error(`${requests.length} candidates not written`);
-          const { UnprocessedItems } = await dynamo.send(new BatchWriteItemCommand({ RequestItems: { [table]: requests } }));
-          requests = (UnprocessedItems?.[table] ?? []) as typeof requests;
-          if (requests.length) await new Promise((r) => setTimeout(r, 50 * 2 ** attempt));
-        }
-      }
+      await batchWrite(candidates.map((c) => ({ PutRequest: { Item: candidateItem(c) } })));
+    },
+    async deleteCandidates(ids) {
+      await batchWrite(ids.map((id) => ({ DeleteRequest: { Key: key(`DISC#C#${id}`) } })));
     },
     async getInventory() {
       return data<OrgInventory>(await get('DISC#ORG'));

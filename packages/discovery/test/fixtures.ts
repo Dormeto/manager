@@ -35,6 +35,7 @@ export function rule(over: Partial<ScannedRule> = {}): ScannedRule {
     suggestedId: 'shop',
     backend: { kind: 'instance', id: 'i-1' },
     tags: { env: ['preview'] },
+    rules: [],
     eligibility: 'eligible',
     idleHours7d: 100,
     requests7d: 10,

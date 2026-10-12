@@ -44,11 +44,14 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false } = {}) {
         return { Items: page.map((k) => items.get(k)), LastEvaluatedKey: keys.length > limit ? { pk: { S: 'T#default' }, sk: { S: page.at(-1) } } : undefined };
       }
       case 'BatchWriteItemCommand': {
-        const requests = input.RequestItems[Object.keys(input.RequestItems)[0]!] as { PutRequest: { Item: Item } }[];
+        const requests = input.RequestItems[Object.keys(input.RequestItems)[0]!] as ({ PutRequest: { Item: Item } } | { DeleteRequest: { Key: Item } })[];
         if (requests.length > 25) throw fail('ValidationException');
         const kept = unprocessed ? requests.slice(-1) : [];
         unprocessed = false;
-        for (const r of requests.slice(0, requests.length - kept.length)) items.set(r.PutRequest.Item.sk!.S!, r.PutRequest.Item);
+        for (const r of requests.slice(0, requests.length - kept.length)) {
+          if ('PutRequest' in r) items.set(r.PutRequest.Item.sk!.S!, r.PutRequest.Item);
+          else items.delete(r.DeleteRequest.Key.sk!.S!);
+        }
         return kept.length ? { UnprocessedItems: { [Object.keys(input.RequestItems)[0]!]: kept } } : {};
       }
       default:
