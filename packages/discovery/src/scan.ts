@@ -218,7 +218,9 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
       requests7d: null,
     };
     if (managed) {
-      scanned.push({ ...base, eligibility: 'managed', workloadId: managed });
+      // Its backend too, so that backend type filters apply to managed workloads (pending offboarding).
+      const backend = group?.TargetGroupArn ? await backendOf(elbv2, group, owners) : null;
+      scanned.push({ ...base, eligibility: 'managed', workloadId: managed, backend: typeof backend === 'string' ? null : backend });
       continue;
     }
     const verdict = await ineligibility(elbv2, forward, group, usage, owners);
@@ -247,11 +249,21 @@ async function ineligibility(
   if (group.TargetType === 'alb') return 'load balancer target group';
   const shared = usage.get(group.TargetGroupArn) ?? 0;
   if (shared > 1) return `target group shared by ${shared} rules`;
-  const asg = owners.groups.get(group.TargetGroupArn);
+  return backendOf(elbv2, group, owners);
+}
+
+// The backend behind a target group (Auto Scaling group, ECS service or instance), or why there is none.
+async function backendOf(
+  elbv2: ScanPorts['elbv2'],
+  group: TargetGroup,
+  owners: { groups: Map<string, string>; services: Map<string, string> },
+): Promise<string | { kind: BackendKind; id: string }> {
+  const arn = group.TargetGroupArn ?? '';
+  const asg = owners.groups.get(arn);
   if (asg) return { kind: 'asg', id: asg };
-  const service = owners.services.get(group.TargetGroupArn);
+  const service = owners.services.get(arn);
   if (service) return { kind: 'ecs', id: service };
-  const { TargetHealthDescriptions = [] } = await elbv2.describeTargetHealth({ TargetGroupArn: group.TargetGroupArn });
+  const { TargetHealthDescriptions = [] } = await elbv2.describeTargetHealth({ TargetGroupArn: arn });
   const ids = TargetHealthDescriptions.map((d) => d.Target?.Id).filter((id): id is string => Boolean(id));
   if (!ids.length) return 'no backend: no registered target, Auto Scaling group or ECS service';
   if (group.TargetType === 'ip') return 'IP targets without an ECS service';

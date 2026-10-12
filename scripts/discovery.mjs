@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Organization discovery through the manager API, as the smoke user (dev): save a perimeter, run, print the result.
-// Usage: node scripts/discovery.mjs [--env dev] [--config <file.json>] [--run] [--show]
+// Usage: node scripts/discovery.mjs [--env dev] [--config <file.json>] [--run] [--show] [--dismiss <id> --note <text>] [--restore <id>]
 import { readFileSync } from 'node:fs';
 import { CognitoIdentityProviderClient, InitiateAuthCommand } from '@aws-sdk/client-cognito-identity-provider';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
@@ -32,6 +32,13 @@ if (typeof file === 'string') {
   const saved = await call('/discovery/config', { method: 'PUT', body: readFileSync(file, 'utf8') });
   console.log(`perimeter saved: ${saved.config.filters.length} filters, ${saved.config.globalExcludes.length} global excludes`);
   for (const f of saved.lint) console.log(`  lint ${f.level}: ${f.message}`);
+}
+for (const action of ['dismiss', 'restore']) {
+  const id = option(action);
+  if (typeof id !== 'string') continue;
+  const note = option('note');
+  const { candidates } = await call(`/discovery/${action}`, { method: 'POST', body: JSON.stringify({ ids: [id], ...(typeof note === 'string' ? { note } : {}) }) });
+  for (const c of candidates) console.log(`${action}: ${c.id} → ${c.status} (${c.statusReason}), history ${c.history.map((h) => h.status).join(' > ')}`);
 }
 if (option('run')) {
   const before = (await call('/discovery')).lastRun?.startedAt;

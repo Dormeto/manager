@@ -64,6 +64,11 @@ describe('scanRegion', () => {
     expect(calls.metricQueries).toBe(4);
   });
 
+  it('gives a managed rule the backend of its application target group, for backend type filters', async () => {
+    const rules = byId(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
+    expect(rules['r-demo']!.backend).toEqual({ kind: 'instance', id: 'i-demo' });
+  });
+
   it('reports the application target group of a sleeping managed workload, not the waker', async () => {
     const rule = RULES[Object.keys(RULES)[1]!]![0]!;
     const awake = rule.Actions;
