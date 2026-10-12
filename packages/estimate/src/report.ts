@@ -55,11 +55,15 @@ const markdownTable = (t: Table) => {
   ];
 };
 
+// Bordered: around the table, under the heading, above the total.
 const textTable = (t: Table) => {
-  const all = [t.head, ...t.rows, t.total];
-  const widths = t.head.map((_, i) => Math.max(...all.map((r) => r[i]!.length)));
-  const line = (r: string[]) => `  ${r.map((c, i) => (t.figures[i] ? c.padStart(widths[i]!) : c.padEnd(widths[i]!))).join('  ')}`;
-  return [...all.map(line), ...(t.note ? [`  ${t.note}`] : [])];
+  const widths = t.head.map((_, i) => Math.max(...[t.head, ...t.rows, t.total].map((r) => r[i]!.length)));
+  const line = (r: string[]) => `  │ ${r.map((c, i) => (t.figures[i] ? c.padStart(widths[i]!) : c.padEnd(widths[i]!))).join(' │ ')} │`;
+  const rule = (left: string, joint: string, right: string) => `  ${left}${widths.map((w) => '─'.repeat(w + 2)).join(joint)}${right}`;
+  return [
+    rule('┌', '┬', '┐'), line(t.head), rule('├', '┼', '┤'), ...t.rows.map(line), rule('├', '┼', '┤'), line(t.total), rule('└', '┴', '┘'),
+    ...(t.note ? [`  ${t.note}`] : []),
+  ];
 };
 
 // The accounts' totals, a row each (at most `limit`, those saving the most), and the total (the manager in its
