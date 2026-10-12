@@ -130,6 +130,27 @@ time per target group, router or workload, one per load balancer (lock), three p
   `aws cognito-idp admin-delete-software-token --user-pool-id <user_pool_id> --username <email>` (a recent AWS CLI); they
   set up a new one at their next sign-in.
 
+## Failed wakes (R7)
+
+- **Failure index:** the fleet ingestion writes `WF#<account>#<region>#<workloadId>` from a `FAILED` state change (the
+  router's `failure` from 0.25.0: kind, step, backend, AWS's message; "no reason" before) or from a check summary that has
+  a failure the index lacks; a successful wake (an `AWAKE` change or a summary without failure) deletes it, and so does
+  the workload leaving its router. Nothing is written while workloads wake well.
+- **Alerts:** the watchdog makes each entry an alarm subject (`workload#<account>#<region>#<workloadId>`, problem
+  `wake-failed:<kind>`): one alert per kind across retries, "woke again" when the entry leaves. Each message is published
+  with `MessageStructure: json`: the text for `email` (and `default`), an Amazon Q Developer custom notification for
+  `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`), `account`,
+  `region`, `router` and `workload` for subscription filter policies (for example `{"kind": ["workload"], "account":
+  ["123456789012"]}` for one team's channel).
+- **Chat:** an Amazon Q Developer in chat applications channel (Slack or Microsoft Teams) subscribed to
+  `dmt-<env>-manager-alerts` (Terraform `aws_chatbot_slack_channel_configuration` or
+  `aws_chatbot_teams_channel_configuration` with `sns_topic_arns`, or the console) receives the chat body.
+- **Dashboard and API:** the workload view shows the last failure, the failures in a row, the next attempt and the
+  fallback instance types in use; the state chip's tooltip the last failure; the Alerts card links to the workload.
+  Onboarding takes `fallbackInstanceTypes` (at most 5) and `failedRetrySeconds` (10 to 600), checked by the API.
+- **Access:** fallback instance types need `ec2:ModifyInstanceAttribute` in DmtRouterBoundary (router 0.25.0's
+  `router-boundary.json`): apply the access module or the AWS CLI script of 0.5.0 again in every member account.
+
 ## Organization access (discovery)
 
 Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a
