@@ -79,6 +79,15 @@ cd ../../.. && node scripts/smoke.mjs --env dev  # API checks as the smoke user
 npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://localhost:5173 against the dev API
 ```
 
+Screenshots of the dashboard (the website's, for example), signed in as the smoke user, with example values in place of
+real identifiers (account ids, email addresses, organization ids, and the names listed in a mask file kept outside the
+repository: `{ "replacements": [["real name", "Example"]] }`); an image where one remains is not written:
+
+```bash
+node scripts/screenshots.mjs --env dev --width 1280 --height 800 --scale 2 --format webp --theme dark \
+  --mask ~/dormeto-mask.json --out /tmp/shots --route / --route /discovery
+```
+
 While SES is in the sandbox, an invited address must be a verified SES identity: inviting from the dashboard creates
 the identity (AWS sends a verification email), and the administrator resends the invitation once it is verified.
 
