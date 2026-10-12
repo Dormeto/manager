@@ -42,7 +42,7 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
 </script>
 
 <template>
-  <v-tooltip location="bottom" max-width="440">
+  <v-tooltip location="bottom" max-width="600">
     <template #activator="{ props: tip }">
       <div v-bind="tip" data-test="state-bar" class="state-bar" :style="{ width: `${width}px` }" tabindex="0" role="img" :aria-label="label">
         <div class="track">
@@ -53,9 +53,9 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
     <div class="font-weight-bold mb-1">{{ title }}</div>
     <table v-if="rows.length" class="rows">
       <tr v-for="r in rows" :key="r.state">
-        <td><span :class="['swatch', `bg-${stateColor(r.state)}`]" />{{ stateLabel(r.state) }}</td>
-        <td class="num">{{ r.share }}</td>
-        <td class="num">{{ longDuration(r.seconds) }}</td>
+        <td class="text-no-wrap"><span :class="['swatch', `bg-${stateColor(r.state)}`]" />{{ stateLabel(r.state) }}</td>
+        <td class="num text-no-wrap">{{ r.share }}</td>
+        <td class="num text-no-wrap">{{ longDuration(r.seconds) }}</td>
         <td class="note">{{ stateBrief(r.state) }}</td>
       </tr>
     </table>
@@ -69,7 +69,7 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
 .track { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(var(--v-theme-on-surface), 0.12); }
 .segment { flex: none; height: 100%; }
 .rows td { padding: 1px 12px 1px 0; vertical-align: middle; }
-.num { text-align: right; white-space: nowrap; }
+.num { text-align: right; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
 .note { opacity: 0.8; }
 </style>

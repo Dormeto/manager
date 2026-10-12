@@ -6,6 +6,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
+import { useSession } from '../src/stores/session';
 import StateBar from '../src/components/StateBar.vue';
 
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
@@ -20,17 +21,55 @@ const status = {
 let current: Record<string, unknown> = status;
 vi.mock('../src/api', () => ({ api: vi.fn(async () => structuredClone(current)) }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+Object.defineProperty(window, 'visualViewport', {
+  configurable: true,
+  value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
+});
 
-async function mountView() {
+async function mountView(role: 'admin' | 'operator' | 'viewer' = 'viewer') {
   setActivePinia(createPinia());
+  useSession().role = role;
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads/:router/:id', component: WorkloadView }] });
   await router.push('/workloads/dmtr-dev/5cdfbf844b925bf8');
-  const wrapper = mount(WorkloadView, { props: { router: 'dmtr-dev', id: '5cdfbf844b925bf8' }, global: { plugins: [createVuetify({ components, directives }), router] } });
+  const wrapper = mount(WorkloadView, { props: { router: 'dmtr-dev', id: '5cdfbf844b925bf8' }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), router] } });
   await flushPromises();
   return wrapper;
 }
+const ACTIONS = ['Pause', 'Resume', 'Exclude', 'Offboard', 'Nap', 'Wake'];
 
 describe('Workload view', () => {
+  it('groups its actions in one menu on the right of its header: wake, nap, pause, rename, exclude, offboard (user request)', async () => {
+    current = { ...status, source: 'manager', targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-3:111122223333:targetgroup/shop/0123456789abcdef' };
+    const wrapper = await mountView('operator');
+    const header = wrapper.find('[data-test="header"]');
+    expect(header.findAll('button').map((b) => b.text()).filter((t) => ACTIONS.includes(t))).toEqual([]);
+    expect(header.find('button[aria-label="Rename"]').exists()).toBe(false);
+    await header.find('[data-test="actions"]').trigger('click');
+    await flushPromises();
+    const items = [...document.querySelectorAll<HTMLElement>('[data-test="action"]')];
+    expect(items.map((i) => [i.textContent?.trim(), i.classList.contains('v-list-item--disabled')])).toEqual([
+      ['Wake', true], ['Nap', false], ['Pause', false], ['Rename', false], ['Exclude', false], ['Offboard', false],
+    ]);
+    items[1]!.click();
+    await flushPromises();
+    expect(document.body.textContent).toContain('Nap ligoj-ui-prod?');
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('offers no action to viewers, and only what a workload written in Terraform allows', async () => {
+    const viewer = await mountView();
+    expect(viewer.find('[data-test="actions"]').exists()).toBe(false);
+    viewer.unmount();
+    current = { ...status, state: 'ASLEEP', source: 'terraform' };
+    const operator = await mountView('operator');
+    await operator.find('[data-test="actions"]').trigger('click');
+    await flushPromises();
+    expect([...document.querySelectorAll('[data-test="action"]')].map((i) => i.textContent?.trim())).toEqual(['Wake', 'Nap', 'Pause']);
+    operator.unmount();
+    current = status;
+  });
+
   it('shows in its header its time in each state over 7 days, the bar of its Workloads row (user request)', async () => {
     const states7d = { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } };
     current = { ...status, states7d, idleHours7d: 150, requests7d: 12 };

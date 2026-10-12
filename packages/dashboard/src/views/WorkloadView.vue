@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiInformationOutline, mdiPencilOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiChevronDown, mdiInformationOutline, mdiPencilOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
@@ -158,7 +158,6 @@ const summary = computed(() => {
   <div data-test="header" class="d-flex flex-wrap align-center ga-3 mb-4">
     <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
     <h1 class="text-headline-small">{{ title }}</h1>
-    <v-btn v-if="session.canOperate && status?.source === 'manager'" :icon="mdiPencilOutline" variant="text" size="small" aria-label="Rename" @click="renameOpen = true" />
     <StateChip v-if="status" :state="status.state" :failure="status.failure" />
     <StateBar v-if="status" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :width="140" />
     <PauseChip :pauses="pauses" />
@@ -166,14 +165,25 @@ const summary = computed(() => {
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
-    <template v-if="session.canOperate && status">
-      <v-btn v-if="ownPause" :prepend-icon="mdiPlay" variant="tonal" :disabled="acting" @click="change('resume')">Resume</v-btn>
-      <v-btn v-else :prepend-icon="mdiPause" variant="tonal" :disabled="acting" @click="pauseOpen = true">Pause</v-btn>
-      <v-btn v-if="!excluded && excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" :disabled="acting" @click="excludeOpen = true">Exclude</v-btn>
-      <v-btn v-if="status.source !== 'terraform'" :prepend-icon="mdiLogoutVariant" variant="tonal" :disabled="acting" @click="confirm = 'offboard'">Offboard</v-btn>
-      <v-btn :prepend-icon="mdiPowerSleep" variant="tonal" :disabled="status.state !== 'AWAKE' || pauses.length > 0 || acting" @click="confirm = 'nap'">Nap</v-btn>
-      <v-btn :prepend-icon="mdiWeatherSunny" color="primary" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state) || acting" @click="confirm = 'wake'">Wake</v-btn>
-    </template>
+    <!-- Its actions in one menu (user request): wake and nap when its state allows, pause or resume, rename and offboard what
+         the manager onboarded (offboard also a workload of a router it did not install), exclude its target group. -->
+    <v-menu v-if="session.canOperate && status" location="bottom end">
+      <template #activator="{ props: menu }">
+        <v-btn v-bind="menu" data-test="actions" variant="tonal" :append-icon="mdiChevronDown" :disabled="acting">Actions</v-btn>
+      </template>
+      <v-list density="compact" min-width="200">
+        <v-list-item data-test="action" :prepend-icon="mdiWeatherSunny" title="Wake" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state)" @click="confirm = 'wake'" />
+        <v-list-item data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="status.state !== 'AWAKE' || pauses.length > 0" @click="confirm = 'nap'" />
+        <v-list-item v-if="ownPause" data-test="action" :prepend-icon="mdiPlay" title="Resume" @click="change('resume')" />
+        <v-list-item v-else data-test="action" :prepend-icon="mdiPause" title="Pause" @click="pauseOpen = true" />
+        <v-list-item v-if="status.source === 'manager'" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
+        <v-list-item v-if="!excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
+        <template v-if="status.source !== 'terraform'">
+          <v-divider class="my-1" />
+          <v-list-item data-test="action" :prepend-icon="mdiLogoutVariant" title="Offboard" base-color="error" @click="confirm = 'offboard'" />
+        </template>
+      </v-list>
+    </v-menu>
   </div>
   <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />

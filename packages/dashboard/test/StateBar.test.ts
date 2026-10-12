@@ -50,6 +50,16 @@ describe('StateBar', () => {
     wrapper.unmount();
   });
 
+  it('keeps each state on one line in a tooltip wide enough for its meaning (user request)', async () => {
+    const wrapper = render({ states: STATES, idleHours7d: 150, requests7d: 12 });
+    await hover(wrapper);
+    expect(wrapper.findComponent({ name: 'VTooltip' }).props('maxWidth')).toBe('600');
+    const content = document.querySelector<HTMLElement>('.v-tooltip .v-overlay__content')!;
+    const cells = [...content.querySelectorAll('.rows tr')].map((tr) => [...tr.querySelectorAll('td')].slice(0, 3).every((td) => td.classList.contains('text-no-wrap')));
+    expect(cells).toEqual([true, true, true]);
+    wrapper.unmount();
+  });
+
   it('says when there is no history yet, and draws nothing', async () => {
     for (const states of [null, { ...STATES, totals: { UNKNOWN: 604_800 } }]) {
       const wrapper = render({ states });
