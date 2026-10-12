@@ -168,7 +168,13 @@ time per target group, router or workload, one per load balancer (lock), three p
 - **What is priced:** what each nap stopped, as router 0.27.0 says in its `ASLEEP` event (`stopped`, kept in the
   history): EC2 instances and Auto Scaling capacity by type and OS, Fargate tasks by size, RDS and Aurora instances by
   class, engine and deployment, Aurora Serverless v2 at its minimum capacity. Prices: the Price List API's on-demand list
-  prices (`pricing:GetProducts`, us-east-1), cached as `PRICE#<region>#<item>` for 30 days (a missing one for a day).
+  prices (`pricing:GetProducts`, us-east-1), cached as `PRICE#<region>#<item>` for 30 days (a missing one for a day)
+  and an hour in each function's memory. A price is asked again at the first lookup after it expires; a day already
+  computed keeps the prices it was computed with. To take a price change at once, delete its `PRICE#` items
+  (`pk = T#default`) and run the job again for the days to price again.
+- **Estimates, not bills:** AWS bills are not read (a bill cannot show what a nap did not spend, and comes a day late).
+  Spot capacity is priced on-demand, and Savings Plans or Reserved Instances are not taken off: both come with the
+  roadmap's R9.5.
 - **Baseline:** `savings_baseline` = `always` (24/7) or `business-hours` (weekdays 08:00 to 20:00 in `savings_timezone`).
 - **Daily job:** `dmt-<env>-manager-savings` (00:30 UTC; run it by hand with `{"day": "YYYY-MM-DD"}`) puts each
   workload's day as `SAV#<date>` / `<account>#<region>#<workloadId>` (kept `history_days`) and the summary
