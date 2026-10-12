@@ -83,9 +83,48 @@ describe('the estimate\'s reports', () => {
     expect(JSON.parse(jsonReport(E))).toEqual(E);
   });
 
+  it('the terminal\'s summary: the two tables of the totals, aligned as text', () => {
+    const lines = summaryLines(E);
+    const table = (title: string) => {
+      const from = lines.indexOf(title);
+      expect(from, title).toBeGreaterThan(0);
+      const rows: string[] = [];
+      for (let i = from + 1; i < lines.length && lines[i]!.startsWith('  ') && !lines[i]!.startsWith('  The total'); i += 1) rows.push(lines[i]!);
+      return rows;
+    };
+    const accounts = table('By account:');
+    expect(accounts.map((l) => l.split(/\s{2,}/).filter(Boolean))).toEqual([
+      ['Account', 'Name', 'Workloads', 'At 1 hour', 'At the recommended windows', 'Dormeto', 'Net at 1 hour'],
+      ['111111111111', 'prod', '12', '$180.50', '$168.50', '$1.82', '$178.68'],
+      ['Total', '12', '$180.50', '$168.50', '$7.08', '$173.42'],
+    ]);
+    // Aligned: the figures right-aligned under their headings, every row as long.
+    expect(new Set(accounts.map((l) => l.length)).size).toBe(1);
+    expect(accounts[1]!.indexOf('$180.50') + '$180.50'.length).toBe(accounts[0]!.indexOf('At 1 hour') + 'At 1 hour'.length);
+    expect(lines).toContain('  The total includes the manager ($5.00), once per installation.');
+    const cost = table('Dormeto\'s cost:');
+    expect(cost.map((l) => l.split(/\s{2,}/).filter(Boolean))).toEqual([
+      ['Part', 'Computation', 'A month'],
+      ['Manager', '1 × $5.00: one per installation, whatever the number of accounts and workloads', '$5.00'],
+      ['Routers', '2 × $0.26: one per account and region with workloads (111111111111 eu-west-1, 111111111111 eu-west-3)', '$0.52'],
+      ['Workloads', '12 × $0.13: each workload\'s naps, wakes and idle checks', '$1.56'],
+      ['Total', '$7.08'],
+    ]);
+    expect(new Set(cost.map((l) => l.length)).size).toBe(1);
+  });
+
+  it('the terminal\'s accounts: the ten saving the most, the others counted', () => {
+    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39 }]));
+    const lines = summaryLines({ ...E, byAccount });
+    const from = lines.indexOf('By account:');
+    expect(lines[from + 2]).toMatch(/^ {2}100000000011 /);
+    expect(lines.slice(from).find((l) => l.includes('100000000001'))).toBeUndefined();
+    expect(lines).toContain('  And 2 more accounts: see the report.');
+  });
+
   it('the terminal\'s summary: the totals, the ten workloads saving the most, what was left out', () => {
     const lines = summaryLines(E);
-    expect(lines[0]).toBe('About $180.50 a month at a 1-hour idle window ($168.50 at the recommended windows) for 12 workloads in 2 accounts; Dormeto costs about $7.08 a month ($5.00 for the manager, 2 routers × $0.26, 12 workloads × $0.13): net about $173.42.');
+    expect(lines[0]).toBe('About $180.50 a month at a 1-hour idle window ($168.50 at the recommended windows) for 12 workloads in 2 accounts; Dormeto costs about $7.08 a month: net about $173.42.');
     const top = lines.filter((l) => l.includes('.example.com'));
     expect(top).toHaveLength(10);
     expect(top[0]).toContain('app11.example.com');
