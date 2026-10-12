@@ -61,10 +61,21 @@ describe('a region\'s discovery', () => {
     expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.tags).toEqual({ env: ['dev'], team: ['web', 'shop'] });
   });
 
-  it('an instance that is already stopped stops nothing', async () => {
+  const inState = (state: string | undefined) => {
     const { ports } = regionPorts([rule('admin', { backend: { kind: 'instance', id: 'i-9' } })]);
-    ports.ec2 = { describeInstances: async ({ InstanceIds }) => ({ Reservations: [{ Instances: InstanceIds.map((id) => ({ InstanceId: id, InstanceType: 'm5.large', PlatformDetails: 'Linux/UNIX', State: { Name: 'stopped' } })) }] }) };
-    expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.stopped).toEqual([]);
+    ports.ec2 = { describeInstances: async ({ InstanceIds }) => ({ Reservations: [{ Instances: InstanceIds.map((id) => ({ InstanceId: id, InstanceType: 'm5.large', PlatformDetails: 'Linux/UNIX', ...(state ? { State: { Name: state } } : {}) })) }] }) };
+    return discoverRegion(ports, { account: A, region: R }).then((r) => r.workloads[0]!);
+  };
+
+  it('an instance keeps its state; one already stopped is described all the same (its measured uptime may estimate it)', async () => {
+    expect(await inState('running')).toMatchObject({ instanceState: 'running', stopped: [{ kind: 'ec2', type: 'm5.large', count: 1, os: 'Linux' }] });
+    expect(await inState('stopped')).toMatchObject({ instanceState: 'stopped', stopped: [{ kind: 'ec2', type: 'm5.large', count: 1, os: 'Linux' }] });
+    // No state said: running, as before.
+    expect(await inState(undefined)).toMatchObject({ instanceState: 'running' });
+  });
+
+  it('a terminated instance stops nothing', async () => {
+    expect(await inState('terminated')).toMatchObject({ instanceState: 'terminated', stopped: [] });
   });
 
   it('an instance Dormeto manages that is stopped is napping: still estimated (it runs when woken)', async () => {
@@ -143,6 +154,19 @@ describe('the discovery of every account and region', () => {
     expect(s.calls.regions).toBe(1);
     await s.run({ refresh: 'discovery' });
     expect(s.calls.scans.slice(3)).toEqual([`${A}/${R}`, `${A}/eu-west-3`]);
+  });
+
+  it('a region kept before instances had their state is scanned again', async () => {
+    const s = setup({ regions: [R] });
+    const { regions } = await s.run();
+    const instance = { ...regions[0]!.workloads[0]!, backend: { kind: 'instance' as const, id: 'i-1' }, stopped: [] };
+    await createCache({ dir: s.dir, now: () => T }).put(`discovery/${A}-${R}.json`, { ...regions[0]!, workloads: [instance] });
+    await s.run();
+    expect(s.calls.scans).toEqual([`${A}/${R}`, `${A}/${R}`]);
+    // With its state: kept.
+    await createCache({ dir: s.dir, now: () => T }).put(`discovery/${A}-${R}.json`, { ...regions[0]!, workloads: [{ ...instance, instanceState: 'terminated' }] });
+    await s.run();
+    expect(s.calls.scans).toHaveLength(2);
   });
 
   it('a region kept before workloads had their tags is scanned again', async () => {

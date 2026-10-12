@@ -70,6 +70,9 @@ const textTable = (t: Table) => {
   ];
 };
 
+// The workloads, then by backend: Auto Scaling groups, EC2 instances, ECS services.
+const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs].map(String);
+
 // What Dormeto would save of an actual cost, cost with Dormeto included.
 const saved = (t: Totals) => (t.actualMonth ? `${Math.round(((t.actualMonth - t.withDormetoMonth) / t.actualMonth) * 100)}%` : '');
 
@@ -81,11 +84,11 @@ function accountsTable(e: Estimate, limit = Infinity): Table & { more: number } 
   const shown = limit < accounts.length ? [...accounts].sort((a, b) => b[1].usdMonthWindow - a[1].usdMonthWindow).slice(0, limit) : accounts;
   const manager = e.dormeto.manager.count ? `; the total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation` : '';
   return {
-    head: ['Account', 'Name', 'Workloads', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
-    figures: [false, false, true, true, true, true],
+    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+    figures: [false, false, true, true, true, true, true, true, true],
     groups: [
-      shown.map(([account, a]) => ({ cells: [account, name(account), String(a.workloads), usd(a.actualMonth), usd(a.withDormetoMonth), saved(a)] })),
-      [{ cells: ['Total', '', String(t.workloads), usd(t.actualMonth), usd(t.withDormetoMonth), saved(t)], strong: true }],
+      shown.map(([account, a]) => ({ cells: [account, name(account), ...counts(a), usd(a.actualMonth), usd(a.withDormetoMonth), saved(a)] })),
+      [{ cells: ['Total', '', ...counts(t), usd(t.actualMonth), usd(t.withDormetoMonth), saved(t)], strong: true }],
     ],
     note: `Cost with Dormeto enabled: at a ${windowAdjective(e.options.window)} idle window, Dormeto's cost included${manager}.`,
     more: accounts.length - shown.length,
@@ -168,7 +171,8 @@ export function markdownReport(e: Estimate): string {
     ...[...e.workloads].sort((a, b) => b.atWindow.usdMonth - a.atWindow.usdMonth).map((x) => {
       const w = x.workload;
       const hosts = `${w.hosts.join(', ') || w.targetGroup}${x.quiet ? ' (no request in 14 days)' : ''}${w.managed ? ' (managed by Dormeto)' : ''}`;
-      return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)} | ${usd(x.atWindow.usdMonth)} | ${day(x.atWindow.wakesPerDay)} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
+      const ran = !x.uptime ? '' : 'hoursPerDay' in x.uptime ? ` (runs ${day(x.uptime.hoursPerDay)} h a day, measured)` : ` (uptime unreadable: ${x.uptime.unreadable}; 24/7 assumed)`;
+      return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}${cell(ran)} | ${usd(x.atWindow.usdMonth)} | ${day(x.atWindow.wakesPerDay)} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
     }), '',
     '## Left out', '',
     ...(e.leftOut.length
@@ -192,6 +196,7 @@ export function markdownReport(e: Estimate): string {
     '## Options', '',
     `- Accounts: ${o.accounts ? `${o.accounts.join(', ')} (--accounts)` : 'every account reached'}`,
     `- Regions: ${o.regions ? o.regions.join(', ') : 'each account\'s enabled regions'}`,
+    `- EC2 uptime: ${o.ec2Uptime ? 'measured over the 14 days (--ec2-uptime)' : '24/7 assumed (--ec2-uptime measures it)'}`,
     `- Excluded tags: ${o.excludeTags.length ? o.excludeTags.map(describeTags).join('; or ') : 'none'}`,
     `- Role in member accounts: ${o.role}`,
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,

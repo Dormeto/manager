@@ -34,12 +34,12 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, excludeTags: [], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
-const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60) => idleWindowAdvice({
+const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60, running: { from: string; to: string }[] | null = null) => idleWindowAdvice({
   requests: { from: FROM, to: TO, minutes }, current, checkMinutes: 5, wakeMs: 60_000, startAsleep: false, actualWakes: 0, actualFrom: null, stopped,
-  hourly: (item) => hourly('eu-west-1', item), baseline, wakerTargetGroup: false, now: NOW,
+  hourly: (item) => hourly('eu-west-1', item), baseline, wakerTargetGroup: false, now: NOW, running,
 });
 const row = (a: Awaited<ReturnType<typeof advise>>, minutes: number) => a.windows.find((r) => r.minutes === minutes)!;
 
@@ -91,6 +91,9 @@ describe('the estimate', () => {
       workloads: { count: 3, unitMonth: DORMETO_COST.workload, usdMonth: 3 * DORMETO_COST.workload },
     });
     expect(e.dormeto.usdMonth).toBeCloseTo(e.totals.dormetoMonth, 9);
+    // Classified by backend: Auto Scaling group, EC2 instance, ECS service.
+    expect(e.totals.kinds).toEqual({ asg: 3, ec2: 0, ecs: 0 });
+    expect(e.byAccount[A]!.kinds).toEqual({ asg: 2, ec2: 0, ecs: 0 });
     expect(e.assumptions.join(' ')).toContain('Every request counts');
   });
 
@@ -127,6 +130,57 @@ describe('the estimate', () => {
     expect(a.actualMonth).toBeCloseTo(e.workloads.filter((x) => x.workload.account === A).reduce((n, x) => n + x.actualMonth, 0), 9);
     // An account's: its routers and workloads, the manager in the total only.
     expect(a.withDormetoMonth).toBeCloseTo(a.actualMonth - a.usdMonthWindow + DORMETO_COST.router + 2 * DORMETO_COST.workload, 9);
+  });
+
+  describe('EC2 instances without an Auto Scaling group', () => {
+    const vm = (name: string, over: Partial<Workload> = {}): Workload => ({ ...w(A, 'eu-west-1', name, [T3]), backend: { kind: 'instance', id: `i-${name}` }, instanceState: 'running', ...over });
+    const only = (workloads: Workload[]) => ({
+      regions: [{ account: A, region: 'eu-west-1', workloads, ineligible: [] }] as RegionDiscovery[],
+      requests: [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: Object.fromEntries(workloads.map((x) => [x.targetGroupArn, daily])), unreadable: {} }] as RegionRequests[],
+    });
+    // 12:00 to 24:00 UTC each day: 12 hours of the 24.
+    const HALF: [number, number][] = Array.from({ length: 14 }, (_, d) => [d * 1440, d * 1440 + 720]);
+    const iso = (m: number) => new Date(Date.parse(FROM) + m * 60_000).toISOString();
+    const uptime = (running: Record<string, [number, number][]>, unreadable: Record<string, string> = {}) => [{ account: A, region: 'eu-west-1', from: FROM, to: TO, running, unreadable }];
+    const measuredRun = (workloads: Workload[], up: ReturnType<typeof uptime> | null) => run({ ...only(workloads), options: { ...OPTIONS, ec2Uptime: up !== null }, uptime: up });
+
+    it('measured (--ec2-uptime): the actual cost of the hours it ran, the savings only while it ran', async () => {
+      const e = await measuredRun([vm('app')], uptime({ 'i-app': HALF }));
+      const x = e.workloads[0]!;
+      expect(x.uptime).toEqual({ hoursPerDay: 12 });
+      expect(x.actualMonth).toBeCloseTo(0.0456 * 12 * 30, 9);
+      expect(x.atWindow.usdMonth).toBeCloseTo(row(await advise(daily, [T3], undefined, 60, HALF.map(([a, b]) => ({ from: iso(a), to: iso(b) }))), 60).usdMonth!, 9);
+      expect(x.atWindow.usdMonth).toBeLessThan((await run(only([vm('app')]))).workloads[0]!.atWindow.usdMonth);
+    });
+
+    it('stopped when discovered: left out without --ec2-uptime, saying how to estimate it; estimated from the hours it ran with it', async () => {
+      const stopped = vm('night', { instanceState: 'stopped' });
+      expect((await run(only([stopped]))).leftOut.map((l) => l.reason)).toEqual(['a stopped instance: nothing running to stop (--ec2-uptime estimates it from the hours it ran)']);
+      const e = await measuredRun([stopped], uptime({ 'i-night': HALF }));
+      expect(e.workloads.map((x) => [x.workload.targetGroup, x.uptime])).toEqual([['night', { hoursPerDay: 12 }]]);
+    });
+
+    it('measured never running in the 14 days: left out', async () => {
+      const e = await measuredRun([vm('idle', { instanceState: 'stopped' })], uptime({ 'i-idle': [] }));
+      expect(e.leftOut.map((l) => l.reason)).toEqual(['it did not run in the last 14 days (its measured uptime)']);
+    });
+
+    it('its uptime unreadable: 24/7 as without, saying why', async () => {
+      const e = await measuredRun([vm('app')], uptime({}, { 'i-app': 'CloudWatch could not read the uptime (Forbidden)' }));
+      expect(e.workloads[0]!.uptime).toEqual({ unreadable: 'CloudWatch could not read the uptime (Forbidden)' });
+      expect(e.workloads[0]!.actualMonth).toBeCloseTo(0.0456 * 24 * 30, 9);
+    });
+
+    it('the assumptions say how EC2 instances ran', async () => {
+      expect((await run()).assumptions.join(' ')).toContain('EC2 instances without an Auto Scaling group are assumed to run 24/7 (--ec2-uptime measures it)');
+      expect((await measuredRun([vm('app')], uptime({ 'i-app': HALF }))).assumptions.join(' ')).toContain('EC2 instances without an Auto Scaling group: their uptime measured over the 14 days');
+    });
+
+    it('managed by Dormeto, or behind an Auto Scaling group: not measured, 24/7', async () => {
+      const e = await measuredRun([vm('napped', { managed: true, instanceState: undefined }), { ...w(A, 'eu-west-1', 'fleet', [T3]) }], uptime({}));
+      expect(e.workloads.map((x) => x.uptime)).toEqual([undefined, undefined]);
+      expect(e.totals.kinds).toEqual({ asg: 1, ec2: 1, ecs: 0 });
+    });
   });
 
   it('the workloads excluded by their tags, as given, apart from the estimate', async () => {

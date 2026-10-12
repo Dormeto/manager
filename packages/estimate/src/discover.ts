@@ -22,6 +22,9 @@ export interface Workload {
   stopped: StoppedItem[];
   // Every value of each tag on its load balancer, target group or rule (discovery's), for --exclude-tags.
   tags: Record<string, string[]>;
+  // An instance's state when discovered (not one Dormeto manages): one stopped is described all the same, estimated only
+  // from its measured uptime (--ec2-uptime).
+  instanceState?: string;
   // Already managed by Dormeto: its requests while asleep go to its waker target group, added up (as R10).
   managed?: true;
   wakerTargetGroupArn?: string;
@@ -33,7 +36,7 @@ export interface RegionPorts extends StoppedPorts {
   autoscaling: { describeAutoScalingGroups(input: { AutoScalingGroupNames: string[] }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; DesiredCapacity?: number; Instances?: { InstanceId?: string }[] }[] }> };
   elbv2: { describeRules(input: { RuleArns: string[] }): Promise<{ Rules?: Rule[] }> };
 }
-export type Progress = (event: { phase: 'discovery' | 'requests'; account: string; region: string; from: 'cache' | 'aws'; workloads: number; error?: string }) => void;
+export type Progress = (event: { phase: 'discovery' | 'requests' | 'uptime'; account: string; region: string; from: 'cache' | 'aws'; workloads: number; error?: string }) => void;
 
 // An ECS service ARN names its cluster (arn:aws:ecs:<region>:<account>:service/<cluster>/<service>); the old format
 // (service/<service>) is in the default cluster.
@@ -43,24 +46,24 @@ const clusterOf = (serviceArn: string) => {
 };
 
 // Discovery's backend as the router describes it: an Auto Scaling group's desired capacity and instances, an ECS
-// service's cluster and desired count, an instance.
-async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, managed: boolean): Promise<RouterBackend | null> {
+// service's cluster and desired count, an instance (with its state, unless Dormeto manages it).
+async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, managed: boolean): Promise<{ running: RouterBackend | null; instanceState?: string }> {
   if (backend.kind === 'asg') {
     const { AutoScalingGroups: [group] = [] } = await ports.autoscaling.describeAutoScalingGroups({ AutoScalingGroupNames: [backend.id] });
-    return { kind: 'asg', name: backend.id, desired: group?.DesiredCapacity ?? 0, instances: (group?.Instances ?? []).map((i) => i.InstanceId).filter((id): id is string => Boolean(id)) };
+    return { running: { kind: 'asg', name: backend.id, desired: group?.DesiredCapacity ?? 0, instances: (group?.Instances ?? []).map((i) => i.InstanceId).filter((id): id is string => Boolean(id)) } };
   }
   if (backend.kind === 'ecs') {
     const cluster = clusterOf(backend.id);
     const { services: [service] = [] } = await ports.ecs.describeServices({ cluster, services: [backend.id] });
-    return { kind: 'ecs', id: backend.id, cluster, desired: service?.desiredCount ?? 0 };
+    return { running: { kind: 'ecs', id: backend.id, cluster, desired: service?.desiredCount ?? 0 } };
   }
-  // An instance already stopped stops nothing (as an Auto Scaling group at 0): never priced as running — unless Dormeto
-  // manages it, which stopped it for a nap (it runs when woken).
-  if (managed) return { kind: 'instance', id: backend.id };
+  // Dormeto manages it: stopped for a nap, it runs when woken. Otherwise its state: one stopped is described all the same
+  // (the estimate says it stops nothing, unless its measured uptime shows it ran); one terminated stops nothing. No
+  // state said: running.
+  if (managed) return { running: { kind: 'instance', id: backend.id } };
   const { Reservations = [] } = await ports.ec2.describeInstances({ InstanceIds: [backend.id] });
-  const state = Reservations.flatMap((r) => r.Instances ?? [])[0]?.State?.Name;
-  if (state && state !== 'running' && state !== 'pending') return null;
-  return { kind: 'instance', id: backend.id };
+  const state = Reservations.flatMap((r) => r.Instances ?? [])[0]?.State?.Name ?? 'running';
+  return { running: state === 'terminated' || state === 'shutting-down' ? null : { kind: 'instance', id: backend.id }, instanceState: state };
 }
 
 // A managed workload's waker target group: the other target group of its Dormeto rule's forward (application and waker
@@ -86,9 +89,11 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     }
     const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
     let stopped: StoppedItem[];
+    let instanceState: string | undefined;
     try {
-      const running = await routerBackend(ports, rule.backend, managed !== null);
-      stopped = running ? await describeStopped(ports, [running]) : [];
+      const found = await routerBackend(ports, rule.backend, managed !== null);
+      instanceState = found.instanceState;
+      stopped = found.running ? await describeStopped(ports, [found.running]) : [];
     } catch (err) {
       // Never guessed: an item that cannot be priced, said in the estimate.
       stopped = [{ kind: 'unknown', backend: `${rule.backend.kind}:${rule.backend.id}`, reason: (err as Error).message.slice(0, 200) } as unknown as StoppedItem];
@@ -96,6 +101,7 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     workloads.push({
       account, region, loadBalancer: rule.loadBalancer, loadBalancerArn: rule.loadBalancerArn, targetGroup: rule.targetGroup ?? '',
       targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped, tags: rule.tags,
+      ...(instanceState ? { instanceState } : {}),
       ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
     });
   }
@@ -132,8 +138,8 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
         for (const region of regions) {
           const path = `discovery/${account}-${region}.json`;
           const kept = again ? null : await cache.get<RegionDiscovery>(path, freshDiscovery(now()));
-          // Kept before workloads had their tags: scanned again.
-          if (kept && kept.workloads.every((w) => w.tags)) {
+          // Kept before workloads had their tags, or instances their state: scanned again.
+          if (kept && kept.workloads.every((w) => w.tags && (w.backend.kind !== 'instance' || w.managed || w.instanceState))) {
             found.push(kept);
             progress({ phase: 'discovery', account, region, from: 'cache', workloads: kept.workloads.length });
             continue;

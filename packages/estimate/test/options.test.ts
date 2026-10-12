@@ -5,7 +5,7 @@ import { UsageError, parseOptions } from '../src/options.js';
 describe('the estimate command\'s options', () => {
   it('a profile alone: every account reached, every enabled region, the supposed role, 24/7, no discount, the cache as it is, here, a 1-hour window', () => {
     expect(parseOptions(['--profile', 'prospect'])).toEqual({
-      profiles: ['prospect'], accounts: null, regions: null, excludeTags: [], role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
+      profiles: ['prospect'], accounts: null, regions: null, excludeTags: [], ec2Uptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' },
       discounts: { compute: 0, databases: 0 }, refresh: null, out: process.cwd(), window: 60,
     });
   });
@@ -13,15 +13,17 @@ describe('the estimate command\'s options', () => {
   it('every option given', () => {
     expect(parseOptions([
       '--profile', 'prospect', '--accounts', '222222222222, 333333333333,222222222222', '--regions', 'eu-west-1,eu-west-3',
-      '--exclude-tags', 'env=dev|test, team=web', '--exclude-tags', 'dormeto:ignore', '--role', 'ReadOnlyAudit', '--baseline', 'business-hours',
+      '--exclude-tags', 'env=dev|test, team=web', '--exclude-tags', 'dormeto:ignore', '--ec2-uptime', '--role', 'ReadOnlyAudit', '--baseline', 'business-hours',
       '--timezone', 'Europe/Paris', '--discount-compute', '20', '--discount-databases', '30', '--refresh', 'metrics', '--out', '/tmp/reports', '--window', '30',
     ])).toEqual({
       profiles: ['prospect'], accounts: ['222222222222', '333333333333'], regions: ['eu-west-1', 'eu-west-3'],
       // Each --exclude-tags a criterion (any of them excludes): every key in it (and), one of a key's values (or).
-      excludeTags: [{ env: ['dev', 'test'], team: ['web'] }, { 'dormeto:ignore': [] }], role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
+      excludeTags: [{ env: ['dev', 'test'], team: ['web'] }, { 'dormeto:ignore': [] }], ec2Uptime: true, role: 'ReadOnlyAudit', baseline: { kind: 'business-hours', timeZone: 'Europe/Paris' },
       discounts: { compute: 20, databases: 30 }, refresh: 'metrics', out: '/tmp/reports', window: 30,
     });
     expect(parseOptions(['--profile', 'p', '--baseline', 'business-hours']).baseline).toEqual({ kind: 'business-hours', timeZone: 'UTC' });
+    // A flag, anywhere: it takes no value.
+    expect(parseOptions(['--ec2-uptime', '--profile', 'p'])).toMatchObject({ profiles: ['p'], ec2Uptime: true });
   });
 
   it('several profiles, such as one SSO profile per account: in their order, once each', () => {
@@ -45,6 +47,7 @@ describe('the estimate command\'s options', () => {
       [['--profile', 'p', '--exclude-tags', ' , '], '--exclude-tags: one tag or more, such as env=dev|test,team=web'],
       [['--profile', 'p', '--exclude-tags', 'env=dev,=web'], '--exclude-tags: a tag without its key: =web'],
       [['--profile', 'p', '--exclude-tags', 'env=dev,env=test'], '--exclude-tags: env twice in one criterion: env=dev|test for either'],
+      [['--profile', 'p', '--ec2-uptime', 'yes'], 'unknown option: yes'],
       [['--profile', 'p', '--window', '4'], '--window: whole minutes from 5 to 1440'],
       [['--profile', 'p', '--window', '90.5'], '--window: whole minutes from 5 to 1440'],
       [['--profile', 'p', '--verbose'], 'unknown option: --verbose'],

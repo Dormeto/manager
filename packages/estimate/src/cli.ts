@@ -13,6 +13,7 @@ import { USAGE, UsageError, parseOptions, type Options } from './options.js';
 import { jsonReport, markdownReport, summaryLines } from './report.js';
 import { requestsAll, type CloudWatchPort } from './requests.js';
 import { excludeByTags } from './tags.js';
+import { uptimeAll } from './uptime.js';
 
 export interface EstimateAws {
   accounts: AccountsPorts;
@@ -71,14 +72,17 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     const { regions, excluded } = excludeByTags(discovered.regions, options.excludeTags);
     const credentialsOf = async (account: string) => (await reached.accounts.find((a) => a.account === account)?.credentials()) ?? null;
     deps.log('Phase 2: requests');
-    const requests = await requestsAll({ regions, cloudwatchOf: async (account, region) => aws.cloudwatchOf(account, region, await credentialsOf(account)), cache, refresh: options.refresh, now: deps.now, progress });
+    const cloudwatchOf = async (account: string, region: string) => aws.cloudwatchOf(account, region, await credentialsOf(account));
+    const requests = await requestsAll({ regions, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress });
+    // When the EC2 instances without an Auto Scaling group ran, over the same period.
+    const uptime = options.ec2Uptime ? await uptimeAll({ regions, requests, cloudwatchOf, cache, refresh: options.refresh, now: deps.now, progress }) : null;
     deps.log('Phase 3: estimate');
     // The prices are public: any profile reads them
     const book = awsByProfile.get(options.profiles[0]!)!.prices(cache.prices);
     const { out, profiles: _profiles, ...kept } = options;
     const estimate = await estimateAll({
       reached, regions, requests, hourly: (region, item) => book.hourly(region, item, options.discounts), priceFailure: () => book.failure?.() ?? null,
-      baseline: options.baseline, options: kept, now: deps.now(), excluded,
+      baseline: options.baseline, options: kept, now: deps.now(), excluded, uptime,
     });
     const date = new Date(deps.now()).toISOString().slice(0, 10);
     const md = join(out, `estimate-${date}.md`);

@@ -8,14 +8,18 @@ import type { Ineligible, RegionDiscovery, Workload } from './discover.js';
 import type { Options } from './options.js';
 import type { RegionRequests } from './requests.js';
 import type { Excluded } from './tags.js';
+import { measured, type RegionUptime } from './uptime.js';
 
 const WAKE_MS = 60_000;
 
 export interface WorkloadEstimate {
   workload: Workload;
   quiet: boolean; // no request in 14 days
-  // What its naps would stop, running every hour of the baseline: its cost a month now.
+  // What its naps would stop, running every hour of the baseline (or, measured, the hours it ran): its cost a month now.
   actualMonth: number;
+  // An EC2 instance without an Auto Scaling group, with --ec2-uptime: the hours it ran a day, or why they are unknown
+  // (then 24/7).
+  uptime?: { hoursPerDay: number } | { unreadable: string };
   // At the report's window (options.window).
   atWindow: { usdMonth: number; wakesPerDay: number; asleepHours: number };
   recommended: { minutes: number; usdMonth: number; wakesPerDay: number };
@@ -23,7 +27,9 @@ export interface WorkloadEstimate {
 export interface LeftOut { workload: Workload; reason: string }
 // withDormetoMonth: the actual cost less the savings at the report's window, plus Dormeto's cost (an account's: its
 // routers and workloads; the total's: the manager too).
-export interface Totals { workloads: number; actualMonth: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number; withDormetoMonth: number }
+// kinds: the workloads by backend (an Auto Scaling group, an EC2 instance, an ECS service).
+export interface Kinds { asg: number; ec2: number; ecs: number }
+export interface Totals { workloads: number; kinds: Kinds; actualMonth: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number; withDormetoMonth: number }
 // Dormeto's cost by part: how many, the cost of one a month, theirs.
 export interface CostPart { count: number; unitMonth: number; usdMonth: number }
 export interface DormetoCost { manager: CostPart; routers: CostPart & { where: { account: string; region: string }[] }; workloads: CostPart; usdMonth: number }
@@ -59,13 +65,16 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
     'Databases are not attached to load balancers: they are not counted (an installed router naps the ones attached to a workload).',
     `Prices: AWS's on-demand list prices, Spot prices for Spot capacity, less the discounts given (compute ${options.discounts.compute}%, databases ${options.discounts.databases}%); storage, load balancers and data transfer are not counted.`,
     `Savings counted within ${baseline.kind === 'always' ? 'every hour (24/7)' : `business hours (weekdays 08:00 to 20:00, ${baseline.timeZone})`}.`,
+    options.ec2Uptime
+      ? 'EC2 instances without an Auto Scaling group: their uptime measured over the 14 days (CloudWatch CPUUtilization, published every 5 minutes while an instance runs); their actual cost counts the hours they ran, their savings only the hours Dormeto would nap them while they ran. Instances Dormeto already manages, Auto Scaling groups and ECS services are assumed to run all the time.'
+      : 'EC2 instances without an Auto Scaling group are assumed to run 24/7 (--ec2-uptime measures it): one stopped at night by a schedule saves less than estimated here.',
     `Dormeto's cost: about $${DORMETO_COST.manager} a month for the manager, $${DORMETO_COST.router} per account and region with workloads, $${DORMETO_COST.workload} per workload.`,
   ];
 }
 
-const empty = (): Totals => ({ workloads: 0, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
+const empty = (): Totals => ({ workloads: 0, kinds: { asg: 0, ec2: 0, ecs: 0 }, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
 
-export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now, excluded = [] }: {
+export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now, excluded = [], uptime = null }: {
   reached: Reached;
   regions: RegionDiscovery[];
   requests: RegionRequests[];
@@ -76,11 +85,14 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   options: Omit<Options, 'out' | 'profiles'>;
   now: number;
   excluded?: Excluded[];
+  // With --ec2-uptime: when the EC2 instances without an Auto Scaling group ran.
+  uptime?: RegionUptime[] | null;
 }): Promise<Estimate> {
   const workloads: WorkloadEstimate[] = [];
   const leftOut: LeftOut[] = [];
   for (const region of regions) {
     const read = requests.find((r) => r.account === region.account && r.region === region.region);
+    const ran = uptime?.find((u) => u.account === region.account && u.region === region.region);
     // A backend behind several target groups is estimated once, at its first, with every target group's requests: it
     // can nap only when none of them is called.
     const key = (w: Workload) => `${w.backend.kind}#${w.backend.id}`;
@@ -92,9 +104,30 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
         leftOut.push({ workload, reason: `its backend (${workload.backend.kind} ${workload.backend.id}) also serves ${group[0]!.targetGroup}: estimated there, with every target group's requests` });
         continue;
       }
+      const stoppedNow = workload.instanceState === 'stopped' || workload.instanceState === 'stopping';
+      if (stoppedNow && !uptime) {
+        leftOut.push({ workload, reason: 'a stopped instance: nothing running to stop (--ec2-uptime estimates it from the hours it ran)' });
+        continue;
+      }
       if (!workload.stopped.length) {
         leftOut.push({ workload, reason: NOTHING });
         continue;
+      }
+      // Measured: its running periods; unreadable, 24/7 (null).
+      let running: { from: string; to: string }[] | null = null;
+      let measuredUptime: WorkloadEstimate['uptime'];
+      if (uptime && measured(workload)) {
+        const periods = ran?.running[workload.backend.id];
+        if (periods) {
+          if (!periods.length) {
+            leftOut.push({ workload, reason: 'it did not run in the last 14 days (its measured uptime)' });
+            continue;
+          }
+          const at = (m: number) => new Date(Date.parse(ran!.from) + m * 60_000).toISOString();
+          running = periods.map(([a, b]) => ({ from: at(a), to: at(b) }));
+          const days = (Date.parse(ran!.to) - Date.parse(ran!.from)) / 86_400_000;
+          measuredUptime = { hoursPerDay: periods.reduce((n, [a, b]) => n + b - a, 0) / 60 / days };
+        } else measuredUptime = { unreadable: ran?.unreadable[workload.backend.id] ?? 'not read' };
       }
       const unreadable = group.map((w) => read?.unreadable[w.targetGroupArn]).find(Boolean);
       const series = group.map((w) => read?.minutes[w.targetGroupArn]);
@@ -113,7 +146,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       const advice = await idleWindowAdvice({
         requests: { from: read.from, to: read.to, minutes }, current: options.window, checkMinutes: 5, wakeMs: WAKE_MS, startAsleep: false,
         actualWakes: 0, actualFrom: null, stopped: workload.stopped, hourly: (item) => hourly(workload.region, item).catch(() => null), baseline,
-        wakerTargetGroup: false, now,
+        wakerTargetGroup: false, now, running,
       });
       if (!advice.priced) {
         const failure = priceFailure();
@@ -123,11 +156,11 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
       const at = row(options.window);
       const best = row(advice.recommended);
-      // Its cost now: asleep never, priced as the savings are (the same baseline, prices and month).
-      const always = await savingsOf([{ state: 'ASLEEP', from: read.from, to: read.to, stopped: workload.stopped }], { hourly: (item) => hourly(workload.region, item).catch(() => null), baseline });
+      // Its cost now: asleep never (while it ran, measured), priced as the savings are (the same baseline, prices and month).
+      const always = await savingsOf((running ?? [{ from: read.from, to: read.to }]).map((p) => ({ state: 'ASLEEP', ...p, stopped: workload.stopped })), { hourly: (item) => hourly(workload.region, item).catch(() => null), baseline });
       const days = (Date.parse(read.to) - Date.parse(read.from)) / 86_400_000;
       workloads.push({
-        workload, quiet: minutes.length === 0, actualMonth: (always.usd * 30) / days,
+        workload, quiet: minutes.length === 0, actualMonth: (always.usd * 30) / days, ...(measuredUptime ? { uptime: measuredUptime } : {}),
         atWindow: { usdMonth: at.usdMonth!, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
         recommended: { minutes: advice.recommended, usdMonth: best.usdMonth!, wakesPerDay: best.wakesPerDay },
       });
@@ -144,6 +177,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
     routed.add(where);
     for (const t of [totals, (byAccount[x.workload.account] ??= empty()), (byRegion[x.workload.region] ??= empty())]) {
       t.workloads += 1;
+      t.kinds[x.workload.backend.kind === 'instance' ? 'ec2' : x.workload.backend.kind] += 1;
       t.actualMonth += x.actualMonth;
       t.usdMonthWindow += x.atWindow.usdMonth;
       t.usdMonthRecommended += x.recommended.usdMonth;
