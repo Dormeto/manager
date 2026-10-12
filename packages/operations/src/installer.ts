@@ -11,7 +11,7 @@ export interface InstallerPorts {
   dynamodb: Record<'describeTable' | 'createTable' | 'describeTimeToLive' | 'updateTimeToLive' | 'describeContinuousBackups' | 'updateContinuousBackups' | 'deleteTable', Call>;
   sqs: Record<'getQueueUrl' | 'createQueue' | 'deleteQueue', Call>;
   logs: Record<'describeLogGroups' | 'createLogGroup' | 'putRetentionPolicy' | 'deleteLogGroup', Call>;
-  lambda: Record<'getFunction' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'getFunctionEventInvokeConfig' | 'putFunctionEventInvokeConfig' | 'getPolicy' | 'addPermission' | 'deleteFunction', Call>;
+  lambda: Record<'getFunction' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'getFunctionEventInvokeConfig' | 'putFunctionEventInvokeConfig' | 'getPolicy' | 'addPermission' | 'removePermission' | 'deleteFunction', Call>;
   scheduler: Record<'getSchedule' | 'createSchedule' | 'updateSchedule' | 'deleteSchedule', Call>;
   events: Record<'describeRule' | 'putRule' | 'listTargetsByRule' | 'putTargets' | 'removeTargets' | 'deleteRule', Call>;
 }
@@ -146,9 +146,39 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
     FunctionName: f.name, Role: f.roleArn, Runtime: f.runtime, Handler: f.handler, Timeout: f.timeout, MemorySize: f.memory, Environment: { Variables: f.environment },
   });
 
+  // The router's invoke permission (routers 0.20.0 and later), as the blueprint has it: added, or replaced when its source
+  // differs. A conflict is not proof it exists (a function being updated answers one too): read again, else retry later.
+  async function wakerStatement(w: NonNullable<Blueprint['wakerPermission']>) {
+    const policy = await find(() => lambda.getPolicy({ FunctionName: w.function }));
+    const statements = (policy ? JSON.parse(policy.Policy) : { Statement: [] }).Statement as { Sid: string; Condition?: { ArnLike?: Record<string, string> } }[];
+    return statements.find((st) => st.Sid === w.statementId) ?? null;
+  }
+  async function ensureWakerPermission(b: Blueprint): Promise<string | null> {
+    const w = b.wakerPermission;
+    if (!w) return null;
+    const sourceOf = (st: Awaited<ReturnType<typeof wakerStatement>>) => st?.Condition?.ArnLike?.['AWS:SourceArn'];
+    const current = await wakerStatement(w);
+    if (current && sourceOf(current) === w.sourceArn) return null;
+    if (current) await lambda.removePermission({ FunctionName: w.function, StatementId: w.statementId });
+    try {
+      await lambda.addPermission({ FunctionName: w.function, StatementId: w.statementId, Action: 'lambda:InvokeFunction', Principal: w.principal, SourceArn: w.sourceArn });
+      return `invoke permission of ${w.function}`;
+    } catch (err) {
+      if ((err as Error).name !== 'ResourceConflictException') throw err;
+      if (sourceOf(await wakerStatement(w)) === w.sourceArn) return null;
+      throw new RetryLater(`invoke permission of ${w.function}: ${(err as Error).message}`);
+    }
+  }
+
   async function functions(b: Blueprint): Promise<StepResult> {
     const changed: string[] = [];
     let pending = false;
+    // An upgrade adds the router's permission before any function runs the new code: its onboardings rely on it.
+    const waker = b.functions.find((f) => f.key === 'waker');
+    if (b.wakerPermission && waker && (await find(() => lambda.getFunction({ FunctionName: waker.name })))?.Configuration?.State === 'Active') {
+      const added = await ensureWakerPermission(b);
+      if (added) changed.push(added);
+    }
     for (const f of b.functions) {
       const current = (await find(() => lambda.getFunction({ FunctionName: f.name })))?.Configuration;
       if (!current) {
@@ -216,19 +246,8 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
       }
     }
     // The load balancers invoke the waker from the router's waker target groups (routers 0.20.0 and later).
-    const waker = b.wakerPermission;
-    if (waker) {
-      const policy = await find(() => lambda.getPolicy({ FunctionName: waker.function }));
-      const sids = new Set(((policy ? JSON.parse(policy.Policy) : { Statement: [] }).Statement as { Sid: string }[]).map((st) => st.Sid));
-      if (!sids.has(waker.statementId)) {
-        try {
-          await lambda.addPermission({ FunctionName: waker.function, StatementId: waker.statementId, Action: 'lambda:InvokeFunction', Principal: waker.principal, SourceArn: waker.sourceArn });
-          changed.push(`invoke permission of ${waker.function}`);
-        } catch (err) {
-          if ((err as Error).name !== 'ResourceConflictException') throw err;
-        }
-      }
-    }
+    const waker = await ensureWakerPermission(b);
+    if (waker) changed.push(waker);
     return result(changed);
   }
 

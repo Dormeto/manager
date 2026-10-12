@@ -11,7 +11,8 @@ export function operationTitle(op: Operation): string {
       const name = op.input.name ?? op.context?.name;
       return `Onboard ${tgName(op.target.targetGroupArn)}${name ? ` as ${String(name)}` : ''}`;
     }
-    case 'offboard': return `Offboard ${String(op.input.name ?? op.target.workloadId)} from ${op.target.router}`;
+    // The name the workflow read from the router (once located).
+    case 'offboard': return `Offboard ${String(op.context?.name ?? op.target.workloadId)} from ${op.target.router}`;
     case 'install-router': return `Install a router in ${where(op)}`;
     case 'upgrade-router': return `Upgrade the router of ${where(op)}`;
     case 'uninstall-router': return `Uninstall the router of ${where(op)}`;

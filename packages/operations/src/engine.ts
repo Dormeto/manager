@@ -85,6 +85,18 @@ export function createEngine(deps: EngineDeps) {
   // Installed routers are named dmtr-<env>: DmtCommandRole and DmtRouterBoundary are scoped to that namespace.
   const routerName = `dmtr-${deps.settings.env}`;
 
+  // The onboarder derives the workload id from the target group (routers 0.20.0 and later); the name is for people. Both
+  // are kept in the operation for the next steps.
+  async function previewOf(op: Operation) {
+    const preview = await invokeRouter(op, 'onboarder', {
+      action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [],
+    });
+    if (!preview?.workloadId) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.20.0: upgrade it to onboard`);
+    op.context.workloadId = preview.workloadId;
+    op.context.name = preview.name;
+    return preview as { ok: boolean; problems?: string[]; workloadId: string; name: string };
+  }
+
   // The target of an operation, and the key no second operation may claim at the same time.
   async function targetOf(type: OperationType, input: Record<string, unknown>): Promise<{ target: Record<string, string>; activeKey: string }> {
     if (type === 'onboard') {
@@ -249,7 +261,9 @@ export function createEngine(deps: EngineDeps) {
         op.context.targetGroupArn = status?.targetGroupArn;
         op.context.loadBalancerArn = ruleArn ? loadBalancerOfRule(ruleArn) : null;
         op.context.wakeTimeoutSeconds = status?.settings?.wakeTimeoutSeconds ?? 600;
-        return { status: 'done', detail: `${op.target.workloadId} ${status?.state}` };
+        // The name people see (routers 0.20.0 and later), for the operation's title.
+        op.context.name = status?.name ?? op.target.workloadId;
+        return { status: 'done', detail: `${op.context.name} ${status?.state}` };
       }
       case 'lock load balancer': {
         const lb = op.target.loadBalancerArn ?? (op.context.loadBalancerArn as string | null);
@@ -266,17 +280,13 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done' };
       }
       case 'preview': {
-        // The onboarder derives the workload id from the target group (routers 0.20.0 and later); the name is for people.
-        const preview = await invokeRouter(op, 'onboarder', {
-          action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [],
-        });
-        if (!preview?.workloadId) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.20.0: upgrade it to onboard`);
+        const preview = await previewOf(op);
         if (!preview.ok) throw new Error((preview.problems ?? ['refused']).join('; '));
-        op.context.workloadId = preview.workloadId;
-        op.context.name = preview.name;
         return { status: 'done', detail: `${preview.name} (${preview.workloadId})` };
       }
       case 'onboard': {
+        // An operation started by a manager that did not keep the preview's id yet: ask again.
+        if (!op.context.workloadId) await previewOf(op);
         const result = await invokeRouter(op, 'onboarder', {
           action: 'onboard', workloadId: op.context.workloadId, targetGroupArn: op.target.targetGroupArn, name: op.context.name,
           settings: op.input.settings ?? {}, databases: op.input.databases ?? [], by: op.by,
@@ -285,6 +295,7 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
       }
       case 'verify': {
+        if (!op.context.workloadId) await previewOf(op);
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
         if (status?.route !== 'app' || (status?.issues ?? []).length) throw new Error(`route ${status?.route}${status?.issues?.length ? `, issues: ${status.issues.join('; ')}` : ''}`);
         return { status: 'done', detail: `${op.context.name} ${status.state}, route app` };
@@ -305,6 +316,7 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
       }
       case 'candidate':
+        if (op.type === 'onboard' && !op.context.workloadId) await previewOf(op);
         return op.type === 'onboard'
           ? updateCandidate(op, (c) => {
             const { reason: _r, ...rest } = c;

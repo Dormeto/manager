@@ -89,6 +89,12 @@ export function workloadOf(routers: { name: string; region: string; account?: st
   };
 }
 
+// The name of a workload of a router (exclusions list the workloads they paused by router and id), its id when unknown.
+export function workloadNamed(workloads: { router: string; workloadId: string; name?: string }[]) {
+  const names = new Map(workloads.map((w) => [`${w.router}/${w.workloadId}`, w.name ?? w.workloadId]));
+  return (router: string, workloadId: string): string => names.get(`${router}/${workloadId}`) ?? workloadId;
+}
+
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;
 export const BACKEND_KINDS: BackendKind[] = ['instance', 'asg', 'ecs'];
 

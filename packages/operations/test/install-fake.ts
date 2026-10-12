@@ -13,6 +13,7 @@ export function fakeInstallAccount() {
     queues: new Map<string, { attributes: Record<string, string>; tags: Record<string, string> }>(),
     logGroups: new Map<string, { retention?: number; tags: Record<string, string> }>(),
     functions: new Map<string, { config: Record<string, unknown>; codeSha256: string; updating: boolean; asyncInvoke?: Record<string, unknown>; permissions: Map<string, string> }>(),
+    conflicts: 0, // addPermission calls answered with a conflict first
     schedules: new Map<string, Record<string, unknown>>(),
     eventRules: new Map<string, { pattern: string; state: string; targets: { Id: string; Arn: string }[] }>(),
     newRoles: new Set<string>(), // roles Lambda cannot assume yet (one failed CreateFunction each)
@@ -155,13 +156,27 @@ export function fakeInstallAccount() {
         call('getPolicy');
         const f = state.functions.get(FunctionName)!;
         if (!f.permissions.size) throw error('ResourceNotFoundException');
-        return { Policy: JSON.stringify({ Statement: [...f.permissions].map(([Sid, principal]) => ({ Sid, Principal: { AWS: principal } })) }) };
+        // As Lambda gives it: a source ARN as an ArnLike condition.
+        return { Policy: JSON.stringify({ Statement: [...f.permissions].map(([Sid, value]) => {
+          const [principal, source] = value.split(' ');
+          return { Sid, Principal: { AWS: principal }, ...(source ? { Condition: { ArnLike: { 'AWS:SourceArn': source } } } : {}) };
+        }) }) };
       },
       async addPermission({ FunctionName, StatementId, Principal, SourceArn }) {
         call('addPermission');
         const f = state.functions.get(FunctionName)!;
+        // A function being updated, or a concurrent policy change, answers a conflict too.
+        if (state.conflicts > 0) {
+          state.conflicts -= 1;
+          throw error('ResourceConflictException');
+        }
         if (f.permissions.has(StatementId)) throw error('ResourceConflictException');
         f.permissions.set(StatementId, SourceArn ? `${Principal} ${SourceArn}` : Principal);
+        return {};
+      },
+      async removePermission({ FunctionName, StatementId }) {
+        call('removePermission');
+        if (!state.functions.get(FunctionName)!.permissions.delete(StatementId)) throw error('ResourceNotFoundException');
         return {};
       },
       async deleteFunction({ FunctionName }) {

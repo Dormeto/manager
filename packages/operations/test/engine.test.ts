@@ -40,7 +40,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
     preview: (p) => (router.previewOk ? { ok: true, problems: [], workloadId: WORKLOAD_ID, name: p.name ?? 'paris-app' } : { ok: false, workloadId: WORKLOAD_ID, name: 'paris-app', problems: ['no backend: no instance, Auto Scaling group or ECS service feeds the target group'] }),
     onboard: (p) => ({ steps: [{ name: 'tag backends', status: 'done' }], workload: { workloadId: p.workloadId, wakerTargetGroupArn: 'arn:waker' } }),
     offboard: () => ({ steps: [{ name: 'restore rules', status: 'done' }] }),
-    status: () => ({ state: router.state, source: router.source, route: 'app', issues: [], targetGroupArn: TG, rules: [{ arn: RULE }], settings: { wakeTimeoutSeconds: router.wakeTimeout } }),
+    status: () => ({ state: router.state, name: 'Paris', source: router.source, route: 'app', issues: [], targetGroupArn: TG, rules: [{ arn: RULE }], settings: { wakeTimeoutSeconds: router.wakeTimeout } }),
     'force-wake': () => { router.state = 'WAKING'; return { state: 'WAKING' }; },
     pause: (p) => { invocationsPaused.push(p); if (router.state === 'ASLEEP') router.state = 'WAKING'; return { pause: {}, woken: [] }; },
     list: () => ({ workloads: Array.from({ length: router.workloads }, (_, i) => ({ workloadId: `w${i}` })) }),
@@ -115,7 +115,7 @@ describe('operations engine', () => {
     expect(stored.steps.find((x) => x.name === 'install functions')!.attempts).toBeGreaterThan(1);
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toMatchObject({
       name: 'dmtr-dev', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`,
-      version: '0.20.0', build: '7ed106f07b2e', installedBy: 'ops@example.com',
+      version: '0.20.1', build: 'd959e54b048a', installedBy: 'ops@example.com',
     });
     expect([...s.account.state.functions.keys()]).toEqual(['dmtr-dev-controller', 'dmtr-dev-waker', 'dmtr-dev-onboarder']);
   });
@@ -175,6 +175,27 @@ describe('operations engine', () => {
     expect(actions.length).toBeGreaterThan(4);
     expect(s.items.get(TG)).toMatchObject({ eligibility: 'eligible', status: 'pending-onboarding' });
     expect(s.items.get(TG)!.workloadId).toBeUndefined();
+    // The name comes from the router (the operation's title), never from the request.
+    expect((await s.records.getOperation(op.id))!.context.name).toBe('Paris');
+  });
+
+  it('an onboarding started before the manager learnt ids from the preview finds its id again at the onboard step', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops');
+    // Run up to the onboard step, then forget what the preview learnt (an operation of the previous version).
+    for (let i = 0; i < 50; i += 1) {
+      const current = (await s.records.getOperation(op.id))!;
+      if (current.steps[current.cursor]!.name === 'onboard') {
+        const { workloadId: _w, name: _n, ...rest } = current.context;
+        await s.records.putOperation({ ...current, context: rest });
+        break;
+      }
+      await s.engine.next(op.id);
+    }
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const onboard = s.invocations.find(([, p]) => p.action === 'onboard')![1];
+    expect([onboard.workloadId, onboard.name]).toEqual([WORKLOAD_ID, 'paris-app']);
+    expect(s.invocations.find(([, p]) => p.action === 'status')![1].workloadId).toBe(WORKLOAD_ID);
   });
 
   it('uninstalling a router with workloads is refused; without, every resource is deleted and the router unregistered', async () => {

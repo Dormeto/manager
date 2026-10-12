@@ -73,12 +73,42 @@ describe('installer', () => {
     expect(drift.targets).toEqual([{ Id: 'onboarder', Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-onboarder' }]);
     // One permission for every waker target group of the router (routers 0.20.0 and later).
     expect([...s.state.functions.get('dmtr-dev-waker')!.permissions]).toEqual([
-      ['alb-waker', 'elasticloadbalancing.amazonaws.com arn:aws:elasticloadbalancing:eu-west-3:121014831971:targetgroup/dmtr-dev-*/*'],
+      ['dormeto-alb', 'elasticloadbalancing.amazonaws.com arn:aws:elasticloadbalancing:eu-west-3:121014831971:targetgroup/dmtr-dev-*/*'],
     ]);
     expect(s.state.schedules.get('dmtr-dev-check')).toMatchObject({
       ScheduleExpression: 'rate(5 minutes)', FlexibleTimeWindow: { Mode: 'OFF' },
       Target: { Arn: 'arn:aws:lambda:eu-west-3:121014831971:function:dmtr-dev-controller', RetryPolicy: { MaximumRetryAttempts: 0 }, DeadLetterConfig: { Arn: 'arn:aws:sqs:eu-west-3:121014831971:dmtr-dev-check-failures' } },
     });
+  });
+
+  it('retries the waker permission on a conflict (a function being updated) and never skips it while it is missing', async () => {
+    const s = setup();
+    await installAll(s, blueprintOf());
+    s.state.functions.get('dmtr-dev-waker')!.permissions.clear();
+    s.state.conflicts = 1;
+    await expect(s.installer.install('permissions', blueprintOf())).rejects.toBeInstanceOf(RetryLater);
+    await s.installer.install('permissions', blueprintOf());
+    expect([...s.state.functions.get('dmtr-dev-waker')!.permissions.keys()]).toEqual(['dormeto-alb']);
+  });
+
+  it('replaces a waker permission whose source differs from the blueprint', async () => {
+    const s = setup();
+    await installAll(s, blueprintOf());
+    s.state.functions.get('dmtr-dev-waker')!.permissions.set('dormeto-alb', 'elasticloadbalancing.amazonaws.com arn:aws:elasticloadbalancing:eu-west-3:121014831971:targetgroup/other-*/*');
+    expect((await s.installer.install('permissions', blueprintOf())).status).toBe('done');
+    expect(s.state.functions.get('dmtr-dev-waker')!.permissions.get('dormeto-alb')).toBe('elasticloadbalancing.amazonaws.com arn:aws:elasticloadbalancing:eu-west-3:121014831971:targetgroup/dmtr-dev-*/*');
+  });
+
+  it('an upgrade adds the waker permission before any function runs the new code (onboardings rely on it)', async () => {
+    const s = setup();
+    const { wakerPermission: _w, ...older } = blueprintOf();
+    await installAll(s, older as Blueprint);
+    const code = new Uint8Array([9, 9]);
+    const installer = createInstaller(s.ports, { boundaryArn: BOUNDARY, principals: PRINCIPALS, zip: async () => code, codeSha256: createHash('sha256').update(code).digest('base64') });
+    s.state.calls.length = 0;
+    await installer.install('functions', blueprintOf());
+    expect(s.state.calls.filter((c) => c === 'addPermission' || c === 'updateFunctionCode')[0]).toBe('addPermission');
+    expect(s.state.functions.get('dmtr-dev-waker')!.permissions.has('dormeto-alb')).toBe(true);
   });
 
   it('adds no waker permission for a blueprint older than 0.20.0 (its onboarder adds one per workload)', async () => {

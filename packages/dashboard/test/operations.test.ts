@@ -15,7 +15,8 @@ describe('operations', () => {
     expect(operationTitle(op())).toBe('Onboard paris-app as Paris');
     expect(operationTitle(op({ input: {}, context: { name: 'paris-app' } }))).toBe('Onboard paris-app as paris-app');
     expect(operationTitle(op({ input: {} }))).toBe('Onboard paris-app');
-    expect(operationTitle(op({ type: 'offboard', target: { router: 'dmt-dev', workloadId: '7010ea54b5c02245', account: '1', region: 'eu-west-3' }, input: { name: 'Paris' } }))).toBe('Offboard Paris from dmt-dev');
+    expect(operationTitle(op({ type: 'offboard', target: { router: 'dmt-dev', workloadId: '7010ea54b5c02245', account: '1', region: 'eu-west-3' }, input: {}, context: { name: 'Paris' } }))).toBe('Offboard Paris from dmt-dev');
+    expect(operationTitle(op({ type: 'offboard', target: { router: 'dmt-dev', workloadId: '7010ea54b5c02245', account: '1', region: 'eu-west-3' }, input: { name: 'Not checked' } }))).toBe('Offboard 7010ea54b5c02245 from dmt-dev');
     expect(operationTitle(op({ type: 'offboard', target: { router: 'dmt-dev', workloadId: 'demo', account: '1', region: 'eu-west-3' }, input: {} }))).toBe('Offboard demo from dmt-dev');
     expect(operationTitle(op({ type: 'install-router', target: { account: '121014831971', region: 'eu-west-3' }, input: {} }))).toBe('Install a router in 121014831971/eu-west-3');
     expect(operationTitle(op({ type: 'upgrade-router', target: { account: '1', region: 'eu-west-3' }, input: {} }))).toBe('Upgrade the router of 1/eu-west-3');

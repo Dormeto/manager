@@ -55,7 +55,7 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
   confirm.value = null;
   if (action === 'offboard') {
     try {
-      const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: props.router, workloadId: props.id, name: title.value }) });
+      const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: props.router, workloadId: props.id }) });
       notice.value = { type: 'success', text: `Offboarding started (operation ${operation.id}): the workload is woken, then its instrumentation removed. Follow it in Operations.` };
     } catch (err) {
       notice.value = { type: 'error', text: (err as Error).message };
@@ -292,7 +292,7 @@ const summary = computed(() => {
     </v-col>
   </v-row>
 
-  <PauseDialog v-model="pauseOpen" :subject="id" @submit="change('pause', $event)" />
+  <PauseDialog v-model="pauseOpen" :subject="title" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
     <v-card :title="confirm === 'nap' ? `Nap ${title}?` : confirm === 'offboard' ? `Offboard ${title}?` : `Wake ${title}?`">

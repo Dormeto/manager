@@ -14,7 +14,7 @@ watch(() => props.modelValue, (open) => { if (open) name.value = props.name; });
     <v-card title="Rename the workload">
       <v-card-text>
         <p class="mb-4">The name shown in the manager and on the router's admin page. Nothing changes in AWS.</p>
-        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" autofocus @keyup.enter="nameRule(name) === true && emit('submit', name.trim())" />
+        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" autofocus @keyup.enter="nameRule(name) === true && name.trim() && emit('submit', name.trim())" />
       </v-card-text>
       <v-card-actions>
         <v-spacer />

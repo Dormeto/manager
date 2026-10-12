@@ -11,7 +11,7 @@ import type { RouterInfo, WorkloadSummary } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import { STATUSES, ruleLines, statusColor, statusLabel, targetText, workloadOf } from '../discovery';
+import { STATUSES, ruleLines, statusColor, statusLabel, targetText, workloadNamed, workloadOf } from '../discovery';
 import { relative } from '../format';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -42,11 +42,13 @@ const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 let poll: number | undefined;
 // Managed candidates link to their workload, by its name (the workload id is not for people).
 const workloadFor = ref<ReturnType<typeof workloadOf>>(() => null);
+const nameOf = ref<ReturnType<typeof workloadNamed>>((_router, id) => id);
 
 async function loadWorkloads() {
   try {
     const [{ routers }, { workloads }] = await Promise.all([api<{ routers: RouterInfo[] }>('/routers'), api<{ workloads: WorkloadSummary[] }>('/workloads')]);
     workloadFor.value = workloadOf(routers, workloads);
+    nameOf.value = workloadNamed(workloads);
   } catch {
     // Names are a convenience: the candidates show without them.
   }
@@ -114,7 +116,7 @@ async function exclude(body: object) {
   excludeOpen.value = false;
   try {
     const result = await api<{ candidates: number; paused: { router: string; workloadId: string }[]; unpaused: string[] }>('/exclusions', { method: 'POST', body: JSON.stringify(body) });
-    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated${result.paused.length ? `, paused ${result.paused.map((p) => p.workloadId).join(', ')}` : ''}${result.unpaused.length ? `; no registered router manages ${result.unpaused.join(', ')}` : ''}.` };
+    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated${result.paused.length ? `, paused ${result.paused.map((p) => nameOf.value(p.router, p.workloadId)).join(', ')}` : ''}${result.unpaused.length ? `; no registered router manages ${result.unpaused.join(', ')}` : ''}.` };
     selected.value = [];
     await load();
   } catch (err) {
@@ -124,8 +126,8 @@ async function exclude(body: object) {
 
 async function lift(e: Exclusion) {
   try {
-    const result = await api<{ candidates: number; resumed: { workloadId: string }[]; errors: string[] }>(`/exclusions/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
-    notice.value = { type: result.errors.length ? 'error' : 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back${result.resumed.length ? `, resumed ${result.resumed.map((p) => p.workloadId).join(', ')}` : ''}${result.errors.length ? `; ${result.errors.join('; ')}` : ''}.` };
+    const result = await api<{ candidates: number; resumed: { router: string; workloadId: string }[]; errors: string[] }>(`/exclusions/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+    notice.value = { type: result.errors.length ? 'error' : 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back${result.resumed.length ? `, resumed ${result.resumed.map((p) => nameOf.value(p.router, p.workloadId)).join(', ')}` : ''}${result.errors.length ? `; ${result.errors.join('; ')}` : ''}.` };
     await load();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -160,8 +162,7 @@ async function offboard() {
     notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
     return;
   }
-  const name = workloadFor.value(c)?.name;
-  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId, ...(name ? { name } : {}) }, `Offboarding of ${name ?? 'the workload'}`);
+  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, `Offboarding of ${workloadFor.value(c)?.name ?? c.workloadId}`);
 }
 
 onMounted(() => { load(); loadWorkloads(); });
@@ -260,7 +261,7 @@ const headers = [
       </template>
       <template #[`item.backend`]="{ item }">
         <BackendLabel v-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
-        <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ workloadFor(item)?.name ?? '' }}</span>
+        <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ workloadFor(item)?.name ?? item.workloadId }}</span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
         <IdleBar v-if="item.idleHours7d !== null" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
@@ -268,7 +269,7 @@ const headers = [
       <template #[`item.statusReason`]="{ item }">
         <span v-if="item.status === 'managed' && workloadFor(item)" class="text-medium-emphasis">managed as
           <router-link :to="`/workloads/${workloadFor(item)!.router}/${workloadFor(item)!.workloadId}`">{{ workloadFor(item)!.name }}</router-link></span>
-        <span v-else class="text-medium-emphasis">{{ item.statusReason }}</span>
+        <span v-else class="text-medium-emphasis">{{ item.status === 'managed' && item.workloadId ? `managed as workload ${item.workloadId}` : item.statusReason }}</span>
       </template>
       <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap">{{ relative(item.firstSeenAt, now) }}</span></template>
     </v-data-table>
@@ -281,7 +282,7 @@ const headers = [
       <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
         <v-list-item-subtitle class="text-wrap">
           {{ e.reason }} · by {{ e.by }} {{ relative(e.at, now) }} · {{ e.expiresAt ? (e.expired ? `expired ${relative(e.expiresAt, now)}` : `expires ${relative(e.expiresAt, now)}`) : 'no expiry' }}
-          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${p.router}/${p.workloadId}`).join(', ') }}</template>
+          <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${nameOf(p.router, p.workloadId)} (${p.router})`).join(', ') }}</template>
         </v-list-item-subtitle>
         <template #append>
           <v-chip v-if="e.expired" variant="tonal" label class="mr-2">expired</v-chip>

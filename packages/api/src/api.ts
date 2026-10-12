@@ -711,9 +711,8 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
       if (type === 'offboard') {
         const workloadId = String(body.workloadId ?? '');
         if (!ID.test(workloadId)) throw new HttpError(400, 'bad_request', `invalid workload id: ${workloadId}`);
-        const name = nameOf(body.name, { required: false });
-        input = { router: router.name, account, region: router.region, workloadId, ...(name ? { name } : {}) };
-        target = `${router.name}/${workloadId}${name ? ` (${name})` : ''}`;
+        input = { router: router.name, account, region: router.region, workloadId };
+        target = `${router.name}/${workloadId}`;
       } else {
         input = { account, region: router.region };
         target = router.name;

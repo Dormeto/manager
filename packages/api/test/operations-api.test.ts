@@ -93,9 +93,9 @@ describe('operations', () => {
     const { api, created } = setup({ installed: [installedParis] });
     expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev-eu-west-3', workloadId: 'paris' }))).statusCode).toBe(202);
     expect(created.at(-1)).toEqual(['offboard', { router: 'dmt-dev-eu-west-3', account: MANAGER, region: 'eu-west-3', workloadId: 'paris' }, 'ops@example.com']);
-    // The workload's name, for the operation's title and audit.
-    expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' }))).statusCode).toBe(202);
-    expect(created.at(-1)![1]).toEqual({ router: 'dmt-dev-eu-west-3', account: MANAGER, region: 'eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' });
+    // A name in the request is ignored: the workflow takes it from the router.
+    expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Not checked' }))).statusCode).toBe(202);
+    expect(created.at(-1)![1]).toEqual({ router: 'dmt-dev-eu-west-3', account: MANAGER, region: 'eu-west-3', workloadId: '7010ea54b5c02245' });
     expect((await api(event('POST', '/api/operations', 'dmt-operator', { type: 'install-router', account: MANAGER, region: 'eu-west-2' }))).statusCode).toBe(403);
     expect((await api(event('POST', '/api/operations', 'dmt-admin', { type: 'install-router', account: MANAGER, region: 'eu-west-2' }))).statusCode).toBe(202);
     expect(created.at(-1)).toEqual(['install-router', { account: MANAGER, region: 'eu-west-2' }, 'ops@example.com']);

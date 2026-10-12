@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATUSES, workloadOf, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
+import { STATUSES, workloadNamed, workloadOf, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -75,5 +75,12 @@ describe('workload of a candidate', () => {
     expect(find({ account: '121014831971', region: 'eu-west-1', workloadId: 'demo' })!.router).toBe('dmt-dev');
     expect(find({ account: '121014831971', region: 'eu-west-1', workloadId: 'gone' })).toBeNull();
     expect(find({ account: '121014831971', region: 'eu-west-1' })).toBeNull();
+  });
+});
+
+describe('names of workloads by router and id', () => {
+  it('gives the name of a workload of a router, its id when unknown', () => {
+    const named = workloadNamed([{ router: 'dmtr-dev-eu-west-3', workloadId: '7010ea54b5c02245', name: 'Paris' }, { router: 'dmt-dev', workloadId: 'demo' }]);
+    expect([named('dmtr-dev-eu-west-3', '7010ea54b5c02245'), named('dmt-dev', 'demo'), named('dmt-dev', 'a4dffc5bf369a297')]).toEqual(['Paris', 'demo', 'a4dffc5bf369a297']);
   });
 });

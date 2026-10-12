@@ -8,7 +8,7 @@ import {
   CreateRoleCommand, DeleteRoleCommand, DeleteRolePolicyCommand, GetRoleCommand, GetRolePolicyCommand, IAMClient, ListRolePoliciesCommand, PutRolePolicyCommand, UpdateAssumeRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import {
-  AddPermissionCommand, CreateFunctionCommand, DeleteFunctionCommand, GetFunctionCommand, GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient,
+  AddPermissionCommand, CreateFunctionCommand, RemovePermissionCommand, DeleteFunctionCommand, GetFunctionCommand, GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient,
   PutFunctionEventInvokeConfigCommand, UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -46,7 +46,7 @@ export function installerPorts(credentials: Credentials, region: string): Instal
     lambda: port(new LambdaClient(opts), {
       getFunction: GetFunctionCommand, createFunction: CreateFunctionCommand, updateFunctionConfiguration: UpdateFunctionConfigurationCommand, updateFunctionCode: UpdateFunctionCodeCommand,
       getFunctionEventInvokeConfig: GetFunctionEventInvokeConfigCommand, putFunctionEventInvokeConfig: PutFunctionEventInvokeConfigCommand, getPolicy: GetPolicyCommand,
-      addPermission: AddPermissionCommand, deleteFunction: DeleteFunctionCommand,
+      addPermission: AddPermissionCommand, removePermission: RemovePermissionCommand, deleteFunction: DeleteFunctionCommand,
     }),
     scheduler: port(new SchedulerClient(opts), { getSchedule: GetScheduleCommand, createSchedule: CreateScheduleCommand, updateSchedule: UpdateScheduleCommand, deleteSchedule: DeleteScheduleCommand }),
     events: port(new EventBridgeClient(opts), {
