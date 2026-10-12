@@ -42,6 +42,25 @@ variable "alert_emails" {
   }
 }
 
+variable "ip_lists" {
+  description = "IP reputation lists the manager downloads once for every router (R6b), hourly at each list's refresh_hours, and its routers use for every workload: name, url (http(s), or s3://bucket/key read with the S3 API), action (defer: a listed source wakes only through the waiter page's probe; ignore: never wakes), refresh_hours. A version that lost more than half its entries is refused. Empty: none."
+  type = list(object({
+    name          = string
+    url           = string
+    action        = optional(string, "defer")
+    refresh_hours = optional(number, 24)
+  }))
+  default = []
+  validation {
+    condition     = alltrue([for l in var.ip_lists : can(regex("^[A-Za-z0-9._-]{1,64}$", l.name))]) && length(distinct([for l in var.ip_lists : l.name])) == length(var.ip_lists)
+    error_message = "ip_lists names must be unique, 1-64 characters among letters, digits, '.', '_' and '-'."
+  }
+  validation {
+    condition     = alltrue([for l in var.ip_lists : can(regex("^(https?://|s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/.+)", l.url)) && contains(["defer", "ignore"], l.action) && l.refresh_hours >= 1])
+    error_message = "Each ip_lists entry needs an http(s) url or an s3://bucket/key URI, action defer or ignore, and refresh_hours of at least 1."
+  }
+}
+
 variable "domain" {
   description = "A custom domain: the dashboard host, the sign-in host under it (auth.<dashboard>), their certificate in us-east-1 (both names), and optionally the Route 53 zone where the records are created. Null: CloudFront's and Cognito's own domains."
   type = object({

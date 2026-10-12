@@ -208,8 +208,8 @@ run "health_alarms" {
     error_message = "One email subscription per address of alert_emails."
   }
   assert {
-    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed"])
-    error_message = "Alarms on the watchdog's errors and silence, and on the router events not stored."
+    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed", "ip-lists-errors"])
+    error_message = "Alarms on the watchdog's errors and silence, on the router events not stored, and on the list function's errors."
   }
   assert {
     condition     = aws_cloudwatch_metric_alarm.manager["watchdog-silent"].treat_missing_data == "breaching" && aws_cloudwatch_metric_alarm.manager["watchdog-silent"].comparison_operator == "LessThanThreshold"
@@ -228,4 +228,56 @@ run "alert_emails_must_be_addresses" {
     alert_emails = ["not an address"]
   }
   expect_failures = [var.alert_emails]
+}
+
+# IP lists distributed by the manager (R6b): the catalog written from ip_lists; the list function from the router bundle,
+# hourly; the bucket read by the organization's routers; installed routers given the catalog.
+run "ip_lists" {
+  command = plan
+
+  variables {
+    ip_lists = [
+      { name = "ipsum", url = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt" },
+      { name = "aws", url = "https://ip-ranges.amazonaws.com/ip-ranges.json", action = "ignore", refresh_hours = 12 },
+    ]
+  }
+  override_resource {
+    target          = aws_s3_bucket.lists
+    override_during = plan
+    values          = { id = "dmt-test-manager-ip-lists-111122223333", bucket = "dmt-test-manager-ip-lists-111122223333", arn = "arn:aws:s3:::dmt-test-manager-ip-lists-111122223333" }
+  }
+
+  assert {
+    condition     = jsondecode(aws_s3_object.catalog.content) == { lists = [{ name = "ipsum", url = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt", action = "defer", refreshHours = 24 }, { name = "aws", url = "https://ip-ranges.amazonaws.com/ip-ranges.json", action = "ignore", refreshHours = 12 }] }
+    error_message = "The catalog lists ip_lists with their defaults."
+  }
+  assert {
+    condition     = aws_lambda_function.ip_lists.handler == "lists.handler" && aws_lambda_function.ip_lists.filename == "tests/artifacts/router/router.zip" && aws_scheduler_schedule.ip_lists.schedule_expression == "rate(1 hour)"
+    error_message = "The list function runs the router bundle's code, hourly."
+  }
+  assert {
+    condition     = aws_s3_bucket.lists.bucket == "dmt-test-manager-ip-lists-111122223333" && output.ip_lists_catalog == "s3://dmt-test-manager-ip-lists-111122223333/catalog.json"
+    error_message = "The bucket and the catalog output."
+  }
+  assert {
+    condition     = aws_lambda_function.operations.environment[0].variables.ROUTER_IP_LISTS_CATALOG == "s3://dmt-test-manager-ip-lists-111122223333/catalog.json" && aws_lambda_function.operations.environment[0].variables.ROUTER_IP_LISTS_BUCKET == "dmt-test-manager-ip-lists-111122223333"
+    error_message = "Installed routers get the catalog and may read the bucket."
+  }
+  assert {
+    condition     = flatten([for s in data.aws_iam_policy_document.lists.statement : [for c in s.condition : c.values] if s.sid == "OrganizationRouters"]) == ["o-abcdefghij"]
+    error_message = "The bucket admits the organization's principals only."
+  }
+  assert {
+    condition     = contains(keys(aws_cloudwatch_metric_alarm.manager), "ip-lists-errors") && aws_lambda_function.watchdog.environment[0].variables.LISTS_BUCKET == "dmt-test-manager-ip-lists-111122223333"
+    error_message = "The list function's errors alarm; the watchdog alarms on the lists' status."
+  }
+}
+
+run "ip_lists_are_validated" {
+  command = plan
+
+  variables {
+    ip_lists = [{ name = "bad name", url = "ftp://x/list", action = "block" }]
+  }
+  expect_failures = [var.ip_lists]
 }

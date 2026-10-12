@@ -62,6 +62,17 @@ variable "alert_emails" {
   default     = []
 }
 
+variable "ip_lists" {
+  description = "The manager's IP lists (manager module ip_lists)."
+  type = list(object({
+    name          = string
+    url           = string
+    action        = optional(string, "defer")
+    refresh_hours = optional(number, 24)
+  }))
+  default = []
+}
+
 variable "email_identity" {
   description = "Verified SES identity used by Cognito to send invitations (managed by the website stack)."
   type        = string

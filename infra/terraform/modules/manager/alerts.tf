@@ -65,6 +65,16 @@ data "aws_iam_policy_document" "watchdog" {
     resources = [aws_sns_topic.alerts.arn]
   }
   statement {
+    sid       = "ListsStatus"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.lists.arn}/status.json"]
+  }
+  statement {
+    sid       = "ListsListing"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.lists.arn]
+  }
+  statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.watchdog.arn}:*"]
   }
@@ -102,6 +112,8 @@ resource "aws_lambda_function" "watchdog" {
       ENV             = var.env
       ALERTS_TOPIC    = aws_sns_topic.alerts.arn
       DASHBOARD_URL   = "https://${local.dashboard_host}"
+      # The manager's IP lists (R6b): their status, alarmed on.
+      LISTS_BUCKET = aws_s3_bucket.lists.id
     }
   }
 
@@ -170,6 +182,11 @@ locals {
       description = "The watchdog did not run for 15 minutes: router alarms are not evaluated (its schedule, or the watchdog-failures queue)."
       namespace   = "AWS/Lambda", metric = "Invocations", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.watchdog.function_name }
       comparison  = "LessThanThreshold", threshold = 1, periods = 3, missing = "breaching"
+    }
+    ip-lists-errors = {
+      description = "The IP list function failed: the routers keep the last versions published (see its logs; a list's own download errors are router alarms of the watchdog)."
+      namespace   = "AWS/Lambda", metric = "Errors", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.ip_lists.function_name }
+      comparison  = "GreaterThanThreshold", threshold = 0, periods = 1, missing = "notBreaching"
     }
     router-events-failed = {
       description = "Router events the manager could not store are in the router-events-failed queue: the dashboard and the alarms miss them."

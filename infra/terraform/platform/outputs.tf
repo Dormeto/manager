@@ -18,3 +18,7 @@ output "api_endpoint" {
 output "alerts_topic_arn" {
   value = module.manager.alerts_topic_arn
 }
+
+output "ip_lists_catalog" {
+  value = module.manager.ip_lists_catalog
+}

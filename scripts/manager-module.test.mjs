@@ -17,7 +17,12 @@ const NEW = ['terraform_data.artifacts', 'aws_cloudwatch_event_rule.refresh', 'a
   // Health alarms (R6a).
   'aws_sns_topic.alerts', 'aws_sns_topic_policy.alerts', 'aws_sns_topic_subscription.alert_email', 'aws_iam_role.watchdog', 'aws_iam_role_policy.watchdog',
   'aws_cloudwatch_log_group.watchdog', 'aws_lambda_function.watchdog', 'aws_sqs_queue.watchdog_failures', 'aws_iam_role.watchdog_scheduler',
-  'aws_iam_role_policy.watchdog_scheduler', 'aws_scheduler_schedule.watchdog', 'aws_cloudwatch_metric_alarm.manager'];
+  'aws_iam_role_policy.watchdog_scheduler', 'aws_scheduler_schedule.watchdog', 'aws_cloudwatch_metric_alarm.manager',
+  // IP lists distributed by the manager (R6b).
+  'aws_s3_bucket.lists', 'aws_s3_bucket_public_access_block.lists', 'aws_s3_bucket_ownership_controls.lists', 'aws_s3_bucket_server_side_encryption_configuration.lists',
+  'aws_s3_bucket_lifecycle_configuration.lists', 'aws_s3_bucket_policy.lists', 'aws_s3_object.catalog', 'aws_iam_role.ip_lists', 'aws_iam_role_policy.ip_lists',
+  'aws_cloudwatch_log_group.ip_lists', 'aws_lambda_function.ip_lists', 'aws_sqs_queue.ip_lists_failures', 'aws_iam_role.ip_lists_scheduler',
+  'aws_iam_role_policy.ip_lists_scheduler', 'aws_scheduler_schedule.ip_lists'];
 
 test('every resource of the manager module has a moved block from its platform address', () => {
   const inModule = addresses(hcl('modules/manager'));

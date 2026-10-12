@@ -117,6 +117,9 @@ resource "aws_lambda_function" "operations" {
       OPERATIONS_STATE_MACHINE = "arn:aws:states:${local.region}:${local.account_id}:stateMachine:${local.name}-operations"
       # Installed routers send their state there (scale design §3).
       MANAGER_BUS = aws_cloudwatch_event_bus.manager.arn
+      # The manager's IP lists (R6b): installed routers read its catalog and the bucket's objects.
+      ROUTER_IP_LISTS_CATALOG = "s3://${aws_s3_bucket.lists.id}/catalog.json"
+      ROUTER_IP_LISTS_BUCKET  = aws_s3_bucket.lists.id
     }
   }
 

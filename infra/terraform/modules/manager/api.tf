@@ -92,6 +92,18 @@ data "aws_iam_policy_document" "api" {
     resources = [aws_cognito_user_pool.main.arn]
   }
   statement {
+    # The Routers view shows the manager's IP lists (R6b): the catalog, and the status the list function writes.
+    sid       = "ListsStatus"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.lists.arn}/catalog.json", "${aws_s3_bucket.lists.arn}/status.json"]
+  }
+  statement {
+    # A missing status.json answers NoSuchKey, not AccessDenied.
+    sid       = "ListsListing"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.lists.arn]
+  }
+  statement {
     # The Overview says where alerts go (R6a).
     sid       = "AlertSubscriptions"
     actions   = ["sns:ListSubscriptionsByTopic"]
@@ -152,6 +164,7 @@ resource "aws_lambda_function" "api" {
       DASHBOARD_URL           = "https://${local.dashboard_host}/"
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
       ALERTS_TOPIC            = aws_sns_topic.alerts.arn
+      LISTS_BUCKET            = aws_s3_bucket.lists.id
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name
       COMMAND_ROLE   = var.command_role_name
