@@ -12,7 +12,8 @@ const at = (minute) => new Date(Date.parse(FROM) + minute * 60_000).toISOString(
 const requests = (minutes) => ({ from: FROM, to: TO, minutes });
 const daily = requests(Array.from({ length: DAYS }, (_, d) => [600 + d * 1440, 1]));
 const T3 = { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' };
-const ODD = { kind: 'unknown', name: 'something' };
+// An item the router could not describe, as it says one (fleet src/prices.ts): never priced.
+const ODD = { kind: 'unknown', backend: 'ecs:x', reason: 'denied' };
 const ALWAYS = { kind: 'always' };
 const PARIS = { kind: 'business-hours', timeZone: 'Europe/Paris' };
 const NINE = [5, 10, 15, 20, 30, 45, 60, 90, 120];

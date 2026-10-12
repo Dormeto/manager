@@ -81,6 +81,32 @@ test('the estimate case\'s report has workloads, exclusions, companions and an E
   assert.ok(world.output.markdown.includes('## Workloads'), 'the Markdown report');
 });
 
+// The fields of each kind of item a nap stops (fleet src/prices.ts StoppedItem): Go's stopped.Item holds no others.
+const ITEM_FIELDS = {
+  ec2: ['kind', 'type', 'count', 'os', 'spot'],
+  fargate: ['kind', 'vcpu', 'memoryGb', 'count', 'arch', 'os', 'spot'],
+  rds: ['kind', 'class', 'engine', 'multiAz'],
+  'aurora-serverless': ['kind', 'engine', 'acu'],
+  'k8s-pods': ['kind', 'count', 'cpu', 'memoryGb', 'nodeType', 'os', 'spot', 'autoscaled', 'allocatable'],
+  unknown: ['kind', 'backend', 'reason'],
+};
+
+test('every item a case gives or expects is one the product describes: its kind\'s fields, no others', () => {
+  const items = [];
+  for (const topic of ['replay', 'prices']) {
+    for (const { input } of JSON.parse(first[`${topic}.json`]).cases) {
+      items.push(...(input.stopped ?? []), ...(input.prices ?? []).map((p) => p.item), ...(input.lookups ?? []).map((l) => l.item), ...(input.phases ?? []).flatMap((p) => p.stopped ?? []));
+    }
+  }
+  for (const { output } of JSON.parse(first['stopped.json']).cases) if (Array.isArray(output)) items.push(...output);
+  assert.ok(items.length > 50);
+  for (const item of items) {
+    const fields = ITEM_FIELDS[item.kind];
+    assert.ok(fields, `an item of kind ${item.kind}`);
+    assert.deepEqual(Object.keys(item).filter((k) => !fields.includes(k)), [], `fields of ${JSON.stringify(item)}`);
+  }
+});
+
 test('nothing of the run itself: no temporary path, no run time', () => {
   for (const [path, text] of Object.entries(first)) {
     assert.ok(!text.includes(tmpdir()) && !text.includes(ROOT), `${path}: a local path`);
