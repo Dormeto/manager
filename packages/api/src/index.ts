@@ -113,7 +113,7 @@ const engine = createEngine({
   routers: async () => [],
   target: async () => unused(),
   bundle: async () => unused(),
-  settings: { env: process.env.ENV ?? 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', noWakeRules: '', metrics: '', managerBus: '' } },
+  settings: { env: process.env.ENV ?? 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', noWakeRules: '', metrics: '', managerBus: '', commandRole: '' } },
   start: async (op) => (await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.OPERATIONS, name: op.id, input: JSON.stringify({ operationId: op.id }) }))).executionArn ?? '',
   log: { info: (event, data = {}) => console.log(JSON.stringify({ level: 'info', event, ...data })), warn: (event, data = {}) => console.log(JSON.stringify({ level: 'warn', event, ...data })), error: (event, data = {}) => console.log(JSON.stringify({ level: 'error', event, ...data })) },
 });
