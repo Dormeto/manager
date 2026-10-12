@@ -69,6 +69,7 @@ export interface UserView {
   status: string;
   enabled: boolean;
   createdAt: string | null;
+  mfa?: boolean; // an authenticator app set up (R6c)
 }
 
 // User management (Cognito, SES identities in the sandbox), behind the routes, roles and audit of this API.
@@ -78,7 +79,13 @@ export interface UsersService {
   resend(email: string): Promise<{ invitation: 'sent' }>;
   setRole(email: string, role: Role): Promise<void>;
   setEnabled(email: string, enabled: boolean): Promise<void>;
+  // The user's authenticator app removed: they set one up again at their next sign-in (R6c).
+  resetMfa(email: string): Promise<void>;
 }
+
+// The MFA policy (R6c): optional; operators (administrators and operators must use MFA, viewer rights until they do);
+// required (everyone, also enforced by the user pool).
+export type MfaMode = 'optional' | 'operators' | 'required';
 
 // Organization discovery: its items in the manager table, and a run on demand (asynchronous Lambda invoke).
 export interface DiscoveryApi {
@@ -102,6 +109,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface Identity {
   sub: string;
+  username: string; // cognito:username, the user's name in the user pool
   email: string;
   groups: string[];
   role: Role;
@@ -114,7 +122,7 @@ export function identityOf(event: ApiEvent): Identity | null {
   const groups = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   const role = groups.map((g) => GROUPS[g]).filter((r): r is Role => r !== undefined)
     .reduce<Role>((best, r) => (RANK[r] > RANK[best] ? r : best), 'viewer');
-  return { sub: claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role };
+  return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role };
 }
 
 const reply = (statusCode: number, body?: unknown): ApiResponse => ({
@@ -150,6 +158,8 @@ export interface ApiOptions {
     open(): Promise<Alarm[]>;
     subscriptions(): Promise<{ topicArn: string; subscriptions: { protocol: string; endpoint: string; pending: boolean }[] }>;
   };
+  // The MFA policy (R6c) and whether a user has an authenticator app (Cognito AdminGetUser).
+  mfa?: { mode: MfaMode; enabled(username: string): Promise<boolean> };
   // The manager's IP lists (R6b): its catalog, and what the list function last did for each list (status.json).
   ipLists?: {
     catalogUrl: string;
@@ -240,7 +250,7 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa,
   fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -264,6 +274,39 @@ export function createApi({
   const need = (identity: Identity, role: Role) => {
     if (RANK[identity.role] < RANK[role]) throw new HttpError(403, 'forbidden', `${role} role required`);
   };
+
+  // The MFA policy (R6c): what Cognito says of each user's authenticator, cached per instance (5 minutes when set up, 30
+  // seconds when not, so that a user who just set it up gets their rights soon; /api/me?fresh=1 reads it again).
+  const mfaCache = new Map<string, { enabled: boolean; at: number }>();
+  const MFA_ON_MS = 5 * 60_000;
+  const MFA_OFF_MS = 30_000;
+  async function mfaOf(identity: Identity, fresh: boolean): Promise<boolean> {
+    const cached = mfaCache.get(identity.username);
+    if (!fresh && cached && now() - cached.at < (cached.enabled ? MFA_ON_MS : MFA_OFF_MS)) return cached.enabled;
+    const enabled = await mfa!.enabled(identity.username);
+    mfaCache.set(identity.username, { enabled, at: now() });
+    return enabled;
+  }
+  // The role a user's groups give, the role they act with, and their MFA, per request.
+  const claimed = new WeakMap<Identity, { role: Role; enabled: boolean | null; effective: Role | null }>();
+  const mfaRequired = (role: Role) => !!mfa && (mfa.mode === 'required' || (mfa.mode === 'operators' && role !== 'viewer'));
+  async function applyMfa(identity: Identity, isMe: boolean, fresh: boolean) {
+    const role = identity.role;
+    const required = mfaRequired(role);
+    const enabled = mfa && (required || isMe) ? await mfaOf(identity, fresh) : null;
+    let effective: Role | null = role;
+    if (required && !enabled) effective = mfa!.mode === 'required' ? null : 'viewer';
+    claimed.set(identity, { role, enabled, effective });
+    if (effective === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
+    identity.role = effective ?? 'viewer';
+  }
+  function me(identity: Identity) {
+    const c = claimed.get(identity) ?? { role: identity.role, enabled: null, effective: identity.role };
+    return {
+      email: identity.email, groups: identity.groups, role: c.role, effectiveRole: c.effective,
+      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled === true, required: mfaRequired(c.role) } } : {}),
+    };
+  }
 
   // Mutating call: always audited, with its result or its error.
   async function audited(identity: Identity, action: string, target: string, run: () => Promise<{ result: string; response: ApiResponse }>) {
@@ -490,7 +533,7 @@ export function createApi({
 
   async function route(method: string, parts: string[], identity: Identity, event: ApiEvent): Promise<ApiResponse> {
     const [resource, a, b, action] = parts;
-    if (method === 'GET' && resource === 'me' && !a) return reply(200, { email: identity.email, groups: identity.groups, role: identity.role });
+    if (method === 'GET' && resource === 'me' && !a) return reply(200, me(identity));
 
     if (resource === 'preferences' && !a && preferences) {
       if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });
@@ -687,6 +730,13 @@ export function createApi({
       const notSelf = () => {
         if (email === identity.email.toLowerCase()) throw new HttpError(409, 'conflict', 'you cannot change your own account');
       };
+      if (method === 'POST' && b === 'mfa' && action === 'reset') {
+        notSelf();
+        return audited(identity, 'mfa-reset', email, async () => {
+          await users.resetMfa(email);
+          return { result: 'reset', response: reply(200, { email, mfa: false }) };
+        });
+      }
       if (method === 'POST' && b === 'resend' && !action) {
         return audited(identity, 'resend', email, async () => ({ result: 'sent', response: reply(200, await users.resend(email)) }));
       }
@@ -1049,6 +1099,8 @@ export function createApi({
       if (method === 'GET' && parts.length === 1 && parts[0] === 'health') return reply(200, { status: 'ok', version });
       const identity = identityOf(event);
       if (!identity) throw new HttpError(401, 'unauthorized', 'sign in required');
+      const isMe = method === 'GET' && parts.length === 1 && parts[0] === 'me';
+      await applyMfa(identity, isMe, isMe && event.queryStringParameters?.fresh === '1');
       await refreshRouters();
       return await route(method, parts, identity, event);
     } catch (err) {

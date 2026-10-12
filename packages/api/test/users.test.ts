@@ -21,6 +21,12 @@ function fakes({ production = false, identities = {} as Record<string, boolean>,
     async adminRemoveUserFromGroup(input) { calls.push(['remove', input.Username, input.GroupName]); return {}; },
     async adminDisableUser(input) { calls.push(['disable', input.Username]); return {}; },
     async adminEnableUser(input) { calls.push(['enable', input.Username]); return {}; },
+    async adminGetUser(input) {
+      calls.push(['get', input.Username]);
+      return { UserMFASettingList: input.Username === 'u-admin' ? ['SOFTWARE_TOKEN_MFA'] : [] };
+    },
+    async adminSetUserMFAPreference(input) { calls.push(['mfa-preference', input.Username, input.SoftwareTokenMfaSettings]); return {}; },
+    async adminDeleteSoftwareToken(input) { calls.push(['delete-token', input.Username]); if (input.Username === 'none@example.com') throw Object.assign(new Error('no token'), { name: 'ResourceNotFoundException' }); return {}; },
   };
   const ses: SesPort = {
     async getAccount() { return { ProductionAccessEnabled: production }; },
@@ -39,10 +45,23 @@ describe('users service', () => {
   it('lists every user with its highest role', async () => {
     const { users } = fakes();
     expect(await users.list()).toEqual([
-      { email: 'admin@example.com', role: 'admin', status: 'CONFIRMED', enabled: true, createdAt: '1970-01-01T00:00:00.000Z' },
-      { email: 'op@example.com', role: 'operator', status: 'FORCE_CHANGE_PASSWORD', enabled: false, createdAt: null },
-      { email: 'new@example.com', role: 'viewer', status: 'FORCE_CHANGE_PASSWORD', enabled: true, createdAt: null },
+      { email: 'admin@example.com', role: 'admin', status: 'CONFIRMED', enabled: true, createdAt: '1970-01-01T00:00:00.000Z', mfa: true },
+      { email: 'op@example.com', role: 'operator', status: 'FORCE_CHANGE_PASSWORD', enabled: false, createdAt: null, mfa: false },
+      { email: 'new@example.com', role: 'viewer', status: 'FORCE_CHANGE_PASSWORD', enabled: true, createdAt: null, mfa: false },
     ]);
+  });
+
+  it('says whether a user has an authenticator app (R6c)', async () => {
+    const { users } = fakes();
+    expect(await users.mfaEnabled('u-admin')).toBe(true);
+    expect(await users.mfaEnabled('u-op')).toBe(false);
+  });
+
+  it('resets a user\'s MFA: TOTP turned off and its token deleted; a user without a token is reset too', async () => {
+    const { users, calls } = fakes();
+    await users.resetMfa('op@example.com');
+    expect(calls).toEqual([['mfa-preference', 'op@example.com', { Enabled: false, PreferredMfa: false }], ['delete-token', 'op@example.com']]);
+    await expect(users.resetMfa('none@example.com')).resolves.toBeUndefined();
   });
 
   it('in the SES sandbox, an unverified address gets an SES identity and the invitation waits', async () => {

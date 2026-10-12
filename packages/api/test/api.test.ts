@@ -42,7 +42,7 @@ describe('health and identity', () => {
 
   it('derives the role from the highest Cognito group, viewer by default', async () => {
     const { api } = setup(async () => ({}));
-    expect(json(await api(event('GET', '/api/me', 'dmt-viewer dmt-admin')))).toEqual({ email: 'ops@example.com', groups: ['dmt-viewer', 'dmt-admin'], role: 'admin' });
+    expect(json(await api(event('GET', '/api/me', 'dmt-viewer dmt-admin')))).toEqual({ email: 'ops@example.com', groups: ['dmt-viewer', 'dmt-admin'], role: 'admin', effectiveRole: 'admin' });
     expect(json(await api(event('GET', '/api/me', 'dmt-operator'))).role).toBe('operator');
     expect(json(await api(event('GET', '/api/me'))).role).toBe('viewer');
   });

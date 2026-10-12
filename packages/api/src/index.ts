@@ -1,7 +1,8 @@
 // Lambda entry point: AWS SDK v3 clients provided by the nodejs24.x runtime (not bundled).
+import * as cognitoSdk from '@aws-sdk/client-cognito-identity-provider';
 import {
-  AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminDisableUserCommand, AdminEnableUserCommand, AdminRemoveUserFromGroupCommand,
-  CognitoIdentityProviderClient, ListUsersCommand, ListUsersInGroupCommand,
+  AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminDisableUserCommand, AdminEnableUserCommand, AdminGetUserCommand, AdminRemoveUserFromGroupCommand,
+  AdminSetUserMFAPreferenceCommand, CognitoIdentityProviderClient, ListUsersCommand, ListUsersInGroupCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
@@ -12,7 +13,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { createStore } from '@dormeto/discovery';
 import { createFleetStore } from '@dormeto/fleet';
 import { createEngine, createRecords } from '@dormeto/operations';
-import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
+import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { readJson } from './s3-json.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
@@ -90,7 +91,12 @@ const cognito: CognitoPort = {
   adminRemoveUserFromGroup: (input) => idp.send(new AdminRemoveUserFromGroupCommand(input)),
   adminDisableUser: (input) => idp.send(new AdminDisableUserCommand(input)),
   adminEnableUser: (input) => idp.send(new AdminEnableUserCommand(input)),
+  adminGetUser: (input) => idp.send(new AdminGetUserCommand(input)),
+  adminSetUserMFAPreference: (input) => idp.send(new AdminSetUserMFAPreferenceCommand(input)),
 };
+// AdminDeleteSoftwareToken (August 2026) only where the runtime's SDK has it: a reset still turns TOTP off without it.
+const DeleteSoftwareToken = (cognitoSdk as Record<string, unknown>).AdminDeleteSoftwareTokenCommand as (new (input: object) => object) | undefined;
+if (DeleteSoftwareToken) cognito.adminDeleteSoftwareToken = (input) => idp.send(new DeleteSoftwareToken(input) as never);
 const sesClient = new SESv2Client({});
 const ses: SesPort = {
   getAccount: () => sesClient.send(new GetAccountCommand({})),
@@ -155,10 +161,15 @@ const ipLists = listsBucket ? {
   status: () => readJson<{ lists?: [] }>(s3, listsBucket, 'status.json'),
 } : undefined;
 
+const users = createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '', sender: process.env.EMAIL_SENDER === 'cognito' ? 'cognito' : 'ses' });
+// The MFA policy (R6c): the manager module's mfa.
+const mfaMode = (['optional', 'operators', 'required'] as const).find((m) => m === process.env.MFA_MODE) ?? 'optional';
+
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
-  users: createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '', sender: process.env.EMAIL_SENDER === 'cognito' ? 'cognito' : 'ses' }),
+  users,
+  mfa: { mode: mfaMode satisfies MfaMode, enabled: (username) => users.mfaEnabled(username) },
   preferences,
   discovery,
   operations: process.env.OPERATIONS ? operations : undefined,

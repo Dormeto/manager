@@ -14,6 +14,10 @@ export interface CognitoPort {
   adminRemoveUserFromGroup(input: { UserPoolId: string; Username: string; GroupName: string }): Promise<unknown>;
   adminDisableUser(input: { UserPoolId: string; Username: string }): Promise<unknown>;
   adminEnableUser(input: { UserPoolId: string; Username: string }): Promise<unknown>;
+  // MFA (R6c): a user's factors, turning TOTP off, and deleting the TOTP token (a recent API: optional).
+  adminGetUser(input: { UserPoolId: string; Username: string }): Promise<{ UserMFASettingList?: string[] }>;
+  adminSetUserMFAPreference(input: { UserPoolId: string; Username: string; SoftwareTokenMfaSettings: { Enabled: boolean; PreferredMfa: boolean } }): Promise<unknown>;
+  adminDeleteSoftwareToken?(input: { UserPoolId: string; Username: string }): Promise<unknown>;
 }
 
 export interface SesPort {
@@ -46,7 +50,7 @@ async function mapped<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cognito: CognitoPort; ses: SesPort; userPoolId: string; sender?: 'ses' | 'cognito' }): UsersService {
+export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cognito: CognitoPort; ses: SesPort; userPoolId: string; sender?: 'ses' | 'cognito' }): UsersService & { mfaEnabled(username: string): Promise<boolean> } {
   // Any address receives Cognito's own email, and SES in production.
   async function inProduction() {
     return sender === 'cognito' || (await ses.getAccount()).ProductionAccessEnabled === true;
@@ -79,7 +83,17 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
     return names;
   }
 
+  // An authenticator app set up: TOTP among the user's MFA settings.
+  const mfaEnabled = async (username: string) => ((await cognito.adminGetUser({ UserPoolId: userPoolId, Username: username })).UserMFASettingList ?? []).includes('SOFTWARE_TOKEN_MFA');
+  // Five at a time: the Users view reads every user's MFA.
+  async function inFives<T, R>(items: T[], each: (item: T) => Promise<R>): Promise<R[]> {
+    const out: R[] = [];
+    for (let i = 0; i < items.length; i += 5) out.push(...await Promise.all(items.slice(i, i + 5).map(each)));
+    return out;
+  }
+
   return {
+    mfaEnabled,
     async list() {
       const all: CognitoUser[] = [];
       let PaginationToken: string | undefined;
@@ -89,12 +103,14 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
         PaginationToken = page.PaginationToken;
       } while (PaginationToken);
       const groups = await Promise.all(ORDER.map(async (role) => [role, await members(group(role))] as const));
-      return all.map((u): UserView => ({
+      const mfa = await inFives(all, (u) => mfaEnabled(u.Username ?? '').catch(() => false));
+      return all.map((u, i): UserView => ({
         email: u.Attributes?.find((a) => a.Name === 'email')?.Value ?? u.Username ?? '',
         role: groups.find(([, names]) => names.has(u.Username ?? ''))?.[0] ?? 'viewer',
         status: u.UserStatus ?? 'UNKNOWN',
         enabled: u.Enabled !== false,
         createdAt: u.UserCreateDate ? new Date(u.UserCreateDate).toISOString() : null,
+        mfa: mfa[i]!,
       }));
     },
 
@@ -134,6 +150,18 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
     async setEnabled(email, enabled) {
       const input = { UserPoolId: userPoolId, Username: email };
       await mapped(() => (enabled ? cognito.adminEnableUser(input) : cognito.adminDisableUser(input)));
+    },
+
+    // TOTP off (enough while the pool's MFA is optional), and its token deleted (needed when MFA is required: a registered
+    // token is asked for even when off); a user without a token is reset all the same.
+    async resetMfa(email) {
+      const input = { UserPoolId: userPoolId, Username: email };
+      await mapped(() => cognito.adminSetUserMFAPreference({ ...input, SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } }));
+      if (cognito.adminDeleteSoftwareToken) {
+        await cognito.adminDeleteSoftwareToken(input).catch((err: Error) => {
+          if (err.name !== 'ResourceNotFoundException') throw err;
+        });
+      }
     },
   };
 }
