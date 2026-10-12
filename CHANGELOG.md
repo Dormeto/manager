@@ -5,7 +5,22 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## 0.6.0 — 2026-10-08
+## 0.7.0 — 2026-10-08
+
+Router 0.27.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
+routers' permissions boundary allows `ecs:DescribeTaskDefinition`, the size of a Fargate service; without it a Fargate
+service is not priced), which also brings 0.5.0's `ec2:ModifyInstanceAttribute`. Then upgrade the routers to 0.27.0.
+0.5.0 and 0.6.0 were not published: their changes below ship in this version.
+
+- Savings, estimated: what each nap stopped (EC2 instances and Auto Scaling capacity by type, Fargate tasks by size, RDS
+  and Aurora by class, Aurora Serverless v2 at its minimum) priced at AWS's on-demand list prices (the Price List API,
+  cached), for the time asleep that the baseline would have run (`savings_baseline`: `always`, or `business-hours` in
+  `savings_timezone`). A daily job (00:30 UTC) sums each workload's day; the Overview's Savings card shows the last 30
+  days, this month and since the start, net of Dormeto's own estimated cost, and the top workloads; the History card
+  gives its period's estimate. Storage, load balancers and data transfer are not counted; discounts are not known.
+- Routers 0.27.0 say what each nap stopped.
+
+## 0.6.0 — 2026-10-08 (not published: in 0.7.0)
 
 Router 0.26.0. Access: as 0.5.0 (0.5.0 was not published: its Access note and changes below ship in this version). Then
 upgrade the routers to 0.26.0; older routers' history is kept too, dated less exactly when an event is lost.

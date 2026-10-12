@@ -163,6 +163,19 @@ time per target group, router or workload, one per load balancer (lock), three p
 - **API and dashboard:** `GET /api/workloads/{router}/{id}/history?days=1..31` answers the period's entries, phases,
   time per state and wakes (at most 5,000 entries, then `truncated`); the workload view's History card draws them.
 
+## Savings (R9)
+
+- **What is priced:** what each nap stopped, as router 0.27.0 says in its `ASLEEP` event (`stopped`, kept in the
+  history): EC2 instances and Auto Scaling capacity by type and OS, Fargate tasks by size, RDS and Aurora instances by
+  class, engine and deployment, Aurora Serverless v2 at its minimum capacity. Prices: the Price List API's on-demand list
+  prices (`pricing:GetProducts`, us-east-1), cached as `PRICE#<region>#<item>` for 30 days (a missing one for a day).
+- **Baseline:** `savings_baseline` = `always` (24/7) or `business-hours` (weekdays 08:00 to 20:00 in `savings_timezone`).
+- **Daily job:** `dmt-<env>-manager-savings` (00:30 UTC; run it by hand with `{"day": "YYYY-MM-DD"}`) puts each
+  workload's day as `SAV#<date>` / `<account>#<region>#<workloadId>` (kept `history_days`) and the summary
+  (`T#default` / `SAVINGS`): the last 30 days, this month, the cumulative total (each day added once), the top workloads,
+  the workloads not priced, Dormeto's estimated cost. `GET /api/savings` answers it; a workload's history adds its
+  period's `savings`.
+
 ## Organization access (discovery)
 
 Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a
