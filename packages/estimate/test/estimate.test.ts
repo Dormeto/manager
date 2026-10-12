@@ -34,25 +34,28 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { regions: null, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null };
+const OPTIONS = { regions: null, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
-const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline']) => idleWindowAdvice({
-  requests: { from: FROM, to: TO, minutes }, current: 15, checkMinutes: 5, wakeMs: 60_000, startAsleep: false, actualWakes: 0, actualFrom: null, stopped,
+const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60) => idleWindowAdvice({
+  requests: { from: FROM, to: TO, minutes }, current, checkMinutes: 5, wakeMs: 60_000, startAsleep: false, actualWakes: 0, actualFrom: null, stopped,
   hourly: (item) => hourly('eu-west-1', item), baseline, wakerTargetGroup: false, now: NOW,
 });
 const row = (a: Awaited<ReturnType<typeof advise>>, minutes: number) => a.windows.find((r) => r.minutes === minutes)!;
 
 describe('the estimate', () => {
-  it('each priced workload at 15 minutes and at its recommended window, as the product\'s replay gives them', async () => {
+  it('each priced workload at the report\'s window (1 hour by default) and at its recommended window, as the product\'s replay gives them', async () => {
     const e = await run();
     expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['shop', 'docs', 'crm']);
     const shop = e.workloads[0]!;
     const expected = await advise(daily, [T3]);
-    expect(shop.at15).toEqual({ usdMonth: row(expected, 15).usdMonth, wakesPerDay: row(expected, 15).wakesPerDay, asleepHours: row(expected, 15).asleepHours });
+    expect(shop.atWindow).toEqual({ usdMonth: row(expected, 60).usdMonth, wakesPerDay: row(expected, 60).wakesPerDay, asleepHours: row(expected, 60).asleepHours });
+    // Another window when asked (--window 15).
+    const quarter = await run({ options: { ...OPTIONS, window: 15 } });
+    expect(quarter.workloads[0]!.atWindow.usdMonth).toBe(row(await advise(daily, [T3], { kind: 'always' }, 15), 15).usdMonth);
     expect(shop.recommended).toEqual({ minutes: expected.recommended, usdMonth: row(expected, expected.recommended).usdMonth, wakesPerDay: row(expected, expected.recommended).wakesPerDay });
     // No request in 14 days: estimated, asleep throughout.
-    expect(e.workloads[1]).toMatchObject({ quiet: true, at15: { wakesPerDay: 0 } });
+    expect(e.workloads[1]).toMatchObject({ quiet: true, atWindow: { wakesPerDay: 0 } });
     expect(shop.quiet).toBe(false);
   });
 
@@ -72,7 +75,7 @@ describe('the estimate', () => {
     const e = await run();
     const sum = (f: (x: (typeof e.workloads)[number]) => number) => e.workloads.reduce((n, x) => n + f(x), 0);
     expect(e.totals.workloads).toBe(3);
-    expect(e.totals.usdMonth15).toBeCloseTo(sum((x) => x.at15.usdMonth), 9);
+    expect(e.totals.usdMonthWindow).toBeCloseTo(sum((x) => x.atWindow.usdMonth), 9);
     expect(e.totals.usdMonthRecommended).toBeCloseTo(sum((x) => x.recommended.usdMonth), 9);
     expect(e.totals.dormetoMonth).toBeCloseTo(DORMETO_COST.manager + 2 * DORMETO_COST.router + 3 * DORMETO_COST.workload, 9);
     expect(e.byAccount[A]).toMatchObject({ workloads: 2 });
@@ -93,7 +96,7 @@ describe('the estimate', () => {
     });
     expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['shop-a']);
     const merged = [...daily, ...evening].sort((x, y) => x[0] - y[0]);
-    expect(e.workloads[0]!.at15.usdMonth).toBeCloseTo(row(await advise(merged, [T3]), 15).usdMonth!, 9);
+    expect(e.workloads[0]!.atWindow.usdMonth).toBeCloseTo(row(await advise(merged, [T3]), 60).usdMonth!, 9);
     expect(e.leftOut).toEqual([{ workload: b, reason: 'its backend (asg shared-asg) also serves shop-a: estimated there, with every target group\'s requests' }]);
   });
 
@@ -106,7 +109,7 @@ describe('the estimate', () => {
   it('within the business-hours baseline, as the product prices it', async () => {
     const paris = { kind: 'business-hours' as const, timeZone: 'Europe/Paris' };
     const e = await run({ baseline: paris });
-    expect(e.workloads[0]!.at15.usdMonth).toBeCloseTo(row(await advise(daily, [T3], paris), 15).usdMonth!, 9);
-    expect(e.workloads[0]!.at15.usdMonth).toBeLessThan((await run()).workloads[0]!.at15.usdMonth);
+    expect(e.workloads[0]!.atWindow.usdMonth).toBeCloseTo(row(await advise(daily, [T3], paris), 60).usdMonth!, 9);
+    expect(e.workloads[0]!.atWindow.usdMonth).toBeLessThan((await run()).workloads[0]!.atWindow.usdMonth);
   });
 });

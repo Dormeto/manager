@@ -1,6 +1,6 @@
 // Phase 3 of the estimate (vision docs/specs/2026-10-10-savings-estimate-design.md §6): each eligible workload's
-// requests replayed by the product's idle window advisor (R10) and priced by its price book, at the router's default
-// window (15 minutes) and at the recommended one; what cannot be estimated, with the reason; the totals by account,
+// requests replayed by the product's idle window advisor (R10) and priced by its price book, at the report's window
+// (--window, an hour by default) and at the recommended one; what cannot be estimated, with the reason; the totals by account,
 // region and all, net of Dormeto's cost. Conservative where the facts are unknown before install (decision 5).
 import { DORMETO_COST, idleWindowAdvice, type Baseline, type StoppedItem } from '@dormeto/fleet';
 import type { Reached, Unreachable } from './accounts.js';
@@ -8,17 +8,17 @@ import type { Ineligible, RegionDiscovery, Workload } from './discover.js';
 import type { Options } from './options.js';
 import type { RegionRequests } from './requests.js';
 
-const DEFAULT_WINDOW = 15;
 const WAKE_MS = 60_000;
 
 export interface WorkloadEstimate {
   workload: Workload;
   quiet: boolean; // no request in 14 days
-  at15: { usdMonth: number; wakesPerDay: number; asleepHours: number };
+  // At the report's window (options.window).
+  atWindow: { usdMonth: number; wakesPerDay: number; asleepHours: number };
   recommended: { minutes: number; usdMonth: number; wakesPerDay: number };
 }
 export interface LeftOut { workload: Workload; reason: string }
-export interface Totals { workloads: number; usdMonth15: number; usdMonthRecommended: number; dormetoMonth: number }
+export interface Totals { workloads: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number }
 export interface Estimate {
   generatedAt: string;
   organization: string | null;
@@ -49,7 +49,7 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
   ];
 }
 
-const empty = (): Totals => ({ workloads: 0, usdMonth15: 0, usdMonthRecommended: 0, dormetoMonth: 0 });
+const empty = (): Totals => ({ workloads: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0 });
 
 export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now }: {
   reached: Reached;
@@ -96,7 +96,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
         continue;
       }
       const advice = await idleWindowAdvice({
-        requests: { from: read.from, to: read.to, minutes }, current: DEFAULT_WINDOW, checkMinutes: 5, wakeMs: WAKE_MS, startAsleep: false,
+        requests: { from: read.from, to: read.to, minutes }, current: options.window, checkMinutes: 5, wakeMs: WAKE_MS, startAsleep: false,
         actualWakes: 0, actualFrom: null, stopped: workload.stopped, hourly: (item) => hourly(workload.region, item).catch(() => null), baseline,
         wakerTargetGroup: false, now,
       });
@@ -106,11 +106,11 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
         continue;
       }
       const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
-      const at = row(DEFAULT_WINDOW);
+      const at = row(options.window);
       const best = row(advice.recommended);
       workloads.push({
         workload, quiet: minutes.length === 0,
-        at15: { usdMonth: at.usdMonth!, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
+        atWindow: { usdMonth: at.usdMonth!, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
         recommended: { minutes: advice.recommended, usdMonth: best.usdMonth!, wakesPerDay: best.wakesPerDay },
       });
     }
@@ -126,7 +126,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
     routed.add(where);
     for (const t of [totals, (byAccount[x.workload.account] ??= empty()), (byRegion[x.workload.region] ??= empty())]) {
       t.workloads += 1;
-      t.usdMonth15 += x.at15.usdMonth;
+      t.usdMonthWindow += x.atWindow.usdMonth;
       t.usdMonthRecommended += x.recommended.usdMonth;
       t.dormetoMonth += router + DORMETO_COST.workload;
     }

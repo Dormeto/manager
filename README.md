@@ -223,7 +223,7 @@ anything is installed, from a laptop with read access (vision docs/specs/2026-10
 ```
 npm run estimate -- --profile prospect [--regions eu-west-1,eu-west-3] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
-  [--refresh discovery|metrics] [--out <dir>]
+  [--refresh discovery|metrics] [--window 60] [--out <dir>]
 ```
 
 - **Accounts:** the organization's active accounts when the profile may list them (the management account or a
@@ -233,8 +233,8 @@ npm run estimate -- --profile prospect [--regions eu-west-1,eu-west-3] [--role <
   credentials.
 - **Three phases:** discovery (discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
-  five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at the default
-  15-minute window and at each workload's recommended one, net of Dormeto's cost). A workload Dormeto already manages is
+  five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`
+  (an hour by default) and at each workload's recommended one, net of Dormeto's cost). A workload Dormeto already manages is
   estimated with its waker target group's requests added.
 - **Cache:** `~/.cache/dormeto/estimate/<organization or account>/` (`$XDG_CACHE_HOME` when set): discovery and each
   account's regions for a day, requests while their 14 days end on the same UTC day, prices as the product's. An

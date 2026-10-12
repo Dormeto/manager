@@ -11,18 +11,22 @@ export interface Options {
   discounts: Discounts;
   refresh: 'discovery' | 'metrics' | null;
   out: string;
+  // The idle window the report's figures use (the recommended windows besides): an hour by default.
+  window: number;
 }
 
 export class UsageError extends Error {}
 
 export const USAGE = `Usage: npm run estimate -- --profile <profile> [--regions eu-west-1,eu-west-3] [--role <name>]
   [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 0-90] [--discount-databases 0-90]
-  [--refresh discovery|metrics] [--out <dir>]`;
+  [--refresh discovery|metrics] [--window 60] [--out <dir>]`;
 
 // Accounts created by AWS Organizations have it; the role is supposed to be there (decision 4).
 const DEFAULT_ROLE = 'OrganizationAccountAccessRole';
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
-const NAMES = ['profile', 'regions', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out'];
+const NAMES = ['profile', 'regions', 'role', 'baseline', 'timezone', 'discount-compute', 'discount-databases', 'refresh', 'out', 'window'];
+// The router's limits of idleMinutes.
+const WINDOW = { min: 5, max: 1440, default: 60 };
 
 const percent = (name: string, value: string | undefined) => {
   if (value === undefined) return 0;
@@ -61,10 +65,12 @@ export function parseOptions(argv: string[]): Options {
   }
   const refresh = given.get('refresh') ?? null;
   if (refresh !== null && refresh !== 'discovery' && refresh !== 'metrics') throw new UsageError('--refresh: discovery or metrics');
+  const window = given.has('window') ? Number(given.get('window')) : WINDOW.default;
+  if (!/^\d+$/.test(given.get('window') ?? String(WINDOW.default)) || window < WINDOW.min || window > WINDOW.max) throw new UsageError(`--window: whole minutes from ${WINDOW.min} to ${WINDOW.max}`);
   return {
     profile, regions, role: given.get('role') ?? DEFAULT_ROLE,
     baseline: kind === 'always' ? { kind } : { kind, timeZone },
     discounts: { compute: percent('discount-compute', given.get('discount-compute')), databases: percent('discount-databases', given.get('discount-databases')) },
-    refresh, out: given.get('out') ?? process.cwd(),
+    refresh, out: given.get('out') ?? process.cwd(), window,
   };
 }
