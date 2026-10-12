@@ -53,6 +53,22 @@ run "without_a_domain_nor_ses" {
     condition     = aws_lambda_function.access_check.handler == "check.handler" && aws_s3_object.router_bundle["router.zip"].key == "router/0.0.0-test/router.zip"
     error_message = "The release's bundles and versions are used."
   }
+  assert {
+    condition     = aws_cognito_user_pool.main.deletion_protection == "ACTIVE"
+    error_message = "The users are protected from a mistaken destroy by default."
+  }
+}
+
+run "uninstall_lifts_the_users_protection" {
+  command = plan
+  variables {
+    deletion_protection = false
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.main.deletion_protection == "INACTIVE"
+    error_message = "deletion_protection = false lets terraform destroy remove the user pool."
+  }
 }
 
 run "with_a_domain_and_ses" {

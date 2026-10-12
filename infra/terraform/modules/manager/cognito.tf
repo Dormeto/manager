@@ -31,7 +31,7 @@ resource "aws_cognito_user_pool" "main" {
   auto_verified_attributes = ["email"]
   mfa_configuration        = "OPTIONAL"
   user_pool_tier           = "ESSENTIALS"
-  deletion_protection      = var.env == "dev" ? "INACTIVE" : "ACTIVE"
+  deletion_protection      = var.deletion_protection ? "ACTIVE" : "INACTIVE"
 
   software_token_mfa_configuration {
     enabled = true

@@ -55,6 +55,12 @@ variable "email_from" {
   default     = null
 }
 
+variable "deletion_protection" {
+  description = "Protect the user pool (the users) from a mistaken destroy. Set to false and apply before terraform destroy (uninstall)."
+  type        = bool
+  default     = true
+}
+
 variable "routers" {
   description = "Routers written in Terraform, operated by this manager: name, region, controller and onboarder Lambda function names (same account). Routers the manager installs are registered in its table."
   type = list(object({

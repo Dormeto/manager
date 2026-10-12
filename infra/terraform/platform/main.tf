@@ -17,6 +17,8 @@ module "manager" {
   ses_identity = var.email_identity
   email_from   = var.email_from
 
+  # Dev is rebuilt at will.
+  deletion_protection          = false
   routers                      = var.routers
   local_dev                    = var.local_dev
   smoke_user                   = var.smoke_user

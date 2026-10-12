@@ -44,7 +44,9 @@ check(me.status === 200 && me.body?.role === 'admin', 'identity and role', `${me
 const routers = await call('/routers', { token });
 check(routers.status === 200 && routers.body?.routers?.every((r) => !r.error), 'routers reachable', (routers.body?.routers ?? []).map((r) => `${r.name} ${r.version} (${r.workloads})`).join(', '));
 const workloads = await call('/workloads', { token });
-check(workloads.status === 200 && workloads.body?.workloads?.length > 0 && workloads.body.errors.length === 0, 'workloads',
+// A fresh install without routers has no workload yet.
+const anyRouter = (routers.body?.routers ?? []).length > 0;
+check(workloads.status === 200 && (!anyRouter || workloads.body?.workloads?.length > 0) && workloads.body.errors.length === 0, 'workloads',
   `${(workloads.body?.workloads ?? []).map((w) => `${w.workloadId} ${w.state}`).join(', ')} (${workloads.ms} ms)`);
 const first = workloads.body?.workloads?.[0];
 if (first) {

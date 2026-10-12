@@ -28,6 +28,37 @@ The manager never reads the router tables or the workload resources itself: each
 Roles come from the Cognito groups: `dmt-viewer` (read), `dmt-operator` (nap, wake), `dmt-admin` (users, audit).
 Users are invited by administrators; the first administrators are listed in `env/<env>.local.tfvars` (not committed).
 
+## Install
+
+Customers install a release with the manager module (https://dormeto.com/get-started.html):
+
+```hcl
+module "dormeto" {
+  source          = "https://releases.dormeto.com/manager/0.2.0/terraform-aws-dormeto-0.2.0.zip//modules/manager"
+  env             = "prod"
+  organization_id = "o-exampleorgid"
+  admin_emails    = ["you@example.com"]
+}
+```
+
+The module's inputs: `infra/terraform/modules/manager/README.md`. Dev runs the same module from the local build
+(`infra/terraform/platform`).
+
+## Release
+
+A release is built from a commit whose `package.json` names the new version (and `dormeto.router` the router it
+carries, built in the sibling repository), with its section in `CHANGELOG.md`:
+
+```bash
+(cd ../router && npm run package)
+AWS_PROFILE=kloudy-dormeto-prd node scripts/release/release.mjs --publish --bucket dmt-releases-121014831971
+```
+
+It builds, assembles `dist/release/<version>/` (the module archive with its artifacts, the access and organization
+modules, the AWS CLI script, the organization policy, `SHA256SUMS`, the changelog section), refuses a version already
+published, uploads it to `releases.dormeto.com/manager/<version>/`, moves `latest.json` forward and tags `v<version>`
+(pushed with the commits). Then update the website's pages to the new version.
+
 ## Usage
 
 Requirements: Node.js ≥ 24, Terraform 1.16.5 (tfenv reads `.terraform-version`), AWS CLI v2, profile
