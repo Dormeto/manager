@@ -270,4 +270,27 @@ export interface WorkloadHistory {
   before: HistoryEntry | null;
   entries: HistoryEntry[];
   truncated: boolean;
+  savings?: PeriodSavings; // R9
 }
+
+// Savings (R9): a period's estimate (the workload history), and the daily job's summary (the Overview).
+export interface PeriodSavings {
+  usd: number;
+  hours: number;
+  items: { item: Record<string, unknown> & { kind: string }; hourly: number; hours: number; usd: number }[];
+  unpriced: { reason: string; item?: Record<string, unknown>; hours: number }[];
+  baseline: { kind: string; timeZone?: string };
+}
+export interface SavingsSummary {
+  computedAt: string;
+  day: string;
+  baseline: { kind: string; timeZone?: string };
+  last30: { usd: number; asleepHours: number; days: { date: string; usd: number }[] };
+  month: { month: string; usd: number };
+  cumulative: { usd: number; since: string; lastDay: string };
+  top: { account: string; region: string; router: string; workloadId: string; name?: string; usd: number }[];
+  unpriced: { workloads: number; hours: number };
+  workloads: number;
+  dormeto: { usdMonth: number };
+}
+

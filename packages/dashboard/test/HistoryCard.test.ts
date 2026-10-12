@@ -74,6 +74,13 @@ describe('HistoryCard', () => {
     wrapper.unmount();
   });
 
+  it('estimates the period\'s savings when the history has them (R9)', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0.957, hours: 21, items: [{ item: { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' }, hourly: 0.0456, hours: 21, usd: 0.957 }], unpriced: [], baseline: { kind: 'always' } } });
+    const wrapper = await mountCard();
+    expect(wrapper.text()).toContain('saved about $0.96 (estimate)');
+    wrapper.unmount();
+  });
+
   it('reloads for another period', async () => {
     const wrapper = await mountCard();
     await wrapper.findAll('button').find((b) => b.text() === '30 days')!.trigger('click');

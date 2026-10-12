@@ -122,3 +122,7 @@ const ROUTES: Record<string, { label: string; color: string }> = {
 };
 export const routeLabel = (route: string): string => ROUTES[route]?.label ?? route;
 export const routeColor = (route: string): string => ROUTES[route]?.color ?? 'grey';
+
+// An amount in US dollars (the estimates use AWS's USD list prices).
+export const usd = (v: number): string => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+

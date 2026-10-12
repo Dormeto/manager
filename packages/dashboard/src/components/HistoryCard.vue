@@ -4,7 +4,7 @@
 import { computed, ref, watch } from 'vue';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { duration, stateColor } from '../format';
+import { duration, stateColor, usd } from '../format';
 import { causeText, collapseRows, dayRows, stateLabel, type Phase } from '../history';
 import type { WorkloadHistory } from '../types';
 
@@ -36,6 +36,8 @@ const summary = computed(() => {
     `awake ${duration(h.totals.AWAKE ?? 0)}`,
     w.count ? `${w.count} wake${w.count === 1 ? '' : 's'}${w.medianMs !== null ? `, median ${ms(w.medianMs)}, longest ${ms(w.maxMs)}` : ''}` : 'no wake',
     ...(w.failed ? [`${w.failed} failed`] : []),
+    // R9: what the naps of the period saved, at AWS's list prices.
+    ...(h.savings ? [`saved about ${usd(h.savings.usd)} (estimate)${h.savings.unpriced.length ? ', part not priced' : ''}`] : []),
   ];
 });
 const transitions = computed(() => [...(history.value?.entries ?? [])].reverse().slice(0, 50));

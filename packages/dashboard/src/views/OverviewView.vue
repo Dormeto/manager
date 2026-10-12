@@ -8,6 +8,7 @@ import { attentionMore, relative } from '../format';
 import { routerStatus } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
+import SavingsCard from '../components/SavingsCard.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import AlertsCard from '../components/AlertsCard.vue';
 import type { AlertsInfo, RouterInfo, WorkloadSummary } from '../types';
@@ -60,6 +61,7 @@ const weekly = computed(() => [
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <AlertsCard v-if="alerts?.notifications" :alerts="alerts" :now="now" class="mb-4" />
+  <SavingsCard class="mb-4" />
   <v-row>
     <v-col v-for="card in cards" :key="card.title" cols="6" md="3">
       <v-card :loading="loading && !loaded">
