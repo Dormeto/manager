@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "mode": "organization",
+  "regions": ["eu-west-1", "eu-west-3"],
+  "refreshHours": 24,
+  "globalExcludes": [],
+  "filters": [{ "name": "dormeto test accounts", "include": [{ "accountIds": ["121014831971", "038606077307"] }] }]
+}
