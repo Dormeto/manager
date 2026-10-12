@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // A release of the manager (vision docs/specs/2026-10-06-packaging-design.md, section 4): the manager module with its
-// built artifacts, the access and organization modules, the AWS CLI procedure, checksums and the changelog section,
-// published once per version under releases.dormeto.com/manager/<version>/.
+// built artifacts, the access and organization modules, the AWS CLI procedure, the Kubernetes rights of the routers'
+// group in an EKS cluster (the router's kubernetes/dormeto-router.yaml), checksums and the changelog section, published
+// once per version under releases.dormeto.com/manager/<version>/.
 // Usage: node scripts/release/release.mjs [--no-build] [--router <router checkout at the pinned version>]
 //          [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +41,8 @@ function assertNoAccountValues(dir, paths = files(dir)) {
 
 export function buildRelease({ manager, router, modules, out, version }) {
   const changelog = changelogSection(readFileSync(join(manager, 'CHANGELOG.md'), 'utf8'), version);
+  const kubernetes = join(router, 'kubernetes/dormeto-router.yaml');
+  if (!existsSync(kubernetes)) throw new Error(`missing build output: ${kubernetes} (the router checkout at the pinned version)`);
   const stage = mkdtempSync(join(tmpdir(), 'dmt-release-stage-'));
   // The manager archive: modules/manager with its artifacts beside, and the access module it uses (../access).
   assembleArtifacts({ manager, router, out: join(stage, 'manager/modules/manager/artifacts') });
@@ -66,6 +69,7 @@ export function buildRelease({ manager, router, modules, out, version }) {
     commandPolicy: readFileSync(join(access, 'command-role/command-policy.json'), 'utf8'),
     boundary: readFileSync(join(access, 'router-boundary.json'), 'utf8'),
   }), { mode: 0o755 });
+  cpSync(kubernetes, join(dir, `dormeto-kubernetes-${version}.yaml`));
   writeFileSync(join(dir, 'dormeto-organization-policy.json'), organizationPolicy(readFileSync(join(stage, 'organization/organization-policy.json'), 'utf8')));
   writeFileSync(join(dir, 'CHANGELOG.md'), changelog);
   assertNoAccountValues(dir);
@@ -75,7 +79,7 @@ export function buildRelease({ manager, router, modules, out, version }) {
   return { dir, files: readdirSync(dir).sort() };
 }
 
-const TYPES = { '.zip': 'application/zip', '.sh': 'text/x-shellscript; charset=utf-8', '.json': 'application/json', '.md': 'text/markdown; charset=utf-8' };
+const TYPES = { '.zip': 'application/zip', '.sh': 'text/x-shellscript; charset=utf-8', '.json': 'application/json', '.md': 'text/markdown; charset=utf-8', '.yaml': 'application/yaml; charset=utf-8' };
 const newer = (a, b) => {
   const [x, y] = [a, b].map((v) => v.split('-')[0].split('.').map(Number));
   for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];

@@ -13,12 +13,14 @@ const MODULES = new URL('../../infra/terraform/modules/', import.meta.url).pathn
 const entries = (zip) => execFileSync('unzip', ['-Z1', zip], { encoding: 'utf8' }).trim().split('\n').filter((e) => !e.endsWith('/')).sort();
 const build = (options = {}) => { const repos = fakeRepos(options); return { repos, release: buildRelease({ ...repos, modules: MODULES, version: '0.2.0' }) }; };
 
-test('a release holds the module with its artifacts, the access and organization modules, the CLI procedure, checksums and the changelog', () => {
+test('a release holds the module with its artifacts, the access and organization modules, the CLI procedure, the Kubernetes rights, checksums and the changelog', () => {
   const { release } = build();
   assert.deepEqual(readdirSync(release.dir).sort(), [
-    'CHANGELOG.md', 'SHA256SUMS', 'dormeto-access-0.2.0.zip', 'dormeto-access-commands-0.2.0.sh', 'dormeto-organization-0.2.0.zip',
+    'CHANGELOG.md', 'SHA256SUMS', 'dormeto-access-0.2.0.zip', 'dormeto-access-commands-0.2.0.sh', 'dormeto-kubernetes-0.2.0.yaml', 'dormeto-organization-0.2.0.zip',
     'dormeto-organization-policy.json', 'terraform-aws-dormeto-0.2.0.zip',
   ]);
+  // The rights of the group dormeto:router in an EKS cluster, as the router of the pinned version publishes them.
+  assert.equal(readFileSync(join(release.dir, 'dormeto-kubernetes-0.2.0.yaml'), 'utf8'), 'kind: ClusterRole\n');
   const manager = entries(join(release.dir, 'terraform-aws-dormeto-0.2.0.zip'));
   for (const file of ['modules/manager/variables.tf', 'modules/manager/README.md', 'modules/manager/artifacts/manifest.json', 'modules/manager/artifacts/lambda/access-check.zip',
     'modules/manager/artifacts/dashboard/index.html', 'modules/manager/artifacts/router/router.zip', 'modules/access/main.tf', 'modules/access/router-boundary.json',
@@ -32,7 +34,7 @@ test('a release holds the module with its artifacts, the access and organization
   assert.equal(readFileSync(join(release.dir, 'CHANGELOG.md'), 'utf8').trim(), '## 0.2.0 — 2026-10-06\n\n- The manager as a Terraform module.');
   // The checksums: every other file, sha256sum's format.
   const sums = readFileSync(join(release.dir, 'SHA256SUMS'), 'utf8').trim().split('\n');
-  assert.equal(sums.length, 6);
+  assert.equal(sums.length, 7);
   for (const line of sums) {
     const [hash, file] = line.split('  ');
     assert.equal(hash, createHash('sha256').update(readFileSync(join(release.dir, file))).digest('hex'), file);
@@ -47,6 +49,7 @@ test('a release holds no account-specific value', () => {
 
 test('a missing build output or changelog section stops the release', () => {
   assert.throws(() => build({ without: ['manager/packages/fleet/dist/index.mjs'] }), /missing build output: .*fleet\/dist\/index\.mjs/);
+  assert.throws(() => build({ without: ['router/kubernetes/dormeto-router.yaml'] }), /missing build output: .*router\/kubernetes\/dormeto-router\.yaml/);
   assert.throws(() => build({ with: { 'manager/CHANGELOG.md': '# Changelog\n\n## 0.1.0\n\n- First.\n' } }), /CHANGELOG\.md has no section for 0\.2\.0/);
 });
 
@@ -83,6 +86,7 @@ test('publishes every file under its version, then moves latest.json forward', a
   assert.deepEqual(s3.puts.map((p) => p.Key), [...readdirSync(release.dir).filter((f) => f !== 'SHA256SUMS').sort().map((f) => `manager/0.2.0/${f}`), 'manager/0.2.0/SHA256SUMS', 'manager/latest.json']);
   assert.ok(s3.puts.slice(0, -1).every((p) => p.IfNoneMatch === '*' && p.CacheControl.includes('immutable')));
   assert.equal(s3.puts.find((p) => p.Key.endsWith('.zip')).ContentType, 'application/zip');
+  assert.equal(s3.puts.find((p) => p.Key.endsWith('.yaml')).ContentType, 'application/yaml; charset=utf-8');
   assert.deepEqual(JSON.parse(s3.objects['manager/latest.json']), { version: '0.2.0', router: '0.22.6', published: '2026-10-06T20:00:00.000Z' });
   assert.equal(s3.puts.at(-1).CacheControl, 'no-cache');
 });

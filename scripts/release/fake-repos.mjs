@@ -20,6 +20,7 @@ export function fakeRepos({ without = [], with: extra = {}, routerVersion = '0.2
     'router/package.json': JSON.stringify({ version: routerVersion }),
     [`router/dist/router-${routerVersion}.zip`]: 'zip',
     [`router/dist/blueprint-${routerVersion}.json`]: '{}',
+    'router/kubernetes/dormeto-router.yaml': 'kind: ClusterRole\n',
     'router/dist/router-boundary.json': '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:${partition}:s3:::dmtr-${account}-*"}]}',
     ...extra,
   };
