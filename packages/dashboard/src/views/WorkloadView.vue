@@ -3,6 +3,7 @@ import { useNow } from '../now';
 import { computed, ref } from 'vue';
 import { mdiArrowLeft, mdiInformationOutline, mdiOpenInNew, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
+import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendLabel, duration, relative, ruleText, shortId, stateColor } from '../format';
@@ -105,6 +106,9 @@ const summary = computed(() => {
       <v-card title="Backends" class="mb-4">
         <v-list density="comfortable">
           <v-list-item v-for="b in status.backends" :key="b.id" :title="shortId(b.id)" :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '')">
+            <template v-if="backendIcon(b.kind)" #prepend>
+              <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
+            </template>
             <template #append>
               <div class="d-flex align-center ga-2">
                 <span v-if="b.kind === 'asg'" class="text-body-small text-medium-emphasis">min {{ b.min }} · desired {{ b.desired }} · max {{ b.max }}<template v-if="b.warmPool"> · warm pool {{ b.warmPool.state }} ({{ b.warmPool.size }})</template></span>

@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { mdiRefresh } from '@mdi/js';
 import { api } from '../api';
 import { backendLabel, percent, relative, shortId } from '../format';
+import { backendIcon } from '../icons';
 import type { Candidate, RouterInfo } from '../types';
 
 const now = useNow();
@@ -78,7 +79,10 @@ const headers = [
         <div class="text-body-small text-medium-emphasis">{{ item.loadBalancer }} · priority {{ item.priority }}</div>
       </template>
       <template #[`item.backend`]="{ item }">
-        <span v-if="item.backend">{{ backendLabel(item.backend.kind) }} <span class="mono">{{ shortId(item.backend.id) }}</span></span>
+        <span v-if="item.backend" class="d-inline-flex align-center ga-2">
+          <img v-if="backendIcon(item.backend.kind)" :src="backendIcon(item.backend.kind)!" alt="" width="22" height="22" class="backend-icon">
+          <span>{{ backendLabel(item.backend.kind) }} <span class="mono">{{ shortId(item.backend.id) }}</span></span>
+        </span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
         <div v-if="item.idleHours7d !== null" class="d-flex align-center justify-end ga-2" style="min-width: 120px">

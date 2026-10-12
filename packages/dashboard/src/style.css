@@ -4,3 +4,4 @@
 .nowrap { white-space: nowrap; }
 .setting { cursor: help; border-radius: 4px; }
 .setting:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
+.backend-icon { border-radius: 6px; flex: none; }
