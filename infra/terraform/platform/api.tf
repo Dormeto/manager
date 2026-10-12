@@ -60,7 +60,7 @@ data "aws_iam_policy_document" "api" {
   }
   statement {
     sid       = "Audit"
-    actions   = ["dynamodb:PutItem", "dynamodb:Query"]
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"]
     resources = [aws_dynamodb_table.manager.arn]
   }
   statement {

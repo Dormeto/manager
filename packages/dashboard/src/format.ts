@@ -52,3 +52,10 @@ export function checkHealth(router: { checkSchedule?: string | null; lastSchedul
   const ago = relative(router.lastScheduledCheckAt, now);
   return { late, text: late ? `idle check late: last run ${ago}` : `idle check ${ago}` };
 }
+
+// Countdown shown next to the refresh button.
+export function refreshLabel({ seconds, nextAt, loading }: { seconds: number; nextAt: number | null; loading: boolean }, now = Date.now()) {
+  if (loading) return 'Refreshing…';
+  if (!seconds || nextAt === null) return 'Auto-refresh off';
+  return `Refreshing in ${duration(Math.max(0, Math.ceil((nextAt - now) / 1000)))}`;
+}

@@ -3,10 +3,10 @@ import {
   AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminDisableUserCommand, AdminEnableUserCommand, AdminRemoveUserFromGroupCommand,
   CognitoIdentityProviderClient, ListUsersCommand, ListUsersInGroupCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
-import { DynamoDBClient, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import { createApi, RouterError, type AuditEntry, type Router } from './api.js';
+import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
 const routers: Router[] = JSON.parse(process.env.ROUTERS ?? '[]');
@@ -59,6 +59,20 @@ const audit = {
   },
 };
 
+// Dashboard preferences: T#default / USER#<sub>#PREFS.
+const preferences: PreferencesStore = {
+  async get(sub) {
+    const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: { pk: { S: 'T#default' }, sk: { S: `USER#${sub}#PREFS` } } }));
+    return Item?.prefs?.S ? (JSON.parse(Item.prefs.S) as Preferences) : null;
+  },
+  async put(sub, prefs) {
+    await dynamo.send(new PutItemCommand({
+      TableName: table,
+      Item: { pk: { S: 'T#default' }, sk: { S: `USER#${sub}#PREFS` }, prefs: { S: JSON.stringify(prefs) } },
+    }));
+  },
+};
+
 const idp = new CognitoIdentityProviderClient({});
 const cognito: CognitoPort = {
   listUsers: (input) => idp.send(new ListUsersCommand(input)),
@@ -79,4 +93,5 @@ const ses: SesPort = {
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   users: createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '' }),
+  preferences,
 });

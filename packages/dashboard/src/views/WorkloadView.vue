@@ -8,6 +8,7 @@ import { usePoll } from '../poll';
 import { backendLabel, duration, relative, ruleText, shortId, stateColor } from '../format';
 import { useSession } from '../stores/session';
 import StateChip from '../components/StateChip.vue';
+import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { Counts, WorkloadStatus, WorkloadSummary } from '../types';
 
 const now = useNow();
@@ -20,13 +21,13 @@ const acting = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
 
-const { error, loading, refreshedAt, run } = usePoll(async () => {
+const { error, loading, nextAt, run } = usePoll(async () => {
   status.value = await api<WorkloadStatus>(path.value);
   if (url.value === null) {
     const list = await api<{ workloads: WorkloadSummary[] }>('/workloads');
     url.value = list.workloads.find((w) => w.router === props.router && w.workloadId === props.id)?.url ?? '';
   }
-}, 10_000);
+});
 
 async function act(action: 'nap' | 'wake') {
   confirm.value = null;
@@ -80,6 +81,7 @@ const summary = computed(() => {
     <span class="text-medium-emphasis">{{ router }}</span>
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
     <v-spacer />
+    <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     <template v-if="session.canOperate && status">
       <v-btn :prepend-icon="mdiPowerSleep" variant="tonal" :disabled="status.state !== 'AWAKE' || acting" @click="confirm = 'nap'">Nap</v-btn>
       <v-btn :prepend-icon="mdiWeatherSunny" color="primary" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state) || acting" @click="confirm = 'wake'">Wake</v-btn>
@@ -179,7 +181,7 @@ const summary = computed(() => {
             <div class="text-body-small mt-2"><strong>Acceptable:</strong> {{ row.range }}</div>
           </v-tooltip>
           <v-spacer />
-          <span class="text-medium-emphasis">Router {{ status.router.version }} ({{ status.router.build }})<template v-if="refreshedAt"> · refreshed {{ relative(new Date(refreshedAt).toISOString(), now) }}</template></span>
+          <span class="text-medium-emphasis">Router {{ status.router.version }} ({{ status.router.build }})</span>
         </v-card-text>
       </v-card>
     </v-col>

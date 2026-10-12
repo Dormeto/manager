@@ -38,6 +38,18 @@ export type Invoke = (router: Router, payload: Record<string, unknown>, options?
 
 export type Role = 'viewer' | 'operator' | 'admin';
 
+// Per-user dashboard preferences.
+export interface Preferences {
+  refreshSeconds: number;
+}
+
+export interface PreferencesStore {
+  get(sub: string): Promise<Preferences | null>;
+  put(sub: string, preferences: Preferences): Promise<void>;
+}
+
+const DEFAULT_PREFERENCES: Preferences = { refreshSeconds: 10 };
+
 export interface UserView {
   email: string;
   role: Role;
@@ -70,6 +82,7 @@ const GROUPS: Record<string, Role> = { 'dmt-admin': 'admin', 'dmt-operator': 'op
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export interface Identity {
+  sub: string;
   email: string;
   groups: string[];
   role: Role;
@@ -82,7 +95,7 @@ export function identityOf(event: ApiEvent): Identity | null {
   const groups = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   const role = groups.map((g) => GROUPS[g]).filter((r): r is Role => r !== undefined)
     .reduce<Role>((best, r) => (RANK[r] > RANK[best] ? r : best), 'viewer');
-  return { email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role };
+  return { sub: claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role };
 }
 
 const reply = (statusCode: number, body?: unknown): ApiResponse => ({
@@ -99,6 +112,7 @@ export interface ApiOptions {
   newId?: () => string;
   version: string;
   users?: UsersService;
+  preferences?: PreferencesStore;
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -120,7 +134,7 @@ function roleIn(body: Record<string, unknown>): Role {
   return role;
 }
 
-export function createApi({ routers, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users }: ApiOptions) {
+export function createApi({ routers, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences }: ApiOptions) {
   const routerOf = (name: string | undefined): Router => {
     const router = routers.find((r) => r.name === name);
     if (!router) throw new HttpError(404, 'not_found', `unknown router: ${name}`);
@@ -155,7 +169,20 @@ export function createApi({ routers, invoke, audit, now = Date.now, newId = () =
 
   async function route(method: string, parts: string[], identity: Identity, event: ApiEvent): Promise<ApiResponse> {
     const [resource, a, b, action] = parts;
-    if (method === 'GET' && resource === 'me' && !a) return reply(200, identity);
+    if (method === 'GET' && resource === 'me' && !a) return reply(200, { email: identity.email, groups: identity.groups, role: identity.role });
+
+    if (resource === 'preferences' && !a && preferences) {
+      if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });
+      if (method === 'PUT') {
+        const refresh = bodyOf(event).refreshSeconds;
+        if (!Number.isInteger(refresh) || (refresh !== 0 && ((refresh as number) < 5 || (refresh as number) > 600))) {
+          throw new HttpError(400, 'bad_request', 'refreshSeconds must be 0 (off) or an integer from 5 to 600');
+        }
+        const saved = { refreshSeconds: refresh as number };
+        await preferences.put(identity.sub, saved);
+        return reply(200, saved);
+      }
+    }
 
     if (method === 'GET' && resource === 'routers' && !a) {
       const all = await listAll();

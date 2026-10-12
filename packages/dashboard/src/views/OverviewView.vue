@@ -6,19 +6,20 @@ import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
 import StateChip from '../components/StateChip.vue';
+import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
 const workloads = ref<WorkloadSummary[]>([]);
 const routers = ref<RouterInfo[]>([]);
-const { error, loading } = usePoll(async () => {
+const { error, loading, nextAt, run } = usePoll(async () => {
   const [w, r] = await Promise.all([
     api<{ workloads: WorkloadSummary[] }>('/workloads'),
     api<{ routers: RouterInfo[] }>('/routers'),
   ]);
   workloads.value = w.workloads;
   routers.value = r.routers;
-}, 15_000);
+});
 
 const count = (...states: string[]) => workloads.value.filter((w) => states.includes(w.state)).length;
 const cards = computed(() => [
@@ -37,7 +38,11 @@ const weekly = computed(() => [
 </script>
 
 <template>
-  <h1 class="text-headline-small mb-4">Overview</h1>
+  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+    <h1 class="text-headline-small">Overview</h1>
+    <v-spacer />
+    <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
+  </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`"
     :text="`${checkHealth(r, now).text}. The scheduled idle check of the router is not running: check its schedule and the dmt-<env>-check-failures queue.`" />

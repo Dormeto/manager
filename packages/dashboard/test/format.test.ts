@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkHealth, duration, percent, relative, ruleText, shortId, stateColor } from '../src/format';
+import { checkHealth, duration, percent, refreshLabel, relative, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -33,5 +33,16 @@ describe('checkHealth', () => {
     expect(checkHealth({ checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:40:00Z' }, now)).toEqual({ late: true, text: 'idle check late: last run 20 min ago' });
     expect(checkHealth({ checkSchedule: 'rate(1 hour)', lastScheduledCheckAt: '2026-10-04T10:30:00Z' }, now).late).toBe(false);
     expect(checkHealth({ checkSchedule: null, lastScheduledCheckAt: null }, now)).toEqual({ late: true, text: 'no scheduled idle check recorded' });
+  });
+});
+
+describe('refreshLabel', () => {
+  it('counts down to the next refresh, or says it is off or running', () => {
+    const now = 1_000_000;
+    expect(refreshLabel({ seconds: 10, nextAt: now + 7_200, loading: false }, now)).toBe('Refreshing in 8 s');
+    expect(refreshLabel({ seconds: 10, nextAt: now - 500, loading: false }, now)).toBe('Refreshing in 0 s');
+    expect(refreshLabel({ seconds: 300, nextAt: now + 125_000, loading: false }, now)).toBe('Refreshing in 2 min 5 s');
+    expect(refreshLabel({ seconds: 10, nextAt: now + 3_000, loading: true }, now)).toBe('Refreshing…');
+    expect(refreshLabel({ seconds: 0, nextAt: null, loading: false }, now)).toBe('Auto-refresh off');
   });
 });

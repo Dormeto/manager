@@ -83,6 +83,8 @@ if (cycle) {
   const entries = (await call('/audit', { token })).body?.entries ?? [];
   check(['nap', 'wake'].every((a) => entries.some((e) => e.action === a && e.target === cycle)), 'nap and wake audited');
 }
+const prefs = await call('/preferences', { token });
+check(prefs.status === 200 && Number.isInteger(prefs.body?.refreshSeconds), 'preferences', JSON.stringify(prefs.body));
 const users = await call('/users', { token });
 check(users.status === 200 && users.body?.users?.some((u) => u.email === smoke.username && u.role === 'admin'), 'users', (users.body?.users ?? []).map((u) => `${u.email} ${u.role}`).join(', '));
 const audit = await call('/audit', { token });

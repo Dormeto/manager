@@ -7,6 +7,7 @@ import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
 import StateChip from '../components/StateChip.vue';
+import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
@@ -16,7 +17,7 @@ const errors = ref<{ router: string; message: string }[]>([]);
 const search = ref('');
 const late = ref<RouterInfo[]>([]);
 let routersCheckedAt = 0;
-const { error, loading, refreshedAt } = usePoll(async () => {
+const { error, loading, nextAt, run } = usePoll(async () => {
   const result = await api<{ workloads: WorkloadSummary[]; errors: { router: string; message: string }[] }>('/workloads');
   workloads.value = result.workloads;
   errors.value = result.errors;
@@ -25,7 +26,7 @@ const { error, loading, refreshedAt } = usePoll(async () => {
     routersCheckedAt = Date.now();
     late.value = (await api<{ routers: RouterInfo[] }>('/routers')).routers.filter((r) => !r.error && checkHealth(r, now.value).late);
   }
-}, 10_000);
+});
 
 const headers = [
   { title: 'Workload', key: 'workloadId' },
@@ -44,7 +45,7 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
   <div class="d-flex flex-wrap align-center ga-4 mb-4">
     <h1 class="text-headline-small">Workloads</h1>
     <v-spacer />
-    <span v-if="refreshedAt" class="text-body-small text-medium-emphasis d-none d-sm-inline">Refreshed {{ relative(new Date(refreshedAt).toISOString(), now) }}</span>
+    <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line style="min-width: 200px; max-width: 280px" />
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />

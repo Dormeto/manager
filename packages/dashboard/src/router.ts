@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { currentUser, signIn } from './auth';
 import { useSession } from './stores/session';
+import { usePreferences } from './stores/preferences';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -26,6 +27,7 @@ router.beforeEach(async (to) => {
   }
   const session = useSession();
   session.set(user);
+  void usePreferences().load();
   // The API enforces the roles; the dashboard only hides what the role cannot use.
   if (to.meta.admin && !session.isAdmin) return '/';
   return true;
