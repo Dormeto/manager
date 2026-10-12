@@ -19,7 +19,9 @@
         "cloudwatch:GetMetricData",
         "cloudtrail:DescribeTrails",
         "cloudtrail:GetTrailStatus",
-        "cloudtrail:GetEventSelectors"
+        "cloudtrail:GetEventSelectors",
+        "eks:ListClusters",
+        "eks:DescribeCluster"
       ],
       "Resource": "*"
     },

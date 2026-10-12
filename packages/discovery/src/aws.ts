@@ -5,6 +5,7 @@ import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwat
 import { GetRoleCommand, IAMClient } from '@aws-sdk/client-iam';
 import { DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { DescribeServicesCommand, ECSClient, ListClustersCommand, ListServicesCommand } from '@aws-sdk/client-ecs';
+import { DescribeClusterCommand, EKSClient, ListClustersCommand as ListEksClustersCommand } from '@aws-sdk/client-eks';
 import {
   DescribeListenersCommand,
   DescribeLoadBalancersCommand,
@@ -16,8 +17,11 @@ import {
 } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { ListAccountsForParentCommand, ListOrganizationalUnitsForParentCommand, ListRootsCommand, ListTagsForResourceCommand } from '@aws-sdk/client-organizations';
 import { AssumeRoleCommand } from '@aws-sdk/client-sts';
+import type { KubernetesPorts } from './kubernetes.js';
 import type { OrganizationsPort } from './org.js';
 import type { ScanPorts } from './scan.js';
+// @ts-expect-error the router's module has no type declarations
+import { kubernetesConnector } from '../../../../router/lambda/src/lib/k8s.mjs';
 
 // Any SDK client: only send() is used (fakes in tests).
 export interface Sender {
@@ -48,6 +52,16 @@ export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; 
       describeServices: (input) => c.ecs.send(new DescribeServicesCommand(input)),
     },
     cloudwatch: { getMetricData: (input) => c.cloudwatch.send(new GetMetricDataCommand(input)) },
+  };
+}
+
+// The region's EKS clusters (Kubernetes workloads, R10.5): listed and described with the discovery role; their API called
+// with an EKS token signed with the same credentials (the router's client: the role's access entry, AmazonEKSViewPolicy).
+export function kubernetesPorts(credentials: Credentials, region: string, client: Sender = new EKSClient({ region, credentials, maxAttempts: 5 })): KubernetesPorts {
+  const describeCluster = (input: { name: string }) => client.send(new DescribeClusterCommand(input));
+  return {
+    eks: { listClusters: (input) => client.send(new ListEksClustersCommand(input)), describeCluster },
+    kubernetesOf: kubernetesConnector({ eks: { describeCluster, credentials: async () => credentials }, region }),
   };
 }
 

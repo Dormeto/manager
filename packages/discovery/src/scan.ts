@@ -2,6 +2,7 @@
 // eligible, ineligible and why), its host names and tags, and how idle its target group was over the last 7 days.
 // Ported from the router discovery (router lambda/src/lib/candidates.mjs).
 import type { BackendKind, RuleRef, ScannedRule } from './types.js';
+import { EKS_ACTIONS, clustersOf, kubernetesBackend, type Cluster, type KubernetesBackend, type KubernetesPorts } from './kubernetes.js';
 
 const WORKLOAD_TAG = 'dormeto:workload';
 const ROLE_TAG = 'dormeto:role';
@@ -15,7 +16,7 @@ type Action = { Type?: string; Order?: number; TargetGroupArn?: string; ForwardC
 export type Rule = { RuleArn?: string; Priority?: string; IsDefault?: boolean; Conditions?: Condition[]; Actions?: Action[] };
 type LoadBalancer = { LoadBalancerArn?: string; LoadBalancerName?: string; Type?: string };
 type Listener = { ListenerArn?: string; Port?: number; Protocol?: string };
-type TargetGroup = { TargetGroupArn?: string; TargetGroupName?: string; TargetType?: string; LoadBalancerArns?: string[] };
+type TargetGroup = { TargetGroupArn?: string; TargetGroupName?: string; TargetType?: string; LoadBalancerArns?: string[]; VpcId?: string };
 type MetricQuery = {
   Id: string;
   ReturnData: boolean;
@@ -43,6 +44,8 @@ export interface ScanPorts {
   cloudwatch?: {
     getMetricData(input: { StartTime: Date; EndTime: Date; MetricDataQueries: MetricQuery[]; NextToken?: string; ScanBy?: 'TimestampAscending' | 'TimestampDescending' }): Promise<{ MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[]; StatusCode?: string; Messages?: { Code?: string; Value?: string }[] }[]; NextToken?: string }>;
   };
+  // The region's EKS clusters and their API (Kubernetes workloads, R10.5).
+  kubernetes?: KubernetesPorts;
 }
 
 // The IAM actions of these calls and of the enabled regions: the discovery role's policy grants them, nothing more
@@ -58,6 +61,8 @@ export const DISCOVERY_ACTIONS = [
   'cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus', 'cloudtrail:GetEventSelectors',
   // Its own role's tags: an account set up for discovery only (aws.ts discoveryOnlyOf).
   'iam:GetRole',
+  // Kubernetes workloads (R10.5): the region's clusters; their API answers through the role's access entry.
+  ...EKS_ACTIONS,
 ];
 
 // Pages of an AWS list call: ELBv2 (Marker/NextMarker), Auto Scaling (NextToken), ECS (nextToken).
@@ -225,6 +230,11 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   ].filter(Boolean));
   const visible = rows.filter((r) => tags.get(r.rule.RuleArn ?? '')?.[ROLE_TAG] !== 'admin');
   const owners = await backendOwners(ports);
+  // A discovery role without EKS rights (accounts set up before 0.10.0) scans the region as before.
+  const clusters = ports.kubernetes ? await clustersOf(ports.kubernetes).catch((err) => {
+    if (/AccessDenied|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`)) return [];
+    throw err;
+  }) : [];
 
   // The application target group of each rule: the one it forwards to, or, managed, its target group that is not the waker.
   for (const row of visible) {
@@ -249,7 +259,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
 
   const candidates: ScannedRule[] = [];
   for (const [arn, members] of byGroup) {
-    candidates.push(await groupCandidate(arn, members.sort((a, b) => rank(a.rule.Priority) - rank(b.rule.Priority)), { where, tags, weighted, elbv2, owners }));
+    candidates.push(await groupCandidate(arn, members.sort((a, b) => rank(a.rule.Priority) - rank(b.rule.Priority)), { where, tags, weighted, elbv2, owners, clusters }));
   }
   for (const row of visible.filter((r) => !r.app)) candidates.push(ruleCandidate(row, where, tags, groups));
 
@@ -267,6 +277,7 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
   weighted: Set<string>;
   elbv2: ScanPorts['elbv2'];
   owners: { groups: Map<string, { name: string; arn?: string }>; services: Map<string, string> };
+  clusters: Cluster[];
 }): Promise<ScannedRule> {
   const first = members[0]!;
   const app = first.app!;
@@ -302,7 +313,7 @@ async function groupCandidate(arn: string, members: Row[], ctx: {
     : new Set(members.map((m) => m.lb.LoadBalancerArn)).size > 1 ? 'target group used by several load balancers'
     : members.length > MAX_RULES ? `more than ${MAX_RULES} rules`
     : null;
-  const backend = await backendOf(ctx.elbv2, app, ctx.owners);
+  const backend = await backendOf(ctx.elbv2, app, ctx.owners, ctx.clusters, ctx.tags.get(arn) ?? {});
   if (managedRules.length) {
     return { ...base, eligibility: 'managed', workloadId: managedRules[0]!.managed, backend: typeof backend === 'string' ? null : backend, ...(issue ? { reason: issue } : {}) };
   }
@@ -354,12 +365,14 @@ function tagValues(sets: (Record<string, string> | undefined)[]): Record<string,
   return out;
 }
 
-// The backend behind a target group (Auto Scaling group, ECS service or instance), or why there is none.
+// The backend behind a target group (Auto Scaling group, ECS service, Kubernetes owner or instance), or why there is none.
 async function backendOf(
   elbv2: ScanPorts['elbv2'],
   group: TargetGroup,
   owners: { groups: Map<string, { name: string; arn?: string }>; services: Map<string, string> },
-): Promise<string | { kind: BackendKind; id: string; arn?: string }> {
+  clusters: Cluster[],
+  tags: Record<string, string>,
+): Promise<string | { kind: BackendKind; id: string; arn?: string } | KubernetesBackend> {
   const arn = group.TargetGroupArn ?? '';
   const asg = owners.groups.get(arn);
   if (asg) return { kind: 'asg', id: asg.name, ...(asg.arn ? { arn: asg.arn } : {}) };
@@ -368,6 +381,9 @@ async function backendOf(
   const { TargetHealthDescriptions = [] } = await elbv2.describeTargetHealth({ TargetGroupArn: arn });
   const ids = TargetHealthDescriptions.map((d) => d.Target?.Id).filter((id): id is string => Boolean(id));
   if (!ids.length) return 'no backend: no registered target, Auto Scaling group or ECS service';
+  // Pods (the controller's tags, else IP targets among a cluster's pods): their owner, or why it cannot be napped.
+  const kubernetes = clusters.length ? await kubernetesBackend(clusters, { arn, type: group.TargetType, vpcId: group.VpcId, tags, targets: ids }) : null;
+  if (kubernetes) return kubernetes;
   if (group.TargetType === 'ip') return 'IP targets without an ECS service';
   // The instance's ARN in the target group's partition, region and account.
   const [, partition, , region, account] = arn.split(':');

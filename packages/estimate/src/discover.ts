@@ -87,6 +87,8 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
       ineligible.push({ loadBalancer: rule.loadBalancer, targetGroup: rule.targetGroup, hosts: rule.hosts, reason: rule.reason ?? 'no backend' });
       continue;
     }
+    // The estimate scans without the clusters' API: no Kubernetes backend comes here.
+    if (rule.backend.kind === 'k8s') continue;
     const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
     let stopped: StoppedItem[];
     let instanceState: string | undefined;

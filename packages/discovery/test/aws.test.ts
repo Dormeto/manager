@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createAssumeRole, enabledRegionsOf, organizationsPort, scanPorts } from '../src/aws.js';
+import { createAssumeRole, enabledRegionsOf, kubernetesPorts, organizationsPort, scanPorts } from '../src/aws.js';
 
 function recorder(answer: (name: string, input: any) => unknown = () => ({})) {
   const sent: [string, any][] = [];
@@ -22,6 +22,16 @@ describe('AWS adapters', () => {
     expect(autoscaling.sent[0]![0]).toBe('DescribeAutoScalingGroupsCommand');
     expect(ecs.sent[0]).toEqual(['DescribeServicesCommand', { cluster: 'c', services: ['s'] }]);
     expect(cloudwatch.sent[0]![0]).toBe('GetMetricDataCommand');
+  });
+
+  it('lists and describes the region\'s EKS clusters, and connects to one with a token of the discovery role', async () => {
+    const eks = recorder((name) => (name === 'ListClustersCommand' ? { clusters: ['eks-demo'] }
+      : { cluster: { name: 'eks-demo', endpoint: 'https://abc.eks.example', certificateAuthority: { data: '' }, resourcesVpcConfig: {}, version: '1.36' } }));
+    const ports = kubernetesPorts({ accessKeyId: 'AK', secretAccessKey: 'SK', sessionToken: 'ST' }, 'eu-west-1', eks);
+    expect(await ports.eks.listClusters({ nextToken: 'n' })).toEqual({ clusters: ['eks-demo'] });
+    const client = await ports.kubernetesOf('eks-demo');
+    expect(typeof client.get).toBe('function');
+    expect(eks.sent.map(([name, input]) => [name, input])).toEqual([['ListClustersCommand', { nextToken: 'n' }], ['DescribeClusterCommand', { name: 'eks-demo' }]]);
   });
 
   it('assumes the discovery role of an account with a named session', async () => {

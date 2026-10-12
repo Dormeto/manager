@@ -58,7 +58,7 @@ describe('validateConfig', () => {
       'globalExcludes[0]: unknown dimension "foo"',
       'filters[0].include[0].ouIds: "ou-bad" is not an OU or root ID',
       'filters[0].include[0].hosts: patterns are at most 256 characters',
-      'filters[0].include[0].backendKinds: "lambda" is not one of instance, asg, ecs',
+      'filters[0].include[0].backendKinds: "lambda" is not one of instance, asg, ecs, k8s',
       'filters[1]: duplicate filter name "a"',
       'filters[1].include: at least one include criterion',
       'filters[2].name: required, at most 64 characters',

@@ -6,7 +6,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { OrganizationsClient } from '@aws-sdk/client-organizations';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
-import { commandCheck, createAssumeRole, discoveryOnlyOf, ec2For, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, trailCovers, trailsPort, type Credentials } from './aws.js';
+import { commandCheck, createAssumeRole, discoveryOnlyOf, ec2For, enabledRegionsOf, kubernetesPorts, organizationsPort, regionalClients, scanPorts, trailCovers, trailsPort, type Credentials } from './aws.js';
 import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSummary, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { requestMinutes } from './requests.js';
@@ -68,7 +68,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     assumeRole: assumeDiscovery,
     ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
-    scan: (credentials, where) => scanRegion(scanPorts(regionalClients(credentials as Credentials, where.region)), where),
+    scan: (credentials, where) => scanRegion({ ...scanPorts(regionalClients(credentials as Credentials, where.region)), kubernetes: kubernetesPorts(credentials as Credentials, where.region) }, where),
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
