@@ -10,8 +10,10 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ListSubscriptionsByTopicCommand, SNSClient, type Subscription } from '@aws-sdk/client-sns';
 import { S3Client } from '@aws-sdk/client-s3';
+import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { createStore } from '@dormeto/discovery';
-import { createFleetStore } from '@dormeto/fleet';
+import { createFleetStore, createPriceBook } from '@dormeto/fleet';
+import { baselineOf } from './baseline.js';
 import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
@@ -167,6 +169,10 @@ const users = createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?
 // A missing or unknown value is the module's default, never less (review M2).
 const mfaMode = (['optional', 'operators', 'required'] as const).find((m) => m === process.env.MFA_MODE) ?? 'operators';
 
+const fleet = createFleetStore({ dynamo, table });
+const pricing = new PricingClient({ region: 'us-east-1' });
+const prices = createPriceBook({ pricing: { getProducts: (input) => pricing.send(new GetProductsCommand(input as GetProductsCommandInput)) }, store: fleet });
+
 export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
@@ -178,7 +184,9 @@ export const handler = createApi({
   operations: process.env.OPERATIONS ? operations : undefined,
   managerAccount: process.env.MANAGER_ACCOUNT,
   // Routers and workloads as the routers report them (scale design §4).
-  fleet: createFleetStore({ dynamo, table }),
+  fleet,
+  // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1), cached in the table.
+  savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item) => prices.hourly(region, item) },
   routerVersion: process.env.ROUTER_VERSION,
   alerts,
   ipLists,

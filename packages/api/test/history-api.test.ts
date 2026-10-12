@@ -11,7 +11,7 @@ const ROUTERS: Router[] = [
 const iso = (ms: number) => new Date(ms).toISOString();
 const entry = (to: string, ms: number, extra: Record<string, unknown> = {}) => ({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to, at: iso(ms), ...extra });
 
-function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }), entry('WAKING', NOW - 600_000, { cause: 'normal' }), entry('AWAKE', NOW - 560_000, { durationMs: 40_000 })], truncated = false, before = entry('AWAKE', NOW - 90_000_000) as unknown, summary = null as unknown } = {}) {
+function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }), entry('WAKING', NOW - 600_000, { cause: 'normal' }), entry('AWAKE', NOW - 560_000, { durationMs: 40_000 })], truncated = false, before = entry('AWAKE', NOW - 90_000_000) as unknown, summary = null as unknown, savingsSummary = null as unknown } = {}) {
   const asked: unknown[][] = [];
   const calls: string[] = [];
   const api = createApi({
@@ -23,7 +23,9 @@ function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }),
       listRouters: async () => [], listWorkloads: async () => [], getWorkload: async () => summary as never,
       listHistory: async (...args: unknown[]) => { asked.push(['list', ...args]); return { entries: entries as never, truncated }; },
       historyBefore: async (...args: unknown[]) => { asked.push(['before', ...args]); return before as never; },
+      getSavingsSummary: async () => savingsSummary as never,
     },
+    savings: { baseline: { kind: 'always' }, hourly: async (region: string, item: { kind: string }) => (region === 'eu-west-1' && item.kind === 'ec2' ? 0.0456 : null) },
   });
   return { api, asked, calls };
 }
@@ -75,6 +77,21 @@ describe('workload history (R8)', () => {
     expect(json(await woke.api(event('/api/workloads/dmt-dev/a/history'))).phases.map((p: { state: string }) => p.state)).toEqual(['ASLEEP', 'WAKING']);
     const recent = setup({ entries: [], before: null, summary: { ...asleep, historySince: iso(NOW - 3_600_000) } });
     expect(json(await recent.api(event('/api/workloads/dmt-dev/a/history'))).phases[0].state).toBe('UNKNOWN');
+  });
+
+  it('estimates the period\'s savings from what each nap stopped (R9)', async () => {
+    const stopped = [{ kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' }];
+    const { api } = setup({ entries: [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle', stopped }), entry('WAKING', NOW - 600_000, { cause: 'normal' })] });
+    const body = json(await api(event('/api/workloads/dmt-dev/a/history', { days: '1' })));
+    expect(body.savings.usd).toBeCloseTo((3_000 / 3_600) * 0.0456, 6);
+    expect(body.savings.items[0].hourly).toBe(0.0456);
+    expect(body.savings.baseline).toEqual({ kind: 'always' });
+  });
+
+  it('answers the savings summary the daily job wrote, for viewers; none yet before its first run (R9)', async () => {
+    const summary = { day: '2026-10-07', last30: { usd: 12.5, asleepHours: 300, days: [] } };
+    expect(json(await setup({ savingsSummary: summary }).api(event('/api/savings')))).toEqual({ summary });
+    expect(json(await setup().api(event('/api/savings')))).toEqual({ summary: null });
   });
 });
 

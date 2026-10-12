@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
-import { historyView, reporting, type HistoryEntry, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
+import { historyView, reporting, savingsOf, type Baseline, type HistoryEntry, type RouterSummary, type SavingsSummary, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 
@@ -152,7 +152,11 @@ export interface ApiOptions {
     // The state history (R8).
     listHistory?(account: string, region: string, id: string, from: string, to: string): Promise<{ entries: HistoryEntry[]; truncated: boolean }>;
     historyBefore?(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null>;
+    // What the daily savings job computed last (R9).
+    getSavingsSummary?(): Promise<SavingsSummary | null>;
   };
+  // A period's savings (R9): AWS's list prices of what the naps stopped, within the baseline.
+  savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem): Promise<number | null> };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
   // The organization roles the manager assumes, set in its Terraform (packaging design §3).
@@ -270,7 +274,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
   }
 }
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa, savings,
   fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -645,6 +649,9 @@ export function createApi({
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
     }
 
+    // The fleet's estimated savings (R9): the daily job's summary, one read.
+    if (method === 'GET' && resource === 'savings' && !a) return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null });
+
     if (method === 'GET' && resource === 'workloads' && !a) {
       const q = event.queryStringParameters ?? {};
       const { rows, errors, routerRows } = await listAll(identity);
@@ -704,7 +711,9 @@ export function createApi({
           const summary = await fleet.getWorkload(account, router.region, id).catch(() => null);
           if (summary?.historySince && summary.historySince < from) initial = entries[0]?.from ?? summary.state;
         }
-        return reply(200, { ...historyView({ before, entries, from, to, now: to, initial }), before, entries, truncated });
+        const view = historyView({ before, entries, from, to, now: to, initial });
+        const priced = savings ? { ...(await savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item), baseline: savings.baseline })), baseline: savings.baseline } : undefined;
+        return reply(200, { ...view, before, entries, truncated, ...(priced ? { savings: priced } : {}) });
       }
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.
