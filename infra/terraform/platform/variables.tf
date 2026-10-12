@@ -35,11 +35,12 @@ variable "auth_domain" {
 }
 
 variable "routers" {
-  description = "Routers operated by this manager: name, region and controller Lambda function name (same account)."
+  description = "Routers written in Terraform, operated by this manager: name, region, controller and onboarder Lambda function names (same account). Routers the manager installs are registered in its table."
   type = list(object({
     name       = string
     region     = string
     controller = string
+    onboarder  = optional(string)
   }))
   default = []
 }
@@ -79,7 +80,11 @@ variable "log_retention_days" {
 }
 
 locals {
-  name    = "dmt-${var.env}-manager"
+  name = "dmt-${var.env}-manager"
+  # Routers (installed by the manager or written in Terraform) are named dmt-<env>.
+  name_prefix = "dmt-${var.env}"
+  # Routers written in Terraform, with their account (the manager's).
+  routers = jsonencode([for r in var.routers : merge({ for k, v in r : k => v if v != null }, { account = var.account_id })])
   version = jsondecode(file("${path.module}/../../../package.json")).version
 }
 

@@ -54,9 +54,16 @@ resource "aws_cloudwatch_log_group" "api" {
 
 data "aws_iam_policy_document" "api" {
   statement {
+    # Routers written in Terraform, and the controllers of the routers the manager installs (their resource policy allows
+    # this role in other accounts).
     sid       = "RouterControllers"
     actions   = ["lambda:InvokeFunction"]
-    resources = [for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"]
+    resources = concat([for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"], ["arn:aws:lambda:*:*:function:${local.name_prefix}-controller"])
+  }
+  statement {
+    sid       = "Operations"
+    actions   = ["states:StartExecution"]
+    resources = [aws_sfn_state_machine.operations.arn]
   }
   statement {
     # Audit, preferences and discovery items (configuration, dismissals, manual exclusions: DeleteItem lifts one).
@@ -112,7 +119,8 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = {
       # Routers run in the manager account until onboarding deploys them elsewhere (R4).
-      ROUTERS            = jsonencode([for r in var.routers : merge(r, { account = var.account_id })])
+      ROUTERS            = local.routers
+      OPERATIONS         = aws_sfn_state_machine.operations.arn
       TABLE              = aws_dynamodb_table.manager.name
       VERSION            = local.version
       USER_POOL_ID       = aws_cognito_user_pool.main.id

@@ -1,0 +1,198 @@
+# Operations (vision docs/specs/2026-10-05-onboarding-design.md, R4b): the workflow that installs, upgrades and removes
+# routers by API calls and onboards and offboards workloads through them. The API creates an operation and starts an
+# execution; the state machine calls the operations Lambda (`next`) until the operation is done.
+
+locals {
+  router_dir     = "${path.module}/../../../../router"
+  router_version = jsondecode(file("${local.router_dir}/package.json")).version
+  # The router bundle the manager installs: run `npm run package` in the router repository before planning.
+  router_bundle = {
+    "router.zip"     = "${local.router_dir}/dist/router-${local.router_version}.zip"
+    "blueprint.json" = "${local.router_dir}/dist/blueprint-${local.router_version}.json"
+  }
+}
+
+resource "aws_s3_bucket" "artifacts" {
+  bucket = "${local.name}-artifacts-${var.account_id}"
+}
+
+resource "aws_s3_bucket_public_access_block" "artifacts" {
+  bucket                  = aws_s3_bucket.artifacts.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "artifacts" {
+  bucket = aws_s3_bucket.artifacts.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_object" "router_bundle" {
+  for_each = local.router_bundle
+  bucket   = aws_s3_bucket.artifacts.id
+  key      = "router/${local.router_version}/${each.key}"
+  source   = each.value
+  etag     = filemd5(each.value)
+}
+
+# DmtCommandRole and DmtRouterBoundary of the manager's account (other accounts: the organization bootstrap).
+module "command_role" {
+  source              = "../modules/command-role"
+  operations_role_arn = aws_iam_role.operations.arn
+  boundary_policy     = replace(replace(file("${local.router_dir}/dist/router-boundary.json"), "$${account}", var.account_id), "$${partition}", "aws")
+}
+
+resource "aws_iam_role" "operations" {
+  name               = "${local.name}-operations"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "operations" {
+  statement {
+    sid       = "OperationItems"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:BatchWriteItem"]
+    resources = [aws_dynamodb_table.manager.arn]
+  }
+  statement {
+    sid       = "RouterBundle"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.artifacts.arn}/router/*"]
+  }
+  statement {
+    sid       = "AssumeCommandRoles"
+    actions   = ["sts:AssumeRole"]
+    resources = ["arn:aws:iam::*:role/DmtCommandRole"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceOrgID"
+      values   = [var.organization_id]
+    }
+  }
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.operations.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "operations" {
+  name   = "operations"
+  role   = aws_iam_role.operations.id
+  policy = data.aws_iam_policy_document.operations.json
+}
+
+data "archive_file" "operations" {
+  type        = "zip"
+  source_file = "${path.module}/../../../packages/operations/dist/index.mjs"
+  output_path = "${path.module}/.build/${local.name}-operations.zip"
+}
+
+resource "aws_cloudwatch_log_group" "operations" {
+  name              = "/aws/lambda/${local.name}-operations"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_lambda_function" "operations" {
+  function_name    = "${local.name}-operations"
+  role             = aws_iam_role.operations.arn
+  runtime          = "nodejs24.x"
+  architectures    = ["arm64"]
+  handler          = "index.handler"
+  filename         = data.archive_file.operations.output_path
+  source_code_hash = data.archive_file.operations.output_base64sha256
+  # One step per invocation: the longest is a function create or code update (zip upload).
+  timeout     = 120
+  memory_size = 512
+
+  environment {
+    variables = {
+      ENV                = var.env
+      TABLE              = aws_dynamodb_table.manager.name
+      ROUTERS            = local.routers
+      ARTIFACTS_BUCKET   = aws_s3_bucket.artifacts.id
+      ROUTER_VERSION     = local.router_version
+      COMMAND_ROLE       = "DmtCommandRole"
+      MANAGER_PRINCIPALS = jsonencode([aws_iam_role.api.arn])
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.operations, aws_iam_role_policy.operations]
+}
+
+data "aws_iam_policy_document" "states_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [var.account_id]
+    }
+  }
+}
+
+resource "aws_iam_role" "workflow" {
+  name               = "${local.name}-workflow"
+  assume_role_policy = data.aws_iam_policy_document.states_assume.json
+}
+
+resource "aws_iam_role_policy" "workflow" {
+  name = "workflow"
+  role = aws_iam_role.workflow.id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [aws_lambda_function.operations.arn, "${aws_lambda_function.operations.arn}:*"] }]
+  })
+}
+
+resource "aws_sfn_state_machine" "operations" {
+  name     = "${local.name}-operations"
+  role_arn = aws_iam_role.workflow.arn
+  type     = "STANDARD"
+  definition = jsonencode({
+    Comment        = "Dormeto operation: the next step until done, waiting as each step asks"
+    StartAt        = "Next"
+    TimeoutSeconds = 6 * 3600
+    States = {
+      Next = {
+        Type           = "Task"
+        Resource       = "arn:aws:states:::lambda:invoke"
+        Parameters     = { FunctionName = aws_lambda_function.operations.arn, Payload = { task = "next", "operationId.$" = "$.operationId" } }
+        ResultSelector = { "Payload.$" = "$.Payload" }
+        ResultPath     = "$.result"
+        Retry = [{
+          ErrorEquals     = ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "Lambda.Unknown", "States.Timeout"]
+          IntervalSeconds = 2, MaxAttempts = 6, BackoffRate = 2, JitterStrategy = "FULL"
+        }]
+        Catch = [{ ErrorEquals = ["States.ALL"], ResultPath = "$.error", Next = "Release" }]
+        Next  = "Decide"
+      }
+      Decide = {
+        Type = "Choice"
+        Choices = [
+          { And = [{ Variable = "$.result.Payload.done", BooleanEquals = true }, { Variable = "$.result.Payload.status", StringEquals = "failed" }], Next = "Failed" },
+          { Variable = "$.result.Payload.done", BooleanEquals = true, Next = "Succeeded" },
+        ]
+        Default = "Wait"
+      }
+      Wait = { Type = "Wait", SecondsPath = "$.result.Payload.waitSeconds", Next = "Next" }
+      Release = {
+        Type       = "Task"
+        Resource   = "arn:aws:states:::lambda:invoke"
+        Parameters = { FunctionName = aws_lambda_function.operations.arn, Payload = { task = "fail", "operationId.$" = "$.operationId", "error.$" = "$.error" } }
+        Retry      = [{ ErrorEquals = ["States.ALL"], IntervalSeconds = 5, MaxAttempts = 5, BackoffRate = 2 }]
+        Next       = "Failed"
+      }
+      Succeeded = { Type = "Succeed" }
+      Failed    = { Type = "Fail", Error = "OperationFailed", Cause = "See the operation record in the manager." }
+    }
+  })
+}
