@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { ref } from 'vue';
 import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
@@ -8,6 +9,7 @@ import { checkHealth, relative } from '../format';
 import StateChip from '../components/StateChip.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
 
+const now = useNow();
 const { smAndDown } = useDisplay();
 const workloads = ref<WorkloadSummary[]>([]);
 const errors = ref<{ router: string; message: string }[]>([]);
@@ -21,7 +23,7 @@ const { error, loading, refreshedAt } = usePoll(async () => {
   // Router health every minute is enough: the warning is about checks late by 15 minutes.
   if (Date.now() - routersCheckedAt > 60_000) {
     routersCheckedAt = Date.now();
-    late.value = (await api<{ routers: RouterInfo[] }>('/routers')).routers.filter((r) => !r.error && checkHealth(r).late);
+    late.value = (await api<{ routers: RouterInfo[] }>('/routers')).routers.filter((r) => !r.error && checkHealth(r, now.value).late);
   }
 }, 10_000);
 
@@ -35,19 +37,19 @@ const headers = [
   { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end' as const, value: (w: WorkloadSummary) => w.stats7d?.wakes ?? null },
   { title: 'Wakes (total)', key: 'wakeCount', align: 'end' as const },
 ];
-const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSince ?? w.updatedAt : w.updatedAt);
+const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSince ?? w.updatedAt : w.updatedAt, now.value);
 </script>
 
 <template>
   <div class="d-flex flex-wrap align-center ga-4 mb-4">
     <h1 class="text-headline-small">Workloads</h1>
     <v-spacer />
-    <span v-if="refreshedAt" class="text-body-small text-medium-emphasis d-none d-sm-inline">Refreshed {{ relative(new Date(refreshedAt).toISOString()) }}</span>
+    <span v-if="refreshedAt" class="text-body-small text-medium-emphasis d-none d-sm-inline">Refreshed {{ relative(new Date(refreshedAt).toISOString(), now) }}</span>
     <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line style="min-width: 200px; max-width: 280px" />
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-alert v-for="e in errors" :key="e.router" type="warning" class="mb-4" :title="`Router ${e.router} unreachable`" :text="e.message" />
-  <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`" :text="`${checkHealth(r).text}.`" />
+  <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`" :text="`${checkHealth(r, now).text}.`" />
   <v-card>
     <v-data-table :mobile="smAndDown" :headers="headers" :items="workloads" :search="search" :loading="loading && !workloads.length" item-value="workloadId" :items-per-page="25">
       <template #[`item.workloadId`]="{ item }">

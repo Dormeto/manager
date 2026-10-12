@@ -67,7 +67,7 @@ export interface WorkloadStatus {
   targets: { id: string; state: string }[];
   settings: Settings;
   stats: { days: number; since: string; today: Counts; total: Counts } | { error: string } | null;
-  ipLists: { name: string; action: string; entries: number; fetchedAt: string | null; error?: string }[];
+  ipLists: { name: string; action: string; url?: string; entries: number; fetchedAt: string | null; error?: string }[];
   wakeMode: string;
   wakeRules: Rule[];
   noWakeRules: Rule[];

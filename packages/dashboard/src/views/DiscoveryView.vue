@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { computed, onMounted, ref, watch } from 'vue';
 import { mdiRefresh } from '@mdi/js';
@@ -6,6 +7,7 @@ import { api } from '../api';
 import { backendLabel, percent, relative, shortId } from '../format';
 import type { Candidate, RouterInfo } from '../types';
 
+const now = useNow();
 const { smAndDown } = useDisplay();
 const routers = ref<RouterInfo[]>([]);
 const router = ref<string | null>(null);
@@ -92,5 +94,5 @@ const headers = [
       </template>
     </v-data-table>
   </v-card>
-  <p v-if="generatedAt" class="text-body-small text-medium-emphasis mt-2">Discovered {{ relative(generatedAt) }}.</p>
+  <p v-if="generatedAt" class="text-body-small text-medium-emphasis mt-2">Discovered {{ relative(generatedAt, now) }}.</p>
 </template>

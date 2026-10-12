@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { ref } from 'vue';
 import { mdiAccountPlus, mdiDotsVertical } from '@mdi/js';
@@ -8,6 +9,7 @@ import { useSession } from '../stores/session';
 
 interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null }
 
+const now = useNow();
 const { smAndDown } = useDisplay();
 const session = useSession();
 const users = ref<User[]>([]);
@@ -82,7 +84,7 @@ load();
       <template #[`item.status`]="{ item }">
         <v-chip :color="!item.enabled ? 'error' : item.status === 'CONFIRMED' ? 'success' : 'warning'" variant="tonal" label>{{ item.enabled ? STATUS[item.status] ?? item.status : 'disabled' }}</v-chip>
       </template>
-      <template #[`item.createdAt`]="{ item }">{{ relative(item.createdAt) }}</template>
+      <template #[`item.createdAt`]="{ item }">{{ relative(item.createdAt, now) }}</template>
       <template #[`item.actions`]="{ item }">
         <v-menu v-if="item.email !== session.email">
           <template #activator="{ props }"><v-btn v-bind="props" :icon="mdiDotsVertical" variant="text" size="small" :aria-label="`Actions for ${item.email}`" /></template>

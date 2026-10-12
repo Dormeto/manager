@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Signed-in screenshots of the dashboard (dev): the smoke user's tokens are stored where oidc-client-ts reads them,
 // then each view is captured with headless Edge or Chrome (DevTools protocol).
-// Usage: node scripts/screenshots.mjs --out <dir> [--env dev] [--width 1440] [--route /path ...]
+// Usage: node scripts/screenshots.mjs --out <dir> [--env dev] [--width 1440] [--focus <css selector>] [--route /path ...]
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +20,7 @@ const base = `https://app.${env}.dormeto.com`;
 const out = option('out', join(tmpdir(), 'dormeto-screenshots'));
 const width = Number(option('width', '1440'));
 const routes = args.flatMap((a, i) => (a === '--route' ? [args[i + 1]] : []));
+const focus = option('focus'); // element to focus before the capture, for example to open its tooltip
 const browser = process.env.BROWSER ?? '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const region = 'eu-west-1';
 const credentials = fromIni({ profile: process.env.AWS_PROFILE ?? 'kloudy-dormeto-prd' });
@@ -75,7 +76,23 @@ try {
     const { result } = await send('Runtime.evaluate', { expression: 'document.documentElement.scrollHeight', returnByValue: true });
     const height = Math.min(Math.max(result.value, 800), 6000);
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile });
-    await sleep(500);
+    if (focus) {
+      // Hover the element (tooltips open on hover), after scrolling it into view.
+      const { result: box } = await send('Runtime.evaluate', {
+        expression: `(() => { const e = document.querySelector(${JSON.stringify(focus)}); if (!e) return null; e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+        returnByValue: true,
+      });
+      if (box.value) {
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.value.x - 30, y: box.value.y });
+        await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.value.x, y: box.value.y });
+      }
+      // Synthetic pointer events do not always reach the listeners: fire them on the element as well.
+      await send('Runtime.evaluate', { expression: `(() => { const e = document.querySelector(${JSON.stringify(focus)}); e?.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false })); e?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false })); e?.focus(); })()` });
+      await sleep(600);
+      const { result: tip } = await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.v-overlay__content')].map((e) => e.textContent.trim()).filter(Boolean).join(' | ')`, returnByValue: true });
+      console.log(`open overlays: ${tip.value || 'none'}`);
+    }
+    await sleep(800);
     const shot = await send('Page.captureScreenshot', { format: 'png' });
     const file = join(out, `${route === '/' ? 'overview' : route.slice(1).replaceAll('/', '_')}-${width}.png`);
     writeFileSync(file, Buffer.from(shot.result.data, 'base64'));

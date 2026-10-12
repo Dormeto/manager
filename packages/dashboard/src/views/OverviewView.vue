@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useNow } from '../now';
 import { computed, ref } from 'vue';
 import { mdiAlertCircleOutline, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
 import { api } from '../api';
@@ -7,6 +8,7 @@ import { checkHealth, relative } from '../format';
 import StateChip from '../components/StateChip.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
 
+const now = useNow();
 const workloads = ref<WorkloadSummary[]>([]);
 const routers = ref<RouterInfo[]>([]);
 const { error, loading } = usePoll(async () => {
@@ -25,7 +27,7 @@ const cards = computed(() => [
   { title: 'Napping or waking', value: count('NAPPING', 'WAKING'), icon: mdiServerNetwork, color: 'warning' },
   { title: 'Failed', value: count('FAILED'), icon: mdiAlertCircleOutline, color: 'error' },
 ]);
-const late = computed(() => routers.value.filter((r) => !r.error && checkHealth(r).late));
+const late = computed(() => routers.value.filter((r) => !r.error && checkHealth(r, now.value).late));
 const attention = computed(() => workloads.value.filter((w) => w.state === 'FAILED' || w.state === 'WAKING'));
 const total = (key: 'ignored' | 'deferred' | 'wakes') => workloads.value.reduce((n, w) => n + (w.stats7d?.[key] ?? 0), 0);
 const weekly = computed(() => [
@@ -38,7 +40,7 @@ const weekly = computed(() => [
   <h1 class="text-headline-small mb-4">Overview</h1>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`"
-    :text="`${checkHealth(r).text}. The scheduled idle check of the router is not running: check its schedule and the dmt-<env>-check-failures queue.`" />
+    :text="`${checkHealth(r, now).text}. The scheduled idle check of the router is not running: check its schedule and the dmt-<env>-check-failures queue.`" />
   <v-row>
     <v-col v-for="card in cards" :key="card.title" cols="6" md="3">
       <v-card :loading="loading && !workloads.length">
@@ -70,7 +72,7 @@ const weekly = computed(() => [
       <v-card title="Needs attention">
         <v-list v-if="attention.length" lines="two">
           <v-list-item v-for="w in attention" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${w.router}/${w.workloadId}`"
-            :title="w.workloadId" :subtitle="`${w.router} · changed ${relative(w.updatedAt)}`">
+            :title="w.workloadId" :subtitle="`${w.router} · changed ${relative(w.updatedAt, now)}`">
             <template #append><StateChip :state="w.state" /></template>
           </v-list-item>
         </v-list>
@@ -80,9 +82,9 @@ const weekly = computed(() => [
     <v-col cols="12" md="5">
       <v-card title="Routers">
         <v-list lines="two">
-          <v-list-item v-for="r in routers" :key="r.name" :title="r.name" :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${checkHealth(r).text}`">
+          <v-list-item v-for="r in routers" :key="r.name" :title="r.name" :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${checkHealth(r, now).text}`">
             <template #append>
-              <v-chip :color="r.error ? 'error' : checkHealth(r).late ? 'warning' : 'success'" variant="tonal" label>{{ r.error ? 'unreachable' : checkHealth(r).late ? 'idle check late' : 'ok' }}</v-chip>
+              <v-chip :color="r.error ? 'error' : checkHealth(r, now).late ? 'warning' : 'success'" variant="tonal" label>{{ r.error ? 'unreachable' : checkHealth(r, now).late ? 'idle check late' : 'ok' }}</v-chip>
             </template>
           </v-list-item>
         </v-list>

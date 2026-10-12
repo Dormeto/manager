@@ -2,3 +2,5 @@
 .v-application { font-family: inherit; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
 .nowrap { white-space: nowrap; }
+.setting { cursor: help; border-radius: 4px; }
+.setting:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }

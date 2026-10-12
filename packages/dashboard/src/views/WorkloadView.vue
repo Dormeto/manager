@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiOpenInNew, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiInformationOutline, mdiOpenInNew, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { settingRows } from '../settings';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendLabel, duration, relative, ruleText, shortId, stateColor } from '../format';
@@ -8,6 +10,7 @@ import { useSession } from '../stores/session';
 import StateChip from '../components/StateChip.vue';
 import type { Counts, WorkloadStatus, WorkloadSummary } from '../types';
 
+const now = useNow();
 const props = defineProps<{ router: string; id: string }>();
 const session = useSession();
 const status = ref<WorkloadStatus | null>(null);
@@ -59,9 +62,9 @@ const summary = computed(() => {
   return [
     { label: 'Route', value: s.route === 'app' ? 'application' : s.route },
     { label: 'Nap', value: s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' },
-    { label: 'Last request', value: relative(s.lastRequestAt) },
-    { label: 'Awake since', value: relative(s.awakeSince) },
-    { label: 'Last state change', value: relative(s.updatedAt) },
+    { label: 'Last request', value: relative(s.lastRequestAt, now.value) },
+    { label: 'Awake since', value: relative(s.awakeSince, now.value) },
+    { label: 'Last state change', value: relative(s.updatedAt, now.value) },
     { label: 'Wakes', value: String(s.wakeCount) },
     { label: 'Held requests', value: String(s.holders) },
     { label: 'Pending wake', value: s.pendingWake ? 'yes' : 'no' },
@@ -139,7 +142,7 @@ const summary = computed(() => {
       </v-card>
     </v-col>
     <v-col cols="12" md="5">
-      <v-card title="Wake rules">
+      <v-card title="Wake filtering">
         <v-card-text>
           <div class="mb-3"><strong>Mode:</strong> {{ status.wakeMode === 'browser' ? 'browser (only the waiter page probe, the x-dormeto-wake header or a wake rule wakes)' : 'any request that passes the filters wakes' }}</div>
           <div v-for="r in [...status.noWakeRules, ...status.wakeRules]" :key="`${r.level}/${r.name}`" class="mb-2 text-body-medium">
@@ -147,9 +150,17 @@ const summary = computed(() => {
             <strong>{{ r.name }}</strong>: <span :class="{ 'text-error': r.invalid }">{{ r.invalid ? `invalid, ${r.invalid}` : ruleText(r.conditions) }}</span>
           </div>
           <div v-if="status.ipLists.length" class="mt-3">
-            <div class="text-title-small mb-1">IP lists</div>
+            <div class="text-title-small">IP reputation lists</div>
+            <div class="text-body-small text-medium-emphasis mb-1">Public lists of scanner and cloud networks, set on the router and applied to all its workloads; the router downloads them every day.</div>
             <div v-for="l in status.ipLists" :key="l.name" class="text-body-medium">
-              {{ l.name }} ({{ l.action }}): <span :class="{ 'text-error': l.error }">{{ l.error ?? `${l.entries.toLocaleString()} entries, ${relative(l.fetchedAt)}` }}</span>
+              <a v-if="l.url" :href="l.url" target="_blank" rel="noopener" :title="l.url">{{ l.name }}</a><span v-else>{{ l.name }}</span>
+              <v-tooltip location="top" max-width="340" open-on-click open-on-focus>
+                <template #activator="{ props }"><span v-bind="props" class="setting text-medium-emphasis" tabindex="0"> ({{ l.action }})</span></template>
+                {{ l.action === 'ignore'
+                  ? 'Requests from a listed address never wake the workload, the waiting page probe included.'
+                  : 'Requests from a listed address get the waiting page; only the page\'s own script wakes the workload, so a real visitor still gets in and a scanner never wakes it.' }}
+              </v-tooltip>:
+              <span :class="{ 'text-error': l.error }">{{ l.error ?? `${l.entries.toLocaleString()} entries, downloaded ${relative(l.fetchedAt, now)}` }}</span>
             </div>
           </div>
         </v-card-text>
@@ -158,13 +169,17 @@ const summary = computed(() => {
     <v-col cols="12">
       <v-card title="Settings">
         <v-card-text class="d-flex flex-wrap ga-6 text-body-medium">
-          <span>Idle window <strong>{{ status.settings.idleMinutes }} min</strong></span>
-          <span>Hold <strong>{{ status.settings.waitSeconds }} s</strong></span>
-          <span>Drain <strong>{{ status.settings.drainSeconds }} s</strong></span>
-          <span>Wake timeout <strong>{{ duration(status.settings.wakeTimeoutSeconds) }}</strong></span>
-          <span>Held requests <strong>≤ {{ status.settings.maxHolders }}</strong></span>
+          <v-tooltip v-for="row in settingRows(status.settings)" :key="row.key" location="top" max-width="380" open-on-click open-on-focus>
+            <template #activator="{ props }">
+              <span v-bind="props" class="setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
+                {{ row.label }} <strong>{{ row.value }}</strong><v-icon :icon="mdiInformationOutline" size="x-small" class="ml-1 text-medium-emphasis" />
+              </span>
+            </template>
+            <div class="text-body-medium">{{ row.help }}</div>
+            <div class="text-body-small mt-2"><strong>Acceptable:</strong> {{ row.range }}</div>
+          </v-tooltip>
           <v-spacer />
-          <span class="text-medium-emphasis">Router {{ status.router.version }} ({{ status.router.build }})<template v-if="refreshedAt"> · refreshed {{ relative(new Date(refreshedAt).toISOString()) }}</template></span>
+          <span class="text-medium-emphasis">Router {{ status.router.version }} ({{ status.router.build }})<template v-if="refreshedAt"> · refreshed {{ relative(new Date(refreshedAt).toISOString(), now) }}</template></span>
         </v-card-text>
       </v-card>
     </v-col>
