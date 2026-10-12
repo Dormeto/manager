@@ -6,7 +6,7 @@ import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendLabel, duration, relative, ruleText, shortId, stateColor } from '../format';
+import { backendLabel, duration, listSourceHref, relative, ruleText, shortId, stateColor } from '../format';
 import { useSession } from '../stores/session';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -157,9 +157,9 @@ const summary = computed(() => {
           </div>
           <div v-if="status.ipLists.length" class="mt-3">
             <div class="text-title-small">IP reputation lists</div>
-            <div class="text-body-small text-medium-emphasis mb-1">Public lists of scanner and cloud networks, set on the router and applied to all its workloads; the router downloads them every day.</div>
+            <div class="text-body-small text-medium-emphasis mb-1">Lists of scanner and cloud networks, public or stored in S3, set on the router and applied to all its workloads; the router downloads them again daily by default.</div>
             <div v-for="l in status.ipLists" :key="l.name" class="text-body-medium">
-              <a v-if="l.url" :href="l.url" target="_blank" rel="noopener" :title="l.url">{{ l.name }}</a><span v-else>{{ l.name }}</span>
+              <a v-if="listSourceHref(l.url)" :href="listSourceHref(l.url) ?? undefined" target="_blank" rel="noopener" :title="l.url">{{ l.name }}</a><span v-else>{{ l.name }}</span>
               <v-tooltip location="top" max-width="340" open-on-click open-on-focus>
                 <template #activator="{ props }"><span v-bind="props" class="setting text-medium-emphasis" tabindex="0"> ({{ l.action }})</span></template>
                 {{ l.action === 'ignore'

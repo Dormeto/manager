@@ -27,6 +27,14 @@ export const backendLabel = (kind: string): string => BACKEND_LABELS[kind] ?? ki
 // "service/cluster/name" → "name"; ARNs are long.
 export const shortId = (id: string): string => (id.startsWith('arn:') ? id.split('/').at(-1) ?? id : id);
 
+// Link to the source of an IP list: the URL itself, or the S3 console object page for s3://bucket/key.
+export function listSourceHref(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const [, bucket, key] = /^s3:\/\/([^/]+)\/(.+)$/.exec(url) ?? [];
+  if (bucket && key) return `https://s3.console.aws.amazon.com/s3/object/${bucket}?prefix=${encodeURIComponent(key)}`;
+  return /^https?:\/\//.test(url) ? url : null;
+}
+
 export function percent(part: number | null, total: number): string {
   return part === null ? '—' : `${Math.round((100 * part) / total)} %`;
 }

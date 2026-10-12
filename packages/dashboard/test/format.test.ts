@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkHealth, duration, percent, refreshLabel, relative, ruleText, shortId, stateColor } from '../src/format';
+import { checkHealth, duration, listSourceHref, percent, refreshLabel, relative, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -44,5 +44,14 @@ describe('refreshLabel', () => {
     expect(refreshLabel({ seconds: 300, nextAt: now + 125_000, loading: false }, now)).toBe('Refreshing in 2 min 5 s');
     expect(refreshLabel({ seconds: 10, nextAt: now + 3_000, loading: true }, now)).toBe('Refreshing…');
     expect(refreshLabel({ seconds: 0, nextAt: null, loading: false }, now)).toBe('Auto-refresh off');
+  });
+});
+
+describe('listSourceHref', () => {
+  it('links http(s) lists directly and S3 lists to the console object page', () => {
+    expect(listSourceHref('https://ip-ranges.amazonaws.com/ip-ranges.json')).toBe('https://ip-ranges.amazonaws.com/ip-ranges.json');
+    expect(listSourceHref('s3://dmt-dev-ip-lists-1/scanners/censys.txt')).toBe('https://s3.console.aws.amazon.com/s3/object/dmt-dev-ip-lists-1?prefix=scanners%2Fcensys.txt');
+    expect(listSourceHref('javascript:alert(1)')).toBeNull();
+    expect(listSourceHref(null)).toBeNull();
   });
 });
