@@ -5,7 +5,8 @@
 import { fromIni } from '@aws-sdk/credential-providers';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { DescribeOrganizationCommand, OrganizationsClient } from '@aws-sdk/client-organizations';
-import { DescribeInstancesCommand, EC2Client } from '@aws-sdk/client-ec2';
+import { DescribeInstancesCommand, DescribeSecurityGroupsCommand, EC2Client } from '@aws-sdk/client-ec2';
+import { DescribeDBClustersCommand, DescribeDBInstancesCommand, RDSClient } from '@aws-sdk/client-rds';
 import { DescribeAutoScalingGroupsCommand } from '@aws-sdk/client-auto-scaling';
 import { DescribeServicesCommand, DescribeTaskDefinitionCommand } from '@aws-sdk/client-ecs';
 import { DescribeRulesCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
@@ -38,6 +39,8 @@ function awsOf(_options: Options, name: string): EstimateAws {
     portsOf: (account, region, credentials) => {
       const clients = regionalClients(creds(credentials) as Credentials, region);
       const ec2 = new EC2Client({ region, credentials: creds(credentials) });
+      // Companion databases: the region's RDS instances and Aurora clusters, and who their security groups let in.
+      const rds = new RDSClient({ region, credentials: creds(credentials), maxAttempts: 5 });
       // Kubernetes workloads (R10.5): the region's EKS clusters, read with the profile's own access; those it cannot read
       // are listed in the report.
       const kubernetes = kubernetesPorts(creds(credentials) as Credentials, region, undefined, 'the profile');
@@ -50,7 +53,14 @@ function awsOf(_options: Options, name: string): EstimateAws {
         kubernetesOf: kubernetes.kubernetesOf,
         autoscaling: { describeAutoScalingGroups: (input) => clients.autoscaling.send(new DescribeAutoScalingGroupsCommand(input)) },
         elbv2: { describeRules: (input) => clients.elbv2.send(new DescribeRulesCommand(input)) },
-        ec2: { describeInstances: (input) => ec2.send(new DescribeInstancesCommand(input)) },
+        ec2: {
+          describeInstances: (input) => ec2.send(new DescribeInstancesCommand(input)),
+          describeSecurityGroups: (input) => ec2.send(new DescribeSecurityGroupsCommand(input)),
+        },
+        rds: {
+          describeDBInstances: (input) => rds.send(new DescribeDBInstancesCommand(input)),
+          describeDBClusters: (input) => rds.send(new DescribeDBClustersCommand(input)),
+        },
         ecs: {
           describeServices: (input) => clients.ecs.send(new DescribeServicesCommand(input)),
           describeTaskDefinition: (input) => clients.ecs.send(new DescribeTaskDefinitionCommand(input)),

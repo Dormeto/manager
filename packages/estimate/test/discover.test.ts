@@ -126,6 +126,71 @@ describe('a region\'s discovery', () => {
   });
 });
 
+// Companion databases (the user, 2026-10-11): an RDS instance or an Aurora provisioned cluster whose security group lets
+// a workload's in, found in discovery and attached in the estimate (after the wakes filter).
+describe('a region\'s companion databases', () => {
+  const sgOf: Record<string, string> = { 'i-9': 'sg-app', 'i-1': 'sg-web', 'i-2': 'sg-web' };
+  const db = (id: string, over: Record<string, unknown> = {}) => ({ DBInstanceIdentifier: id, DBInstanceStatus: 'available', Engine: 'mysql', DBInstanceClass: 'db.t3.medium', MultiAZ: false, VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-db', Status: 'active' }], TagList: [], ...over });
+  const INSTANCES = [
+    db('shop-db', { TagList: [{ Key: 'env', Value: 'dev' }] }),
+    db('replica', { ReadReplicaSourceDBInstanceIdentifier: 'shop-db' }),
+    db('with-replicas', { ReadReplicaDBInstanceIdentifiers: ['far'], VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-db2', Status: 'active' }] }),
+    db('other-db', { VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-other', Status: 'active' }] }),
+    db('aur-1', { DBClusterIdentifier: 'aurora', Engine: 'aurora-postgresql', DBInstanceClass: 'db.r6g.large' }),
+    db('aur-2', { DBClusterIdentifier: 'aurora', Engine: 'aurora-postgresql', DBInstanceClass: 'db.r6g.large' }),
+    db('sls-1', { DBClusterIdentifier: 'aurora-sls', Engine: 'aurora-postgresql', DBInstanceClass: 'db.serverless' }),
+  ];
+  const CLUSTERS = [
+    { DBClusterIdentifier: 'aurora', Status: 'available', Engine: 'aurora-postgresql', EngineMode: 'provisioned', VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-aur', Status: 'active' }], TagList: [{ Key: 'team', Value: 'shop' }] },
+    { DBClusterIdentifier: 'aurora-sls', Status: 'available', Engine: 'aurora-postgresql', EngineMode: 'provisioned', VpcSecurityGroups: [{ VpcSecurityGroupId: 'sg-aur', Status: 'active' }], TagList: [] },
+  ];
+  const INGRESS: Record<string, string[]> = { 'sg-db': ['sg-web'], 'sg-db2': ['sg-api'], 'sg-aur': ['sg-app'], 'sg-other': ['sg-elsewhere'] };
+  const service = `arn:aws:ecs:${R}:${A}:service/prod/api`;
+  function ports(rds?: RegionPorts['rds']) {
+    const { ports: base } = regionPorts([rule('web'), rule('api', { backend: { kind: 'ecs', id: service, arn: service } }), rule('admin', { backend: { kind: 'instance', id: 'i-9' } })]);
+    const instances = base.ec2!.describeInstances;
+    base.ec2 = {
+      describeInstances: async (input) => {
+        const out = await instances(input);
+        for (const r of out.Reservations ?? []) for (const i of r.Instances ?? []) Object.assign(i, { SecurityGroups: [{ GroupId: sgOf[i.InstanceId!] }] });
+        return out;
+      },
+      describeSecurityGroups: async ({ GroupIds }) => ({ SecurityGroups: GroupIds.map((g) => ({ GroupId: g, IpPermissions: [{ UserIdGroupPairs: (INGRESS[g] ?? []).map((from) => ({ GroupId: from })) }, { IpRanges: [{ CidrIp: '10.0.0.0/16' }] }] })) }),
+    };
+    const services = base.ecs.describeServices;
+    base.ecs = { ...base.ecs, describeServices: async (input) => {
+      const out = await services(input);
+      return { services: (out.services ?? []).map((x) => ({ ...x, networkConfiguration: { awsvpcConfiguration: { securityGroups: ['sg-api'] } } })) };
+    } };
+    if (rds) base.rds = rds;
+    return base;
+  }
+  const RDS: RegionPorts['rds'] = {
+    describeDBInstances: async ({ Marker }) => (Marker ? { DBInstances: INSTANCES.slice(4) } : { DBInstances: INSTANCES.slice(0, 4), Marker: 'next' }),
+    describeDBClusters: async () => ({ DBClusters: CLUSTERS }),
+  };
+
+  it('each workload\'s security groups, and the databases whose security group lets one in, with what they stop or why they cannot be stopped', async () => {
+    const found = await discoverRegion(ports(RDS), { account: A, region: R });
+    expect(found.workloads.map((w) => [w.targetGroup, w.securityGroups])).toEqual([['web', ['sg-web']], ['api', ['sg-api']], ['admin', ['sg-app']]]);
+    const item = (cls: string, engine = 'mysql') => ({ kind: 'rds', class: cls, engine, multiAz: false });
+    expect(found.databases).toEqual([
+      { kind: 'rds-instance', id: 'shop-db', allowedFrom: ['sg-web'], tags: { env: ['dev'] }, stopped: [item('db.t3.medium')] },
+      { kind: 'rds-instance', id: 'replica', allowedFrom: ['sg-web'], tags: {}, stopped: [], notStoppable: 'a read replica: cannot be stopped' },
+      { kind: 'rds-instance', id: 'with-replicas', allowedFrom: ['sg-api'], tags: {}, stopped: [], notStoppable: 'it has read replicas: cannot be stopped' },
+      { kind: 'rds-cluster', id: 'aurora', allowedFrom: ['sg-app'], tags: { team: ['shop'] }, stopped: [item('db.r6g.large', 'aurora-postgresql'), item('db.r6g.large', 'aurora-postgresql')] },
+      { kind: 'rds-cluster', id: 'aurora-sls', allowedFrom: ['sg-app'], tags: {}, stopped: [], notStoppable: 'Aurora Serverless: not yet' },
+    ]);
+  });
+
+  it('without RDS rights the databases are not read, said; without an RDS port (before) none', async () => {
+    const denied = { describeDBInstances: async () => { throw Object.assign(new Error('not authorized to perform: rds:DescribeDBInstances'), { name: 'AccessDenied' }); }, describeDBClusters: async () => ({}) };
+    const found = await discoverRegion(ports(denied), { account: A, region: R });
+    expect([found.databases, found.databasesError]).toEqual([[], 'AccessDenied: not authorized to perform: rds:DescribeDBInstances']);
+    expect((await discoverRegion(ports(), { account: A, region: R })).databases).toEqual([]);
+  });
+});
+
 describe('the discovery of every account and region', () => {
   const account = (id: string, credentials: () => Promise<null | { accessKeyId: string; secretAccessKey: string; sessionToken: string }> = async () => null) => ({ account: id, name: id, credentials });
   const reachedOf = (accounts: ReturnType<typeof account>[]): Reached => ({ organization: 'o-abc123', why: null, accounts, unreachable: [], listed: accounts.length });

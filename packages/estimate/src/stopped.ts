@@ -11,9 +11,9 @@ export type RouterBackend =
   // A Kubernetes owner (router 0.29.0, R10.5): its pods and their nodes, read through the cluster's API.
   | { kind: 'k8s'; id: string; cluster: string; namespace: string; owner: { kind: string; name: string }; autoscaler: string | null };
 export interface StoppedPorts {
-  ec2: { describeInstances(input: { InstanceIds: string[] }): Promise<{ Reservations?: { Instances?: { InstanceId?: string; InstanceType?: string; PlatformDetails?: string; InstanceLifecycle?: string; State?: { Name?: string } }[] }[] }> };
+  ec2: { describeInstances(input: { InstanceIds: string[] }): Promise<{ Reservations?: { Instances?: { InstanceId?: string; InstanceType?: string; PlatformDetails?: string; InstanceLifecycle?: string; State?: { Name?: string }; SecurityGroups?: { GroupId?: string }[] }[] }[] }> };
   ecs: {
-    describeServices(input: { cluster: string; services: string[] }): Promise<{ services?: { serviceArn?: string; desiredCount?: number; launchType?: string; capacityProviderStrategy?: { capacityProvider?: string; weight?: number; base?: number }[]; taskDefinition?: string }[] }>;
+    describeServices(input: { cluster: string; services: string[] }): Promise<{ services?: { serviceArn?: string; desiredCount?: number; launchType?: string; capacityProviderStrategy?: { capacityProvider?: string; weight?: number; base?: number }[]; taskDefinition?: string; networkConfiguration?: { awsvpcConfiguration?: { securityGroups?: string[] } } }[] }>;
     describeTaskDefinition(input: { taskDefinition: string }): Promise<{ taskDefinition?: { cpu?: string; memory?: string; runtimePlatform?: { cpuArchitecture?: string; operatingSystemFamily?: string } } }>;
   };
   // A cluster's API (the router's client, with the profile's access): Kubernetes owners only.

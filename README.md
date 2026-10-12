@@ -224,7 +224,7 @@ vision repository: `tools/estimate/bin/dormeto-estimate`, the same options).
 ```
 npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
   [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
-  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--parallel 5] [--out <dir>]
+  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--max-wakes-rds 2|none] [--parallel 5] [--out <dir>]
 ```
 
 - **Accounts:** the organization's active accounts when the profile may list them (the management account or a
@@ -256,6 +256,13 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   wait more than it saves), and `--min-saving` ($1 by default) one that would save less than that a month (not worth
   installing Dormeto for). Each is listed apart in the report with its window, wakes a day and the saving left out;
   `none` keeps them all.
+- **Companion databases:** an RDS instance or an Aurora provisioned cluster (not yet Aurora Serverless) whose security
+  group lets in a workload's (an instance's, its Auto Scaling group's instances', an ECS service's; not yet Kubernetes)
+  naps with it, once the wakes filter has kept the workload: its saving is added to the workload's (before
+  `--min-saving`) and listed apart. Left out, with why: excluded by its own tags (`--exclude-tags`), reached by another
+  workload of the region (even an excluded one), a read replica or one with replicas, or its workload waking more than
+  `--max-wakes-rds` times a day (2 by default: a database takes minutes to start; `none` keeps them). The table by
+  account counts them (RDS).
 - **Three phases:** discovery (`--parallel` accounts at a time, 5 by default, each scanning its regions one after the
   other; in a terminal, one progress line with a bar, the accounts done, the regions, workloads, failures and the time,
   else a line per account; discovery's scan of each enabled region, or `--regions`; what each eligible workload's
@@ -275,7 +282,8 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   `ListOrganizationalUnitsForParent`, `ListAccountsForParent`, `ec2:DescribeRegions`, `DescribeInstances`,
   `DescribeSpotPriceHistory`, `elasticloadbalancing:Describe*`, `autoscaling:DescribeAutoScalingGroups`,
   `ecs:ListClusters`, `ListServices`, `DescribeServices`, `DescribeTaskDefinition`, `cloudwatch:GetMetricData`,
-  `pricing:GetProducts`, `eks:ListClusters`, `DescribeCluster` (the `ReadOnlyAccess` managed policy covers them).
+  `pricing:GetProducts`, `eks:ListClusters`, `DescribeCluster`, `rds:DescribeDBInstances`, `DescribeDBClusters`,
+  `ec2:DescribeSecurityGroups` (the `ReadOnlyAccess` managed policy covers them).
   An EKS cluster's workloads are read through its Kubernetes API, which needs the profile's own access entry (the
   view policy is enough); a cluster it cannot read is listed with the reason. CloudWatch costs about $0.01 per 1,000
   workloads.

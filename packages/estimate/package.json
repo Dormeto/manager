@@ -9,6 +9,7 @@
     "build": "esbuild src/bin.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/estimate.mjs --external:@aws-sdk/*"
   },
   "dependencies": {
+    "@aws-sdk/client-rds": "^3.1149.0",
     "@dormeto/discovery": "*",
     "@dormeto/fleet": "*",
     "@dormeto/manager-api": "*"

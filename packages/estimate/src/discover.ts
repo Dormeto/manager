@@ -31,16 +31,51 @@ export interface Workload {
   // Already managed by Dormeto: its requests while asleep go to its waker target group, added up (as R10).
   managed?: true;
   wakerTargetGroupArn?: string;
+  // Its backend's security groups (an instance's, its Auto Scaling group's instances', an ECS service's): a database whose
+  // security group lets one in is its companion. Kubernetes pods share their nodes' groups: not matched yet.
+  securityGroups?: string[];
+}
+// A companion database candidate of the region (the user, 2026-10-11): an RDS instance, or an Aurora provisioned cluster
+// (its instances), whose security groups let in allowedFrom; what a nap would stop, as the router describes it; why it
+// cannot be stopped with a workload, if so (then nothing to price).
+export interface Database {
+  kind: 'rds-instance' | 'rds-cluster';
+  id: string;
+  allowedFrom: string[];
+  tags: Record<string, string[]>;
+  stopped: StoppedItem[];
+  notStoppable?: string;
 }
 export interface Ineligible { loadBalancer: string; targetGroup: string | null; hosts: string[]; reason: string }
 // clusters: the region's EKS clusters the profile cannot read, with why (R10.5).
-export interface RegionDiscovery { account: string; region: string; workloads: Workload[]; ineligible: Ineligible[]; clusters?: { name: string; reason: string }[]; error?: string }
+// databases: the region's companion candidates (letting in a workload's security group); databasesError: why they could
+// not be read.
+export interface RegionDiscovery {
+  account: string; region: string; workloads: Workload[]; ineligible: Ineligible[]; clusters?: { name: string; reason: string }[]; error?: string;
+  databases?: Database[]; databasesError?: string;
+}
+type DbInstance = {
+  DBInstanceIdentifier?: string; DBInstanceStatus?: string; Engine?: string; DBInstanceClass?: string; MultiAZ?: boolean; DBClusterIdentifier?: string;
+  ReadReplicaSourceDBInstanceIdentifier?: string; ReadReplicaDBInstanceIdentifiers?: string[]; VpcSecurityGroups?: { VpcSecurityGroupId?: string; Status?: string }[];
+  TagList?: { Key?: string; Value?: string }[];
+};
+type DbCluster = {
+  DBClusterIdentifier?: string; Status?: string; Engine?: string; EngineMode?: string; VpcSecurityGroups?: { VpcSecurityGroupId?: string; Status?: string }[];
+  TagList?: { Key?: string; Value?: string }[];
+};
 export interface RegionPorts extends StoppedPorts {
   scan(): Promise<ScannedRule[]>;
   // The clusters the last scan could not read (set by the scan).
   unreadableClusters?: () => { name: string; reason: string }[];
   autoscaling: { describeAutoScalingGroups(input: { AutoScalingGroupNames: string[] }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; DesiredCapacity?: number; Instances?: { InstanceId?: string }[] }[] }> };
   elbv2: { describeRules(input: { RuleArns: string[] }): Promise<{ Rules?: Rule[] }> };
+  ec2: StoppedPorts['ec2'] & {
+    describeSecurityGroups?(input: { GroupIds: string[] }): Promise<{ SecurityGroups?: { GroupId?: string; IpPermissions?: { UserIdGroupPairs?: { GroupId?: string }[] }[] }[] }>;
+  };
+  rds?: {
+    describeDBInstances(input: { Marker?: string }): Promise<{ DBInstances?: DbInstance[]; Marker?: string }>;
+    describeDBClusters(input: { Marker?: string }): Promise<{ DBClusters?: DbCluster[]; Marker?: string }>;
+  };
 }
 export type ProgressEvent = { phase: 'discovery' | 'requests' | 'uptime'; account: string; region: string; from: 'cache' | 'aws'; workloads: number; error?: string };
 export type Progress = (event: ProgressEvent) => void;
@@ -94,6 +129,89 @@ async function wakerOf(ports: RegionPorts, rule: ScannedRule): Promise<{ waker: 
   return { waker: null };
 }
 
+const unique = (values: (string | undefined)[]) => [...new Set(values.filter((v): v is string => Boolean(v)))];
+
+// The security groups of a workload's backend: an instance's, its Auto Scaling group's instances', an ECS service's
+// (awsvpc). None for a Kubernetes owner (its pods share their nodes' groups) or when they cannot be read.
+async function securityGroupsOf(ports: RegionPorts, backend: NonNullable<ScannedRule['backend']>, running: RouterBackend | null): Promise<string[]> {
+  try {
+    if (backend.kind === 'instance' || backend.kind === 'asg') {
+      const ids = backend.kind === 'instance' ? [backend.id] : running?.kind === 'asg' ? running.instances : [];
+      if (!ids.length) return [];
+      const { Reservations = [] } = await ports.ec2.describeInstances({ InstanceIds: ids });
+      return unique(Reservations.flatMap((r) => r.Instances ?? []).flatMap((i) => i.SecurityGroups ?? []).map((g) => g.GroupId));
+    }
+    if (backend.kind === 'ecs') {
+      const { services: [service] = [] } = await ports.ecs.describeServices({ cluster: clusterOf(backend.id), services: [backend.id] });
+      return unique(service?.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? []);
+    }
+  } catch {
+    // Not read: the workload gets no companion.
+  }
+  return [];
+}
+
+async function pages<T>(call: (marker?: string) => Promise<Record<string, unknown> & { Marker?: string }>, key: string): Promise<T[]> {
+  const items: T[] = [];
+  let marker: string | undefined;
+  do {
+    const page = await call(marker);
+    items.push(...((page[key] as T[] | undefined) ?? []));
+    marker = page.Marker;
+  } while (marker);
+  return items;
+}
+
+const tagsOf = (list: { Key?: string; Value?: string }[] = []) => {
+  const tags: Record<string, string[]> = {};
+  for (const t of list) if (t.Key) (tags[t.Key] ??= []).push(t.Value ?? '');
+  return tags;
+};
+// What a nap of the database would stop, as the router describes it (lambda/src/lib/stopped.mjs).
+const dbItem = (db: DbInstance) => ({ kind: 'rds', class: db.DBInstanceClass, engine: db.Engine, multiAz: db.MultiAZ === true }) as unknown as StoppedItem;
+const activeGroups = (groups: { VpcSecurityGroupId?: string; Status?: string }[] = []) => unique(groups.filter((g) => g.Status !== 'inactive').map((g) => g.VpcSecurityGroupId));
+
+// The region's databases letting in one of `groups`, with their tags, what they stop, why they cannot be stopped.
+async function databasesOf(ports: RegionPorts, groups: Set<string>): Promise<{ databases: Database[]; error?: string }> {
+  const { rds } = ports;
+  if (!rds || !groups.size || !ports.ec2.describeSecurityGroups) return { databases: [] };
+  try {
+    const instances = await pages<DbInstance>((m) => rds.describeDBInstances(m ? { Marker: m } : {}), 'DBInstances');
+    const clusters = await pages<DbCluster>((m) => rds.describeDBClusters(m ? { Marker: m } : {}), 'DBClusters');
+    const found: (Omit<Database, 'allowedFrom'> & { groups: string[] })[] = [];
+    for (const db of instances.filter((i) => !i.DBClusterIdentifier)) {
+      const notStoppable = db.DBInstanceStatus !== 'available' ? `${db.DBInstanceStatus} when discovered`
+        : db.ReadReplicaSourceDBInstanceIdentifier ? 'a read replica: cannot be stopped'
+        : db.ReadReplicaDBInstanceIdentifiers?.length ? 'it has read replicas: cannot be stopped'
+        : db.Engine?.startsWith('sqlserver') && db.MultiAZ ? 'SQL Server Multi-AZ: cannot be stopped'
+        : undefined;
+      found.push({ kind: 'rds-instance', id: db.DBInstanceIdentifier ?? '', groups: activeGroups(db.VpcSecurityGroups), tags: tagsOf(db.TagList), stopped: notStoppable ? [] : [dbItem(db)], ...(notStoppable ? { notStoppable } : {}) });
+    }
+    for (const cluster of clusters) {
+      const members = instances.filter((i) => i.DBClusterIdentifier === cluster.DBClusterIdentifier);
+      const notStoppable = cluster.EngineMode === 'serverless' || members.some((i) => i.DBInstanceClass === 'db.serverless') ? 'Aurora Serverless: not yet'
+        : !cluster.Engine?.startsWith('aurora') ? 'a Multi-AZ DB cluster: not yet'
+        : cluster.Status !== 'available' ? `${cluster.Status} when discovered`
+        : !members.length ? 'no instance'
+        : undefined;
+      found.push({ kind: 'rds-cluster', id: cluster.DBClusterIdentifier ?? '', groups: activeGroups(cluster.VpcSecurityGroups), tags: tagsOf(cluster.TagList), stopped: notStoppable ? [] : members.map(dbItem), ...(notStoppable ? { notStoppable } : {}) });
+    }
+    // Who each database security group lets in (rules naming a security group; address ranges are not followed).
+    const ingress = new Map<string, string[]>();
+    const asked = unique(found.flatMap((f) => f.groups));
+    for (let first = 0; first < asked.length; first += 100) {
+      const { SecurityGroups = [] } = await ports.ec2.describeSecurityGroups({ GroupIds: asked.slice(first, first + 100) });
+      for (const sg of SecurityGroups) ingress.set(sg.GroupId ?? '', unique((sg.IpPermissions ?? []).flatMap((p) => p.UserIdGroupPairs ?? []).map((p) => p.GroupId)));
+    }
+    const databases = found
+      .map(({ groups: own, ...db }) => ({ ...db, allowedFrom: unique(own.flatMap((g) => ingress.get(g) ?? [])) }))
+      .filter((db) => db.allowedFrom.some((g) => groups.has(g)));
+    return { databases };
+  } catch (err) {
+    return { databases: [], error: `${(err as Error).name}: ${(err as Error).message}` };
+  }
+}
+
 export async function discoverRegion(ports: RegionPorts, { account, region }: { account: string; region: string }): Promise<RegionDiscovery> {
   const workloads: Workload[] = [];
   const ineligible: Ineligible[] = [];
@@ -106,10 +224,12 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     let stopped: StoppedItem[];
     let instanceState: string | undefined;
     let ecsDesired: number | undefined;
+    let running: RouterBackend | null = null;
     try {
       const found = await routerBackend(ports, rule.backend, managed !== null);
       instanceState = found.instanceState;
       ecsDesired = found.ecsDesired;
+      running = found.running;
       stopped = found.running ? await describeStopped(ports, [found.running]) : [];
     } catch (err) {
       // Never guessed: an item that cannot be priced, said in the estimate.
@@ -121,10 +241,12 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
       ...(instanceState ? { instanceState } : {}),
       ...(ecsDesired !== undefined ? { ecsDesired } : {}),
       ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
+      securityGroups: await securityGroupsOf(ports, rule.backend, running),
     });
   }
   const clusters = ports.unreadableClusters?.() ?? [];
-  return { account, region, workloads, ineligible, ...(clusters.length ? { clusters } : {}) };
+  const { databases, error: databasesError } = await databasesOf(ports, new Set(workloads.flatMap((w) => w.securityGroups ?? [])));
+  return { account, region, workloads, ineligible, ...(clusters.length ? { clusters } : {}), databases, ...(databasesError ? { databasesError } : {}) };
 }
 
 // regions: --regions, used as given (never cached as an account's enabled regions); null: each account's enabled ones.
@@ -162,8 +284,9 @@ export async function discoverAll({ reached, regions: given, regionsOf, portsOf,
         for (const region of regions) {
           const path = `discovery/${account}-${region}.json`;
           const kept = again ? null : await cache.get<RegionDiscovery>(path, freshDiscovery(now()));
-          // Kept before workloads had their tags, or instances their state: scanned again.
-          if (kept && kept.workloads.every((w) => w.tags && (w.backend.kind !== 'instance' || w.managed || w.instanceState))) {
+          // Kept before workloads had their tags and security groups, instances their state, or the region its companion
+          // databases: scanned again.
+          if (kept && kept.databases && kept.workloads.every((w) => w.tags && w.securityGroups && (w.backend.kind !== 'instance' || w.managed || w.instanceState))) {
             found.push(kept);
             progress({ phase: 'discovery', account, region, from: 'cache', workloads: kept.workloads.length });
             continue;

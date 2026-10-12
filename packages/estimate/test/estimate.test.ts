@@ -15,7 +15,7 @@ const FROM = '2026-09-26T12:00:00.000Z';
 const T3: StoppedItem = { kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' };
 const FARGATE: StoppedItem = { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'arm64', os: 'Linux' };
 const HUGE: StoppedItem = { kind: 'ec2', type: 'x9.huge', count: 1, os: 'Linux' };
-const hourly = async (_region: string, item: StoppedItem) => (item.kind === 'ec2' && item.type === 't3.medium' ? 0.0456 : item.kind === 'ec2' && item.type === 't4g.pico' ? 0.001 : item.kind === 'fargate' ? 0.0099 : null);
+const hourly = async (_region: string, item: StoppedItem) => (item.kind === 'ec2' && item.type === 't3.medium' ? 0.0456 : item.kind === 'ec2' && item.type === 't4g.pico' ? 0.001 : item.kind === 'fargate' ? 0.0099 : (item as { kind: string }).kind === 'rds' ? 0.068 : null);
 const daily: [number, number][] = Array.from({ length: 14 }, (_, d) => [600 + d * 1440, 3]);
 const w = (account: string, region: string, name: string, stopped: StoppedItem[]): Workload => ({
   account, region, loadBalancer: 'web', loadBalancerArn: `arn:lb/${name}`, targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg', id: name }, stopped, tags: {},
@@ -34,7 +34,7 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1, parallel: 5, maxWakesRds: 2 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
 const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60, running: { from: string; to: string }[] | null = null) => idleWindowAdvice({
@@ -300,6 +300,55 @@ describe('the estimate', () => {
     expect(e.byAccount[B]).toMatchObject({ workloads: 0, excluded: 1, actualMonth: 0 });
     expect(e.totals).toMatchObject({ workloads: 1, excluded: 5 });
     expect(e.byRegion['eu-west-1']!.excluded).toBe(5);
+  });
+
+  // Companion databases (the user, 2026-10-11): found by security group in discovery, attached after the wakes filter;
+  // the tags exclusion applies to them; left out when their workload wakes more than --max-wakes-rds a day.
+  describe('companion databases', () => {
+    const every = (hours: number): [number, number][] => Array.from({ length: Math.round((14 * 24) / hours) }, (_, k) => [10 + Math.round(k * hours * 60), 2]);
+    const RDS = { kind: 'rds', class: 'db.t3.medium', engine: 'mysql', multiAz: false } as unknown as StoppedItem;
+    const sg = (workload: Workload, group: string): Workload => ({ ...workload, securityGroups: [group] });
+    const shop = sg(w(A, 'eu-west-1', 'shop', [T3]), 'sg-shop');
+    const blog = sg(w(A, 'eu-west-1', 'blog', [T3]), 'sg-blog');
+    const calm = sg(w(A, 'eu-west-1', 'calm', [T3]), 'sg-calm');
+    const database = (id: string, allowedFrom: string[], over: Record<string, unknown> = {}) => ({ kind: 'rds-instance' as const, id, allowedFrom, tags: {}, stopped: [RDS], ...over });
+    const regions = [{
+      account: A, region: 'eu-west-1', workloads: [shop, blog, calm], ineligible: [],
+      databases: [
+        database('shop-db', ['sg-shop']), database('blog-db', ['sg-blog']), database('prd-db', ['sg-shop'], { tags: { env: ['PRD'] } }),
+        database('calm-db', ['sg-calm']), database('shared-db', ['sg-shop', 'sg-calm']), database('replica', ['sg-shop'], { stopped: [], notStoppable: 'a read replica: cannot be stopped' }),
+      ],
+    }] as RegionDiscovery[];
+    // shop: about 1 wake a day; blog: every 3 hours (busy); calm: about 2.5 a day.
+    const requests = [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/blog': every(3), 'arn:tg/calm': every(9.6) }, unreadable: {} }] as RegionRequests[];
+    const options = { ...OPTIONS, excludeTags: [{ env: ['PRD'] }] };
+
+    it('attaches a database to the elected workload its security group lets in: its saving with the workload\'s, apart in the report', async () => {
+      const e = await run({ regions, requests, options });
+      const x = e.workloads.find((y) => y.workload.targetGroup === 'shop')!;
+      expect(x.databases?.map((d) => [d.kind, d.id])).toEqual([['rds-instance', 'shop-db']]);
+      const alone = (await run({ regions: [{ ...regions[0]!, databases: [] }], requests, options })).workloads.find((y) => y.workload.targetGroup === 'shop')!;
+      expect(x.databases![0]!.usdMonth).toBeCloseTo(x.atWindow.usdMonth - alone.atWindow.usdMonth, 6);
+      expect(x.databases![0]!.recommendedUsdMonth).toBeCloseTo(x.recommended.usdMonth - alone.recommended.usdMonth, 6);
+      expect(x.actualMonth).toBeCloseTo((0.0456 + 0.068) * 24 * 30, 6);
+      expect([e.totals.databases, e.byAccount[A]!.databases]).toEqual([1, 1]);
+      expect(e.assumptions.join(' ')).toContain('Companion databases are found by security group');
+      // blog is busy: left out, its database never considered.
+      expect(e.busy.map((b) => b.workload.targetGroup)).toEqual(['blog']);
+    });
+
+    it('leaves out a database excluded by its tags, of a workload waking more than --max-wakes-rds, reached by several workloads, or that cannot be stopped', async () => {
+      const e = await run({ regions, requests, options });
+      expect(e.databasesLeftOut.map((d) => [d.database.id, d.workload.targetGroup, d.reason])).toEqual([
+        ['prd-db', 'shop', 'excluded by its tags (env=PRD)'],
+        ['calm-db', 'calm', `its workload wakes ${(e.workloads.find((y) => y.workload.targetGroup === 'calm')!.recommended.wakesPerDay).toFixed(1)} times a day at its recommended window, more than --max-wakes-rds 2 (a database takes minutes to start)`],
+        ['shared-db', 'shop', 'reached by 2 workloads: stopping it with one would cut the others off'],
+        ['replica', 'shop', 'a read replica: cannot be stopped'],
+      ]);
+      expect(e.workloads.find((y) => y.workload.targetGroup === 'calm')!.databases ?? []).toEqual([]);
+      const kept = await run({ regions, requests, options: { ...options, maxWakesRds: null } });
+      expect(kept.workloads.find((y) => y.workload.targetGroup === 'calm')!.databases?.map((d) => d.id)).toEqual(['calm-db']);
+    });
   });
 
   it('the workloads excluded by their tags, as given, apart from the estimate', async () => {

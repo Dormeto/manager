@@ -15,7 +15,9 @@ CLI script, of the same release).
   `--max-wakes` (3 by default) and `--min-saving` ($1 by default) leave out the workloads that would wake more than
   that a day, or save less than that a month, at their recommended window (`none` keeps them); the table by account
   counts each account's excluded workloads, whatever the reason. Discovery reads `--parallel` accounts at a time (5 by
-  default), with its progress on one line in a terminal.
+  default), with its progress on one line in a terminal. Companion RDS databases (instances and Aurora provisioned
+  clusters) are found by security group and napped with their workload, unless shared, excluded by their tags, unstoppable,
+  or their workload wakes more than `--max-wakes-rds` (2 by default) times a day.
 
 ## 0.10.0 — 2026-10-11
 

@@ -45,6 +45,8 @@ export function summaryLines(e: Estimate): string[] {
   if (e.excluded.length) lines.push(`Excluded by tags: ${n(e.excluded.length, 'workload')} (see the report)`);
   if (e.busy.length) lines.push(`More than ${e.options.maxWakes} wakes a day: ${n(e.busy.length, 'workload')} left out (see the report)`);
   if (e.small.length) lines.push(`Saving less than ${usd(e.options.minSaving ?? 0)} a month: ${n(e.small.length, 'workload')} left out (see the report)`);
+  const attached = e.workloads.reduce((total, x) => total + (x.databases?.length ?? 0), 0);
+  if (attached || e.databasesLeftOut.length) lines.push(`Companion databases: ${attached} attached, ${e.databasesLeftOut.length} left out (see the report)`);
   if (e.unreachable.length) lines.push(`Not reached: ${n(e.unreachable.length, 'account')} (see the report for how to include them)`);
   if (e.failedRegions.length) lines.push(`Regions that failed: ${e.failedRegions.map((r) => `${r.account}/${r.region}`).join(', ')}`);
   return lines;
@@ -74,7 +76,7 @@ const textTable = (t: Table) => {
 };
 
 // The workloads, then by backend: Auto Scaling groups, EC2 instances, ECS services, Kubernetes owners on EKS.
-const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs, t.kinds.eks ?? 0, t.excluded ?? 0].map(String);
+const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs, t.kinds.eks ?? 0, t.databases ?? 0, t.excluded ?? 0].map(String);
 
 // What Dormeto would save of an actual cost, cost with Dormeto included.
 const saved = (t: Totals) => (t.actualMonth ? `${Math.round(((t.actualMonth - t.withDormetoMonth) / t.actualMonth) * 100)}%` : '');
@@ -87,8 +89,8 @@ function accountsTable(e: Estimate, limit = Infinity): Table & { more: number } 
   const shown = limit < accounts.length ? [...accounts].sort((a, b) => b[1].usdMonthWindow - a[1].usdMonthWindow).slice(0, limit) : accounts;
   const manager = e.dormeto.manager.count ? `; the total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation` : '';
   return {
-    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Excluded', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
-    figures: [false, false, true, true, true, true, true, true, true, true, true],
+    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'RDS', 'Excluded', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+    figures: [false, false, true, true, true, true, true, true, true, true, true, true],
     groups: [
       shown.map(([account, a]) => ({ cells: [account, name(account), ...counts(a), usd(a.actualMonth), usd(a.withDormetoMonth), saved(a)] })),
       [{ cells: ['Total', '', ...counts(t), usd(t.actualMonth), usd(t.withDormetoMonth), saved(t)], strong: true }],
@@ -155,6 +157,27 @@ function costVisual(e: Estimate): string[] {
 // The terminal's accounts: those saving the most.
 const TERMINAL_ACCOUNTS = 10;
 
+// The companion databases attached (their saving, included in their workload's), those left out with why, and the regions
+// whose databases could not be read.
+function companionLines(e: Estimate): string[] {
+  const attached = e.workloads.flatMap((x) => (x.databases ?? []).map((d) => ({ x, d })));
+  if (!attached.length && !e.databasesLeftOut.length && !e.databasesUnread.length) return [];
+  const where = (w: { account: string; region: string; hosts: string[]; targetGroup: string }) => `| ${w.account} | ${w.region} | ${cell(w.hosts.join(', ') || w.targetGroup)} |`;
+  return [
+    '## Companion databases', '',
+    'Found by security group: a database whose security group lets a workload\'s in naps with it (RDS instances and Aurora provisioned clusters, not yet Aurora Serverless); its saving is in the workload\'s.', '',
+    ...(attached.length
+      ? ['| Account | Region | Workload | Database | Saving | At the recommended window |', '|---|---|---|---|---|---|',
+        ...attached.map(({ x, d }) => `${where(x.workload)} ${d.kind} ${cell(d.id)} | ${usd(d.usdMonth)} | ${usd(d.recommendedUsdMonth)} |`), '']
+      : []),
+    ...(e.databasesLeftOut.length
+      ? ['### Left out', '', '| Account | Region | Workload | Database | Why |', '|---|---|---|---|---|',
+        ...e.databasesLeftOut.map((l) => `${where(l.workload)} ${l.database.kind} ${cell(l.database.id)} | ${cell(l.reason)} |`), '']
+      : []),
+    ...(e.databasesUnread.length ? [...e.databasesUnread.map((u) => `- ${u.account} ${u.region}: not read (${u.reason})`), ''] : []),
+  ];
+}
+
 export function markdownReport(e: Estimate): string {
   const t = e.totals;
   const o = e.options;
@@ -175,7 +198,8 @@ export function markdownReport(e: Estimate): string {
       const w = x.workload;
       const hosts = `${w.hosts.join(', ') || w.targetGroup}${x.quiet ? ' (no request in 14 days)' : ''}${w.managed ? ' (managed by Dormeto)' : ''}`;
       const ran = !x.uptime ? '' : 'hoursPerDay' in x.uptime ? ` (runs ${day(x.uptime.hoursPerDay)} h a day, measured)` : ` (uptime unreadable: ${x.uptime.unreadable}; 24/7 assumed)`;
-      return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}${cell(ran)} | ${usd(x.atWindow.usdMonth)} | ${day(x.atWindow.wakesPerDay)} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
+      const databases = (x.databases ?? []).map((d) => ` + ${d.kind} ${d.id}`).join('');
+      return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}${cell(databases)}${cell(ran)} | ${usd(x.atWindow.usdMonth)} | ${day(x.atWindow.wakesPerDay)} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
     }), '',
     '## Left out', '',
     ...(e.leftOut.length
@@ -191,6 +215,7 @@ export function markdownReport(e: Estimate): string {
         '| Account | Region | Load balancer | Hosts | Backend | Recommended | Saving left out |', '|---|---|---|---|---|---|---|',
         ...e.small.map((x) => `| ${x.workload.account} | ${x.workload.region} | ${cell(x.workload.loadBalancer)} | ${cell(x.workload.hosts.join(', ') || x.workload.targetGroup)} | ${backendCell(x.workload)} | ${x.minutes} min | ${usd(x.usdMonth)} |`), '']
       : []),
+    ...companionLines(e),
     ...(o.excludeTags.length
       ? ['## Excluded by tags', '', ...(e.excluded.length
         ? ['| Account | Region | Load balancer | Target group | Hosts | Tags matched |', '|---|---|---|---|---|---|', ...e.excluded.map((x) => `| ${x.workload.account} | ${x.workload.region} | ${cell(x.workload.loadBalancer)} | ${cell(x.workload.targetGroup)} | ${cell(x.workload.hosts.join(', '))} | ${cell(x.criterion)} |`)]
@@ -220,7 +245,8 @@ export function markdownReport(e: Estimate): string {
     `- Discounts: compute ${o.discounts.compute}%, databases ${o.discounts.databases}%`,
     `- Idle window of the figures: ${windowWords(o.window)} (the recommended windows besides)`,
     `- Wakes a day: ${o.maxWakes === null ? 'any (--max-wakes none)' : `at most ${o.maxWakes} at each workload's recommended window, the busier left out (--max-wakes)`}`,
-    `- Minimum saving: ${o.minSaving === null ? 'none (--min-saving none)' : `${usd(o.minSaving)} a month at each workload's recommended window, the smaller left out (--min-saving)`}`, '',
+    `- Minimum saving: ${o.minSaving === null ? 'none (--min-saving none)' : `${usd(o.minSaving)} a month at each workload's recommended window, the smaller left out (--min-saving)`}`,
+    `- Companion databases: found by security group, ${o.maxWakesRds === null ? 'whatever their workload\'s wakes (--max-wakes-rds none)' : `left out when their workload wakes more than ${o.maxWakesRds} times a day at its recommended window (--max-wakes-rds)`}`, '',
     '## Assumptions', '',
     ...e.assumptions.map((a) => `- ${a}`), '',
   ];
