@@ -50,8 +50,12 @@ export interface DynamoSender {
   send(command: object): Promise<any>;
 }
 
-export function createFleetStore({ dynamo, table }: { dynamo: DynamoSender; table: string }) {
+// Summaries expire this long after their last write (the table's TTL): those of a router uninstalled or gone leave.
+const SUMMARY_DAYS = 7;
+
+export function createFleetStore({ dynamo, table, now = Date.now }: { dynamo: DynamoSender; table: string; now?: () => number }) {
   const key = (sk: string) => ({ pk: { S: PK }, sk: { S: sk } });
+  const expiresAt = () => ({ N: String(Math.floor(now() / 1000) + SUMMARY_DAYS * 86_400) });
   const routerKey = (account: string, region: string) => `RS#${account}#${region}`;
   const workloadKey = (account: string, region: string, id: string) => `WS#${account}#${region}#${id}`;
   const data = <T>(item: Item | undefined): T | null => (item?.data?.S ? (JSON.parse(item.data.S) as T) : null);
@@ -79,7 +83,7 @@ export function createFleetStore({ dynamo, table }: { dynamo: DynamoSender; tabl
     async putRouter(summary: RouterSummary, version: number): Promise<boolean> {
       try {
         await dynamo.send(new PutItemCommand({
-          TableName: table, Item: { ...key(routerKey(summary.account, summary.region)), data: { S: JSON.stringify(summary) }, version: { N: String(version + 1) } },
+          TableName: table, Item: { ...key(routerKey(summary.account, summary.region)), data: { S: JSON.stringify(summary) }, version: { N: String(version + 1) }, expiresAt: expiresAt() },
           ConditionExpression: 'attribute_not_exists(sk) OR version = :version', ExpressionAttributeValues: { ':version': { N: String(version) } },
         }));
         return true;
@@ -104,7 +108,7 @@ export function createFleetStore({ dynamo, table }: { dynamo: DynamoSender; tabl
     },
     async writeWorkload(w: WorkloadSummary, version: number): Promise<boolean> {
       return conditional(() => dynamo.send(new PutItemCommand({
-        TableName: table, Item: { ...key(workloadKey(w.account, w.region, w.workloadId)), data: { S: JSON.stringify(w) }, version: { N: String(version + 1) } },
+        TableName: table, Item: { ...key(workloadKey(w.account, w.region, w.workloadId)), data: { S: JSON.stringify(w) }, version: { N: String(version + 1) }, expiresAt: expiresAt() },
         ConditionExpression: VERSIONED, ExpressionAttributeValues: { ':version': { N: String(version) } },
       })));
     },

@@ -27,7 +27,7 @@ const NOW = Date.parse('2026-10-05T13:00:00.000Z');
 
 function setup() {
   const dynamo = fakeDynamo();
-  const store = createFleetStore({ dynamo, table: 'dmt-dev-manager' });
+  const store = createFleetStore({ dynamo, table: 'dmt-dev-manager', now: () => NOW });
   const refused: [string, object][] = [];
   const ingest = createIngest({ store, now: () => NOW, log: { warn: (event, data) => { refused.push([event, data]); } } });
   const ids = async () => (await store.listWorkloads()).map((w) => w.workloadId).sort();
@@ -128,6 +128,15 @@ describe('fleet', () => {
     const ingest = createIngest({ store: { ...s.store, ...(store.readWorkload ? { readWorkload: store.readWorkload } : {}), routerWorkloads } as never, now: () => NOW });
     await ingest(checked(T2, [workload('a')]));
     expect(await s.ids()).toEqual(['a', 'b']);
+  });
+
+  it('summaries expire 7 days after their last write: those of a router uninstalled or gone leave the table', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a')]));
+    await s.ingest(stateChanged('a', 'AWAKE', 'NAPPING', at(T1, 10)));
+    const expires = Math.floor(NOW / 1000) + 7 * 86_400;
+    const items = [...s.dynamo.items.values()].filter((i) => /^(RS|WS)#/.test(i.sk!.S!));
+    expect(items.map((i) => [i.sk!.S, i.expiresAt?.N]).sort()).toEqual([[`RS#${ACCOUNT}#${REGION}`, String(expires)], [`WS#${ACCOUNT}#${REGION}#a`, String(expires)]]);
   });
 
   it('a state change of a workload not reported yet creates it; the next check that does not list it removes it', async () => {
