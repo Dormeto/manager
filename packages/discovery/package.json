@@ -12,6 +12,14 @@
     "build": "esbuild src/handler.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.mjs --external:@aws-sdk/*"
   },
   "devDependencies": {
+    "@aws-sdk/client-auto-scaling": "^3.1146.0",
+    "@aws-sdk/client-cloudwatch": "^3.1146.0",
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
+    "@aws-sdk/client-ec2": "^3.1146.0",
+    "@aws-sdk/client-ecs": "^3.1146.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "^3.1146.0",
+    "@aws-sdk/client-organizations": "^3.1146.0",
+    "@aws-sdk/client-sts": "^3.1146.0",
     "@types/node": "^24.19.1",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
