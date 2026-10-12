@@ -85,7 +85,8 @@ resource "aws_iam_role" "discovery" {
     }]
   })
   max_session_duration = 3600
-  tags                 = { "dormeto:component" = "discovery" }
+  # Without the command role, the account says it is set up for discovery only: the manager counts it apart.
+  tags = merge({ "dormeto:component" = "discovery" }, var.create_command_role ? {} : { "dormeto:command-role" = "none" })
 }
 
 resource "aws_iam_role_policy" "discovery" {

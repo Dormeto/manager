@@ -3,7 +3,7 @@
 // reason and the procedure. Run now checks again.
 import { computed, ref } from 'vue';
 import { mdiOpenInNew } from '@mdi/js';
-import { accessLine, forwardersLine, procedureLink, type AccessReport } from '../access';
+import { accessLine, countsLine, forwardersLine, procedureLink, type AccessReport } from '../access';
 
 const props = defineProps<{ report: AccessReport; roles?: { discoveryRole: string; commandRole: string } | null }>();
 const all = ref(false);
@@ -25,9 +25,7 @@ const impossible = computed(() => (allImpossible.value ? notConnected.value : no
     <v-card-text>
       <v-alert v-if="report.delegation === 'missing'" type="warning" variant="tonal" density="compact" class="mb-3"
         text="Organization mode is unavailable: the delegation policy of the management account is missing, so the manager cannot list the accounts." />
-      <p>{{ report.counts.ready }} ready<template v-if="report.counts.discoveryMissing">, {{ report.counts.discoveryMissing }} without the discovery role</template>
-        <template v-if="report.counts.commandMissing">, {{ report.counts.commandMissing }} without the command role</template>
-        <template v-if="report.counts.unchecked">, {{ report.counts.unchecked }} not checked yet</template>.</p>
+      <p>{{ countsLine(report.counts) }}</p>
       <ul v-if="shown.length" class="mt-2 pl-4">
         <li v-for="a in shown" :key="a.account" class="text-body-medium">{{ a.name }} ({{ a.account }}): {{ accessLine(a) }}</li>
       </ul>

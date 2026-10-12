@@ -59,7 +59,13 @@ put_role "$DISCOVERY_ROLE" \\
   discovery ${quoted(compact(discoveryPolicy))} \\
   --description "Dormeto discovery (read-only)" --tags Key=dormeto:component,Value=discovery
 
-[[ -z $COMMAND_ROLE ]] && { echo "dormeto: $DISCOVERY_ROLE ready (no command role)"; exit 0; }
+# Without a command role, the account says it is set up for discovery only (the manager counts it apart).
+if [[ -z $COMMAND_ROLE ]]; then
+  aws iam tag-role --role-name "\${DISCOVERY_ROLE##*/}" --tags Key=dormeto:command-role,Value=none
+  echo "dormeto: $DISCOVERY_ROLE ready (discovery only: no command role)"
+  exit 0
+fi
+aws iam untag-role --role-name "\${DISCOVERY_ROLE##*/}" --tag-keys dormeto:command-role
 
 # The boundary of every role Dormeto creates for a router: created, or a new default version (IAM keeps five).
 BOUNDARY=$(fill ${quoted(compact(boundary))})

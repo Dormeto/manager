@@ -56,6 +56,8 @@ export const DISCOVERY_ACTIONS = [
   'cloudwatch:GetMetricData',
   // Event refresh: whether a trail logs the management writes of the region (aws.ts trailCovers).
   'cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus', 'cloudtrail:GetEventSelectors',
+  // Its own role's tags: an account set up for discovery only (aws.ts discoveryOnlyOf).
+  'iam:GetRole',
 ];
 
 // Pages of an AWS list call: ELBv2 (Marker/NextMarker), Auto Scaling (NextToken), ECS (nextToken).

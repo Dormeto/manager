@@ -60,3 +60,26 @@ run "without_an_organization_no_organization_condition" {
     error_message = "Without organization_id, the trust has no organization condition."
   }
 }
+
+# An account set up without the command role declares it on its discovery role: the manager counts it as discovery only
+# rather than missing a role.
+run "an_account_without_the_command_role_says_so" {
+  command = plan
+  variables {
+    create_command_role = false
+  }
+
+  assert {
+    condition     = aws_iam_role.discovery.tags["dormeto:command-role"] == "none" && length(module.command_role) == 0
+    error_message = "Without the command role, the discovery role is tagged dormeto:command-role = none."
+  }
+}
+
+run "with_the_command_role_no_such_tag" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(aws_iam_role.discovery.tags), "dormeto:command-role")
+    error_message = "With the command role, the discovery role carries no discovery-only tag."
+  }
+}

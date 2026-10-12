@@ -35,6 +35,9 @@ export interface RunDeps {
   assumeRole(account: string): Promise<unknown>; // credentials for the account's discovery role
   assumeCommand?(account: string): Promise<unknown>; // the account's command role, only to check it (packaging design §3)
   enabledRegions(credentials: unknown): Promise<string[]>;
+  // Whether the account's discovery role declares the account set up without the command role (tag
+  // dormeto:command-role = none, from the access module or the AWS CLI script).
+  discoveryOnly?(credentials: unknown): Promise<boolean>;
   // Whether a CloudTrail trail logs the management writes of the region (event refresh, packaging design §5).
   trails?(credentials: unknown, region: string): Promise<boolean>;
   scan(credentials: unknown, where: { account: string; region: string }): Promise<ScannedRule[]>;
@@ -73,6 +76,7 @@ const denied = (err: unknown) => /^AccessDenied/.test((err as Error).name ?? '')
 const ACCESS_DENIED = 'access denied: the role is missing or does not trust the manager';
 const ORGANIZATION_ACCESS = 'organization access missing: the delegation policy of the management account (see the Organization access page)';
 const accessOf = (err: unknown): AccessState => ({ ok: false, reason: denied(err) ? ACCESS_DENIED : errorText(err) });
+const DISCOVERY_ONLY = 'discovery only: set up without the command role';
 
 const usesAccountTags = (config: DiscoveryConfig) =>
   [...config.globalExcludes, ...config.filters.flatMap((f) => [...f.include, ...f.exclude])].some((c) => c.accountTags !== undefined);
@@ -220,7 +224,11 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   let access: AccountScan['access'] = only ? state?.access : undefined;
   if (!only && !synthetic && deps.assumeCommand) {
     // A check that does not answer is no verdict: the last one stands (none: the account stays unchecked).
-    const command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? state?.access?.command : accessOf(err)));
+    let command = await deps.assumeCommand(account).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? state?.access?.command : accessOf(err)));
+    // Refused: an account set up for discovery only says so on its discovery role.
+    if (command && !command.ok && !command.discoveryOnly && credentials && deps.discoveryOnly && (await deps.discoveryOnly(credentials).catch(() => false))) {
+      command = { ok: false, reason: DISCOVERY_ONLY, discoveryOnly: true };
+    }
     if (command) access = { discovery: discoveryAccess, command, checkedAt: at };
     else log.warn('AccessCheckUnavailable', { account });
   }
@@ -407,7 +415,8 @@ async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPl
   const impossible: { account: string; name: string; reason: string }[] = [];
   let connectedCount = 0;
   for (const s of [...scans].sort((a, b) => a.account.localeCompare(b.account))) {
-    if (s.synthetic || !wanted(s.account)) continue;
+    // An account set up for discovery only has no forwarder, on purpose.
+    if (s.synthetic || !wanted(s.account) || (s.access && !s.access.command.ok && s.access.command.discoveryOnly)) continue;
     const name = inventory.accounts.find((a) => a.id === s.account)?.name ?? s.account;
     const regions = Object.entries(s.access?.trails ?? {}).filter(([, on]) => on).map(([r]) => r).sort();
     const current = connected.get(s.account);
@@ -426,7 +435,7 @@ async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPl
 // check in this run (a synthetic one, or a step that did not finish) is unchecked.
 function accessSummary(plan: RunPlan, scans: AccountScan[], inventory: OrgInventory, at: string): AccessSummary {
   const byAccount = new Map(scans.filter((s) => s.access).map((s) => [s.account, s.access!]));
-  const counts = { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 };
+  const counts: AccessSummary['counts'] = { ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 0 };
   const accounts: AccessRow[] = [];
   for (const account of [...plan.accounts].sort()) {
     const access = byAccount.get(account);
@@ -436,6 +445,10 @@ function accessSummary(plan: RunPlan, scans: AccountScan[], inventory: OrgInvent
     }
     if (access.discovery.ok && access.command.ok) {
       counts.ready += 1;
+      continue;
+    }
+    if (access.discovery.ok && !access.command.ok && access.command.discoveryOnly) {
+      counts.discoveryOnly = (counts.discoveryOnly ?? 0) + 1;
       continue;
     }
     if (!access.discovery.ok) counts.discoveryMissing += 1;

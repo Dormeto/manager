@@ -21,6 +21,7 @@
     "@aws-sdk/client-ec2": "^3.1146.0",
     "@aws-sdk/client-ecs": "^3.1146.0",
     "@aws-sdk/client-elastic-load-balancing-v2": "^3.1146.0",
+    "@aws-sdk/client-iam": "^3.1146.0",
     "@aws-sdk/client-lambda": "^3.1146.0",
     "@aws-sdk/client-organizations": "^3.1146.0",
     "@aws-sdk/client-sts": "^3.1146.0",

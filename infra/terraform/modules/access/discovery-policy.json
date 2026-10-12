@@ -22,6 +22,17 @@
         "cloudtrail:GetEventSelectors"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "OwnRole",
+      "Effect": "Allow",
+      "Action": "iam:GetRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/dormeto:component": "discovery"
+        }
+      }
     }
   ]
 }

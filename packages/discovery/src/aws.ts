@@ -2,6 +2,7 @@
 import { AutoScalingClient, DescribeAutoScalingGroupsCommand } from '@aws-sdk/client-auto-scaling';
 import { CloudTrailClient, DescribeTrailsCommand, GetEventSelectorsCommand, GetTrailStatusCommand } from '@aws-sdk/client-cloudtrail';
 import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwatch';
+import { GetRoleCommand, IAMClient } from '@aws-sdk/client-iam';
 import { DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { DescribeServicesCommand, ECSClient, ListClustersCommand, ListServicesCommand } from '@aws-sdk/client-ecs';
 import {
@@ -148,4 +149,12 @@ export function trailsPort(credentials: Credentials, region: string): TrailsPort
     getTrailStatus: (input) => client.send(new GetTrailStatusCommand(input)),
     getEventSelectors: (input) => client.send(new GetEventSelectorsCommand(input)),
   } as TrailsPort;
+}
+
+// Whether the account's discovery role declares the account set up for discovery only (the access module with
+// create_command_role = false, or the AWS CLI script without a command role, tag it dormeto:command-role = none).
+export async function discoveryOnlyOf(credentials: Credentials, roleName: string): Promise<boolean> {
+  const iam = new IAMClient({ region: 'us-east-1', credentials, maxAttempts: 3 });
+  const { Role } = await iam.send(new GetRoleCommand({ RoleName: roleName.split('/').at(-1)! }));
+  return (Role?.Tags ?? []).some((t) => t.Key === 'dormeto:command-role' && t.Value === 'none');
 }

@@ -139,7 +139,8 @@ export const CANDIDATE_STATUSES: readonly Status[] = ['pending-onboarding', 'pen
 // Scan state of an account (R4.5): when it and each of its regions were last scanned, and for how many successive runs a
 // region had no application load balancer (scanned less often).
 // Organization access (packaging design §3): whether the manager can assume a role in an account.
-export type AccessState = { ok: true } | { ok: false; reason: string };
+// discoveryOnly: the account was set up without the command role on purpose (its discovery role says so).
+export type AccessState = { ok: true } | { ok: false; reason: string; discoveryOnly?: true };
 
 export interface AccountScan {
   account: string;
@@ -170,6 +171,7 @@ export interface AccessCounts {
   ready: number;
   discoveryMissing: number;
   commandMissing: number;
+  discoveryOnly?: number; // set up without the command role on purpose: not listed as missing it
   unchecked: number;
 }
 

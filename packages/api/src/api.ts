@@ -960,6 +960,9 @@ export function createApi({
   // design §3); an account never checked is let through (its operation fails as before).
   async function needCommandRole(account: string) {
     const command = (await discovery?.store.getAccountScan(account).catch(() => null))?.access?.command;
+    if (command && !command.ok && command.discoveryOnly) {
+      throw new HttpError(409, 'no_access', `account ${account} is set up for discovery only (its access has no command role): onboarding and router installs are not possible there`);
+    }
     if (command && !command.ok) {
       throw new HttpError(409, 'no_access', `account ${account}: its command role ${accessRoles?.commandRole ?? 'DmtCommandRole'} cannot be assumed (${command.reason}); see the Organization access page`);
     }

@@ -24,9 +24,10 @@ export function organizationsOf(inventory: OrgInventory) {
 
 // deny: accounts refusing the discovery role; denyCommand: accounts refusing the command role (packaging design §3).
 // trails: the regions of each account a CloudTrail trail covers (absent: none); 'denied' when the role cannot read them.
-export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false, trails = {} }: {
+// discoveryOnly: accounts whose discovery role is tagged dormeto:command-role = none (set up without the command role).
+export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions = ['eu-west-1', 'eu-central-1'], delayMs = 0, laggingIndex = false, trails = {}, discoveryOnly = [] }: {
   cfg?: DiscoveryConfig; deny?: string[]; denyCommand?: string[]; failScan?: string[]; regions?: string[]; delayMs?: number; laggingIndex?: boolean;
-  trails?: Record<string, string[] | 'denied'>;
+  trails?: Record<string, string[] | 'denied'>; discoveryOnly?: string[];
 } = {}) {
   const dynamo = fakeDynamo({ laggingIndex });
   let now = T0;
@@ -35,6 +36,7 @@ export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions
   const assumed: string[] = [];
   const scanned: string[] = [];
   const trailChecks: string[] = [];
+  const roleReads: string[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
   const deps: RunDeps = {
@@ -52,6 +54,11 @@ export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions
       if (denyCommand.includes(account)) throw Object.assign(new Error(`User is not authorized to perform: sts:AssumeRole on resource: arn:aws:iam::${account}:role/DmtCommandRole`), { name: 'AccessDenied' });
     },
     async enabledRegions() { return regions; },
+    async discoveryOnly(credentials) {
+      const account = (credentials as { account: string }).account;
+      roleReads.push(account);
+      return discoveryOnly.includes(account);
+    },
     async trails(credentials, region) {
       const account = (credentials as { account: string }).account;
       trailChecks.push(`${account}/${region}`);
@@ -69,6 +76,6 @@ export function setup({ cfg, deny = [], denyCommand = [], failScan = [], regions
       return [rule({ id: `rule-${where.account}-${where.region}`, account: where.account, region: where.region })];
     },
   };
-  return { deps, store, dynamo, org, assumed, scanned, trailChecks, flight: () => maxInFlight, advance: (ms: number) => { now += ms; }, ready: cfg ? store.putConfig(cfg, 'admin@example.com') : Promise.resolve() };
+  return { deps, store, dynamo, org, assumed, scanned, trailChecks, roleReads, flight: () => maxInFlight, advance: (ms: number) => { now += ms; }, ready: cfg ? store.putConfig(cfg, 'admin@example.com') : Promise.resolve() };
 }
 

@@ -86,4 +86,19 @@ describe('organization access', () => {
     expect((await fresh.store.getAccountScan(A.id))!.access).toBeUndefined();
     expect((await fresh.store.accessReport({ limit: 10 })).counts).toEqual({ ready: 0, discoveryMissing: 0, commandMissing: 0, unchecked: 3 });
   });
+
+  it('an account set up for discovery only (its discovery role tagged dormeto:command-role = none) is counted apart: never listed as missing a role, never connected', async () => {
+    const s = setup({ cfg: { ...ALL, eventRefresh: { enabled: true } }, regions: ['eu-west-1'], denyCommand: [B.id, C.id], discoveryOnly: [B.id], trails: { [A.id]: ['eu-west-1'], [B.id]: ['eu-west-1'], [C.id]: ['eu-west-1'] } });
+    await s.ready;
+    const run = await runDiscovery(s.deps, { source: 'manual' });
+    expect((await s.store.getAccountScan(B.id))!.access!.command).toEqual({ ok: false, reason: 'discovery only: set up without the command role', discoveryOnly: true });
+    expect((await s.store.getAccountScan(C.id))!.access!.command).toEqual({ ok: false, reason: DENIED });
+    // Read only where the command role was refused.
+    expect(s.roleReads.sort()).toEqual([B.id, C.id]);
+    const summary = (await s.store.getAccess())!;
+    expect(summary.counts).toEqual({ ready: 1, discoveryMissing: 0, commandMissing: 1, discoveryOnly: 1, unchecked: 0 });
+    expect(summary.accounts.map((a) => a.account)).toEqual([C.id]);
+    expect(summary.forwarders!.impossible.map((f) => f.account)).toEqual([C.id]);
+    expect(run.connections!.connect.map((c) => c.account)).toEqual([A.id]);
+  });
 });

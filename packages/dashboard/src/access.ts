@@ -1,5 +1,5 @@
 // Organization access (packaging design §3): what an account misses, why, and the procedure that fixes it.
-export type AccessState = { ok: true } | { ok: false; reason: string };
+export type AccessState = { ok: true } | { ok: false; reason: string; discoveryOnly?: true };
 
 export interface AccessRow {
   account: string;
@@ -11,7 +11,7 @@ export interface AccessRow {
 }
 
 export interface AccessReport {
-  counts: { ready: number; discoveryMissing: number; commandMissing: number; unchecked: number };
+  counts: { ready: number; discoveryMissing: number; commandMissing: number; discoveryOnly?: number; unchecked: number };
   accounts: AccessRow[];
   cursor: string | null;
   delegation: 'ok' | 'missing' | null;
@@ -38,6 +38,12 @@ export function forwardersLine(f: Forwarders | undefined): string | null {
 
 // The website's page, with the roles' Terraform modules and AWS CLI commands.
 export const PROCEDURE_URL = 'https://dormeto.com/organization-access.html';
+
+export function countsLine(c: AccessReport['counts']): string {
+  const parts = [`${c.ready} ready`, ...(c.discoveryMissing ? [`${c.discoveryMissing} without the discovery role`] : []), ...(c.commandMissing ? [`${c.commandMissing} without the command role`] : []),
+    ...(c.discoveryOnly ? [`${c.discoveryOnly} for discovery only`] : []), ...(c.unchecked ? [`${c.unchecked} not checked yet`] : [])];
+  return `${parts.join(', ')}.`;
+}
 
 export function accessLine(row: AccessRow): string {
   const missing = [!row.discovery.ok && 'no discovery role', !row.command.ok && 'no command role'].filter(Boolean).join(', ');

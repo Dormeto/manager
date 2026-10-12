@@ -70,10 +70,13 @@ test('updates the roles and the boundary of an account set up before: the trusts
   assert.ok(find(calls, 'create-policy-version').includes('--set-as-default'));
 });
 
-test('without a command role: the discovery role only', () => {
+test('without a command role: the discovery role only, tagged discovery only; the tag removed once a command role is set up', () => {
   const { status, calls } = run({ ...SETTINGS, COMMAND_ROLE: '' });
   assert.equal(status, 0);
   assert.ok(find(calls, 'create-role', 'DmtDiscoveryRole'));
+  assert.ok(find(calls, 'tag-role', 'DmtDiscoveryRole').includes('Key=dormeto:command-role,Value=none'));
+  const again = run({ ...SETTINGS }, { existing: true, versions: '' });
+  assert.ok(find(again.calls, 'untag-role', 'DmtDiscoveryRole').includes('dormeto:command-role'));
   assert.equal(find(calls, 'create-role', 'DmtCommandRole'), undefined);
   assert.equal(find(calls, 'create-policy'), undefined);
 });

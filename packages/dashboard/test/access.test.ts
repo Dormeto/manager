@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessLine, forwardersLine, PROCEDURE_URL, procedureLink } from '../src/access';
+import { accessLine, countsLine, forwardersLine, PROCEDURE_URL, procedureLink } from '../src/access';
 
 const DENIED = 'access denied: the role is missing or does not trust the manager';
 const row = (discovery: boolean, command: boolean) => ({
@@ -14,6 +14,12 @@ describe('organization access', () => {
     expect(accessLine(row(true, false))).toBe(`no command role (${DENIED}): onboarding and router installs are refused`);
     expect(accessLine(row(false, false))).toBe(`no discovery role, no command role (${DENIED}): the account is not scanned, onboarding and router installs are refused`);
   });
+  it('counts the accounts ready, missing a role, set up for discovery only, or not checked yet', () => {
+    expect(countsLine({ ready: 3, discoveryMissing: 0, commandMissing: 0, unchecked: 0 })).toBe('3 ready.');
+    expect(countsLine({ ready: 3, discoveryMissing: 1, commandMissing: 2, discoveryOnly: 4, unchecked: 1 }))
+      .toBe('3 ready, 1 without the discovery role, 2 without the command role, 4 for discovery only, 1 not checked yet.');
+  });
+
   it('counts the forwarders of event-driven refresh, and says where one is not possible and why', () => {
     expect(forwardersLine(undefined)).toBeNull();
     expect(forwardersLine({ connected: 2, connecting: 1, impossible: [] })).toBe('Event-driven refresh: 2 accounts connected, 1 being connected.');
