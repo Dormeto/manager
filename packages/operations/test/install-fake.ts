@@ -116,7 +116,10 @@ export function fakeInstallAccount() {
         if (!f) throw error('ResourceNotFoundException');
         const updating = f.updating;
         f.updating = false;
-        return { Configuration: { ...f.config, CodeSha256: f.codeSha256, State: 'Active', LastUpdateStatus: updating ? 'InProgress' : 'Successful' } };
+        // Lambda answers the environment variables in its own order, not the order they were sent in.
+        const variables = (f.config.Environment as { Variables?: Record<string, string> } | undefined)?.Variables ?? {};
+        const reordered = Object.fromEntries(Object.entries(variables).reverse());
+        return { Configuration: { ...f.config, Environment: { Variables: reordered }, CodeSha256: f.codeSha256, State: 'Active', LastUpdateStatus: updating ? 'InProgress' : 'Successful' } };
       },
       async createFunction(input) {
         call('createFunction');

@@ -202,3 +202,14 @@ describe('operations engine', () => {
     expect(await s.records.acquireLock(`LB#${LB}`, 'other', 60_000)).toBe(true);
   });
 });
+
+describe('pending steps', () => {
+  it('a step that stays pending fails after 30 minutes instead of looping until the workflow timeout', async () => {
+    const s = setup();
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    s.account.ports.dynamodb.describeTable = async () => ({ Table: { TableStatus: 'CREATING' } });
+    s.account.ports.dynamodb.createTable = async () => ({});
+    expect(await s.drive(op.id, { maxIterations: 1000 })).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toBe('install table: still pending after 30 minutes (table dmt-dev-router CREATING)');
+  });
+});

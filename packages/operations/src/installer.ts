@@ -46,7 +46,10 @@ async function find<T>(call: () => Promise<T>): Promise<T | null> {
   }
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+// Equal whatever the key order (AWS answers objects in its own order).
+const canonical = (value: unknown): unknown => (Array.isArray(value) ? value.map(canonical)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value);
+const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const policyOf = (document: string) => JSON.parse(decodeURIComponent(document)) as unknown;
 const tagList = (tags: Record<string, string>) => Object.entries(tags).map(([Key, Value]) => ({ Key, Value }));
 const result = (changed: string[]): StepResult => (changed.length ? { status: 'done', detail: changed.join(', ') } : { status: 'skipped' });

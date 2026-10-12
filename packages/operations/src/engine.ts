@@ -10,6 +10,8 @@ const MINUTE = 60_000;
 const ACTIVE_TTL = 6 * 60 * MINUTE;
 const LOCK_LEASE = 60 * MINUTE;
 const BUSY_MAX = 30 * MINUTE;
+// A step pending longer than this (a resource never settling) fails instead of looping until the workflow timeout.
+const PENDING_MAX = 30 * MINUTE;
 const SLOTS = 3;
 const RETRY_MAX = 30;
 const WAKE_GRACE = 2 * MINUTE;
@@ -315,6 +317,9 @@ export function createEngine(deps: EngineDeps) {
       if (outcome.status === 'pending' || outcome.status === 'wait') {
         if (outcome.status === 'pending' && outcome.changed) step.changed = true;
         if (outcome.detail) step.detail = outcome.detail;
+        if (outcome.status === 'pending' && now() - Date.parse(step.startedAt) > PENDING_MAX) {
+          throw new Error(`still pending after ${PENDING_MAX / MINUTE} minutes${outcome.detail ? ` (${outcome.detail})` : ''}`);
+        }
         await records.putOperation(op);
         return { done: false, waitSeconds: outcome.status === 'wait' ? outcome.seconds : 5 };
       }
