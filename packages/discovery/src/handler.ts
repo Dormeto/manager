@@ -33,8 +33,6 @@ type Event =
 const trigger = (e: { source?: string; by?: string } = {}) => ({ source: e.source === 'manual' ? 'manual' as const : 'schedule' as const, ...(e.by ? { by: e.by } : {}) });
 
 export const handler = async (event: Event = {}) => {
-  // One-off: candidates of versions before R4.5 moved to their account partition (dev migration).
-  if (!event.step && event.action === 'migrate') return { migrated: await store.migrateCandidates() };
   managerAccount ??= (await sts.send(new GetCallerIdentityCommand({}))).Account ?? '';
   const deps: RunDeps = {
     store,

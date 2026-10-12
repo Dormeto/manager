@@ -33,8 +33,6 @@ const engine = createEngine({
 
 export const handler = async (event: { task: string; operationId: string; error?: { Error?: string; Cause?: string } }) => {
   if (event.task === 'next') return engine.next(event.operationId);
-  // One-off: operations of versions before R4.5 indexed by time (dev migration).
-  if (event.task === 'migrate') return { indexed: await records.indexOperations() };
   if (event.task === 'fail') {
     await engine.fail(event.operationId, [event.error?.Error, event.error?.Cause].filter(Boolean).join(': ') || 'workflow failed');
     return { done: true, status: 'failed' };

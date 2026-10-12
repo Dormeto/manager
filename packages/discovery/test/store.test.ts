@@ -175,14 +175,4 @@ describe('discovery store at organization scale', () => {
     expect((await store.getAccountScan('111111111111'))!.regions['eu-west-1']!.emptyRuns).toBe(0);
     expect(await store.getAccountScan('333333333333')).toBeNull();
   });
-
-  it('moves the candidates of an earlier version to their account partition, once', async () => {
-    const { store, dynamo } = setup();
-    const legacy = candidate(1);
-    dynamo.items.set(`DISC#C#${legacy.id}`, { pk: { S: 'T#default' }, sk: { S: `DISC#C#${legacy.id}` }, status: { S: legacy.status }, data: { S: JSON.stringify(legacy) } });
-    expect(await store.migrateCandidates()).toBe(1);
-    expect(await store.migrateCandidates()).toBe(0);
-    expect(dynamo.items.has(`DISC#C#${legacy.id}`)).toBe(false);
-    expect((await store.getCandidate(legacy.id))!.id).toBe(legacy.id);
-  });
 });

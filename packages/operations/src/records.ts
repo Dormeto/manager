@@ -103,12 +103,6 @@ export function createRecords({ dynamo, table, now = Date.now }: { dynamo: Dynam
       }));
       return ((page.Items ?? []) as Item[]).map((i) => data<Operation>(i)!).filter(Boolean);
     },
-    // Operations of versions before R4.5 (without the time index): indexed, once (dev migration).
-    async indexOperations() {
-      const legacy = (await query('OP#')).filter((i) => !i.gsi1pk).map((i) => data<Operation>(i)!).filter(Boolean);
-      for (const op of legacy) await dynamo.send(new PutItemCommand({ TableName: table, Item: operationItem(op) }));
-      return legacy.length;
-    },
 
     // One operation per target (target group, router, account-region): a second request learns the running operation.
     async claimActive(activeKey: string, operationId: string, ttlMs: number): Promise<{ ok: true } | { ok: false; operationId: string }> {

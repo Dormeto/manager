@@ -47,7 +47,6 @@ export interface DiscoveryStore {
   // The scan states of these accounts, read by key and consistent (a run's results, right after its last account).
   getAccountScans(accounts: string[]): Promise<AccountScan[]>;
   countCandidates(): Promise<Partial<Record<Status, number>>>;
-  migrateCandidates(): Promise<number>;
   getInventory(): Promise<OrgInventory | null>;
   putInventory(inventory: OrgInventory): Promise<void>;
   listExclusions(): Promise<Exclusion[]>;
@@ -329,13 +328,6 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
         if (n) counts[status] = n;
       }));
       return Object.fromEntries(CANDIDATE_STATUSES.filter((st) => counts[st]).map((st) => [st, counts[st]!])) as Partial<Record<Status, number>>;
-    },
-    // Candidates of versions before R4.5 (partition T#default): moved to their account partition, once (dev migration).
-    async migrateCandidates() {
-      const legacy = (await query('DISC#C#')).map((item) => data<Candidate>(item)!).filter(Boolean);
-      await batchWrite(legacy.map((c) => ({ PutRequest: { Item: candidateItem(c) } })));
-      await batchWrite(legacy.map((c) => ({ DeleteRequest: { Key: key(`DISC#C#${c.id}`) } })));
-      return legacy.length;
     },
     async getInventory() {
       return data<OrgInventory>(await get('DISC#ORG'));
