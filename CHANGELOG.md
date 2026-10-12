@@ -7,16 +7,20 @@ CLI script, of the same release).
 
 ## 0.9.0 — 2026-10-10
 
-Router 0.28.1 (unchanged). Access: nothing to apply again in the member accounts; the manager's own IAM changes with its
-module (the API may invoke the discovery function).
+Router 0.28.1. Access: nothing to apply again in the member accounts; the manager's own IAM changes with its module (the
+API may invoke the discovery function). 0.8.1 was not published: its change ships in this version. Upgrade the routers
+to 0.28.1.
 
 - The Idle window card on each workload's page: its last 14 days of requests replayed against idle windows from 5 to
   120 minutes (and its own), each window's estimated savings a month, wakes and visitors' wait a day, and a
   recommendation: the shortest window that already avoids 90% of the wakes the longest one avoids. Every request counts
   (the requests the waker ignores are not known per minute): the card compares the replay with the real wakes and says
   when it counts clearly more. Read through the discovery role, kept a day.
+- Every AWS call of the routers is bounded (router 0.28.1): connected within 3 seconds, answered within 10 seconds of
+  silence, else retried on a new connection. The AWS SDK waits forever by default: a scheduled check could wait 15
+  minutes for an answer that never came, its lease skipping the next three checks.
 
-## 0.8.1 — 2026-10-09
+## 0.8.1 — 2026-10-09 (not published: in 0.9.0)
 
 Router 0.28.1. Access: nothing to apply again.
 
