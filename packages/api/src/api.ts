@@ -146,6 +146,7 @@ export interface ApiOptions {
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
   callConcurrency?: number; // at most this many such calls at once (10)
+  callDeadlineMs?: number; // and all of them within (20 s: API Gateway answers within 29 s); the others are not called
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -211,7 +212,7 @@ const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion,
-  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10,
+  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -252,20 +253,27 @@ export function createApi({
     }
   }
 
-  // A router called directly (it does not report): its answer within the timeout, at most callConcurrency at once.
-  function bounded<T>(promise: Promise<T>): Promise<T> {
+  // A router called directly (it does not report): its answer within the timeout, at most callConcurrency at once, and
+  // none started once the request's deadline is reached (a fleet whose reports stopped still lists within it).
+  function bounded<T>(promise: Promise<T>, ms: number): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RouterError(`no answer within ${callTimeoutMs} ms`)), callTimeoutMs); });
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RouterError(`no answer within ${ms} ms`)), ms); });
     return Promise.race([promise, late]).finally(() => clearTimeout(timer));
   }
   async function each<T, R>(items: T[], work: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
     const out: PromiseSettledResult<R>[] = new Array(items.length);
+    const deadline = Date.now() + callDeadlineMs;
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(callConcurrency, items.length) }, async () => {
       while (next < items.length) {
         const i = next++;
+        const left = deadline - Date.now();
+        if (left <= 0) {
+          out[i] = { status: 'rejected', reason: new RouterError(`not called: no time left in this request (${callDeadlineMs} ms)`) };
+          continue;
+        }
         try {
-          out[i] = { status: 'fulfilled', value: await bounded(work(items[i]!)) };
+          out[i] = { status: 'fulfilled', value: await bounded(work(items[i]!), Math.min(callTimeoutMs, left)) };
         } catch (reason) {
           out[i] = { status: 'rejected', reason };
         }
@@ -287,14 +295,16 @@ export function createApi({
     return { summaries: out, workloads };
   }
 
-  // Every workload: from the summaries of the routers that report, from the others by their list action.
-  async function listAll() {
+  // Every workload of the routers the caller sees: from the summaries of the routers that report, from the others by
+  // their list action.
+  async function listAll(identity: Identity) {
     const { summaries, workloads } = await reports();
-    const silent = routers.filter((r) => !summaries.has(r));
+    const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
+    const silent = shown.filter((r) => !summaries.has(r));
     const called = await each(silent, (r) => invoke(r, { action: 'list' }));
     const rows: Record<string, unknown>[] = [];
     const errors: { router: string; message: string }[] = [];
-    for (const router of routers) {
+    for (const router of shown) {
       const summary = summaries.get(router);
       if (summary) {
         rows.push(...workloads.filter((w) => w.account === summary.account && w.region === summary.region)
@@ -434,7 +444,7 @@ export function createApi({
 
     if (method === 'GET' && resource === 'workloads' && !a) {
       const q = event.queryStringParameters ?? {};
-      const { rows, errors } = await listAll();
+      const { rows, errors } = await listAll(identity);
       const seen = rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') }));
       // Counts and 7-day totals of what the caller sees, whatever the filters (the Overview).
       const byState: Record<string, number> = {};

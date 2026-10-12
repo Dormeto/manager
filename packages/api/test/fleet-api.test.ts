@@ -21,9 +21,10 @@ const workloadSummary = (region: string, router: string, id: string, state: stri
 
 function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt-dev'), routerSummary('eu-west-3', 'dmtr-dev', { counts: { ASLEEP: 1 } })], workloads = [
   workloadSummary('eu-west-1', 'dmt-dev', 'a', 'AWAKE'), workloadSummary('eu-west-1', 'dmt-dev', 'b', 'ASLEEP'), workloadSummary('eu-west-3', 'dmtr-dev', 'p', 'ASLEEP', { name: 'Paris' }),
-], invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'list' ? { router: { version: '0.20.1' }, workloads: [{ workloadId: 'x', state: 'AWAKE' }] } : { router: { version: '0.20.1' }, pauses: [], workloads: { total: 1, byState: { AWAKE: 1 }, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }), visible, callTimeoutMs }: {
+], invoke = async (_r: Router, payload: Record<string, unknown>) => (payload.action === 'list' ? { router: { version: '0.20.1' }, workloads: [{ workloadId: 'x', state: 'AWAKE' }] } : { router: { version: '0.20.1' }, pauses: [], workloads: { total: 1, byState: { AWAKE: 1 }, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }), visible, callTimeoutMs, callDeadlineMs }: {
   routers?: Router[]; summaries?: ReturnType<typeof routerSummary>[]; workloads?: ReturnType<typeof workloadSummary>[];
   invoke?: (router: Router, payload: Record<string, unknown>) => Promise<unknown>; visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; callTimeoutMs?: number;
+  callDeadlineMs?: number;
 } = {}) {
   const calls: [string, string][] = [];
   let listed = 0;
@@ -39,7 +40,7 @@ function setup({ routers = ROUTERS, summaries = [routerSummary('eu-west-1', 'dmt
       listWorkloads: async () => { listed += 1; return workloads as never; },
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
-    ...(visible ? { visible } : {}), ...(callTimeoutMs ? { callTimeoutMs } : {}),
+    ...(visible ? { visible } : {}), ...(callTimeoutMs ? { callTimeoutMs } : {}), ...(callDeadlineMs ? { callDeadlineMs } : {}),
   });
   return { api, calls, listed: () => listed };
 }
@@ -93,6 +94,31 @@ describe('workloads and routers from the summaries', () => {
     expect(peak).toBeLessThanOrEqual(10);
     expect(body.workloads).toHaveLength(24);
     expect(body.errors).toEqual([{ router: 'r7', message: 'no answer within 50 ms' }]);
+  });
+
+  it('stops calling routers that do not report once the request\'s budget is spent: the others are listed as not called', async () => {
+    const many = Array.from({ length: 40 }, (_, i): Router => ({ name: `r${i}`, region: 'eu-west-1', controller: `c${i}`, account: String(100000000000 + i) }));
+    const s = setup({
+      routers: many, summaries: [], workloads: [], callTimeoutMs: 1000, callDeadlineMs: 100,
+      invoke: async (router) => {
+        await new Promise((r) => setTimeout(r, 40));
+        return { workloads: [{ workloadId: router.name, state: 'AWAKE' }] };
+      },
+    });
+    const started = Date.now();
+    const body = json(await s.api(event('/api/workloads')));
+    // 10 at a time, 40 ms each, 100 ms of budget: three rounds at most are started, the last one cut at the deadline.
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(body.workloads.length).toBeGreaterThanOrEqual(10);
+    expect(body.workloads.length).toBeLessThan(40);
+    expect(body.errors.length + body.workloads.length).toBe(40);
+    expect(body.errors.some((e: { message: string }) => /not called: no time left/.test(e.message))).toBe(true);
+  });
+
+  it('never calls a router the caller may not see', async () => {
+    const s = setup({ summaries: [routerSummary('eu-west-1', 'dmt-dev')], visible: (_identity, item) => item.region !== 'eu-west-3' });
+    const body = json(await s.api(event('/api/workloads')));
+    expect([s.calls, body.errors]).toEqual([[], []]);
   });
 
   it('filters by state, router and text, pages with a cursor, and hides what the caller may not see', async () => {
