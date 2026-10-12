@@ -3,7 +3,7 @@
 // router's description, priced later). Kept per account and region: a run reuses what is fresh and resumes the rest; a
 // region that fails is said and tried again next time. Four accounts at a time, an account's regions one by one; an
 // account's role is assumed only when one of its regions is not kept.
-import type { ScannedRule } from '@dormeto/discovery';
+import type { Rule, ScannedRule } from '@dormeto/discovery';
 import type { Credentials } from '@dormeto/discovery/aws';
 import type { StoppedItem } from '@dormeto/fleet';
 import type { Reached } from './accounts.js';
@@ -20,12 +20,16 @@ export interface Workload {
   hosts: string[];
   backend: { kind: 'instance' | 'asg' | 'ecs'; id: string };
   stopped: StoppedItem[];
+  // Already managed by Dormeto: its requests while asleep go to its waker target group, added up (as R10).
+  managed?: true;
+  wakerTargetGroupArn?: string;
 }
 export interface Ineligible { loadBalancer: string; targetGroup: string | null; hosts: string[]; reason: string }
 export interface RegionDiscovery { account: string; region: string; workloads: Workload[]; ineligible: Ineligible[]; error?: string }
 export interface RegionPorts extends StoppedPorts {
   scan(): Promise<ScannedRule[]>;
   autoscaling: { describeAutoScalingGroups(input: { AutoScalingGroupNames: string[] }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; DesiredCapacity?: number; Instances?: { InstanceId?: string }[] }[] }> };
+  elbv2: { describeRules(input: { RuleArns: string[] }): Promise<{ Rules?: Rule[] }> };
 }
 export type Progress = (event: { phase: 'discovery' | 'requests'; account: string; region: string; from: 'cache' | 'aws'; workloads: number; error?: string }) => void;
 
@@ -51,15 +55,28 @@ async function routerBackend(ports: RegionPorts, backend: NonNullable<ScannedRul
   return { kind: 'instance', id: backend.id };
 }
 
+// A managed workload's waker target group: the other target group of its Dormeto rule's forward (application and waker
+// only), or none found (its requests while asleep are then not counted).
+async function wakerOf(ports: RegionPorts, rule: ScannedRule): Promise<{ waker: string | null }> {
+  const ref = rule.rules.find((r) => r.managed) ?? rule.rules[0];
+  if (!ref) return { waker: null };
+  const { Rules = [] } = await ports.elbv2.describeRules({ RuleArns: [ref.id] });
+  for (const action of Rules[0]?.Actions ?? []) {
+    const groups = (action.ForwardConfig?.TargetGroups ?? []).map((g) => g.TargetGroupArn).filter((arn): arn is string => Boolean(arn));
+    if (groups.length === 2 && groups.includes(rule.targetGroupArn!)) return { waker: groups.find((arn) => arn !== rule.targetGroupArn)! };
+  }
+  return { waker: null };
+}
+
 export async function discoverRegion(ports: RegionPorts, { account, region }: { account: string; region: string }): Promise<RegionDiscovery> {
   const workloads: Workload[] = [];
   const ineligible: Ineligible[] = [];
   for (const rule of await ports.scan()) {
-    if (rule.eligibility !== 'eligible' || !rule.backend || !rule.targetGroupArn) {
-      const reason = rule.eligibility === 'managed' ? 'already managed by Dormeto' : rule.reason ?? 'no backend';
-      ineligible.push({ loadBalancer: rule.loadBalancer, targetGroup: rule.targetGroup, hosts: rule.hosts, reason });
+    if (rule.eligibility === 'ineligible' || !rule.backend || !rule.targetGroupArn) {
+      ineligible.push({ loadBalancer: rule.loadBalancer, targetGroup: rule.targetGroup, hosts: rule.hosts, reason: rule.reason ?? 'no backend' });
       continue;
     }
+    const managed = rule.eligibility === 'managed' ? await wakerOf(ports, rule) : null;
     let stopped: StoppedItem[];
     try {
       stopped = await describeStopped(ports, [await routerBackend(ports, rule.backend)]);
@@ -70,6 +87,7 @@ export async function discoverRegion(ports: RegionPorts, { account, region }: { 
     workloads.push({
       account, region, loadBalancer: rule.loadBalancer, loadBalancerArn: rule.loadBalancerArn, targetGroup: rule.targetGroup ?? '',
       targetGroupArn: rule.targetGroupArn, hosts: rule.hosts, backend: { kind: rule.backend.kind, id: rule.backend.id }, stopped,
+      ...(managed ? { managed: true as const, ...(managed.waker ? { wakerTargetGroupArn: managed.waker } : {}) } : {}),
     });
   }
   return { account, region, workloads, ineligible };

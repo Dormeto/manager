@@ -48,6 +48,16 @@ describe('the requests of a region\'s workloads', () => {
     expect(out.minutes[tg(11)]).toEqual([]);
   });
 
+  it('a workload Dormeto manages: its application and waker target groups added up, five metrics a call', async () => {
+    const managed = { ...workload(0), managed: true as const, wakerTargetGroupArn: tg(9) };
+    const { port, calls } = cloudwatch((arn) => (arn === tg(0) ? { Timestamps: [minute(9), minute(4)], Values: [2, 1], StatusCode: 'Complete' } : arn === tg(9) ? { Timestamps: [minute(9), minute(5)], Values: [3, 6], StatusCode: 'Complete' } : { Timestamps: [], Values: [], StatusCode: 'Complete' }));
+    const out = await readRequests(port, [managed, workload(1), workload(2), workload(3), workload(4)], { days: 14, now: NOW });
+    // Six metrics: five in the first call (two pages), one in the next.
+    expect(calls.map((c) => c.queries.length)).toEqual([5, 5, 1]);
+    expect(out.minutes[tg(0)]).toEqual([[4, 1], [5, 6], [9, 5]]);
+    expect(out.minutes[tg(9)]).toBeUndefined();
+  });
+
   it('a metric CloudWatch could not read is unreadable, the others are read', async () => {
     const { port } = cloudwatch((arn) => (arn === tg(1) ? { Timestamps: [], Values: [], StatusCode: 'Forbidden', Messages: [{ Code: 'Forbidden', Value: 'not authorized' }] } : { Timestamps: [minute(3)], Values: [2], StatusCode: 'Complete' }));
     const out = await readRequests(port, [workload(0), workload(1)], { days: 14, now: NOW });

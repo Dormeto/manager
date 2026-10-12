@@ -28,6 +28,7 @@ function regionPorts(rules: ScannedRule[], { desired = 2 } = {}) {
     ec2: {
       describeInstances: async ({ InstanceIds }) => ({ Reservations: [{ Instances: InstanceIds.map((id) => ({ InstanceId: id, InstanceType: id === 'i-9' ? 'm5.large' : 't3.medium', PlatformDetails: 'Linux/UNIX' })) }] }),
     },
+    elbv2: { describeRules: async () => ({ Rules: [] }) },
     ecs: {
       describeServices: async (input) => { asked.services.push(input); return { services: [{ serviceArn: input.services[0], desiredCount: 3, launchType: 'FARGATE', taskDefinition: 'api:7' }] }; },
       describeTaskDefinition: async () => ({ taskDefinition: { cpu: '256', memory: '512', runtimePlatform: { cpuArchitecture: 'ARM64', operatingSystemFamily: 'LINUX' } } }),
@@ -60,17 +61,23 @@ describe('a region\'s discovery', () => {
     expect((await discoverRegion(ports, { account: A, region: R })).workloads[0]!.stopped).toEqual([]);
   });
 
-  it('keeps the ineligible rules with discovery\'s reason, and those Dormeto already manages', async () => {
-    const { ports } = regionPorts([
-      rule('shared', { eligibility: 'ineligible', reason: 'its target group is shared by another rule' }),
-      rule('napping', { eligibility: 'managed', workloadId: 'abc' }),
-    ]);
+  it('keeps the ineligible rules with discovery\'s reason', async () => {
+    const { ports } = regionPorts([rule('shared', { eligibility: 'ineligible', reason: 'its target group is shared by another rule' })]);
     const found = await discoverRegion(ports, { account: A, region: R });
     expect(found.workloads).toEqual([]);
-    expect(found.ineligible).toEqual([
-      { loadBalancer: 'web', targetGroup: 'shared', hosts: ['shared.example.com'], reason: 'its target group is shared by another rule' },
-      { loadBalancer: 'web', targetGroup: 'napping', hosts: ['napping.example.com'], reason: 'already managed by Dormeto' },
-    ]);
+    expect(found.ineligible).toEqual([{ loadBalancer: 'web', targetGroup: 'shared', hosts: ['shared.example.com'], reason: 'its target group is shared by another rule' }]);
+  });
+
+  it('estimates a workload Dormeto already manages too, with its waker target group from its rule\'s forward', async () => {
+    const ruleArn = `arn:aws:elasticloadbalancing:${R}:${A}:listener-rule/app/web/0123456789abcdef/aaaa/bbbb`;
+    const waker = `arn:aws:elasticloadbalancing:${R}:${A}:targetgroup/dmtr-dev-napping/0000000000000000`;
+    const { ports } = regionPorts([rule('napping', { eligibility: 'managed', workloadId: 'abc', rules: [{ id: ruleArn, listener: 'HTTPS:443', priority: '10', conditions: '', hosts: [], managed: true }] })]);
+    const asked: unknown[] = [];
+    ports.elbv2 = { describeRules: async (input) => { asked.push(input); return { Rules: [{ RuleArn: ruleArn, Actions: [{ Type: 'forward', ForwardConfig: { TargetGroups: [{ TargetGroupArn: tg('napping'), Weight: 0 }, { TargetGroupArn: waker, Weight: 1 }] } }] }] }; } };
+    const found = await discoverRegion(ports, { account: A, region: R });
+    expect(asked).toEqual([{ RuleArns: [ruleArn] }]);
+    expect(found.ineligible).toEqual([]);
+    expect(found.workloads[0]).toMatchObject({ targetGroup: 'napping', managed: true, wakerTargetGroupArn: waker, stopped: [{ kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' }] });
   });
 });
 

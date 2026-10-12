@@ -29,6 +29,7 @@ function fakeAws({ whoami = async () => A }: { whoami?: () => Promise<string> } 
     portsOf: () => ({
       scan: async () => { calls.scans += 1; return [RULE]; },
       autoscaling: { describeAutoScalingGroups: async () => ({ AutoScalingGroups: [] }) },
+      elbv2: { describeRules: async () => ({ Rules: [] }) },
       ec2: { describeInstances: async () => ({ Reservations: [{ Instances: [{ InstanceId: 'i-1', InstanceType: 't3.medium', PlatformDetails: 'Linux/UNIX' }] }] }) },
       ecs: { describeServices: async () => ({ services: [] }), describeTaskDefinition: async () => ({}) },
     }),

@@ -8,6 +8,7 @@ import { DescribeOrganizationCommand, OrganizationsClient } from '@aws-sdk/clien
 import { DescribeInstancesCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { DescribeAutoScalingGroupsCommand } from '@aws-sdk/client-auto-scaling';
 import { DescribeServicesCommand, DescribeTaskDefinitionCommand } from '@aws-sdk/client-ecs';
+import { DescribeRulesCommand } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { loadInventory, scanRegion } from '@dormeto/discovery';
 import { createAssumeRole, enabledRegionsOf, organizationsPort, regionalClients, scanPorts, type Credentials } from '@dormeto/discovery/aws';
@@ -39,6 +40,7 @@ function awsOf(options: Options): EstimateAws {
       return {
         scan: () => scanRegion(scanPorts(clients), { account, region }),
         autoscaling: { describeAutoScalingGroups: (input) => clients.autoscaling.send(new DescribeAutoScalingGroupsCommand(input)) },
+        elbv2: { describeRules: (input) => clients.elbv2.send(new DescribeRulesCommand(input)) },
         ec2: { describeInstances: (input) => ec2.send(new DescribeInstancesCommand(input)) },
         ecs: {
           describeServices: (input) => clients.ecs.send(new DescribeServicesCommand(input)),

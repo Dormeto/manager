@@ -50,7 +50,7 @@ export function markdownReport(e: Estimate): string {
     '| Account | Region | Load balancer | Hosts | Backend | At 15 minutes | Wakes a day | Recommended | Saving | Wakes a day |', '|---|---|---|---|---|---|---|---|---|---|',
     ...[...e.workloads].sort((a, b) => b.at15.usdMonth - a.at15.usdMonth).map((x) => {
       const w = x.workload;
-      const hosts = `${w.hosts.join(', ') || w.targetGroup}${x.quiet ? ' (no request in 14 days)' : ''}`;
+      const hosts = `${w.hosts.join(', ') || w.targetGroup}${x.quiet ? ' (no request in 14 days)' : ''}${w.managed ? ' (managed by Dormeto)' : ''}`;
       return `| ${w.account} | ${w.region} | ${cell(w.loadBalancer)} | ${cell(hosts)} | ${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)} | ${usd(x.at15.usdMonth)} | ${day(x.at15.wakesPerDay)} | ${x.recommended.minutes} min | ${usd(x.recommended.usdMonth)} | ${day(x.recommended.wakesPerDay)} |`;
     }), '',
     '## Left out', '',

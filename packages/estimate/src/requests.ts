@@ -1,6 +1,6 @@
 // Phase 2 of the estimate (vision docs/specs/2026-10-10-savings-estimate-design.md §5): each eligible workload's
 // requests per minute over 14 days (its target group's RequestCount; CloudWatch keeps one-minute data 15 days), five
-// workloads per GetMetricData call (20,160 values each, under the 100,800 a call returns), every page, by each value's
+// metrics per GetMetricData call (20,160 values each, under the 100,800 a call returns), every page, by each value's
 // timestamp. CloudWatch publishes nothing for a minute without request: an empty series is a workload no one called; a
 // metric it could not read is unreadable, never silence. Kept per account and region the same UTC day.
 import { lbDimension, tgDimension, type ScanPorts } from '@dormeto/discovery';
@@ -26,13 +26,15 @@ export async function readRequests(cloudwatch: CloudWatchPort, workloads: Worklo
   const from = to - days * DAY_MS;
   const minutes: Record<string, [number, number][]> = {};
   const unreadable: Record<string, string> = {};
-  for (let start = 0; start < workloads.length; start += PER_CALL) {
-    const batch = workloads.slice(start, start + PER_CALL);
-    const counts = batch.map(() => new Map<number, number>());
-    const queries = batch.map((w, i) => ({
-      Id: `w${i}`, ReturnData: true,
+  // One metric per target group: a managed workload's waker too, added up to its own (R10).
+  const metrics = workloads.flatMap((w, i) => [{ i, tg: w.targetGroupArn }, ...(w.wakerTargetGroupArn ? [{ i, tg: w.wakerTargetGroupArn }] : [])]);
+  const counts = workloads.map(() => new Map<number, number>());
+  for (let start = 0; start < metrics.length; start += PER_CALL) {
+    const batch = metrics.slice(start, start + PER_CALL);
+    const queries = batch.map((m, k) => ({
+      Id: `m${k}`, ReturnData: true,
       MetricStat: {
-        Metric: { Namespace: 'AWS/ApplicationELB', MetricName: 'RequestCount', Dimensions: [{ Name: 'LoadBalancer', Value: lbDimension(w.loadBalancerArn) }, { Name: 'TargetGroup', Value: tgDimension(w.targetGroupArn) }] },
+        Metric: { Namespace: 'AWS/ApplicationELB', MetricName: 'RequestCount', Dimensions: [{ Name: 'LoadBalancer', Value: lbDimension(workloads[m.i]!.loadBalancerArn) }, { Name: 'TargetGroup', Value: tgDimension(m.tg) }] },
         Period: 60, Stat: 'Sum',
       },
     }));
@@ -40,26 +42,26 @@ export async function readRequests(cloudwatch: CloudWatchPort, workloads: Worklo
     do {
       const page = await cloudwatch.getMetricData({ StartTime: new Date(from), EndTime: new Date(to), MetricDataQueries: queries, ScanBy: 'TimestampAscending', ...(token ? { NextToken: token } : {}) });
       for (const result of page.MetricDataResults ?? []) {
-        const i = Number((result.Id ?? '').slice(1));
-        const w = batch[i];
-        if (!w) continue;
+        const m = batch[Number((result.Id ?? '').slice(1))];
+        if (!m) continue;
+        const w = workloads[m.i]!;
         if (result.StatusCode && result.StatusCode !== 'Complete' && result.StatusCode !== 'PartialData') {
-          const why = result.Messages?.map((m) => m.Value ?? m.Code).filter(Boolean).join('; ');
+          const why = result.Messages?.map((x) => x.Value ?? x.Code).filter(Boolean).join('; ');
           unreadable[w.targetGroupArn] = `CloudWatch could not read the requests (${result.StatusCode}${why ? `: ${why}` : ''})`;
           continue;
         }
         (result.Timestamps ?? []).forEach((timestamp, k) => {
           const value = result.Values?.[k] ?? 0;
-          const m = Math.round((new Date(timestamp).getTime() - from) / MIN_MS);
-          if (value > 0 && m >= 0 && m < days * 1440) counts[i]!.set(m, (counts[i]!.get(m) ?? 0) + value);
+          const minute = Math.round((new Date(timestamp).getTime() - from) / MIN_MS);
+          if (value > 0 && minute >= 0 && minute < days * 1440) counts[m.i]!.set(minute, (counts[m.i]!.get(minute) ?? 0) + value);
         });
       }
       token = page.NextToken;
     } while (token);
-    batch.forEach((w, i) => {
-      if (!unreadable[w.targetGroupArn]) minutes[w.targetGroupArn] = [...counts[i]!].sort((a, b) => a[0] - b[0]);
-    });
   }
+  workloads.forEach((w, i) => {
+    if (!unreadable[w.targetGroupArn]) minutes[w.targetGroupArn] = [...counts[i]!].sort((a, b) => a[0] - b[0]);
+  });
   return { account: workloads[0]?.account ?? '', region: workloads[0]?.region ?? '', from: new Date(from).toISOString(), to: new Date(to).toISOString(), minutes, unreadable };
 }
 

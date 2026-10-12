@@ -14,7 +14,7 @@ const E: Estimate = {
   totals: { workloads: 12, usdMonth15: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08 },
   byAccount: { '111111111111': { workloads: 12, usdMonth15: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82 } },
   byRegion: { 'eu-west-1': { workloads: 12, usdMonth15: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82 } },
-  workloads: Array.from({ length: 12 }, (_, i) => workload(i === 3 ? 'docs' : `app${i}`, 10 + i)),
+  workloads: Array.from({ length: 12 }, (_, i) => (i === 5 ? { ...workload('napping', 15), workload: { ...workload('napping', 15).workload, managed: true as const } } : workload(i === 3 ? 'docs' : `app${i}`, 10 + i))),
   leftOut: [{ workload: workload('gpu', 0).workload, reason: 'what it stops has no AWS list price' }],
   ineligible: [{ account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }],
   unreachable: [{ account: '333333333333', name: 'sandbox', reason: 'not authorized to perform: sts:AssumeRole', fix: 'create a role this profile may assume, with read access, and name it with --role (tried OrganizationAccountAccessRole)' }],
@@ -30,6 +30,7 @@ describe('the estimate\'s reports', () => {
     expect(md).toContain('$180.50');
     expect(md).toContain('$173.42'); // net at 15 minutes
     expect(md).toContain('docs.example.com (no request in 14 days)');
+    expect(md).toContain('napping.example.com (managed by Dormeto)');
     expect(md).toContain('what it stops has no AWS list price');
     expect(md).toContain('create a role this profile may assume');
     expect(md).toContain('compute 20%, databases 0%');
