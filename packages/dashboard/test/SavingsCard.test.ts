@@ -7,6 +7,8 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import SavingsCard from '../src/components/SavingsCard.vue';
+import { api } from '../src/api';
+import { useSession } from '../src/stores/session';
 
 const days = Array.from({ length: 30 }, (_, i) => ({ date: `2026-09-${String(i + 8).padStart(2, '0')}`, usd: i === 29 ? 1.25 : 0.5 }));
 const SUMMARY = {
@@ -19,12 +21,17 @@ const SUMMARY = {
 const answer: { value: unknown } = { value: { summary: SUMMARY } };
 vi.mock('../src/api', () => ({ api: vi.fn(async () => answer.value) }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+Object.defineProperty(window, 'visualViewport', {
+  configurable: true,
+  value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
+});
 
-async function mountCard(value: unknown) {
+async function mountCard(value: unknown, role: 'viewer' | 'operator' | 'admin' = 'viewer') {
   answer.value = value;
   setActivePinia(createPinia());
+  useSession().role = role;
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
-  const wrapper = mount(SavingsCard, { global: { plugins: [createVuetify({ components, directives }), router] } });
+  const wrapper = mount(SavingsCard, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), router] } });
   await flushPromises();
   return wrapper;
 }
@@ -63,5 +70,62 @@ describe('SavingsCard', () => {
     expect(wrapper.text()).toContain('net about $0.92 over the 3 days computed');
     wrapper.unmount();
   });
-});
 
+  // R9.5: Spot at Spot prices, discounts for commitments set by administrators.
+  const NONE = { compute: 0, databases: 0, updatedAt: null, updatedBy: null };
+  const SET = { compute: 20, databases: 30, updatedAt: '2026-10-09T10:00:00.000Z', updatedBy: 'admin@example.com' };
+
+  it('says the discounts, and that Spot is priced at Spot prices', async () => {
+    const none = await mountCard({ summary: SUMMARY, settings: NONE });
+    expect(none.text()).toContain('No discount set; Spot at Spot prices (Fargate Spot at 30% of on-demand).');
+    none.unmount();
+    const set = await mountCard({ summary: { ...SUMMARY, discounts: { compute: 20, databases: 30 } }, settings: SET });
+    expect(set.text()).toContain('Discounts: compute 20%, databases 30% off the list prices; Spot at Spot prices (Fargate Spot at 30% of on-demand).');
+    expect(set.text()).not.toContain('from the next day computed');
+    expect(set.text()).toMatch(/AWS list prices of what the naps stopped, against 24\/7/);
+    expect(set.text()).toContain('the discounts are an average rate');
+    expect(set.text()).not.toContain('Savings Plans, Reserved Instances and Spot lower the real figure');
+    set.unmount();
+  });
+
+  it('says a change of discounts applies from the next day computed; a summary from before has none', async () => {
+    const changed = await mountCard({ summary: { ...SUMMARY, discounts: { compute: 0, databases: 0 } }, settings: SET });
+    expect(changed.text()).toContain('from the next day computed');
+    changed.unmount();
+    const old = await mountCard({ summary: SUMMARY, settings: SET });
+    expect(old.text()).toContain('from the next day computed');
+    old.unmount();
+    const same = await mountCard({ summary: SUMMARY, settings: NONE });
+    expect(same.text()).not.toContain('from the next day computed');
+    same.unmount();
+  });
+
+  it('lets administrators only edit the discounts: whole percentages from 0 to 90', async () => {
+    const operator = await mountCard({ summary: SUMMARY, settings: NONE }, 'operator');
+    expect(operator.find('[data-test="edit-discounts"]').exists()).toBe(false);
+    operator.unmount();
+    const wrapper = await mountCard({ summary: SUMMARY, settings: NONE }, 'admin');
+    await wrapper.find('[data-test="edit-discounts"]').trigger('click');
+    await flushPromises();
+    const field = (name: string) => document.querySelector(`[data-test="${name}"] input`) as HTMLInputElement;
+    const save = () => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === 'Save') as HTMLButtonElement;
+    expect(document.body.textContent).toContain('an average rate');
+    for (const [compute, databases] of [['91', '30'], ['2.5', '30'], ['20', '']]) {
+      field('compute').value = compute!;
+      field('compute').dispatchEvent(new Event('input'));
+      field('databases').value = databases!;
+      field('databases').dispatchEvent(new Event('input'));
+      await flushPromises();
+      expect(save().disabled, `${compute}, ${databases}`).toBe(true);
+    }
+    field('databases').value = '30';
+    field('databases').dispatchEvent(new Event('input'));
+    await flushPromises();
+    vi.mocked(api).mockClear();
+    save().click();
+    await flushPromises();
+    const put = vi.mocked(api).mock.calls.find(([, init]) => init?.method === 'PUT');
+    expect(put).toEqual(['/savings/settings', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ compute: 20, databases: 30 }) })]);
+    wrapper.unmount();
+  });
+});

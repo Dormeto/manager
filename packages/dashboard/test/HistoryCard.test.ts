@@ -81,6 +81,13 @@ describe('HistoryCard', () => {
     wrapper.unmount();
   });
 
+  it('says the period\'s savings are after discounts when some are set (R9.5)', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0.766, hours: 21, items: [{ item: { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' }, hourly: 0.0365, hours: 21, usd: 0.766 }], unpriced: [], baseline: { kind: 'always' }, discounts: { compute: 20, databases: 30 } } });
+    const wrapper = await mountCard();
+    expect(wrapper.text()).toContain('saved about $0.77 (estimate, after discounts)');
+    wrapper.unmount();
+  });
+
   it('says the savings are not priced yet rather than $0 when nothing could be priced (review I6)', async () => {
     vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0, hours: 21, items: [], unpriced: [{ reason: 'not described (a router before 0.27.0)', hours: 21 }], baseline: { kind: 'always' } } });
     const wrapper = await mountCard();

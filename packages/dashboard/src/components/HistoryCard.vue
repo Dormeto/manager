@@ -38,7 +38,7 @@ const summary = computed(() => {
     ...(w.failed ? [`${w.failed} failed`] : []),
     // R9: what the naps of the period saved, at AWS's list prices.
     // Nothing priced is not $0 saved (review I6): a router before 0.27.0, or what AWS's list prices do not name.
-    ...(!h.savings ? [] : h.savings.items.length ? [`saved about ${usd(h.savings.usd)} (estimate)${h.savings.unpriced.length ? ', part not priced' : ''}`]
+    ...(!h.savings ? [] : h.savings.items.length ? [`saved about ${usd(h.savings.usd)} (estimate${h.savings.discounts ? ', after discounts' : ''})${h.savings.unpriced.length ? ', part not priced' : ''}`]
       : h.savings.unpriced.length ? ['savings not priced yet'] : []),
   ];
 });

@@ -1,7 +1,7 @@
 // What a workload's backends cost and save (user request): its last nap's items, priced by the API, matched to its
 // backends by kind; a month is 730 hours, saved at the share of the last 30 days asleep within the baseline.
 import { describe, expect, it } from 'vitest';
-import { backendCost, barSavings, monthlySaving } from '../src/costs';
+import { backendCost, barSavings, discountText, itemText, monthlySaving } from '../src/costs';
 import type { Costs } from '../src/types';
 
 const SHOP = 'arn:aws:ecs:eu-west-3:111122223333:service/main/shop';
@@ -43,7 +43,7 @@ describe('costs', () => {
     expect(bar.hourly).toBeCloseTo(0.026875, 6);
     expect(bar.monthly).toBeCloseTo(monthlySaving(costs)!, 6);
     expect(barSavings(undefined)).toBeNull();
-    expect(barSavings({ ...costs, items: [] })).toEqual({ saved: costs.saved, hourly: null, monthly: null });
+    expect(barSavings({ ...costs, items: [] })).toEqual({ saved: costs.saved, hourly: null, monthly: null, discounts: null });
   });
 
   it('knows nothing before a nap said what it stopped', () => {
@@ -51,5 +51,14 @@ describe('costs', () => {
     expect(backendCost(backends[1]!, backends, { ...costs, items: [], napAt: null })).toBeNull();
     expect(monthlySaving({ ...costs, items: [] })).toBeNull();
     expect(monthlySaving({ ...costs, savedShare: null })).toBeNull();
+  });
+
+  it('says what ran on Spot, the discounts in a few words, and gives them to the bar (R9.5)', () => {
+    expect(itemText({ kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux', spot: true })).toBe('2 × t3.medium (Linux, Spot)');
+    expect(itemText({ kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'arm64', os: 'Linux', spot: true })).toBe('1 × 0.25 vCPU, 0.5 GB (Linux, arm64, Spot)');
+    expect(itemText({ kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' })).toBe('2 × t3.medium (Linux)');
+    expect(discountText({ compute: 20, databases: 30 })).toBe('compute 20%, databases 30%');
+    expect(barSavings({ ...costs, discounts: { compute: 20, databases: 30 } })!.discounts).toEqual({ compute: 20, databases: 30 });
+    expect(barSavings(costs)!.discounts).toBeNull();
   });
 });

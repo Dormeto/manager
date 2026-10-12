@@ -2,7 +2,7 @@
 // backends by kind (EC2 instances and Auto Scaling groups, ECS services, databases); several backends of a kind share the
 // price of their items, which the nap does not tell apart. A month is 730 hours, saved at the share of the last 30 days
 // asleep within the baseline.
-import type { Costs, StoppedItem } from './types';
+import type { Costs, Discounts, StoppedItem } from './types';
 
 export const MONTH_HOURS = 730;
 const BACKEND_GROUPS: Record<string, string> = { instance: 'ec2', asg: 'ec2', ecs: 'fargate', 'rds-instance': 'db', 'rds-cluster': 'db' };
@@ -19,8 +19,8 @@ export interface BackendCost {
 // An item in a few words, for what is not priced.
 export function itemText(item: StoppedItem): string {
   switch (item.kind) {
-    case 'ec2': return `${item.count} × ${item.type} (${item.os})`;
-    case 'fargate': return `${item.count} × ${item.vcpu} vCPU, ${item.memoryGb} GB (${item.os}, ${item.arch})`;
+    case 'ec2': return `${item.count} × ${item.type} (${item.os}${item.spot ? ', Spot' : ''})`;
+    case 'fargate': return `${item.count} × ${item.vcpu} vCPU, ${item.memoryGb} GB (${item.os}, ${item.arch}${item.spot ? ', Spot' : ''})`;
     case 'rds': return `${item.class} ${item.engine}${item.multiAz ? ' Multi-AZ' : ''}`;
     case 'aurora-serverless': return `${item.engine} Serverless v2, ${item.acu} ACU`;
     default: return item.reason;
@@ -47,10 +47,14 @@ export function monthlySaving(costs: Costs | undefined | null): number | null {
   return priced.reduce((n, i) => n + i.hourly!, 0) * MONTH_HOURS * costs.savedShare;
 }
 
+// The discounts for commitments in a few words (R9.5).
+export const discountText = (d: Discounts) => `compute ${d.compute}%, databases ${d.databases}%`;
+
 // What the 7-day bar says of a workload's savings: the base cost an hour of what its last nap stopped, what its naps
-// saved in the last 30 days, and a month's saving at that rate.
-export function barSavings(costs: Costs | undefined | null): { saved: Costs['saved']; hourly: number | null; monthly: number | null } | null {
+// saved in the last 30 days, a month's saving at that rate, and the discounts they are after (R9.5).
+export interface BarSavings { saved: Costs['saved']; hourly: number | null; monthly: number | null; discounts?: Discounts | null }
+export function barSavings(costs: Costs | undefined | null): BarSavings | null {
   if (!costs) return null;
   const priced = costs.items.filter((i) => i.hourly !== null);
-  return { saved: costs.saved, hourly: priced.length ? priced.reduce((n, i) => n + i.hourly!, 0) : null, monthly: monthlySaving(costs) };
+  return { saved: costs.saved, hourly: priced.length ? priced.reduce((n, i) => n + i.hourly!, 0) : null, monthly: monthlySaving(costs), discounts: costs.discounts ?? null };
 }

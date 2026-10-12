@@ -105,7 +105,7 @@ const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, 
   <div data-test="workloads-header" class="d-flex flex-wrap align-center ga-4 mb-4">
     <h1 class="text-headline-small">Workloads</h1>
     <StateBar v-if="fleet" :states="fleet.states7d" :title="`All ${fleet.workloads} workloads, last 7 days`" :width="200"
-      :savings="fleet.costs ? { saved: fleet.costs.saved, hourly: fleet.costs.hourly, monthly: fleet.costs.monthly } : null"
+      :savings="fleet.costs ? { saved: fleet.costs.saved, hourly: fleet.costs.hourly, monthly: fleet.costs.monthly, discounts: fleet.costs.discounts ?? null } : null"
       :note="`Computed ${relative(fleet.computedAt, now)}; each workload's figures are kept ${fleet.cacheMinutes} minutes.`" />
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />

@@ -58,6 +58,9 @@ describe('Workload view', () => {
     };
     const [, database] = wrapper.findAll('[data-test="backend"]');
     expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS.*Base cost\$0\.0170 an hour · \$12\.41 a month.*Savedabout \$11\.17 a month/);
+    // R9.5: Spot at Spot prices; no discount set, none said.
+    expect(document.body.textContent).toContain('Spot at Spot prices');
+    expect(document.body.textContent).not.toContain('after discounts');
     expect(wrapper.find('[data-test="header"]').findComponent(StateBar).props('savings')).toEqual(barSavings(current.costs as never));
     expect(await tip(wrapper.find('[data-test="target"]'))).toMatch(/Id10\.0\.1\.12.*ARN—.*ServiceAmazon ECS task/);
     wrapper.unmount();

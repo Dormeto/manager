@@ -6,9 +6,8 @@
 // note, the bar of all workloads.
 import { computed } from 'vue';
 import { idleText } from '../discovery';
-import { MONTH_HOURS } from '../costs';
+import { MONTH_HOURS, discountText, type BarSavings } from '../costs';
 import { longDuration, stateColor, usd, usdHourly } from '../format';
-import type { Costs } from '../types';
 import { STATE_ORDER, stateLabel } from '../history';
 import { stateBrief } from '../state';
 
@@ -16,7 +15,7 @@ const props = withDefaults(defineProps<{
   states?: { from: string; to: string; totals: Record<string, number> } | null;
   idleHours7d?: number | null;
   requests7d?: number | null;
-  savings?: { saved: Costs['saved']; hourly: number | null; monthly: number | null } | null;
+  savings?: BarSavings | null;
   title?: string;
   note?: string | null;
   width?: number;
@@ -59,6 +58,8 @@ const monthly = computed(() => {
   const m = props.savings?.monthly;
   return typeof m === 'number' ? `Estimated saving: about ${usd(m)} a month at that rate` : null;
 });
+// R9.5: Spot at Spot prices, the discounts when set.
+const estimates = computed(() => `Estimates: AWS list prices of what the naps stopped, Spot at Spot prices${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, for the time asleep the baseline would have run.`);
 const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }).detail}` : null));
 </script>
 
@@ -84,7 +85,7 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
     <div v-if="base" class="mt-1">{{ base }}</div>
     <div v-if="saved" :class="{ 'mt-1': !base }">{{ saved }}</div>
     <div v-if="monthly">{{ monthly }}</div>
-    <div v-if="saved || monthly" class="note">Estimates: AWS on-demand list prices of what the naps stopped, for the time asleep the baseline would have run.</div>
+    <div v-if="saved || monthly" class="note">{{ estimates }}</div>
     <div v-if="idle" class="mt-1 note">{{ idle }}</div>
     <div v-if="note" class="mt-1 note">{{ note }}</div>
   </v-tooltip>

@@ -19,7 +19,7 @@ import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import { stateSince } from '../state';
-import { backendCost, barSavings } from '../costs';
+import { backendCost, barSavings, discountText } from '../costs';
 import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
@@ -96,7 +96,11 @@ function costRows(b: Backend): { label: string; value: string }[] {
     ...(cost.unpriced.length ? [{ label: 'Not priced', value: cost.unpriced.join(', ') }] : []),
   ];
 }
-const COST_NOTE = 'AWS on-demand list prices of what its last nap stopped; a month is 730 hours.';
+// R9.5: Spot at Spot prices, the discounts when set.
+const costNote = computed(() => {
+  const d = status.value?.costs?.discounts;
+  return `AWS list prices of what its last nap stopped, Spot at Spot prices${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.`;
+});
 
 // Where the workload is: the ARNs of its backends and targets.
 const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
@@ -237,7 +241,7 @@ const summary = computed(() => {
       <v-card title="Backends" class="mb-4">
         <v-list density="comfortable">
           <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)" :rows="costRows(b)"
-            :note="costRows(b).some((r) => r.label === 'Base cost') ? COST_NOTE : null">
+            :note="costRows(b).some((r) => r.label === 'Base cost') ? costNote : null">
             <template #default="{ tip }">
               <v-list-item v-bind="tip" data-test="backend" :title="shortId(b.id)" :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '')">
                 <template v-if="backendIcon(b.kind)" #prepend>

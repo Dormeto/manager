@@ -54,8 +54,8 @@ export interface StatesWeek { from: string; to: string; totals: Record<string, n
 
 // What a nap stopped (router 0.27.0), as the savings price it.
 export type StoppedItem =
-  | { kind: 'ec2'; type: string; count: number; os: string }
-  | { kind: 'fargate'; vcpu: number; memoryGb: number; count: number; arch: string; os: string }
+  | { kind: 'ec2'; type: string; count: number; os: string; spot?: true }
+  | { kind: 'fargate'; vcpu: number; memoryGb: number; count: number; arch: string; os: string; spot?: true }
   | { kind: 'rds'; class: string; engine: string; multiAz: boolean }
   | { kind: 'aurora-serverless'; engine: string; acu: number }
   | { kind: 'unknown'; backend: string; reason: string };
@@ -70,7 +70,11 @@ export interface Costs {
   savedShare: number | null;
   items: { item: StoppedItem; hourly: number | null }[];
   saved: { usd: number; hours: number; unpricedHours: number };
+  discounts?: Discounts; // when one is set (R9.5)
 }
+// Percentages off the list prices for commitments (R9.5): compute (EC2, Fargate), databases (RDS, Aurora).
+export interface Discounts { compute: number; databases: number }
+export interface SavingsSettings extends Discounts { updatedAt: string | null; updatedBy: string | null }
 
 // All the workloads the caller sees (GET /api/workloads/states): their seconds in each state over 7 days and their
 // savings, from each workload's figures kept cacheMinutes.
@@ -79,7 +83,7 @@ export interface FleetStates {
   computedAt: string;
   cacheMinutes: number;
   states7d: StatesWeek;
-  costs?: { baseline: Costs['baseline']; saved: Costs['saved']; hourly: number | null; monthly: number | null; priced: number };
+  costs?: { baseline: Costs['baseline']; saved: Costs['saved']; hourly: number | null; monthly: number | null; priced: number; discounts?: Discounts };
 }
 
 export interface Counts {
@@ -321,6 +325,7 @@ export interface PeriodSavings {
   items: { item: Record<string, unknown> & { kind: string }; hourly: number; hours: number; usd: number }[];
   unpriced: { reason: string; item?: Record<string, unknown>; hours: number }[];
   baseline: { kind: string; timeZone?: string };
+  discounts?: Discounts;
 }
 export interface SavingsSummary {
   computedAt: string;
@@ -333,5 +338,6 @@ export interface SavingsSummary {
   unpriced: { workloads: number; hours: number };
   workloads: number;
   dormeto: { usdMonth: number };
+  discounts?: Discounts; // those of its latest day (R9.5)
 }
 

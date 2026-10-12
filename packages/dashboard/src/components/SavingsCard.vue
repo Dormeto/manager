@@ -1,18 +1,50 @@
 <script setup lang="ts">
 // The fleet's estimated savings (R9), from the daily job's summary: the last 30 days with a bar a day, this month, since
-// the start, net of Dormeto's own cost, the workloads that save the most, and what the estimate does not count.
+// the start, net of Dormeto's own cost, the workloads that save the most, and what the estimate does not count; the
+// discounts for commitments, edited by administrators (R9.5).
 import { computed, ref } from 'vue';
+import { mdiPencil } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { usd } from '../format';
-import type { SavingsSummary } from '../types';
+import { discountText } from '../costs';
+import { useSession } from '../stores/session';
+import DiscountsDialog from './DiscountsDialog.vue';
+import type { Discounts, SavingsSettings, SavingsSummary } from '../types';
 
+const session = useSession();
 const summary = ref<SavingsSummary | null>(null);
+const settings = ref<SavingsSettings | null>(null);
 const loaded = ref(false);
-usePoll(async () => {
-  summary.value = (await api<{ summary?: SavingsSummary | null }>('/savings'))?.summary ?? null;
+const editing = ref(false);
+const saveError = ref('');
+async function load() {
+  const answer = await api<{ summary?: SavingsSummary | null; settings?: SavingsSettings | null }>('/savings');
+  summary.value = answer?.summary ?? null;
+  settings.value = answer?.settings ?? null;
   loaded.value = true;
+}
+usePoll(load);
+const NONE: Discounts = { compute: 0, databases: 0 };
+const current = computed<Discounts>(() => (settings.value ? { compute: settings.value.compute, databases: settings.value.databases } : NONE));
+const SPOT = 'Spot at Spot prices (Fargate Spot at 30% of on-demand).';
+const discountsLine = computed(() => (current.value.compute || current.value.databases
+  ? `Discounts: ${discountText(current.value)} off the list prices; ${SPOT}` : `No discount set; ${SPOT}`));
+// The summary's days keep the discounts they were computed with (none before 0.8.0).
+const pending = computed(() => {
+  const used = summary.value?.discounts ?? NONE;
+  return Boolean(summary.value) && (used.compute !== current.value.compute || used.databases !== current.value.databases);
 });
+async function save(discounts: Discounts) {
+  saveError.value = '';
+  try {
+    await api('/savings/settings', { method: 'PUT', body: JSON.stringify(discounts) });
+    editing.value = false;
+    await load();
+  } catch (err) {
+    saveError.value = (err as Error).message;
+  }
+}
 const day = (date: string) => new Date(`${date}T00:00:00.000Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 // The days the last 30 cover since the first one computed (review I7: Dormeto's cost for those days only).
 const covered = computed(() => {
@@ -55,9 +87,15 @@ const unpriced = computed(() => {
         </v-list-item>
       </v-list>
       <div class="text-body-small text-medium-emphasis mt-2">AWS list prices of what the naps stopped, against {{ baseline }}. Storage, load balancers and
-        data transfer keep running and are not counted; Savings Plans, Reserved Instances and Spot lower the real figure.{{ unpriced }}</div>
+        data transfer keep running and are not counted; the discounts are an average rate.{{ unpriced }}</div>
     </v-card-text>
     <v-progress-linear v-else indeterminate color="primary" />
+    <v-card-text v-if="loaded" class="d-flex align-center ga-2 pt-0 text-body-medium">
+      <span data-test="discounts">{{ discountsLine }}<template v-if="pending"> Applies from the next day computed.</template></span>
+      <v-btn v-if="session.isAdmin" data-test="edit-discounts" class="ml-auto" size="small" variant="text" :prepend-icon="mdiPencil" @click="editing = true">Edit</v-btn>
+    </v-card-text>
+    <v-alert v-if="saveError" type="error" density="compact" class="mx-4 mb-4" :text="saveError" />
+    <DiscountsDialog v-model="editing" :discounts="current" @submit="save" />
   </v-card>
 </template>
 

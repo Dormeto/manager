@@ -66,6 +66,18 @@ describe('StateBar', () => {
     unpriced.unmount();
   });
 
+  it('says Spot is priced at Spot prices, and the discounts when set (R9.5)', async () => {
+    const savings = { saved: { usd: 3.2, hours: 600, unpricedHours: 0 }, hourly: 0.02, monthly: 13 };
+    const plain = render({ states: STATES, savings: { ...savings, discounts: null } });
+    const text = await hover(plain);
+    expect(text).toContain('Spot at Spot prices');
+    expect(text).not.toContain('after discounts');
+    plain.unmount();
+    const discounted = render({ states: STATES, savings: { ...savings, discounts: { compute: 20, databases: 30 } } });
+    expect(await hover(discounted)).toContain('after discounts (compute 20%, databases 30%)');
+    discounted.unmount();
+  });
+
   it('takes a title and a note: the bar of all workloads (user request)', async () => {
     const wrapper = render({ states: STATES, title: 'All 12 workloads, last 7 days', note: 'Computed 12 min ago; each workload\'s figures are kept 60 minutes.' });
     expect(wrapper.find('[data-test="state-bar"]').attributes('aria-label')).toMatch(/^All 12 workloads, last 7 days: awake/);
