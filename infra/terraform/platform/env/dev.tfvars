@@ -6,3 +6,4 @@ smoke_user       = true
 routers = [
   { name = "dmt-dev", region = "eu-west-1", controller = "dmt-dev-controller" },
 ]
+organization_id  = "o-vvk0115ixn"

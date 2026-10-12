@@ -82,3 +82,18 @@ locals {
   name    = "dmt-${var.env}-manager"
   version = jsondecode(file("${path.module}/../../../package.json")).version
 }
+
+variable "organization_id" {
+  description = "AWS organization of the discovery perimeter: the discovery Lambda only assumes roles of this organization."
+  type        = string
+  validation {
+    condition     = can(regex("^o-[a-z0-9]{10,32}$", var.organization_id))
+    error_message = "organization_id must look like o-xxxxxxxxxx."
+  }
+}
+
+variable "discovery_role_name" {
+  description = "Read-only role deployed in each account of the perimeter (manager/infra/org/discovery-role.yaml)."
+  type        = string
+  default     = "DmtDiscoveryRole"
+}

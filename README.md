@@ -45,3 +45,19 @@ npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://loca
 
 While SES is in the sandbox, an invited address must be a verified SES identity: inviting from the dashboard creates
 the identity (AWS sends a verification email), and the administrator resends the invitation once it is verified.
+
+## Organization access (discovery)
+
+Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a
+read-only role, `DmtDiscoveryRole` (template `infra/org/discovery-role.yaml`). The organization management account
+grants this once (vision `docs/architecture/organization-iam.md`):
+
+```bash
+cd infra/terraform/org                         # acts in the management account (profile kloudy-master)
+tfenv exec init -backend-config=env/dev.backend.hcl
+tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
+tfenv exec apply dev.tfplan                    # delegation policy, StackSet dmt-discovery and its instances
+```
+
+Only the accounts of `discovery_accounts` get the role, so discovery can never read any other account of the
+organization.
