@@ -73,6 +73,12 @@ variable "ip_lists" {
   default = []
 }
 
+variable "mfa" {
+  description = "The MFA policy (manager module mfa)."
+  type        = string
+  default     = "operators"
+}
+
 variable "email_identity" {
   description = "Verified SES identity used by Cognito to send invitations (managed by the website stack)."
   type        = string
