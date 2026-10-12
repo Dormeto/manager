@@ -77,6 +77,23 @@ const fallbacksOf = (v: unknown): Fallback[] | undefined => (Array.isArray(v)
     .slice(0, 20).map(({ instance, from, to }) => ({ instance, from, to }))
   : undefined);
 
+// What a nap stopped (routers 0.27.0, R9): the known kinds, well-formed, at most 50.
+const TYPE = /^[a-z][a-z0-9-]*\.[a-z0-9]+$/;
+const DB_CLASS = /^db\.[a-z0-9.]+$/;
+const between = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
+function stoppedItemOf(v: unknown): Json | null {
+  if (!isObject(v)) return null;
+  if (v.kind === 'ec2' && typeof v.type === 'string' && TYPE.test(v.type) && between(v.count, 1, 10_000) && typeof v.os === 'string') return { kind: 'ec2', type: v.type, count: v.count, os: v.os.slice(0, 40) };
+  if (v.kind === 'fargate' && between(v.vcpu, 0.25, 64) && between(v.memoryGb, 0.5, 512) && between(v.count, 1, 10_000) && (v.arch === 'x86_64' || v.arch === 'arm64') && typeof v.os === 'string') {
+    return { kind: 'fargate', vcpu: v.vcpu, memoryGb: v.memoryGb, count: v.count, arch: v.arch, os: v.os.slice(0, 40) };
+  }
+  if (v.kind === 'rds' && typeof v.class === 'string' && DB_CLASS.test(v.class) && typeof v.engine === 'string') return { kind: 'rds', class: v.class, engine: v.engine.slice(0, 40), multiAz: v.multiAz === true };
+  if (v.kind === 'aurora-serverless' && typeof v.engine === 'string' && between(v.acu, 0, 256)) return { kind: 'aurora-serverless', engine: v.engine.slice(0, 40), acu: v.acu };
+  if (v.kind === 'unknown') return { kind: 'unknown', backend: text(v.backend, 200) ?? '', reason: text(v.reason, 200) ?? '' };
+  return null;
+}
+export const stoppedOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(stoppedItemOf).filter((i): i is Json => i !== null) : undefined);
+
 // What a state change event says of its transition, for the history (R8): what started it, its wake, the wake's
 // duration, the failure, who asked it from the manager.
 export function transitionOf(d: Json, at: string) {
@@ -87,6 +104,7 @@ export function transitionOf(d: Json, at: string) {
     durationMs: count(d.durationMs),
     failure: failureOf(d.failure, at),
     by: text(d.by, 320),
+    stopped: stoppedOf(d.stopped),
   });
 }
 

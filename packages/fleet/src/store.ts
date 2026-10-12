@@ -2,6 +2,7 @@
 // router, WS#<account>#<region>#<workloadId> per workload. Written from the router events, read by the API. Each
 // workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+import type { StoppedItem } from './prices.js';
 
 const PK = 'T#default';
 const VERSIONED = 'attribute_not_exists(version) OR version = :version';
@@ -62,6 +63,7 @@ export interface HistoryEntry {
   failure?: { kind: string; step: string; backend?: string; message: string; at?: string };
   by?: string; // who asked it from the manager
   inferred?: boolean;
+  stopped?: StoppedItem[]; // what the nap stopped (ASLEEP, routers 0.27.0: R9)
 }
 // The entries of a period read at most (a request's bound).
 export const HISTORY_MAX = 5000;
@@ -209,6 +211,17 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
         start = page.LastEvaluatedKey;
       } while (start && entries.length <= max);
       return { entries: entries.slice(0, max).reverse(), truncated: entries.length > max };
+    },
+
+    // AWS list prices (R9), per region and item: 30 days; the absence of one a day (a new instance type appears).
+    async getPrice(priceKey: string): Promise<{ usd: number | null } | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(`PRICE#${priceKey}`) }));
+      return Item && Number(Item.expiresAt?.N ?? 0) > now() / 1000 ? { usd: Item.usd?.N ? Number(Item.usd.N) : null } : null;
+    },
+    async putPrice(priceKey: string, usd: number | null): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key(`PRICE#${priceKey}`), ...(usd === null ? {} : { usd: { N: String(usd) } }), expiresAt: { N: String(Math.floor(now() / 1000) + (usd === null ? 1 : 30) * 86_400) } },
+      }));
     },
 
     // The last entry before a time: the state a period starts in.

@@ -1,8 +1,9 @@
 // A period of a workload's state history (R8), computed when read: its consecutive phases, the time in each state and
 // its wakes. The period ends at now at the latest; before the first entry the history has, the state is UNKNOWN.
 import type { HistoryEntry } from './store.js';
+import type { StoppedItem } from './prices.js';
 
-export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean }
+export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[] }
 export interface HistoryView {
   from: string;
   to: string;
@@ -18,7 +19,7 @@ export function historyView({ before, entries, from, to, now, initial }: { befor
   const start = Date.parse(from);
   const end = Math.max(start, Math.min(Date.parse(to), Date.parse(now)));
   const clamp = (at: string) => Math.min(Math.max(Date.parse(at), start), end);
-  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean }[] = [];
+  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[] }[] = [];
   let current: (typeof phases)[number] = { state: before?.to ?? initial ?? 'UNKNOWN', from: start, to: end };
   for (const entry of entries) {
     // A twin (an inferred entry after its event, or a duplicate) changes nothing.
@@ -28,7 +29,7 @@ export function historyView({ before, entries, from, to, now, initial }: { befor
     current = {
       state: entry.to, from: at, to: end,
       ...(entry.cause ? { cause: entry.cause } : {}), ...(entry.by ? { by: entry.by } : {}), ...(entry.inferred ? { inferred: true } : {}),
-      ...(entry.from === null ? { first: true } : {}),
+      ...(entry.from === null ? { first: true } : {}), ...(entry.stopped ? { stopped: entry.stopped } : {}),
     };
   }
   phases.push(current);

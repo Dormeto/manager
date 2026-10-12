@@ -57,4 +57,11 @@ describe('history view', () => {
     const first = historyView({ before: null, entries: [e('AWAKE', 10, { inferred: true })], from: t(0), to: t(60), now: t(60) });
     expect(first.phases[1]).toMatchObject({ state: 'AWAKE', first: true });
   });
+
+  it('an asleep phase carries what its nap stopped (R9)', () => {
+    const stopped = [{ kind: 'ec2' as const, type: 't3.medium', count: 1, os: 'Linux' }];
+    const v = historyView({ before: e('AWAKE', -10), entries: [e('ASLEEP', 10, { stopped })], from: t(0), to: t(60), now: t(60) });
+    expect(v.phases[1]).toMatchObject({ state: 'ASLEEP', stopped });
+  });
 });
+

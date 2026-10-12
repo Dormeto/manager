@@ -445,6 +445,29 @@ describe('state history (R8)', () => {
     expect((await history(s))[0]!.at).toBe(T1);
   });
 
+  it('keeps what a nap stopped (router 0.27.0), its known kinds only (R9)', async () => {
+    const s = setup();
+    await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [
+      { kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' }, { kind: 'fargate', vcpu: 0.5, memoryGb: 1, count: 1, arch: 'arm64', os: 'Linux' },
+      { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: true }, { kind: 'aurora-serverless', engine: 'aurora-mysql', acu: 0.5 },
+      { kind: 'unknown', backend: 'ecs:x', reason: 'denied' }, { kind: 'ec2', type: 'bad type', count: 1, os: 'Linux' }, { kind: 'gpu', n: 1 }, 'junk',
+    ] }));
+    const [entry] = await history(s);
+    expect(entry!.stopped!.map((i) => i.kind)).toEqual(['ec2', 'fargate', 'rds', 'aurora-serverless', 'unknown']);
+  });
+
+  it('caches a price 30 days, the absence of one a day (R9)', async () => {
+    const dynamo = fakeDynamo();
+    const store = createFleetStore({ dynamo, table: 'dmt-dev-manager', now: () => NOW });
+    await store.putPrice('eu-west-1#ec2#t3.medium#Linux', 0.0456);
+    await store.putPrice('eu-west-1#ec2#x9.huge#Linux', null);
+    expect(await store.getPrice('eu-west-1#ec2#t3.medium#Linux')).toEqual({ usd: 0.0456 });
+    expect(await store.getPrice('eu-west-1#ec2#x9.huge#Linux')).toEqual({ usd: null });
+    expect(await store.getPrice('eu-west-1#ec2#m5.large#Linux')).toBeNull();
+    const ttl = (k: string) => Number([...dynamo.items.values()].find((i) => i.sk?.S === `PRICE#${k}`)!.expiresAt!.N) - Math.floor(NOW / 1000);
+    expect([ttl('eu-west-1#ec2#t3.medium#Linux'), ttl('eu-west-1#ec2#x9.huge#Linux')]).toEqual([30 * 86_400, 86_400]);
+  });
+
   it('a period is read in pages up to a cap, with the entry before it', async () => {
     const s = setup();
     for (let i = 0; i < 30; i += 1) await s.ingest(change(i % 2 ? 'ASLEEP' : 'AWAKE', at(T1, i * 60), { cause: 'idle' }));
