@@ -265,20 +265,51 @@ export function createApi({
     const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RouterError(`no answer within ${ms} ms`)), ms); });
     return Promise.race([promise, late]).finally(() => clearTimeout(timer));
   }
+  // A call that timed out keeps its place until the router answers (its Lambda still runs): at most callConcurrency
+  // router invocations at once, without waiting for those answers.
   async function each<T, R>(items: T[], work: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
     const out: PromiseSettledResult<R>[] = new Array(items.length);
     const deadline = Date.now() + callDeadlineMs;
     let next = 0;
+    let running = 0;
+    const waiting: (() => void)[] = [];
+    // A place for a call, or false once the deadline passes while waiting for one.
+    const place = (left: number) => new Promise<boolean>((resolve) => {
+      if (running < callConcurrency) {
+        running += 1;
+        resolve(true);
+        return;
+      }
+      const take = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        const at = waiting.indexOf(take);
+        if (at >= 0) waiting.splice(at, 1);
+        resolve(false);
+      }, left);
+      waiting.push(take);
+    });
+    // An answer frees its place for the next waiting call.
+    const free = () => {
+      const take = waiting.shift();
+      if (take) take();
+      else running -= 1;
+    };
+    const notCalled = (): PromiseSettledResult<R> => ({ status: 'rejected', reason: new RouterError(`not called: no time left in this request (${callDeadlineMs} ms)`) });
     await Promise.all(Array.from({ length: Math.min(callConcurrency, items.length) }, async () => {
       while (next < items.length) {
         const i = next++;
         const left = deadline - Date.now();
-        if (left <= 0) {
-          out[i] = { status: 'rejected', reason: new RouterError(`not called: no time left in this request (${callDeadlineMs} ms)`) };
+        if (left <= 0 || !(await place(left))) {
+          out[i] = notCalled();
           continue;
         }
+        const call = work(items[i]!);
+        call.then(free, free);
         try {
-          out[i] = { status: 'fulfilled', value: await bounded(work(items[i]!), Math.min(callTimeoutMs, left)) };
+          out[i] = { status: 'fulfilled', value: await bounded(call, Math.max(1, Math.min(callTimeoutMs, deadline - Date.now()))) };
         } catch (reason) {
           out[i] = { status: 'rejected', reason };
         }

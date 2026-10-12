@@ -96,6 +96,29 @@ describe('workloads and routers from the summaries', () => {
     expect(body.errors).toEqual([{ router: 'r7', message: 'no answer within 50 ms' }]);
   });
 
+  it('a router call that timed out keeps its place until the router answers: at most 10 router Lambdas run at once, and the answer does not wait for them', async () => {
+    const many = Array.from({ length: 30 }, (_, i): Router => ({ name: `r${i}`, region: 'eu-west-1', controller: `c${i}`, account: String(100000000000 + i) }));
+    let running = 0;
+    let peak = 0;
+    const s = setup({
+      routers: many, summaries: [], workloads: [], callTimeoutMs: 30, callDeadlineMs: 2000,
+      invoke: async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise((r) => setTimeout(r, 300));
+        running -= 1;
+        return { workloads: [] };
+      },
+    });
+    const started = Date.now();
+    const body = json(await s.api(event('/api/workloads')));
+    expect(peak).toBeLessThanOrEqual(10);
+    // Three rounds of 10, each started when the round before has answered; the last one's answers are not awaited.
+    expect(Date.now() - started).toBeLessThan(850);
+    expect(body.errors).toHaveLength(30);
+    expect(body.errors.every((e: { message: string }) => e.message === 'no answer within 30 ms')).toBe(true);
+  });
+
   it('stops calling routers that do not report once the request\'s budget is spent: the others are listed as not called', async () => {
     const many = Array.from({ length: 40 }, (_, i): Router => ({ name: `r${i}`, region: 'eu-west-1', controller: `c${i}`, account: String(100000000000 + i) }));
     const s = setup({
