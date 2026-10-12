@@ -2,7 +2,7 @@
 // its wakes. The period ends at now at the latest; before the first entry the history has, the state is UNKNOWN.
 import type { HistoryEntry } from './store.js';
 
-export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean }
+export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean }
 export interface HistoryView {
   from: string;
   to: string;
@@ -13,12 +13,13 @@ export interface HistoryView {
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
-export function historyView({ before, entries, from, to, now }: { before: HistoryEntry | null; entries: HistoryEntry[]; from: string; to: string; now: string }): HistoryView {
+// initial: the state at the period's start when no entry before it is kept (the last one expired: review I3).
+export function historyView({ before, entries, from, to, now, initial }: { before: HistoryEntry | null; entries: HistoryEntry[]; from: string; to: string; now: string; initial?: string }): HistoryView {
   const start = Date.parse(from);
   const end = Math.max(start, Math.min(Date.parse(to), Date.parse(now)));
   const clamp = (at: string) => Math.min(Math.max(Date.parse(at), start), end);
-  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean }[] = [];
-  let current: (typeof phases)[number] = { state: before?.to ?? 'UNKNOWN', from: start, to: end };
+  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean }[] = [];
+  let current: (typeof phases)[number] = { state: before?.to ?? initial ?? 'UNKNOWN', from: start, to: end };
   for (const entry of entries) {
     // A twin (an inferred entry after its event, or a duplicate) changes nothing.
     if (entry.to === current.state) continue;
@@ -27,6 +28,7 @@ export function historyView({ before, entries, from, to, now }: { before: Histor
     current = {
       state: entry.to, from: at, to: end,
       ...(entry.cause ? { cause: entry.cause } : {}), ...(entry.by ? { by: entry.by } : {}), ...(entry.inferred ? { inferred: true } : {}),
+      ...(entry.from === null ? { first: true } : {}),
     };
   }
   phases.push(current);

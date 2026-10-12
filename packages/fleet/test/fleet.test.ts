@@ -436,11 +436,22 @@ describe('state history (R8)', () => {
     expect(await history(s)).toHaveLength(2);
   });
 
+  it('a check\'s stateAt ahead of the clock is ignored: it never pins the summary (review I1)', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { stateAt: '2099-01-01T00:00:00.000Z' })]));
+    expect((await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.stateAt).not.toBe('2099-01-01T00:00:00.000Z');
+    await s.ingest(change('NAPPING', at(T1, 60), { from: 'AWAKE', cause: 'idle' }));
+    expect((await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.state).toBe('NAPPING');
+    expect((await history(s))[0]!.at).toBe(T1);
+  });
+
   it('a period is read in pages up to a cap, with the entry before it', async () => {
     const s = setup();
     for (let i = 0; i < 30; i += 1) await s.ingest(change(i % 2 ? 'ASLEEP' : 'AWAKE', at(T1, i * 60), { cause: 'idle' }));
     const capped = await s.store.listHistory(ACCOUNT, REGION, 'a', T1, at(T1, 3_600), { max: 10 });
     expect([capped.entries.length, capped.truncated]).toEqual([10, true]);
+    // The newest are kept (review I2): the latest days are what people look at.
+    expect([capped.entries[0]!.at, capped.entries.at(-1)!.at]).toEqual([at(T1, 20 * 60), at(T1, 29 * 60)]);
     const all = await s.store.listHistory(ACCOUNT, REGION, 'a', at(T1, 300), at(T1, 3_600));
     expect([all.entries.length, all.truncated]).toEqual([25, false]);
     expect(await s.store.historyBefore(ACCOUNT, REGION, 'a', at(T1, 300))).toMatchObject({ to: 'AWAKE', at: at(T1, 240) });

@@ -2,7 +2,7 @@
 // identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
 // arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
-import { CHUNK_WORKLOADS_MAX, chunkOf, failureOf, regionOf, routerOf, stateOf, timely, transitionOf, workloadIdOf, workloadOf, type Failure } from './clean.js';
+import { CHUNK_WORKLOADS_MAX, SKEW_MS, chunkOf, failureOf, regionOf, routerOf, stateOf, timely, transitionOf, workloadIdOf, workloadOf, type Failure } from './clean.js';
 import type { FailureEntry, FleetStore, HistoryEntry, RouterSummary, WorkloadSummary } from './store.js';
 
 // A router before 0.25.0 says a workload FAILED, never why.
@@ -51,8 +51,11 @@ export function createIngest({ store, now = Date.now, log }: {
     await eachAtOnce(workloads, WRITES, async (w) => {
       let before: WorkloadSummary | undefined;
       let written: WorkloadSummary | null = null;
-      // When its state began, as the router says (0.26.0: the instant of its event), else the check's time.
-      const reported = typeof w.stateAt === 'string' ? w.stateAt : undefined;
+      // When its state began, as the router says (0.26.0: the instant of its event), else the check's time; never ahead of
+      // the check or the clock (review I1: a time in the future would pin the summary, refusing every later change).
+      const { stateAt: said, ...listed } = w;
+      const timed = timely(said, now());
+      const reported = timed && Date.parse(timed) <= Date.parse(checkedAt) + SKEW_MS ? timed : undefined;
       await versioned(account, region, w.workloadId as string, (existing) => {
         before = existing;
         // A newer check wrote it already; a state change newer than this check is kept.
@@ -60,7 +63,7 @@ export function createIngest({ store, now = Date.now, log }: {
         const newer = existing?.stateAt && existing.stateAt > checkedAt;
         const stateAt = newer ? existing.stateAt : [existing?.stateAt, reported].filter((t): t is string => !!t).sort().at(-1);
         return (written = {
-          ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
+          ...listed, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
           ...(newer ? { state: existing.state } : {}), ...(stateAt ? { stateAt } : {}),
           historySince: existing?.historySince ?? reported ?? checkedAt,
         });

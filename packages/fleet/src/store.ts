@@ -195,19 +195,20 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       return conditional(() => dynamo.send(new PutItemCommand({ TableName: table, Item: item, ConditionExpression: 'attribute_not_exists(sk)' })));
     },
 
-    // A period's entries, oldest first, at most max (then truncated).
+    // A period's entries, oldest first: the newest max of them (review I2: the latest days are what people look at), then
+    // truncated.
     async listHistory(account: string, region: string, id: string, from: string, to: string, { max = HISTORY_MAX }: { max?: number } = {}): Promise<{ entries: HistoryEntry[]; truncated: boolean }> {
       const entries: HistoryEntry[] = [];
       let start: Item | undefined;
       do {
         const page = await dynamo.send(new QueryCommand({
-          TableName: table, KeyConditionExpression: 'pk = :pk AND sk BETWEEN :from AND :to', Limit: Math.min(1000, max - entries.length + 1),
+          TableName: table, KeyConditionExpression: 'pk = :pk AND sk BETWEEN :from AND :to', ScanIndexForward: false, Limit: Math.min(1000, max - entries.length + 1),
           ExpressionAttributeValues: { ':pk': historyPk(account, region, id), ':from': { S: from }, ':to': { S: `${to}~` } }, ...(start ? { ExclusiveStartKey: start } : {}),
         }));
         entries.push(...(page.Items ?? []).map((i: Item) => data<HistoryEntry>(i)!).filter(Boolean));
         start = page.LastEvaluatedKey;
       } while (start && entries.length <= max);
-      return { entries: entries.slice(0, max), truncated: entries.length > max };
+      return { entries: entries.slice(0, max).reverse(), truncated: entries.length > max };
     },
 
     // The last entry before a time: the state a period starts in.

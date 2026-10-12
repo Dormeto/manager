@@ -11,7 +11,7 @@ const ROUTERS: Router[] = [
 const iso = (ms: number) => new Date(ms).toISOString();
 const entry = (to: string, ms: number, extra: Record<string, unknown> = {}) => ({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to, at: iso(ms), ...extra });
 
-function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }), entry('WAKING', NOW - 600_000, { cause: 'normal' }), entry('AWAKE', NOW - 560_000, { durationMs: 40_000 })], truncated = false } = {}) {
+function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }), entry('WAKING', NOW - 600_000, { cause: 'normal' }), entry('AWAKE', NOW - 560_000, { durationMs: 40_000 })], truncated = false, before = entry('AWAKE', NOW - 90_000_000) as unknown, summary = null as unknown } = {}) {
   const asked: unknown[][] = [];
   const calls: string[] = [];
   const api = createApi({
@@ -20,9 +20,9 @@ function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }),
     invoke: async (_r, payload) => { calls.push(payload.action as string); return null; },
     visible: (_identity, item) => item.account !== '038606077307',
     fleet: {
-      listRouters: async () => [], listWorkloads: async () => [], getWorkload: async () => null,
+      listRouters: async () => [], listWorkloads: async () => [], getWorkload: async () => summary as never,
       listHistory: async (...args: unknown[]) => { asked.push(['list', ...args]); return { entries: entries as never, truncated }; },
-      historyBefore: async (...args: unknown[]) => { asked.push(['before', ...args]); return entry('AWAKE', NOW - 90_000_000) as never; },
+      historyBefore: async (...args: unknown[]) => { asked.push(['before', ...args]); return before as never; },
     },
   });
   return { api, asked, calls };
@@ -59,4 +59,22 @@ describe('workload history (R8)', () => {
     expect((await api(event('/api/workloads/other/a/history'))).statusCode).toBe(404);
     expect(asked.filter((a) => a[0] === 'list')).toHaveLength(1);
   });
+
+  it('a capped period starts unknown before its oldest kept entry, not in the state before the period (review I2)', async () => {
+    const { api } = setup({ truncated: true });
+    const body = json(await api(event('/api/workloads/dmt-dev/a/history', { days: '1' })));
+    expect(body.phases[0].state).toBe('UNKNOWN');
+    expect(body.before).toBeNull();
+  });
+
+  it('a workload in one state for longer than the history keeps it: the summary says so (review I3)', async () => {
+    const asleep = { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', state: 'ASLEEP', historySince: iso(NOW - 900 * 86_400_000) };
+    const quiet = setup({ entries: [], before: null, summary: asleep });
+    expect(json(await quiet.api(event('/api/workloads/dmt-dev/a/history'))).phases.map((p: { state: string }) => p.state)).toEqual(['ASLEEP']);
+    const woke = setup({ entries: [entry('WAKING', NOW - 600_000, { from: 'ASLEEP', cause: 'normal' })], before: null, summary: { ...asleep, state: 'WAKING' } });
+    expect(json(await woke.api(event('/api/workloads/dmt-dev/a/history'))).phases.map((p: { state: string }) => p.state)).toEqual(['ASLEEP', 'WAKING']);
+    const recent = setup({ entries: [], before: null, summary: { ...asleep, historySince: iso(NOW - 3_600_000) } });
+    expect(json(await recent.api(event('/api/workloads/dmt-dev/a/history'))).phases[0].state).toBe('UNKNOWN');
+  });
 });
+

@@ -54,7 +54,7 @@ const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
     <v-card-text v-if="error" class="text-error">{{ error }}</v-card-text>
     <v-card-text v-else-if="history?.phases">
       <div class="text-body-medium mb-3">{{ summary.join(' · ') }}</div>
-      <v-alert v-if="history.truncated" type="info" variant="tonal" density="compact" class="mb-2" text="Only the period's first 5,000 changes are drawn." />
+      <v-alert v-if="history.truncated" type="info" variant="tonal" density="compact" class="mb-2" text="More than 5,000 changes in this period: only the latest are drawn, the time before them is unknown." />
       <div class="d-flex ga-2 text-body-small text-medium-emphasis">
         <span class="day-label" />
         <div class="ticks"><span v-for="(h, i) in ['00:00', '06:00', '12:00', '18:00']" :key="h" :style="{ left: `${i * 25}%` }">{{ h }}</span></div>
@@ -85,7 +85,7 @@ const LEGEND = ['AWAKE', 'NAPPING', 'ASLEEP', 'WAKING', 'FAILED', 'UNKNOWN'];
           <tr v-for="t in transitions" :key="`${t.at}#${t.to}`" data-test="transition">
             <td class="text-no-wrap">{{ when(t.at) }}</td>
             <td class="text-no-wrap">{{ t.from ?? 'first seen' }} → {{ t.to }}</td>
-            <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
+            <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
             <td class="text-no-wrap">{{ t.durationMs ? duration(Math.round(t.durationMs / 1000)) : '' }}</td>
           </tr>
         </tbody>

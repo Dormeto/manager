@@ -684,10 +684,19 @@ export function createApi({
         const t = now();
         const [from, to] = [new Date(t - days * 86_400_000).toISOString(), new Date(t).toISOString()];
         const account = accountOfRouter(router);
-        const [{ entries, truncated }, before] = await Promise.all([
+        const [{ entries, truncated }, found] = await Promise.all([
           fleet.listHistory(account, router.region, id, from, to), fleet.historyBefore(account, router.region, id, from),
         ]);
-        return reply(200, { ...historyView({ before, entries, from, to, now: to }), before, entries, truncated });
+        // Capped (review I2): the newest entries are kept, and the time before the oldest of them is unknown.
+        const before = truncated ? null : found;
+        // No entry before the period, but a history that began before it (review I3: its last change expired): the state
+        // then was the one before the period's first change, or, with none, the summary's.
+        let initial: string | undefined;
+        if (!before && !truncated) {
+          const summary = await fleet.getWorkload(account, router.region, id).catch(() => null);
+          if (summary?.historySince && summary.historySince < from) initial = entries[0]?.from ?? summary.state;
+        }
+        return reply(200, { ...historyView({ before, entries, from, to, now: to, initial }), before, entries, truncated });
       }
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.

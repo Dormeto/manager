@@ -41,6 +41,9 @@ describe('causes in words', () => {
     expect(causeText({ state: 'AWAKE', inferred: true })).toBe('seen at a check (its event was lost)');
     expect(causeText({ state: 'AWAKE' })).toBe('');
     expect(causeText({ state: 'WAKING', cause: 'something-new' })).toBe('something-new');
+    // Review M7: a first entry is not a lost event, and the router's own wake names no one.
+    expect(causeText({ state: 'ASLEEP', inferred: true, first: true })).toBe('first seen by the manager');
+    expect(causeText({ state: 'WAKING', cause: 'rule-issues', by: 'dormeto' })).toBe('its rules, which the router could not switch');
   });
 });
 

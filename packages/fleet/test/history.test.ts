@@ -50,4 +50,11 @@ describe('history view', () => {
     });
     expect(v.wakes).toEqual({ count: 4, failed: 1, medianMs: 40_000, maxMs: 90_000 });
   });
+
+  it('a first entry\'s phase says so; with no entry before the period, the initial state given is used (review M7, I3)', () => {
+    const v = historyView({ before: null, initial: 'ASLEEP', entries: [e('WAKING', 30, { from: 'ASLEEP', cause: 'normal' })], from: t(0), to: t(60), now: t(60) });
+    expect(v.phases.map((p) => [p.state, p.from])).toEqual([['ASLEEP', t(0)], ['WAKING', t(30)]]);
+    const first = historyView({ before: null, entries: [e('AWAKE', 10, { inferred: true })], from: t(0), to: t(60), now: t(60) });
+    expect(first.phases[1]).toMatchObject({ state: 'AWAKE', first: true });
+  });
 });

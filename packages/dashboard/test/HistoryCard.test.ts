@@ -66,6 +66,14 @@ describe('HistoryCard', () => {
     wrapper.unmount();
   });
 
+  it('says a capped period keeps its latest changes, and a first entry is first seen (review I2, M7)', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), truncated: true, entries: [{ from: null, to: 'ASLEEP', at: local(7, 11), inferred: true }] });
+    const wrapper = await mountCard();
+    expect(wrapper.text()).toContain('More than 5,000 changes in this period: only the latest are drawn');
+    expect(wrapper.find('[data-test="transition"]').text()).toMatch(/first seen → ASLEEP.*first seen by the manager/);
+    wrapper.unmount();
+  });
+
   it('reloads for another period', async () => {
     const wrapper = await mountCard();
     await wrapper.findAll('button').find((b) => b.text() === '30 days')!.trigger('click');
