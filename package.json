@@ -15,7 +15,7 @@
     "packages/estimate"
   ],
   "scripts": {
-    "test": "npm run test --workspaces --if-present && node --test scripts/*.test.mjs scripts/release/*.test.mjs",
+    "test": "npm run test --workspaces --if-present && node --test scripts/*.test.mjs scripts/release/*.test.mjs scripts/parity/*.test.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "artifacts": "node scripts/release/artifacts.mjs",

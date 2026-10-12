@@ -57,3 +57,19 @@ It builds, assembles `dist/release/<version>/` (the module archive with its arti
 modules, the AWS CLI script, the organization policy, `SHA256SUMS`, the changelog section), refuses a version already
 published, uploads it to `releases.dormeto.com/manager/<version>/`, moves `latest.json` forward and tags `v<version>`
 (pushed with the commits). Then update the website's pages to the new version.
+
+The Dormeto CLI (the savings estimate in Go, `../cli`) is pinned to the product's Node code by shared cases this
+repository writes. After any change to the idle window replay (`packages/fleet/src/idle.ts`), the prices
+(`prices.ts`, `savings.ts`, `packages/api/src/spot.ts`), discovery's scan (`packages/discovery/src/scan.ts`,
+`kubernetes.ts`, `filters.ts`, `org.ts`) or the router's description of what a nap stops (`../router`
+`lambda/src/lib/stopped.mjs`, `kubernetes.mjs`), and before each release, export them again from a committed tree
+(the cases name its commit) with `../router` at the router the manager carries, and commit them in the CLI:
+
+```bash
+node scripts/parity/export.mjs --out ../cli/testdata/parity
+(cd ../cli && git add testdata/parity && git commit -m "test: shared cases exported from manager $(git -C ../manager rev-parse --short HEAD)")
+```
+
+A result that changed then fails the CLI's tests until its Go code is ported, and the CLI's release refuses cases older
+than the manager's latest release. The corpus is `scripts/parity/cases/`; `npm test` checks the export (deterministic,
+every case replayed from its recorded answers alone).
