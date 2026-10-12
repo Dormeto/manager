@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
-import { reporting, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
+import { historyView, reporting, type HistoryEntry, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 
@@ -147,7 +147,12 @@ export interface ApiOptions {
   managerAccount?: string;
   routerVersion?: string; // the router version the manager installs and upgrades to
   // Routers and workloads as the routers report them (scale design §4): read instead of calling every router.
-  fleet?: { listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null> };
+  fleet?: {
+    listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null>;
+    // The state history (R8).
+    listHistory?(account: string, region: string, id: string, from: string, to: string): Promise<{ entries: HistoryEntry[]; truncated: boolean }>;
+    historyBefore?(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null>;
+  };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).
   visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
   // The organization roles the manager assumes, set in its Terraform (packaging design §3).
@@ -671,6 +676,19 @@ export function createApi({
     if (resource === 'workloads' && a && b) {
       const router = routerOf(a, identity);
       const id = workloadId(b);
+      // Its state history over the last days (R8), from the manager's store: never the router.
+      if (method === 'GET' && action === 'history' && !parts[4]) {
+        const days = Number(event.queryStringParameters?.days ?? 7);
+        if (!Number.isInteger(days) || days < 1 || days > 31) throw new HttpError(400, 'bad_request', 'days must be a whole number from 1 to 31');
+        if (!fleet?.listHistory || !fleet.historyBefore) throw new HttpError(404, 'not_found', 'no state history in this manager');
+        const t = now();
+        const [from, to] = [new Date(t - days * 86_400_000).toISOString(), new Date(t).toISOString()];
+        const account = accountOfRouter(router);
+        const [{ entries, truncated }, before] = await Promise.all([
+          fleet.listHistory(account, router.region, id, from, to), fleet.historyBefore(account, router.region, id, from),
+        ]);
+        return reply(200, { ...historyView({ before, entries, from, to, now: to }), before, entries, truncated });
+      }
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.
         const [status, summary] = await Promise.all([
