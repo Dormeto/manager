@@ -5,8 +5,10 @@
 import type { Costs, Discounts, StoppedItem } from './types';
 
 export const MONTH_HOURS = 730;
-const BACKEND_GROUPS: Record<string, string> = { instance: 'ec2', asg: 'ec2', ecs: 'fargate', 'rds-instance': 'db', 'rds-cluster': 'db' };
-const ITEM_GROUPS: Record<string, string> = { ec2: 'ec2', fargate: 'fargate', rds: 'db', 'aurora-serverless': 'db' };
+const BACKEND_GROUPS: Record<string, string> = { instance: 'ec2', asg: 'ec2', ecs: 'fargate', k8s: 'k8s', 'rds-instance': 'db', 'rds-cluster': 'db' };
+const ITEM_GROUPS: Record<string, string> = { ec2: 'ec2', fargate: 'fargate', 'k8s-pods': 'k8s', rds: 'db', 'aurora-serverless': 'db' };
+// A Kubernetes workload's pods on Fargate are Fargate items: its own, when no ECS service shares the workload.
+const groupOf = (item: StoppedItem, backends: { kind: string }[]) => (item.kind === 'fargate' && backends.some((b) => b.kind === 'k8s') && !backends.some((b) => b.kind === 'ecs') ? 'k8s' : ITEM_GROUPS[item.kind]);
 
 export interface BackendCost {
   hourly: number | null;
@@ -23,6 +25,10 @@ export function itemText(item: StoppedItem): string {
     case 'fargate': return `${item.count} × ${item.vcpu} vCPU, ${item.memoryGb} GB (${item.os}, ${item.arch}${item.spot ? ', Spot' : ''})`;
     case 'rds': return `${item.class} ${item.engine}${item.multiAz ? ' Multi-AZ' : ''}`;
     case 'aurora-serverless': return `${item.engine} Serverless v2, ${item.acu} ACU`;
+    case 'k8s-pods': {
+      const pods = `${item.count} pod${item.count === 1 ? '' : 's'} × ${item.cpu} vCPU, ${item.memoryGb} GB on ${item.nodeType ?? 'a node of unknown type'} (${item.os}${item.spot ? ', Spot' : ''})`;
+      return item.autoscaled ? pods : `${pods}: nothing saved, no autoscaler removes the nodes`;
+    }
     default: return item.reason;
   }
 }
@@ -30,7 +36,7 @@ export function itemText(item: StoppedItem): string {
 export function backendCost(backend: { kind: string; id: string }, backends: { kind: string; id: string }[], costs: Costs | undefined | null): BackendCost | null {
   if (!costs?.items.length) return null;
   const group = BACKEND_GROUPS[backend.kind];
-  const items = costs.items.filter(({ item }) => (item.kind === 'unknown' ? item.backend === `${backend.kind}:${backend.id}` : ITEM_GROUPS[item.kind] === group));
+  const items = costs.items.filter(({ item }) => (item.kind === 'unknown' ? item.backend === `${backend.kind}:${backend.id}` : groupOf(item, backends) === group));
   const priced = items.filter((i) => i.hourly !== null);
   const hourly = priced.length ? priced.reduce((n, i) => n + i.hourly!, 0) : null;
   const monthly = hourly === null ? null : hourly * MONTH_HOURS;

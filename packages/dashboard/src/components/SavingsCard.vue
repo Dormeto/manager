@@ -87,7 +87,8 @@ const unpriced = computed(() => {
         </v-list-item>
       </v-list>
       <div class="text-body-small text-medium-emphasis mt-2">AWS list prices of what the naps stopped, against {{ baseline }}. Storage, load balancers and
-        data transfer keep running and are not counted; the discounts are an average rate.{{ unpriced }}</div>
+        data transfer keep running and are not counted, nor the EKS control plane and the nodes' DaemonSets: Kubernetes pods count as their share of their
+        nodes, where an autoscaler removes the nodes they free; the discounts are an average rate.{{ unpriced }}</div>
     </v-card-text>
     <v-progress-linear v-else indeterminate color="primary" />
     <v-card-text v-if="loaded" class="d-flex align-center ga-2 pt-0 text-body-medium">

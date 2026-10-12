@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createApi, RouterError, type ApiEvent, type AuditEntry, type Router } from '../src/api.js';
+import { fleetRouters } from '../src/routers.js';
 
 const NOW = Date.UTC(2026, 9, 5, 12, 0);
 const HOUR = 3_600_000;
@@ -73,6 +74,26 @@ describe('routers', () => {
     const res = json(await api(event('GET', '/api/routers/dmt-dev')));
     expect(res).toMatchObject({ name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', configuration: ROUTER_INFO.configuration, health: ROUTER_INFO.health });
     expect((await api(event('GET', '/api/routers/nope'))).statusCode).toBe(404);
+  });
+});
+
+describe('the router\'s clusters (R10.5)', () => {
+  it('lists and details a router with the EKS clusters of its account and region, as its last check found them', async () => {
+    const clusters = [{ name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-05T11:00:00.000Z' }];
+    const api = createApi({
+      routers: [{ ...ROUTERS[0]!, clusters }],
+      async invoke(_router, payload) { return payload.action === 'router' ? ROUTER_INFO : null; },
+      audit: { write: async () => {}, list: async () => [] },
+      now: () => NOW, newId: () => 'id-1', version: '0.2.0',
+    });
+    expect(json(await api(event('GET', '/api/routers/dmt-dev'))).clusters).toEqual(clusters);
+    expect(json(await api(event('GET', '/api/routers'))).routers[0].clusters).toEqual(clusters);
+  });
+
+  it('the manager\'s routers carry the clusters their operations checked', () => {
+    const clusters = [{ name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: '2026-10-05T11:00:00.000Z' }];
+    const [router] = fleetRouters([], [{ name: 'dmtr-dev', account: '121014831971', region: 'eu-west-1', controller: 'c', onboarder: 'o', version: '0.29.0', build: 'b', installedBy: 'a', installedAt: 'x', clusters }], '121014831971');
+    expect(router!.clusters).toEqual(clusters);
   });
 });
 

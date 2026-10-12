@@ -68,6 +68,31 @@ describe('Workload view', () => {
     current = status;
   });
 
+  it('shows a Kubernetes backend: its owner, cluster, recorded replicas, KEDA and switch; its cluster\'s ARN, and the Kubernetes assumptions of its cost (R10.5)', async () => {
+    current = {
+      ...status, account: '111122223333', region: 'eu-west-1',
+      backends: [{ kind: 'k8s', id: 'eks-demo/demo/Deployment/web', status: 'running', cluster: 'eks-demo', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, replicas: 2, keda: true, switch: 'ingress' }],
+      costs: {
+        baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: '2026-10-09T04:51:00.000Z', savedShare: 0.9, saved: { usd: 3.2, hours: 600, unpricedHours: 0 },
+        items: [{ item: { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: 'm5.large', os: 'Linux', autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } }, hourly: 0.0277 }],
+      },
+    };
+    const wrapper = await mountView();
+    const row = wrapper.find('[data-test="backend"]');
+    expect(row.text()).toContain('Deployment demo/web');
+    expect(row.text()).toContain('Kubernetes workload · cluster eks-demo');
+    expect(row.text()).toContain('2 replicas · KEDA · Dormeto\'s Ingress in the group');
+    await row.trigger('mouseenter');
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 300));
+    const tip = [...document.querySelectorAll('.v-tooltip')].map((t) => t.textContent).join(' | ');
+    expect(tip).toContain('arn:aws:eks:eu-west-1:111122223333:cluster/eks-demo');
+    expect(tip).toContain('Amazon EKS');
+    expect(tip).toContain('the pods\' share of their nodes, where an autoscaler removes the nodes they free; the EKS control plane and the nodes\' DaemonSets keep running');
+    wrapper.unmount();
+    current = status;
+  });
+
   it('groups its actions in one menu on the right of its header: wake, nap, pause, rename, exclude, offboard (user request)', async () => {
     current = { ...status, source: 'manager', targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-3:111122223333:targetgroup/shop/0123456789abcdef' };
     const wrapper = await mountView('operator');

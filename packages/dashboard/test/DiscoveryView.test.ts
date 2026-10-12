@@ -12,10 +12,11 @@ import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
 // The server's side: the onboarding running on the candidate (named by the candidates while it runs) and how it ended.
-const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
+const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown } = { running: null, ended: { status: 'succeeded' } };
+const CHECK = { name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-11T10:00:00.000Z' };
 const candidate = () => ({
   id: 'c-1', status: 'pending-onboarding', statusReason: 'eligible', account: '111122223333', accountName: 'example', region: 'eu-west-3',
-  conditions: 'host app.example.com', loadBalancer: 'web', loadBalancerArn: 'arn:lb/web', listener: 'HTTPS:443', priority: '10', rules: [], backend: null, idleHours7d: null,
+  conditions: 'host app.example.com', loadBalancer: 'web', loadBalancerArn: 'arn:lb/web', listener: 'HTTPS:443', priority: '10', rules: [], backend: server.backend ?? null, idleHours7d: null,
   targetGroup: 'ligoj-ui-prod', targetGroupArn: 'arn:tg/ligoj-ui-prod', firstSeenAt: '2026-10-07T06:00:00.000Z',
   ...(server.running ? { operation: { id: server.running, type: 'onboard' } } : {}),
 });
@@ -29,6 +30,7 @@ vi.mock('../src/api', () => ({
     if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'onboard', ...server.ended };
     if (path === '/discovery') return { lastRun: null, counts: { 'pending-onboarding': 1 } };
     if (path === '/exclusions') return { exclusions: [] };
+    if (path === '/routers') return { routers: [{ name: 'dmtr-dev-eu-west-3', account: '111122223333', region: 'eu-west-3', clusters: [CHECK] }] };
     if (path.startsWith('/discovery/candidates?')) return { candidates: [candidate()], cursor: null };
     throw new Error(`unexpected ${path}`);
   }),
@@ -65,6 +67,7 @@ describe('Discovery view', () => {
     calls.length = 0;
     server.running = null;
     server.ended = { status: 'succeeded' };
+    delete server.backend;
     document.body.innerHTML = '';
   });
   afterEach(() => {
@@ -93,6 +96,20 @@ describe('Discovery view', () => {
     expect([...toast()!.querySelectorAll('a')].find((a) => a.textContent === 'Follow it in Operations')?.getAttribute('href')).toBe('/operations?id=op-9');
     expect(wrapper.find('.v-alert').exists()).toBe(false);
     expect(running(wrapper).exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('gives the onboarding dialog of a Kubernetes candidate its owner and switch, and the router\'s last check of its cluster (R10.5)', async () => {
+    const kubernetes = { cluster: 'eks-demo', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, switch: 'ingress', hpa: false, keda: false, capacity: 'nodes', autoscaler: 'karpenter',
+      ingress: { name: 'web', ruleIndex: 0, groupOrder: -1, service: { name: 'web', port: { number: 80 } } } };
+    server.backend = { kind: 'k8s', id: 'eks-demo/demo/Deployment/web', kubernetes };
+    const wrapper = await mountView();
+    await select(wrapper);
+    await wrapper.findAll('button').find((b) => b.text() === 'Onboard…')!.trigger('click');
+    await flushPromises();
+    const dialog = wrapper.findComponent(OnboardDialog);
+    expect(dialog.props('kubernetes')).toEqual(kubernetes);
+    expect(dialog.props('access')).toEqual(CHECK);
     wrapper.unmount();
   });
 

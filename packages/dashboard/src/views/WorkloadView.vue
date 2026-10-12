@@ -6,7 +6,7 @@ import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
+import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
@@ -100,7 +100,10 @@ function costRows(b: Backend): { label: string; value: string }[] {
 // R9.5: Spot at Spot prices, the discounts when set.
 const costNote = computed(() => {
   const d = status.value?.costs?.discounts;
-  return `AWS list prices of what its last nap stopped, Spot at Spot prices${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.`;
+  // Kubernetes workloads (R10.5): what the pods' price supposes, and what keeps running.
+  const kubernetes = status.value?.backends.some((b) => b.kind === 'k8s')
+    ? ' Pods count as the pods\' share of their nodes, where an autoscaler removes the nodes they free; the EKS control plane and the nodes\' DaemonSets keep running.' : '';
+  return `AWS list prices of what its last nap stopped, Spot at Spot prices${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.${kubernetes}`;
 });
 
 // Where the workload is: the ARNs of its backends and targets.
@@ -244,13 +247,15 @@ const summary = computed(() => {
           <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)" :rows="costRows(b)"
             :note="costRows(b).some((r) => r.label === 'Base cost') ? costNote : null">
             <template #default="{ tip }">
-              <v-list-item v-bind="tip" data-test="backend" :title="shortId(b.id)" :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '')">
+              <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : shortId(b.id)"
+                :subtitle="backendLabel(b.kind) + (b.companion ? ' · companion' : '') + (b.cluster ? ` · cluster ${b.cluster}` : '')">
                 <template v-if="backendIcon(b.kind)" #prepend>
                   <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
                 </template>
                 <template #append>
                   <div class="d-flex align-center ga-2">
                     <span v-if="b.kind === 'asg'" class="text-body-small text-medium-emphasis">min {{ b.min }} · desired {{ b.desired }} · max {{ b.max }}<template v-if="b.warmPool"> · warm pool {{ b.warmPool.state }} ({{ b.warmPool.size }})</template></span>
+                    <span v-if="b.kind === 'k8s'" class="text-body-small text-medium-emphasis">{{ b.replicas }} replica{{ b.replicas === 1 ? '' : 's' }}<template v-if="b.keda"> · KEDA</template><template v-if="b.switch"> · {{ switchText(b.switch) }}</template></span>
                     <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
                   </div>
                 </template>

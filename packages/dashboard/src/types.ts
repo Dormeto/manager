@@ -58,6 +58,8 @@ export type StoppedItem =
   | { kind: 'fargate'; vcpu: number; memoryGb: number; count: number; arch: string; os: string; spot?: true }
   | { kind: 'rds'; class: string; engine: string; multiAz: boolean }
   | { kind: 'aurora-serverless'; engine: string; acu: number }
+  // Pods on EC2 nodes (router 0.29.0, R10.5).
+  | { kind: 'k8s-pods'; count: number; cpu: number; memoryGb: number; nodeType: string | null; os: string; spot?: true; autoscaled: boolean; allocatable: { cpu: number; memoryGb: number } }
   | { kind: 'unknown'; backend: string; reason: string };
 
 // A workload's savings over the last 30 days (the API, with its states): what its naps saved, the share of its time with
@@ -96,6 +98,11 @@ export interface Backend {
   kind: string;
   id: string;
   status: string;
+  // A Kubernetes workload (router 0.29.0): its cluster, recorded replicas, KEDA and how the waker is switched in.
+  cluster?: string;
+  replicas?: number;
+  keda?: boolean;
+  switch?: string;
   min?: number;
   max?: number;
   desired?: number;
@@ -199,6 +206,7 @@ export interface RouterInfo {
   name: string;
   region: string;
   account?: string;
+  clusters?: ClusterCheck[];
   reporting?: boolean; // its state comes from its events (router 0.21.0 and later with the manager's bus)
   checkedAt?: string;
   source?: 'terraform' | 'manager';
@@ -224,10 +232,14 @@ export interface Configured<T> {
 }
 
 // GET /api/routers/{name}: the router action.
+// An EKS cluster of a router's account and region, as the router's last check found it (R10.5).
+export interface ClusterCheck { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; checkedAt: string }
+
 export interface RouterDetails {
   name: string;
   region: string;
   account?: string;
+  clusters?: ClusterCheck[];
   router: { name: string; version: string; build: string };
   configuration: {
     checkSchedule: Configured<string | null>;

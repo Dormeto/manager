@@ -54,6 +54,8 @@ describe('SavingsCard', () => {
     expect(links).toEqual(expect.arrayContaining([[expect.stringContaining('demo-rds'), '/workloads/dmt-dev/demo-rds']]));
     expect(wrapper.text()).toMatch(/AWS list prices of what the naps stopped, against 24\/7/);
     expect(wrapper.text()).toMatch(/1 workload not priced yet/);
+    // Kubernetes workloads (R10.5): what their pods' price supposes.
+    expect(wrapper.text()).toContain('nor the EKS control plane and the nodes\' DaemonSets: Kubernetes pods count as their share of their nodes, where an autoscaler removes the nodes they free');
     wrapper.unmount();
   });
 

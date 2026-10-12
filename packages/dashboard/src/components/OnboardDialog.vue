@@ -1,10 +1,14 @@
 <script setup lang="ts">
 // Onboard a discovered candidate: its name (for people; the router derives the workload id from the target group), idle
-// window, wake mode, companion databases, fallback instance types (R7b).
+// window, wake mode, companion databases, fallback instance types (R7b). A Kubernetes candidate (R10.5): what Dormeto adds,
+// the GitOps snippet, the router's access to its cluster.
 import { computed, ref, watch } from 'vue';
 import { nameRule } from '../format';
+import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
 
-const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null }>();
+const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null }>();
+const access = computed(() => (props.kubernetes ? accessText(props.kubernetes.cluster, props.access) : null));
+const snippet = computed(() => (props.kubernetes ? gitopsSnippet(props.kubernetes) : null));
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }] }>();
 const name = ref('');
 const idleMinutes = ref(15);
@@ -34,13 +38,23 @@ function submit() {
   <v-dialog :model-value="modelValue" max-width="560" @update:model-value="emit('update:modelValue', $event)">
     <v-card :title="`Onboard ${title}`">
       <v-card-text>
-        <p class="mb-4">The router of its account and region (installed first if needed) tags its backends, adds the waker before every rule
+        <template v-if="kubernetes">
+          <p v-for="text in onboardingTexts(kubernetes)" :key="text" class="mb-2">{{ text }}</p>
+          <p class="mb-2">The router of its account and region (installed first if needed, with its access entries in the cluster) naps it once idle.
+            A failed onboarding is undone.</p>
+          <v-alert v-if="access" :type="access.level" variant="tonal" density="compact" class="mb-3" :text="access.text" />
+          <template v-if="snippet">
+            <p class="mb-1">Its GitOps tool would set the replicas back while it naps: keep this in its configuration.</p>
+            <pre data-test="gitops" class="gitops mb-4">{{ snippet }}</pre>
+          </template>
+        </template>
+        <p v-else class="mb-4">The router of its account and region (installed first if needed) tags its backends, adds the waker before every rule
           forwarding to its target group (traffic unchanged) and naps it once idle. A failed onboarding is undone.</p>
         <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" hint="Shown in the manager; the target group name if empty. It can be changed later." persistent-hint autofocus class="mb-2" />
         <v-text-field v-model.number="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" />
         <v-select v-model="wakeMode" :items="[{ title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
         <v-text-field v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
-        <v-text-field v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-2"
+        <v-text-field v-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-2"
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
       </v-card-text>
       <v-card-actions>
@@ -51,3 +65,7 @@ function submit() {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+.gitops { font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre; overflow-x: auto; padding: 8px; border-radius: 4px; background: rgba(var(--v-theme-on-surface), 0.06); }
+</style>

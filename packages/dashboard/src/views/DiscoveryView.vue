@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // Organization discovery: the last run (scanned, skipped and failed account-regions, lint) and the candidates, a status
 // at a time, paged on the server (scale design §5), starting with the statuses people act on.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
 import { useDisplay } from 'vuetify';
 import { mdiCancel, mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiLogoutVariant, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import OnboardDialog from '../components/OnboardDialog.vue';
-import type { RouterInfo } from '../types';
+import type { ClusterCheck, RouterInfo } from '../types';
+import type { KubernetesCandidate } from '../kubernetes';
 import LintAlert from '../components/LintAlert.vue';
 import OrganizationAccess from '../components/OrganizationAccess.vue';
 import { onboardRefusal, type AccessReport } from '../access';
@@ -60,6 +61,20 @@ const dismissDialog = ref(false);
 const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
 const onboardOpen = ref(false);
+// A Kubernetes candidate (R10.5): its owner and switch for the dialog, and its router's last check of its cluster.
+const singleKubernetes = computed(() => {
+  const backend = single.value?.backend as { kind?: string; kubernetes?: KubernetesCandidate } | null | undefined;
+  return backend?.kind === 'k8s' ? backend.kubernetes ?? null : null;
+});
+const clusterAccess = ref<ClusterCheck | null>(null);
+watchValue(onboardOpen, async (open) => {
+  clusterAccess.value = null;
+  const c = single.value;
+  const kubernetes = singleKubernetes.value;
+  if (!open || !c || !kubernetes) return;
+  const routers = (await api<{ routers: RouterInfo[] }>('/routers').catch(() => ({ routers: [] as RouterInfo[] }))).routers;
+  clusterAccess.value = routers.find((r) => r.account === c.account && r.region === c.region)?.clusters?.find((x) => x.name === kubernetes.cluster) ?? null;
+});
 const excludeOpen = ref(false);
 const notice = ref<Notice | null>(null);
 let poll: number | undefined;
@@ -418,7 +433,7 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card title="Dismiss candidates">

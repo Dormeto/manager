@@ -28,7 +28,11 @@ vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string) => {
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
-    if (path.startsWith('/routers/')) return DETAILS;
+    if (path.startsWith('/routers/')) return { ...DETAILS, clusters: [
+      { name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
+      { name: 'eks-legacy', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
+      { name: 'eks-lab', reachable: false, allowed: false, missing: [], reason: 'GET /apis: no connection within 3000 ms', checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
+    ] };
     if (path === '/alerts') return { alarms: [{ id: 'router#111122223333#eu-west-3', kind: 'router', name: 'dmtr-dev-eu-west-3', level: 'warning', since: new Date(Date.now() - 600_000).toISOString(), problems: [] }], notifications: null };
     return {};
   }),
@@ -105,6 +109,16 @@ describe('Router view', () => {
     const viewer = await mountView('dmtr-dev-eu-west-3', 'viewer');
     expect(viewer.findAll('button').map((b) => b.text())).not.toContain('Pause');
     viewer.unmount();
+  });
+
+  it('lists the EKS clusters of its account and region with its reach and rights, and what to apply when some are missing (R10.5)', async () => {
+    const wrapper = await mountView('dmtr-dev-eu-west-3');
+    await flushPromises();
+    const text = wrapper.find('[data-test="clusters"]').findAll('tr').map((r) => `${r.find('th').text()} ${r.find('td').text()}`.replace(/\s+/g, ' ')).join(' | ');
+    expect(text).toContain('eks-demo reachable, every right checked 1 h ago');
+    expect(text).toContain('eks-legacy missing get nodes: apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router');
+    expect(text).toContain('eks-lab unreachable: GET /apis: no connection within 3000 ms');
+    wrapper.unmount();
   });
 
   it('says so for a router the manager does not know', async () => {

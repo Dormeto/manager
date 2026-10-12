@@ -3,6 +3,7 @@
 import { onMounted, ref } from 'vue';
 import { api } from '../api';
 import { concurrencyText, listSourceHref, relative, ruleText } from '../format';
+import { CLUSTER_ROLE } from '../kubernetes';
 import { useNow } from '../now';
 import { terraformSettingHelp } from '../router-actions';
 import TerraformChip from './TerraformChip.vue';
@@ -48,6 +49,25 @@ onMounted(async () => {
               <td :class="{ 'text-warning': details.health.concurrency?.error }">{{ concurrencyText(details.health.concurrency) }}</td></tr>
             <tr v-for="l in details.health.ipLists" :key="l.name"><th class="font-weight-regular text-medium-emphasis">IP list {{ l.name }}{{ l.source === 'manager' ? ' (manager)' : '' }}</th>
               <td :class="{ 'text-warning': l.error && !l.pending }">{{ l.error ?? `${l.entries.toLocaleString()} entries, downloaded ${relative(l.fetchedAt, now)}` }}</td></tr>
+          </tbody>
+        </v-table>
+      </v-col>
+      <v-col v-if="details.clusters?.length" cols="12" md="6" data-test="clusters">
+        <div class="text-title-small mb-2">EKS clusters</div>
+        <p class="text-body-small text-medium-emphasis mb-2">Its access to the clusters of its account and region, as its last install, upgrade or
+          onboarding checked it.</p>
+        <v-table density="compact">
+          <tbody>
+            <tr v-for="c in details.clusters" :key="c.name">
+              <th class="font-weight-regular text-medium-emphasis">{{ c.name }}</th>
+              <td :class="{ 'text-warning': !c.allowed }">
+                <template v-if="!c.reachable">unreachable: {{ c.reason }}</template>
+                <template v-else-if="c.allowed">reachable, every right</template>
+                <template v-else-if="c.missing.length">missing {{ c.missing.join('; ') }}: {{ CLUSTER_ROLE }}</template>
+                <template v-else>{{ c.reason }}</template>
+                <span class="text-medium-emphasis"> checked {{ relative(c.checkedAt, now) }}</span>
+              </td>
+            </tr>
           </tbody>
         </v-table>
       </v-col>

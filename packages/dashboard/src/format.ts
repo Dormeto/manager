@@ -30,13 +30,14 @@ const STATE_COLORS: Record<string, string> = { AWAKE: 'success', ASLEEP: 'info',
 export const stateColor = (state: string): string => STATE_COLORS[state] ?? 'grey';
 
 const BACKEND_LABELS: Record<string, string> = {
-  instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster',
+  instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', k8s: 'Kubernetes workload', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster',
 };
 export const backendLabel = (kind: string): string => BACKEND_LABELS[kind] ?? kind;
 const BACKEND_HELP: Record<string, string> = {
   instance: 'started and stopped by Dormeto',
   asg: 'its instances are started and stopped through the group',
   ecs: 'scaled to zero tasks when it naps, and back when it wakes',
+  k8s: 'a Deployment or StatefulSet on Amazon EKS, scaled to zero replicas when it naps, back to its replicas when it wakes',
   'rds-instance': 'a companion database, stopped after the application and started before it',
   'rds-cluster': 'a companion database, stopped after the application and started before it',
 };
@@ -49,16 +50,27 @@ export function backendArn(backend: { kind: string; id: string; arn?: string }, 
   if (backend.arn) return backend.arn;
   if (backend.id.startsWith('arn:')) return backend.id;
   if (!where.account || !where.region) return null;
+  // A Kubernetes workload (<cluster>/<namespace>/<kind>/<name>): its cluster's.
+  if (backend.kind === 'k8s') return `arn:${partitionOf(where.region)}:eks:${where.region}:${where.account}:cluster/${backend.id.split('/')[0]}`;
   // An Auto Scaling group's ARN holds an id AWS gives it: not known from its name.
   const resource = { instance: `ec2:${where.region}:${where.account}:instance/`, 'rds-instance': `rds:${where.region}:${where.account}:db:`, 'rds-cluster': `rds:${where.region}:${where.account}:cluster:` }[backend.kind];
   return resource ? `arn:${partitionOf(where.region)}:${resource}${backend.id}` : null;
 }
 
 const BACKEND_SERVICES: Record<string, string> = {
-  instance: 'Amazon EC2', asg: 'Amazon EC2 Auto Scaling', ecs: 'Amazon ECS', 'rds-instance': 'Amazon RDS', 'rds-cluster': 'Amazon Aurora',
+  instance: 'Amazon EC2', asg: 'Amazon EC2 Auto Scaling', ecs: 'Amazon ECS', k8s: 'Amazon EKS', 'rds-instance': 'Amazon RDS', 'rds-cluster': 'Amazon Aurora',
 };
 // The AWS service of a kind of backend, for its tooltip.
 export const backendService = (kind: string): string => BACKEND_SERVICES[kind] ?? kind;
+
+// A Kubernetes workload's owner from its id (<cluster>/<namespace>/<kind>/<name>): "Deployment demo/web".
+export function kubernetesOwner(id: string): string {
+  const [, namespace, kind, name] = id.split('/');
+  return `${kind} ${namespace}/${name}`;
+}
+// How the waker is switched in for a Kubernetes workload (vision docs/specs/2026-10-11-kubernetes-design.md, section 6).
+const SWITCHES: Record<string, string> = { ingress: 'Dormeto\'s Ingress in the group', 'patched-ingress': 'its Ingress patched', rule: 'the load balancer rules' };
+export const switchText = (mode: string): string => SWITCHES[mode] ?? mode;
 
 // A load balancer target, from its id: an instance, an IP address (an ECS task's, with an ECS backend), or a function.
 export function targetInfo(id: string, where: { account: string; region: string }, backends: { kind: string }[]): { service: string; arn: string | null } {

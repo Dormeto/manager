@@ -673,7 +673,10 @@ export function createApi({
       throw err;
     }
   }
-  const where = (router: Router) => ({ name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}) });
+  const where = (router: Router) => ({
+    name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}),
+    ...(router.clusters ? { clusters: router.clusters } : {}),
+  });
 
   type RouterInfo = {
     router: { version?: string; build?: string };

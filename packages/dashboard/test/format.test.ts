@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionMore, backendArn, backendService, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { attentionMore, backendArn, backendHelp, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -116,5 +116,18 @@ describe('attentionMore', () => {
     expect(attentionMore(35, 20)).toBe('15 more need attention');
     expect(attentionMore(21, 20)).toBe('1 more needs attention');
     expect(attentionMore(20, 20)).toBeNull();
+  });
+
+  // Kubernetes workloads (vision docs/specs/2026-10-11-kubernetes-design.md, section 10).
+  it('names a Kubernetes backend: its owner, its cluster\'s ARN, its service, how the waker is switched in', () => {
+    expect(backendLabel('k8s')).toBe('Kubernetes workload');
+    expect(backendHelp('k8s')).toBe('Kubernetes workload: a Deployment or StatefulSet on Amazon EKS, scaled to zero replicas when it naps, back to its replicas when it wakes');
+    expect(backendService('k8s')).toBe('Amazon EKS');
+    expect(kubernetesOwner('eks-demo/demo/Deployment/web')).toBe('Deployment demo/web');
+    expect(kubernetesOwner('eks-demo/cache/StatefulSet/redis')).toBe('StatefulSet cache/redis');
+    expect(backendArn({ kind: 'k8s', id: 'eks-demo/demo/Deployment/web' }, { account: '111122223333', region: 'eu-west-1' })).toBe('arn:aws:eks:eu-west-1:111122223333:cluster/eks-demo');
+    expect(switchText('ingress')).toBe('Dormeto\'s Ingress in the group');
+    expect(switchText('patched-ingress')).toBe('its Ingress patched');
+    expect(switchText('rule')).toBe('the load balancer rules');
   });
 });

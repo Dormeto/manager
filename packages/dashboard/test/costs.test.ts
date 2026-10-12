@@ -61,4 +61,14 @@ describe('costs', () => {
     expect(barSavings({ ...costs, discounts: { compute: 20, databases: 30 } })!.discounts).toEqual({ compute: 20, databases: 30 });
     expect(barSavings(costs)!.discounts).toBeNull();
   });
+
+  it('gives a Kubernetes backend the pods of its nap (on nodes or Fargate), and says the pods in a few words', () => {
+    const pods = { kind: 'k8s-pods' as const, count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: 'm5.large', os: 'Linux', autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } };
+    const k8s: Costs = { ...costs, items: [{ item: pods, hourly: 0.0277 }, { item: { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'x86_64', os: 'Linux' }, hourly: 0.012 }] };
+    const web = { kind: 'k8s', id: 'eks-demo/demo/Deployment/web' };
+    expect(backendCost(web, [web], k8s)!.hourly).toBeCloseTo(0.0397, 6);
+    expect(itemText(pods)).toBe('2 pods × 0.25 vCPU, 0.5 GB on m5.large (Linux)');
+    expect(itemText({ ...pods, spot: true, nodeType: null })).toBe('2 pods × 0.25 vCPU, 0.5 GB on a node of unknown type (Linux, Spot)');
+    expect(itemText({ ...pods, autoscaled: false })).toBe('2 pods × 0.25 vCPU, 0.5 GB on m5.large (Linux): nothing saved, no autoscaler removes the nodes');
+  });
 });
