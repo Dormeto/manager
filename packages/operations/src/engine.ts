@@ -5,6 +5,7 @@ import { exclusionCriterion, matches, restatus, type Candidate, type DiscoverySt
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, OperationType, Records } from './records.js';
+import { ensureClusterAccess, type EksPort } from './cluster-access.js';
 
 const MINUTE = 60_000;
 // An operation lasts at most its slot waits (SLOT_WAIT_MAX) and the steps after them: the workflow's timeout is 25 hours
@@ -45,6 +46,8 @@ export interface RouterRef {
 }
 
 export interface TargetAccess {
+  // The EKS clusters of the account and region (Kubernetes workloads, R10.5): their access entries.
+  eks: EksPort;
   installer(options: Parameters<typeof createInstaller>[1]): ReturnType<typeof createInstaller>;
   invoke(functionArn: string, payload: Record<string, unknown>): Promise<any>;
 }
@@ -59,7 +62,8 @@ export interface EngineDeps {
   // managerBus: the manager's event bus, where the routers send their state (scale design §3).
   // commandRole: the command role's name without its path; the forwarder ignores the manager's own calls (routers 0.23.0).
   // ipListsCatalog and ipListsBucket: the manager's IP lists (R6b), read by its routers (router 0.24.0).
-  settings: { env: string; principals: string[]; routerSettings: { checkSchedule: string; ipLists: string; ipListsCatalog: string; ipListsBucket: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
+  // discoveryRole: the discovery role's name (DmtDiscoveryRole by default), given the view policy in the clusters.
+  settings: { env: string; principals: string[]; discoveryRole?: string; routerSettings: { checkSchedule: string; ipLists: string; ipListsCatalog: string; ipListsBucket: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
   start(op: Operation): Promise<string>; // starts the workflow execution, returns its ARN
   now?: () => number;
   newId?: () => string;
@@ -82,12 +86,14 @@ type Outcome = StepResult | { status: 'wait'; seconds: number; detail?: string }
 
 const installSteps = INSTALL_STEPS.map((s) => `install ${s}`);
 const uninstallSteps = UNINSTALL_STEPS.map((s) => `uninstall ${s}`);
+// The router's access to the EKS clusters of its account and region, and its check of each (Kubernetes workloads, R10.5).
+const clusterSteps = ['access entries', 'check clusters'];
 const PLANS: Record<OperationType, string[]> = {
-  'install-router': ['find router', 'lock router', ...installSteps, 'register router', 'verify router'],
-  'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', 'verify router'],
+  'install-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
+  'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
   'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', ...uninstallSteps, 'unregister router'],
   // The slot before the load balancer's lock: an operation waiting for a slot holds no lock others wait for.
-  onboard: ['find router', 'lock router', ...installSteps, 'register router', 'slot', 'lock load balancer', 'preview', 'onboard', 'verify', 'candidate'],
+  onboard: ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'slot', 'lock load balancer', 'preview', 'onboard', 'verify', 'candidate'],
   // Paused first (that wakes an asleep workload): no nap starts or commits while the instrumentation goes.
   offboard: ['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'candidate'],
   // Exclusions (scale design §6): the API answers at once; their workloads are paused or resumed here, in batches.
@@ -96,6 +102,8 @@ const PLANS: Record<OperationType, string[]> = {
   // Event-driven discovery refresh (packaging design §5): one per account at a time; the rules before the role on removal.
   'connect-account': ['forwarder role', 'forwarder rules', 'connected'],
   'disconnect-account': ['remove forwarder rules', 'remove forwarder role', 'disconnected'],
+  // Again, after the customer applied the manifest or switched a cluster to access entries.
+  'cluster-access': ['find router', ...clusterSteps],
 };
 const ACCOUNT_ID = /^\d{12}$/;
 const REGION_NAME = /^[a-z]{2}(-[a-z]+)+-\d$/;
@@ -230,9 +238,21 @@ export function createEngine(deps: EngineDeps) {
 
   // The onboarder derives the workload id from the target group (routers 0.20.0 and later); the name is for people. Both
   // are kept in the operation for the next steps.
+  // The candidate's Kubernetes workload (its cluster, owner and switch), null for any other backend; kept in the operation.
+  async function kubernetesOf(op: Operation): Promise<{ cluster: string; namespace: string } | null> {
+    if (op.type !== 'onboard') return null;
+    if (op.context.kubernetes === undefined) {
+      const backend = (await deps.discovery?.getCandidate(String(op.input.candidateId)))?.backend as { kind?: string; kubernetes?: unknown } | null | undefined;
+      op.context.kubernetes = backend?.kind === 'k8s' ? backend.kubernetes ?? null : null;
+    }
+    return op.context.kubernetes as { cluster: string; namespace: string } | null;
+  }
+
   async function previewOf(op: Operation) {
+    const kubernetes = await kubernetesOf(op);
     const preview = await invokeRouter(op, 'onboarder', {
       action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [],
+      ...(kubernetes ? { kubernetes } : {}),
     });
     if (!preview?.workloadId) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.20.0: upgrade it to onboard`);
     op.context.workloadId = preview.workloadId;
@@ -413,6 +433,10 @@ export function createEngine(deps: EngineDeps) {
           return { status: 'done', detail: `no router in ${where}: installing ${routerName}` };
         }
         if (!router) throw new Error(`no router in ${where}`);
+        if (op.type === 'cluster-access') {
+          op.context.router = router;
+          return { status: 'done', detail: `router ${router.name} ${router.version ?? ''}`.trim() };
+        }
         if (router.source !== 'manager') throw new Error(`router ${router.name} was installed by Terraform: remove it with Terraform`);
         op.context.router = router;
         op.context.install = true;
@@ -432,6 +456,49 @@ export function createEngine(deps: EngineDeps) {
         await records.putRouter(router);
         op.context.router = { ...router, source: 'manager' };
         return { status: 'done', detail: `${router.name} ${router.version}` };
+      }
+      case 'access entries': {
+        const kubernetes = await kubernetesOf(op);
+        if (op.type === 'onboard' && !kubernetes) return { status: 'skipped' };
+        const router = op.context.router as RouterRef;
+        if (router.source === 'terraform') {
+          if (kubernetes) op.context.clusters = [kubernetes.cluster];
+          return { status: 'skipped', detail: `router ${router.name} is written in Terraform: its access entries are the customer's (module eks-access)` };
+        }
+        const { blueprint } = await filledBlueprint(op);
+        const routerRoles = blueprint.roles.filter((r) => ['controller', 'waker', 'onboarder'].includes(r.key)).map((r) => `arn:aws:iam::${op.target.account}:role${r.path}${r.name}`);
+        const discoveryRole = `arn:aws:iam::${op.target.account}:role/${deps.settings.discoveryRole ?? 'DmtDiscoveryRole'}`;
+        const results = await ensureClusterAccess((await access(op)).eks, { routerRoles, discoveryRole });
+        op.context.clusters = results.filter((r) => r.ready).map((r) => r.cluster);
+        if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
+        return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
+      }
+      case 'check clusters': {
+        const clusters = (op.context.clusters as string[] | undefined) ?? [];
+        if (!clusters.length) return { status: 'skipped' };
+        const kubernetes = await kubernetesOf(op);
+        const checks: { cluster: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string }[] = [];
+        for (const cluster of clusters) {
+          try {
+            checks.push(await invokeRouter(op, 'controller', { action: 'clusterCheck', cluster, ...(kubernetes?.cluster === cluster ? { namespace: kubernetes.namespace } : {}) }));
+          } catch (err) {
+            if (/unknown action/.test((err as Error).message)) return { status: 'skipped', detail: `router ${(op.context.router as RouterRef).name} is older than 0.29.0: no cluster check` };
+            throw err;
+          }
+        }
+        // Kept on the router: its view lists the clusters with their reach and rights.
+        const installed = await records.getRouter(op.target.account!, op.target.region!);
+        if (installed) {
+          const checkedAt = iso(now());
+          await records.putRouter({ ...installed, clusters: checks.map((c) => ({ name: c.cluster, reachable: c.reachable, allowed: c.allowed, missing: c.missing ?? [], ...(c.reason ? { reason: c.reason } : {}), checkedAt })) });
+        }
+        // An onboarding stops on its candidate's cluster when the router may not use it.
+        const own = kubernetes && checks.find((c) => c.cluster === kubernetes.cluster);
+        if (own && !own.allowed) {
+          throw new Error(`cluster ${own.cluster}: ${own.missing?.length ? `the router may not ${own.missing.join('; ')}: apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router` : own.reason ?? 'not allowed'}`);
+        }
+        const text = (c: (typeof checks)[number]) => `cluster ${c.cluster}: ${!c.reachable ? `unreachable (${c.reason})` : c.allowed ? 'reachable, every right' : `missing ${c.missing?.length ? c.missing.join('; ') : c.reason}`}`;
+        return { status: 'done', detail: checks.map(text).join('; ') };
       }
       case 'verify router': {
         const info = await invokeRouter(op, 'controller', { action: 'router' });
@@ -501,9 +568,10 @@ export function createEngine(deps: EngineDeps) {
       case 'onboard': {
         // An operation started by a manager that did not keep the preview's id yet: ask again.
         if (!op.context.workloadId) await previewOf(op);
+        const kubernetes = await kubernetesOf(op);
         const result = await invokeRouter(op, 'onboarder', {
           action: 'onboard', workloadId: op.context.workloadId, targetGroupArn: op.target.targetGroupArn, name: op.context.name,
-          settings: op.input.settings ?? {}, databases: op.input.databases ?? [], by: op.by,
+          settings: op.input.settings ?? {}, databases: op.input.databases ?? [], by: op.by, ...(kubernetes ? { kubernetes } : {}),
         });
         op.context.wakerTargetGroupArn = result?.workload?.wakerTargetGroupArn;
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };

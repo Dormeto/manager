@@ -7,7 +7,7 @@ const RETENTION_S = 90 * 86_400;
 type Item = Record<string, AttributeValue>;
 
 export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion'
-  | 'connect-account' | 'disconnect-account';
+  | 'connect-account' | 'disconnect-account' | 'cluster-access';
 export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Operation {
@@ -40,6 +40,8 @@ export interface InstalledRouter {
   installedBy: string;
   installedAt: string;
   uninstalling?: boolean; // an uninstall runs: no new onboarding
+  // The EKS clusters of its account and region, as its last check found them (R10.5: the router's view).
+  clusters?: { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; checkedAt: string }[];
 }
 
 // Any DynamoDB client: only send() is used.

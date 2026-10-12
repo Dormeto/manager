@@ -210,6 +210,63 @@
       "Resource": [
         "arn:${partition}:scheduler:*:${account}:schedule/default/dmtr-*"
       ]
+    },
+    {
+      "Sid": "EksClusters",
+      "Effect": "Allow",
+      "Action": [
+        "eks:ListClusters",
+        "eks:DescribeCluster",
+        "eks:DescribeAccessEntry",
+        "eks:ListAssociatedAccessPolicies"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EksAccessEntries",
+      "Effect": "Allow",
+      "Action": [
+        "eks:CreateAccessEntry"
+      ],
+      "Resource": "arn:${partition}:eks:*:${account}:cluster/*",
+      "Condition": {
+        "ArnLike": {
+          "eks:principalArn": [
+            "arn:${partition}:iam::${account}:role/dormeto/router/dmtr-*",
+            "arn:${partition}:iam::${account}:role/DmtDiscoveryRole"
+          ]
+        },
+        "ForAllValues:StringEquals": {
+          "eks:kubernetesGroups": [
+            "dormeto:router"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "EksAccessEntriesRemoved",
+      "Effect": "Allow",
+      "Action": [
+        "eks:DeleteAccessEntry"
+      ],
+      "Resource": [
+        "arn:${partition}:eks:*:${account}:access-entry/*/role/${account}/dmtr-*",
+        "arn:${partition}:eks:*:${account}:access-entry/*/role/${account}/DmtDiscoveryRole/*"
+      ]
+    },
+    {
+      "Sid": "EksDiscoveryView",
+      "Effect": "Allow",
+      "Action": [
+        "eks:AssociateAccessPolicy"
+      ],
+      "Resource": "arn:${partition}:eks:*:${account}:access-entry/*/role/${account}/DmtDiscoveryRole/*",
+      "Condition": {
+        "StringEquals": {
+          "eks:policyArn": "arn:${partition}:eks::aws:cluster-access-policy/AmazonEKSViewPolicy",
+          "eks:accessScope": "cluster"
+        }
+      }
     }
   ]
 }

@@ -12,6 +12,9 @@ import {
   GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient, ListEventSourceMappingsCommand, PutFunctionEventInvokeConfigCommand, UpdateEventSourceMappingCommand,
   UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
+import {
+  AssociateAccessPolicyCommand, CreateAccessEntryCommand, DescribeAccessEntryCommand, DescribeClusterCommand, EKSClient, ListAssociatedAccessPoliciesCommand, ListClustersCommand,
+} from '@aws-sdk/client-eks';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { CreateScheduleCommand, DeleteScheduleCommand, GetScheduleCommand, SchedulerClient, UpdateScheduleCommand } from '@aws-sdk/client-scheduler';
 import { CreateQueueCommand, DeleteQueueCommand, GetQueueAttributesCommand, GetQueueUrlCommand, SetQueueAttributesCommand, SQSClient } from '@aws-sdk/client-sqs';
@@ -21,6 +24,7 @@ import {
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import { createHash } from 'node:crypto';
 import type { Blueprint } from './blueprint.js';
+import type { EksPort } from './cluster-access.js';
 import type { TargetAccess } from './engine.js';
 import { createInstaller, type InstallerPorts } from './installer.js';
 
@@ -61,6 +65,19 @@ export function installerPorts(credentials: Credentials, region: string): Instal
   };
 }
 
+// The EKS calls of the access entries step (cluster-access.ts), with the command role's credentials in a region.
+export function eksPort(credentials: Credentials, region: string): EksPort {
+  const client = new EKSClient({ region, credentials, maxAttempts: 5 });
+  return {
+    listClusters: (input) => client.send(new ListClustersCommand(input)),
+    describeCluster: (input) => client.send(new DescribeClusterCommand(input)),
+    describeAccessEntry: (input) => client.send(new DescribeAccessEntryCommand(input)),
+    createAccessEntry: (input) => client.send(new CreateAccessEntryCommand(input)),
+    listAssociatedAccessPolicies: (input) => client.send(new ListAssociatedAccessPoliciesCommand(input)),
+    associateAccessPolicy: (input) => client.send(new AssociateAccessPolicyCommand(input)),
+  };
+}
+
 // DmtCommandRole of the target account; credentials cached until 5 minutes before they expire.
 export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; roleName: string; sessionName: string }) {
   const cache = new Map<string, Credentials>();
@@ -77,6 +94,7 @@ export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; 
     const credentials = await credentialsFor(account);
     const lambda = new LambdaClient({ region, credentials });
     return {
+      eks: eksPort(credentials, region),
       installer: (options) => createInstaller(installerPorts(credentials, region), options),
       async invoke(functionArn, payload) {
         const out = await lambda.send(new InvokeCommand({ FunctionName: functionArn, Payload: Buffer.from(JSON.stringify(payload)) }));

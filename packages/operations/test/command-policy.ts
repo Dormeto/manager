@@ -9,12 +9,14 @@ const policy = JSON.parse(readFileSync(new URL('../../../infra/terraform/modules
 const like = (pattern: string, value: string) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`).test(value);
 const list = <T>(v: T | T[]) => ([] as T[]).concat(v);
 
-// Allow statements only (the policy has no Deny); StringEquals and ArnLike conditions, as the policy uses.
-export function allows(action: string, resource: string, context: Record<string, string> = {}) {
+// Allow statements only (the policy has no Deny); StringEquals, ArnLike and ForAllValues:StringEquals conditions, as the
+// policy uses (ForAllValues holds for a key the request does not carry, as IAM evaluates it).
+export function allows(action: string, resource: string, context: Record<string, string | string[]> = {}) {
   return policy.Statement.some((s) => s.Effect === 'Allow' && list(s.Action).some((a) => like(a, action)) && list(s.Resource).some((r) => like(r, resource))
     && Object.entries(s.Condition ?? {}).every(([test, keys]) => Object.entries(keys).every(([key, values]) => {
       const value = context[key];
-      if (value === undefined) return false;
+      if (test === 'ForAllValues:StringEquals') return value === undefined || list(value).every((v) => list(values).includes(v));
+      if (value === undefined || Array.isArray(value)) return false;
       return list(values).some((v) => (test === 'ArnLike' ? like(v, value) : v === value));
     })));
 }

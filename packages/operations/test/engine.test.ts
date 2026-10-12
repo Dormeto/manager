@@ -8,6 +8,7 @@ import { createInstaller } from '../src/installer.js';
 import { createRecords } from '../src/records.js';
 import { fakeDynamo } from './dynamo-fake.js';
 import { fakeInstallAccount } from './install-fake.js';
+import { cluster as eksCluster, fakeEks } from './eks-fake.js';
 
 const T0 = Date.UTC(2026, 9, 5, 12, 0);
 const ACCOUNT = '121014831971';
@@ -23,7 +24,7 @@ const candidate = (over: Partial<Candidate> = {}): Candidate => ({
   status: 'pending-onboarding', statusReason: 'eligible: instance i-1', firstSeenAt: '2026-10-05T10:00:00.000Z', lastSeenAt: '2026-10-05T10:00:00.000Z', history: [], ...over,
 });
 
-function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {}) {
+function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = fakeEks([]) } = {}) {
   let now = T0;
   let ids = 0;
   const dynamo = fakeDynamo();
@@ -43,7 +44,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
   } as unknown as DiscoveryStore;
   // The router functions of the target account: onboarder and controller actions.
   const invocations: [string, Record<string, unknown>][] = [];
-  const router = { state: 'AWAKE', previewOk: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600 };
+  const router = { state: 'AWAKE', previewOk: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600, clusterChecks: {} as Record<string, unknown> };
   const invocationsPaused: Record<string, unknown>[] = [];
   const answers: Record<string, (p: Record<string, unknown>) => unknown> = {
     // Routers 0.20.0 and later derive the workload id from the target group (vision onboarding design, section 7).
@@ -55,12 +56,15 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
     pause: (p) => { invocationsPaused.push(p); if (router.state === 'ASLEEP') router.state = 'WAKING'; return { pause: {}, woken: [] }; },
     list: () => ({ workloads: Array.from({ length: router.workloads }, (_, i) => ({ workloadId: `w${i}` })) }),
     router: () => ({ router: { name: 'dmt-dev', version: '0.17.0', build: '1d50494cac65' } }),
+    // Routers 0.29.0 and later: whether they reach a cluster and have the published ClusterRole's rights.
+    clusterCheck: (p) => router.clusterChecks[p.cluster as string] ?? { cluster: p.cluster, reachable: true, allowed: true, missing: [] },
   };
   const started: string[] = [];
   const engine = createEngine({
     records, discovery,
     routers: async () => [...routers, ...(await records.listRouters()).map((r) => ({ ...r, source: 'manager' as const }))],
     target: async () => ({
+      eks,
       installer: (options) => createInstaller(account.ports, options),
       invoke: async (functionArn, payload) => {
         invocations.push([functionArn, payload]);
@@ -83,7 +87,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()] } = {})
     }
     throw new Error('the operation never finished');
   }
-  return { engine, records, account, invocations, invocationsPaused, router, answers, items, moves, started, drive, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { engine, records, account, invocations, invocationsPaused, router, answers, items, moves, started, drive, eks, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 const DEV_ROUTER: RouterRef = {
@@ -104,7 +108,8 @@ describe('operations engine', () => {
     const stored = (await s.records.getOperation(op.id))!;
     expect(stored.steps.map((x) => [x.name, x.status])).toEqual([
       ['find router', 'done'], ['lock router', 'skipped'], ...['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'].map((n) => [`install ${n}`, 'skipped']),
-      ['register router', 'skipped'], ['slot', 'done'], ['lock load balancer', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
+      ['register router', 'skipped'], ['access entries', 'skipped'], ['check clusters', 'skipped'],
+      ['slot', 'done'], ['lock load balancer', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
     ]);
     expect(s.invocations.map(([fn, p]) => [fn.split(':').at(-1), p.action])).toEqual([['dmt-dev-onboarder', 'preview'], ['dmt-dev-onboarder', 'onboard'], ['dmt-dev-controller', 'status']]);
     // The onboarder derives the id at the preview; the onboard step passes it back with the name.
@@ -332,7 +337,7 @@ describe('operations engine', () => {
   it('a workflow failure releases what the operation holds and records the error', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
-    for (let i = 0; i < 15; i += 1) await s.engine.next(op.id);
+    for (let i = 0; i < 17; i += 1) await s.engine.next(op.id); // up to the load balancer's lock (after the cluster steps)
     expect((await s.records.getOperation(op.id))!.holds.locks).toEqual([`LB#${LB}`]);
     await s.engine.fail(op.id, 'States.Timeout: the task timed out');
     const stored = (await s.records.getOperation(op.id))!;
@@ -430,5 +435,64 @@ describe('onboarding on a router older than 0.20.0', () => {
     const op = await s.engine.create('onboard', { candidateId: TG }, 'ops');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
     expect((await s.records.getOperation(op.id))!.error).toMatch(/router dmt-dev is older than 0.20.0: upgrade it to onboard/);
+  });
+});
+
+// Kubernetes workloads (vision docs/specs/2026-10-11-kubernetes-design.md, section 4): the router's access entries in the
+// clusters of its account and region, and its check of each.
+describe('cluster access', () => {
+  const ROLE = (r: string) => `arn:aws:iam::${ACCOUNT}:role/dormeto/router/dmtr-dev-eu-west-3-${r}`;
+  const k8sCandidate = () => candidate({
+    backend: { kind: 'k8s', id: 'eks-demo/demo/Deployment/web', kubernetes: { cluster: 'eks-demo', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, switch: 'ingress', ingress: { name: 'web', ruleIndex: 0, groupOrder: -1, service: { name: 'web', port: { number: 80 } } }, hpa: false, keda: false, capacity: 'nodes', autoscaler: 'karpenter' } } as Candidate['backend'],
+  });
+
+  it('a router installed where a cluster runs gets its access entries, and each cluster\'s check is kept on the router', async () => {
+    const s = setup({ eks: fakeEks([eksCluster('eks-demo')]) });
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.steps.map((x) => x.name).slice(-4)).toEqual(['register router', 'access entries', 'check clusters', 'verify router']);
+    expect(stored.steps.find((x) => x.name === 'access entries')).toMatchObject({ status: 'done', detail: 'cluster eks-demo: access entries created for 3 router roles (group dormeto:router) and DmtDiscoveryRole (AmazonEKSViewPolicy)' });
+    expect(s.eks.writes.filter(([w]) => w === 'createAccessEntry').map(([, i]) => i.principalArn)).toEqual([ROLE('controller'), ROLE('waker'), ROLE('onboarder'), `arn:aws:iam::${ACCOUNT}:role/DmtDiscoveryRole`]);
+    expect(stored.steps.find((x) => x.name === 'check clusters')).toMatchObject({ status: 'done', detail: 'cluster eks-demo: reachable, every right' });
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.clusters).toEqual([{ name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: new Date(s.now()).toISOString() }]);
+  });
+
+  it('onboarding a Kubernetes candidate makes the access entries first and gives the onboarder its kubernetes', async () => {
+    const s = setup({ candidates: [k8sCandidate()], eks: fakeEks([eksCluster('eks-demo')]) });
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.steps.find((x) => x.name === 'access entries')!.status).toBe('done');
+    const preview = s.invocations.find(([, p]) => p.action === 'preview')![1];
+    const onboard = s.invocations.find(([, p]) => p.action === 'onboard')![1];
+    expect(preview.kubernetes).toEqual((k8sCandidate().backend as { kubernetes: unknown }).kubernetes);
+    expect(onboard.kubernetes).toEqual(preview.kubernetes);
+  });
+
+  it('a Kubernetes candidate whose cluster the router may not use is not onboarded, with what the router lacks', async () => {
+    const s = setup({ candidates: [k8sCandidate()], eks: fakeEks([eksCluster('eks-demo')]) });
+    s.router.clusterChecks['eks-demo'] = { cluster: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes', 'get, patch deployments/scale (apps)'] };
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.error).toBe('check clusters: cluster eks-demo: the router may not get nodes; get, patch deployments/scale (apps): apply the ClusterRole Dormeto publishes (kubernetes/dormeto-router.yaml) and its binding to the group dormeto:router');
+    expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
+  });
+
+  it('a command role without the EKS statements fails the access entries, naming the organization module to apply again', async () => {
+    const denied = Object.assign(new Error('User is not authorized to perform: eks:CreateAccessEntry'), { name: 'AccessDeniedException' });
+    const s = setup({ eks: fakeEks([eksCluster('eks-demo')], { deny: denied }) });
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toMatch(/^access entries: the command role may not manage the access entries of cluster eks-demo: apply the organization module again \(statement EksAccessEntries\)/);
+  });
+
+  it('the cluster-access operation runs the access entries and the check again (after the customer applied the manifest)', async () => {
+    const s = setup({ eks: fakeEks([eksCluster('eks-demo')]) });
+    await s.records.putRouter({ name: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-3', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`, version: '0.29.0', build: 'b', installedBy: 'a', installedAt: 'x' });
+    const op = await s.engine.create('cluster-access', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect((await s.records.getOperation(op.id))!.steps.map((x) => [x.name, x.status])).toEqual([['find router', 'done'], ['access entries', 'done'], ['check clusters', 'done']]);
   });
 });
