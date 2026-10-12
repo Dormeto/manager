@@ -22,12 +22,16 @@ const stateChanged = (workloadId: string, from: string, to: string, when: string
   account: ACCOUNT, region: REGION, 'detail-type': 'Workload state changed', detail: { router: 'dmtr-dev', workloadId, from, to, at: when },
 });
 
+// The manager's clock: every event of these tests is before it.
+const NOW = Date.parse('2026-10-05T13:00:00.000Z');
+
 function setup() {
   const dynamo = fakeDynamo();
   const store = createFleetStore({ dynamo, table: 'dmt-dev-manager' });
-  const ingest = createIngest({ store });
+  const refused: [string, object][] = [];
+  const ingest = createIngest({ store, now: () => NOW, log: { warn: (event, data) => { refused.push([event, data]); } } });
   const ids = async () => (await store.listWorkloads()).map((w) => w.workloadId).sort();
-  return { dynamo, store, ingest, ids };
+  return { dynamo, store, ingest, ids, refused };
 }
 
 describe('fleet', () => {
@@ -112,6 +116,42 @@ describe('fleet', () => {
     state.detail.region = 'eu-west-3';
     await s.ingest(state);
     expect((await s.store.listWorkloads()).find((w) => w.workloadId === 'p')!.state).toBe('NAPPING');
+  });
+
+  it('refuses a check or a state change dated ahead of the manager\'s clock, or not dated: one event never pins a summary', async () => {
+    const s = setup();
+    // Any principal of the organization may publish: a check dated in 2099 would win over every later one.
+    await s.ingest(checked('2099-01-01T00:00:00.000Z', [workload('a', 'AWAKE')]));
+    await s.ingest(checked('9', [workload('a', 'AWAKE')]));
+    expect([await s.store.listRouters(), await s.ids()]).toEqual([[], []]);
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP')]));
+    await s.ingest(stateChanged('a', 'ASLEEP', 'FAILED', '2099-01-01T00:00:00.000Z'));
+    await s.ingest(checked(T2, [workload('a', 'AWAKE')]));
+    expect([(await s.store.listRouters())[0]!.checkedAt, (await s.store.listWorkloads())[0]!.state]).toEqual([T2, 'AWAKE']);
+    // Five minutes of clock difference are accepted.
+    await s.ingest(stateChanged('a', 'AWAKE', 'NAPPING', at('2026-10-05T13:00:00.000Z', 240)));
+    expect((await s.store.listWorkloads())[0]!.state).toBe('NAPPING');
+    expect(s.refused.map(([event]) => event)).toEqual(['RouterEventRefused', 'RouterEventRefused', 'RouterEventRefused']);
+  });
+
+  it('keeps the known fields of a summary only, each of its type and size; a link other than https is dropped', async () => {
+    const s = setup();
+    const pauses = Array.from({ length: 100 }, (_, i) => ({ scope: 'workload', reason: `r${i}`, by: 'ops' }));
+    await s.ingest(checked(T1, [
+      workload('a', 'AWAKE', { url: 'javascript:alert(1)', name: 'n'.repeat(500), evil: 'x'.repeat(100_000), pauses, wakeCount: '3', stats7d: { wakes: 2, ignored: 'x' } }),
+      workload('b', 'NOT-A-STATE', { url: 'https://b.example.com/' }),
+      workload('../c'),
+    ]));
+    const [a, b] = await s.store.listWorkloads();
+    expect([a!.url, (a!.name as string).length, 'evil' in a!, (a!.pauses as unknown[]).length, a!.wakeCount, a!.stats7d]).toEqual([null, 64, false, 20, undefined, { wakes: 2 }]);
+    expect([b!.workloadId, b!.state, b!.url]).toEqual(['b', 'UNKNOWN', 'https://b.example.com/']);
+    expect(await s.ids()).toEqual(['a', 'b']);
+  });
+
+  it('refuses a check of more chunks than a router can send', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a')], { index: 0, total: 1_000_000 }));
+    expect(await s.ids()).toEqual([]);
   });
 
   it('tells a router not reporting: its last check older than 3 periods of its schedule', () => {

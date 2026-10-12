@@ -1,7 +1,8 @@
 // Router events into summaries (vision scale design §4). The envelope's account (set by EventBridge: the caller's)
 // identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
-// arrive late, twice or out of order: a newer state always wins.
+// arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
+import { CHUNK_WORKLOADS_MAX, chunkOf, regionOf, routerOf, stateOf, timely, workloadIdOf, workloadOf } from './clean.js';
 import type { FleetStore, RouterSummary } from './store.js';
 
 export interface RouterEvent {
@@ -11,36 +12,47 @@ export interface RouterEvent {
   detail: any;
 }
 
-export function createIngest({ store }: { store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'getWorkload' | 'putWorkload' | 'deleteWorkload' | 'routerWorkloads'> }) {
+export function createIngest({ store, now = Date.now, log }: {
+  store: Pick<FleetStore, 'getRouter' | 'putRouter' | 'getWorkload' | 'putWorkload' | 'deleteWorkload' | 'routerWorkloads'>;
+  now?: () => number;
+  log?: { warn: (event: string, data: object) => void };
+}) {
+  // Dropped, not retried: the same event would be refused again.
+  const refuse = (event: RouterEvent, reason: string) => log?.warn('RouterEventRefused', { account: event.account, detailType: event['detail-type'], reason });
+
   // One chunk of a router's state after an idle check: its workloads first, then the chunk counted; the last chunk in
   // removes the workloads the check no longer lists.
-  async function checked({ account, region: envelope, detail: d }: RouterEvent) {
-    const region: string = d.router?.region ?? envelope;
+  async function checked(event: RouterEvent) {
+    const { account, region: envelope, detail } = event;
+    const d = detail ?? {};
+    const checkedAt = timely(d.checkedAt, now());
+    const chunk = chunkOf(d.chunk);
+    const own = routerOf(d);
+    if (!checkedAt || !chunk || !own.name) return refuse(event, !checkedAt ? `check time ${String(d.checkedAt).slice(0, 40)}` : !chunk ? 'chunk' : 'router name');
+    const region = regionOf(d.router?.region) ?? envelope;
     const current = await store.getRouter(account, region);
-    if (current && current.summary.check.checkedAt > d.checkedAt) return;
-    for (const w of d.workloads ?? []) {
-      const existing = await store.getWorkload(account, region, w.workloadId);
+    if (current && current.summary.check.checkedAt > checkedAt) return;
+    const listed: unknown[] = Array.isArray(d.workloads) ? d.workloads.slice(0, CHUNK_WORKLOADS_MAX) : [];
+    const workloads = listed.map(workloadOf).filter((w): w is Record<string, unknown> => w !== null);
+    for (const w of workloads) {
+      const existing = await store.getWorkload(account, region, w.workloadId as string);
       // A state change newer than this check is kept.
-      const newer = existing?.stateAt && existing.stateAt > d.checkedAt;
+      const newer = existing?.stateAt && existing.stateAt > checkedAt;
       await store.putWorkload({
-        ...w, account, region, router: d.router.name, checkedAt: d.checkedAt,
+        ...w, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
         ...(newer ? { state: existing.state, stateAt: existing.stateAt } : existing?.stateAt ? { stateAt: existing.stateAt } : {}),
       });
     }
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      const now = attempt === 0 ? current : await store.getRouter(account, region);
-      const check = now?.summary.check;
-      if (check && check.checkedAt > d.checkedAt) return;
-      const received = check && check.checkedAt === d.checkedAt ? [...new Set([...check.received, d.chunk.index])] : [d.chunk.index];
-      const summary: RouterSummary = {
-        account, region, name: d.router.name, version: d.router.version ?? null, build: d.router.build ?? null, checkSchedule: d.router.checkSchedule ?? null,
-        checkedAt: d.checkedAt, durationMs: d.durationMs ?? null, health: d.health ?? null, pauses: d.pauses ?? [], counts: d.counts ?? {},
-        check: { checkedAt: d.checkedAt, total: d.chunk.total, received },
-      };
-      if (!(await store.putRouter(summary, now?.version ?? 0))) continue;
-      if (received.length === d.chunk.total) {
+      const stored = attempt === 0 ? current : await store.getRouter(account, region);
+      const check = stored?.summary.check;
+      if (check && check.checkedAt > checkedAt) return;
+      const received = check && check.checkedAt === checkedAt ? [...new Set([...check.received, chunk.index])] : [chunk.index];
+      const summary: RouterSummary = { account, region, ...own, checkedAt, check: { checkedAt, total: chunk.total, received } };
+      if (!(await store.putRouter(summary, stored?.version ?? 0))) continue;
+      if (received.length === chunk.total) {
         for (const w of await store.routerWorkloads(account, region)) {
-          if ((w.checkedAt ?? '') < d.checkedAt && (w.stateAt ?? '') < d.checkedAt) await store.deleteWorkload(w);
+          if ((w.checkedAt ?? '') < checkedAt && (w.stateAt ?? '') < checkedAt) await store.deleteWorkload(w);
         }
       }
       return;
@@ -49,11 +61,18 @@ export function createIngest({ store }: { store: Pick<FleetStore, 'getRouter' | 
   }
 
   // A state change, at once; ignored when the workload already shows a newer state (a later change or check).
-  async function stateChanged({ account, region: envelope, detail: d }: RouterEvent) {
-    const region: string = d.region ?? envelope;
-    const existing = await store.getWorkload(account, region, d.workloadId);
-    if ((existing?.stateAt ?? '') >= d.at || (existing?.checkedAt ?? '') > d.at) return;
-    await store.putWorkload({ ...(existing ?? { account, region, router: d.router, workloadId: d.workloadId }), state: d.to, stateAt: d.at });
+  async function stateChanged(event: RouterEvent) {
+    const { account, region: envelope, detail } = event;
+    const d = detail ?? {};
+    const at = timely(d.at, now());
+    const workloadId = workloadIdOf(d.workloadId);
+    const to = stateOf(d.to);
+    const router = typeof d.router === 'string' ? d.router.slice(0, 64) : null;
+    if (!at || !workloadId || !to || !router) return refuse(event, !at ? `change time ${String(d.at).slice(0, 40)}` : 'workload, state or router');
+    const region = regionOf(d.region) ?? envelope;
+    const existing = await store.getWorkload(account, region, workloadId);
+    if ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at) return;
+    await store.putWorkload({ ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at });
   }
 
   return async function ingest(event: RouterEvent) {
