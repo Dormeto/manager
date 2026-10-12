@@ -1,5 +1,5 @@
 // Router management display helpers: pauses, router health, manual exclusions.
-import { relative } from './format';
+import { checkHealth, relative } from './format';
 import type { ExclusionKind, ExclusionTarget, Pause } from './types';
 
 export function pauseLabel(pauses: Pause[] | undefined): 'excluded' | 'paused' | null {
@@ -33,6 +33,16 @@ export function untilFrom(choice: UntilChoice, now = Date.now(), date = ''): str
 
 const HEALTH: Record<string, string> = { ok: 'success', warning: 'warning', error: 'error' };
 export const healthColor = (status: string | undefined): string => (status && HEALTH[status]) || 'grey';
+
+// A router's status for the Overview: unreachable, its health, not reporting (a router known by its list answer only has
+// no health: its schedule alone could say ok while its checks fail), a late check, or ok.
+export function routerStatus(r: { error?: string; reporting?: boolean; health?: { status: string; problems: { level?: string; text: string }[] }; checkSchedule?: string | null; lastScheduledCheckAt?: string | null }, now = Date.now()): { color: string; text: string; detail: string } {
+  if (r.error) return { color: 'error', text: 'unreachable', detail: r.error };
+  const check = checkHealth(r, now);
+  if (r.health) return { color: healthColor(r.health.status), text: r.health.status, detail: r.health.problems[0]?.text ?? check.text };
+  if (r.reporting === false) return { color: 'warning', text: 'not reporting', detail: 'no report from its idle checks for 3 periods of its schedule' };
+  return check.late ? { color: 'warning', text: 'idle check late', detail: check.text } : { color: 'success', text: 'ok', detail: check.text };
+}
 
 export interface TargetOption {
   kind: ExclusionKind;

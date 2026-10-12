@@ -5,7 +5,7 @@ import { mdiAlertCircleOutline, mdiFilterRemoveOutline, mdiPowerSleep, mdiServer
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { attentionMore, checkHealth, relative } from '../format';
-import { healthColor } from '../pause';
+import { routerStatus } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -39,10 +39,6 @@ const cards = computed(() => [
   { title: 'Failed', value: count('FAILED'), icon: mdiAlertCircleOutline, color: 'error' },
 ]);
 const late = computed(() => routers.value.filter((r) => !r.error && checkHealth(r, now.value).late));
-const routerChip = (r: RouterInfo) => (r.error
-  ? { color: 'error', text: 'unreachable' }
-  : r.health ? { color: healthColor(r.health.status), text: r.health.status }
-    : checkHealth(r, now.value).late ? { color: 'warning', text: 'idle check late' } : { color: 'success', text: 'ok' });
 const total = (key: 'ignored' | 'deferred' | 'wakes') => stats7d.value[key];
 const weekly = computed(() => [
   { title: 'Wakes (7 days)', value: total('wakes'), icon: mdiWeatherSunsetUp, color: 'primary' },
@@ -102,9 +98,9 @@ const weekly = computed(() => [
       <v-card title="Routers">
         <v-list lines="two">
           <v-list-item v-for="r in routers" :key="r.name" :title="r.name" to="/routers"
-            :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${r.health?.problems[0]?.text ?? checkHealth(r, now).text}`">
+            :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${routerStatus(r, now).detail}`">
             <template #append>
-              <span class="d-inline-flex align-center ga-1"><PauseChip :pauses="r.pauses" /><v-chip :color="routerChip(r).color" variant="tonal" label>{{ routerChip(r).text }}</v-chip></span>
+              <span class="d-inline-flex align-center ga-1"><PauseChip :pauses="r.pauses" /><v-chip :color="routerStatus(r, now).color" variant="tonal" label>{{ routerStatus(r, now).text }}</v-chip></span>
             </template>
           </v-list-item>
         </v-list>
