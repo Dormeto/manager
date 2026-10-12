@@ -5,7 +5,31 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## 0.4.0 — 2026-10-08
+## 0.5.0 — 2026-10-08
+
+Router 0.25.0. Access: apply the access module or the AWS CLI script of this release again in every member account (the
+routers' permissions boundary allows `ec2:ModifyInstanceAttribute`, for fallback instance types; from 0.3.0, it also
+allows reading the account's Cognito user pool clients, as 0.4.0 said). Then upgrade the routers to 0.25.0. 0.4.0 was not
+published: its changes and upgrade note below ship in this version.
+
+- Failed wakes say why: the router records the kind (no capacity, quota, permission, configuration, no healthy target,
+  throttled, timeout, unknown), the step and backend that failed and AWS's message. It reads the Auto Scaling activities
+  and ECS service events while it waits, so that a launch that cannot happen fails at once instead of at the wake timeout.
+- Capacity: a start refused for capacity is tried again within the wake timeout (after 30 s, 60 s, then every 2 minutes).
+  An EC2 instance can fall back to other instance types (`fallback_instance_types` of the workload module, or the
+  onboarding dialog); the next nap gives it its own type back.
+- Between failed wakes, requests retry after `failed_retry_seconds` (60 s by default), doubled after each failure, at
+  most 30 minutes; a wake from the manager does not wait. A failed workload whose backends run without a healthy target
+  is stopped after its idle window, so a failure does not run up the bill. The waiting page says what happened and when
+  the next attempt is.
+- Alerts: each failed wake is an alert of the watchdog within 5 minutes (one per kind across retries, "woke again" when it
+  wakes), with the workload, its account and region, the backend, AWS's message, the next attempt and what to do. Each
+  message has a chat body for Amazon Q Developer in chat applications (Slack, Microsoft Teams) on `https` subscriptions,
+  and the attributes `level`, `kind`, `account`, `region`, `router` and `workload` for subscription filter policies.
+- The workload view shows the last failure, the failures in a row, the next attempt and the fallback types in use; the
+  state chip's tooltip has the last failure; the Alerts card links to the workload.
+
+## 0.4.0 — 2026-10-08 (not published: in 0.5.0)
 
 Router 0.24.0. Access: apply the access module or the AWS CLI script of this release again in every member account (from
 0.3.1, which was not published: the routers' permissions boundary allows reading the account's Cognito user pool clients).

@@ -3,8 +3,8 @@
     "name": "${name}",
     "region": "${region}",
     "account": "${account}",
-    "version": "0.24.0",
-    "build": "45f7f87bb8d8"
+    "version": "0.25.0",
+    "build": "9d5a4f30efe8"
   },
   "tags": {
     "dormeto:router": "${name}"
@@ -77,6 +77,40 @@
           {
             "Effect": "Allow",
             "Action": [
+              "ec2:ModifyInstanceAttribute"
+            ],
+            "Resource": [
+              "arn:${partition}:ec2:${region}:${account}:instance/*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
+              "ec2:CreateTags",
+              "ec2:DeleteTags"
+            ],
+            "Resource": [
+              "arn:${partition}:ec2:${region}:${account}:instance/*"
+            ],
+            "Condition": {
+              "Null": {
+                "aws:ResourceTag/dormeto:workload": "false"
+              },
+              "ForAllValues:StringEquals": {
+                "aws:TagKeys": [
+                  "dormeto:instance-type"
+                ]
+              }
+            }
+          },
+          {
+            "Effect": "Allow",
+            "Action": [
               "elasticloadbalancing:ModifyRule"
             ],
             "Resource": [
@@ -101,6 +135,7 @@
             "Effect": "Allow",
             "Action": [
               "autoscaling:DescribeAutoScalingGroups",
+              "autoscaling:DescribeScalingActivities",
               "tag:GetResources",
               "ecs:DescribeServices",
               "application-autoscaling:DescribeScalableTargets",
@@ -644,8 +679,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.24.0",
-        "DMT_BUILD": "45f7f87bb8d8",
+        "DMT_VERSION": "0.25.0",
+        "DMT_BUILD": "9d5a4f30efe8",
         "DMT_IP_LISTS": "${ipLists}",
         "DMT_IP_LISTS_CATALOG": "${ipListsCatalog}",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
@@ -679,8 +714,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.24.0",
-        "DMT_BUILD": "45f7f87bb8d8",
+        "DMT_VERSION": "0.25.0",
+        "DMT_BUILD": "9d5a4f30efe8",
         "DMT_CONTROLLER": "${name}-controller",
         "DMT_NO_WAKE_RULES": "${noWakeRules}",
         "DMT_METRICS": "${metrics}",
@@ -704,8 +739,8 @@
       "environment": {
         "DMT_TABLE": "${name}-router",
         "DMT_TG_PREFIX": "${name}-",
-        "DMT_VERSION": "0.24.0",
-        "DMT_BUILD": "45f7f87bb8d8",
+        "DMT_VERSION": "0.25.0",
+        "DMT_BUILD": "9d5a4f30efe8",
         "DMT_WAKER_FUNCTION": "${name}-waker",
         "DMT_WAKER_FUNCTION_ARN": "arn:${partition}:lambda:${region}:${account}:function:${name}-waker"
       },
