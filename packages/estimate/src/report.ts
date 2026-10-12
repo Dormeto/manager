@@ -6,6 +6,7 @@ import { describeTags } from './tags.js';
 const usd = (v: number) => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 const n = (v: number, one: string, many = `${one}s`) => `${v} ${v === 1 ? one : many}`;
 const day = (v: number) => (Math.round(v * 10) / 10).toString();
+const backendCell = (w: { backend: { kind: string; id: string } }) => `${w.backend.kind} ${cell(w.backend.id.split('/').at(-1) ?? w.backend.id)}`;
 const cell = (s: string) => s.replace(/\|/g, '\\|');
 const net = (t: Totals) => t.usdMonthWindow - t.dormetoMonth;
 // The report's window in words: "1-hour" or "15-minute" before a noun, "1 hour" or "15 minutes" alone.
@@ -43,6 +44,7 @@ export function summaryLines(e: Estimate): string[] {
   if (e.leftOut.length) lines.push(`Left out: ${n(e.leftOut.length, 'workload')} (see the report for why)`);
   if (e.excluded.length) lines.push(`Excluded by tags: ${n(e.excluded.length, 'workload')} (see the report)`);
   if (e.busy.length) lines.push(`More than ${e.options.maxWakes} wakes a day: ${n(e.busy.length, 'workload')} left out (see the report)`);
+  if (e.small.length) lines.push(`Saving less than ${usd(e.options.minSaving ?? 0)} a month: ${n(e.small.length, 'workload')} left out (see the report)`);
   if (e.unreachable.length) lines.push(`Not reached: ${n(e.unreachable.length, 'account')} (see the report for how to include them)`);
   if (e.failedRegions.length) lines.push(`Regions that failed: ${e.failedRegions.map((r) => `${r.account}/${r.region}`).join(', ')}`);
   return lines;
@@ -72,7 +74,7 @@ const textTable = (t: Table) => {
 };
 
 // The workloads, then by backend: Auto Scaling groups, EC2 instances, ECS services, Kubernetes owners on EKS.
-const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs, t.kinds.eks ?? 0].map(String);
+const counts = (t: Totals) => [t.workloads, t.kinds.asg, t.kinds.ec2, t.kinds.ecs, t.kinds.eks ?? 0, t.excluded ?? 0].map(String);
 
 // What Dormeto would save of an actual cost, cost with Dormeto included.
 const saved = (t: Totals) => (t.actualMonth ? `${Math.round(((t.actualMonth - t.withDormetoMonth) / t.actualMonth) * 100)}%` : '');
@@ -85,8 +87,8 @@ function accountsTable(e: Estimate, limit = Infinity): Table & { more: number } 
   const shown = limit < accounts.length ? [...accounts].sort((a, b) => b[1].usdMonthWindow - a[1].usdMonthWindow).slice(0, limit) : accounts;
   const manager = e.dormeto.manager.count ? `; the total includes the manager (${usd(e.dormeto.manager.usdMonth)}), once per installation` : '';
   return {
-    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
-    figures: [false, false, true, true, true, true, true, true, true, true],
+    head: ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Excluded', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+    figures: [false, false, true, true, true, true, true, true, true, true, true],
     groups: [
       shown.map(([account, a]) => ({ cells: [account, name(account), ...counts(a), usd(a.actualMonth), usd(a.withDormetoMonth), saved(a)] })),
       [{ cells: ['Total', '', ...counts(t), usd(t.actualMonth), usd(t.withDormetoMonth), saved(t)], strong: true }],
@@ -180,9 +182,14 @@ export function markdownReport(e: Estimate): string {
       ? ['| Account | Region | Load balancer | Target group | Why |', '|---|---|---|---|---|', ...e.leftOut.map((l) => `| ${l.workload.account} | ${l.workload.region} | ${cell(l.workload.loadBalancer)} | ${cell(l.workload.targetGroup)} | ${cell(l.reason)} |`)]
       : ['None.']), '',
     ...(e.busy.length
-      ? [`## More than ${o.maxWakes} wakes a day`, '', `Left out: at ${windowWords(o.window)}, each would wake its visitors more than ${o.maxWakes} times a day (--max-wakes).`, '',
-        '| Account | Region | Load balancer | Hosts | Backend | Wakes a day | Saving left out |', '|---|---|---|---|---|---|---|',
-        ...e.busy.map((b) => `| ${b.workload.account} | ${b.workload.region} | ${cell(b.workload.loadBalancer)} | ${cell(b.workload.hosts.join(', ') || b.workload.targetGroup)} | ${b.workload.backend.kind} ${cell(b.workload.backend.id.split('/').at(-1) ?? b.workload.backend.id)} | ${day(b.wakesPerDay)} | ${usd(b.usdMonth)} |`), '']
+      ? [`## More than ${o.maxWakes} wakes a day`, '', `Left out: even at its recommended window, each would wake its visitors more than ${o.maxWakes} times a day (--max-wakes).`, '',
+        '| Account | Region | Load balancer | Hosts | Backend | Recommended | Wakes a day | Saving left out |', '|---|---|---|---|---|---|---|---|',
+        ...e.busy.map((b) => `| ${b.workload.account} | ${b.workload.region} | ${cell(b.workload.loadBalancer)} | ${cell(b.workload.hosts.join(', ') || b.workload.targetGroup)} | ${backendCell(b.workload)} | ${b.minutes} min | ${day(b.wakesPerDay)} | ${usd(b.usdMonth)} |`), '']
+      : []),
+    ...(e.small.length
+      ? [`## Saving less than ${usd(o.minSaving ?? 0)} a month`, '', `Left out: at its recommended window, each would save less than ${usd(o.minSaving ?? 0)} a month, not worth installing Dormeto for (--min-saving).`, '',
+        '| Account | Region | Load balancer | Hosts | Backend | Recommended | Saving left out |', '|---|---|---|---|---|---|---|',
+        ...e.small.map((x) => `| ${x.workload.account} | ${x.workload.region} | ${cell(x.workload.loadBalancer)} | ${cell(x.workload.hosts.join(', ') || x.workload.targetGroup)} | ${backendCell(x.workload)} | ${x.minutes} min | ${usd(x.usdMonth)} |`), '']
       : []),
     ...(o.excludeTags.length
       ? ['## Excluded by tags', '', ...(e.excluded.length
@@ -212,7 +219,8 @@ export function markdownReport(e: Estimate): string {
     `- Baseline: ${o.baseline.kind === 'always' ? '24/7' : `business hours, ${o.baseline.timeZone}`}`,
     `- Discounts: compute ${o.discounts.compute}%, databases ${o.discounts.databases}%`,
     `- Idle window of the figures: ${windowWords(o.window)} (the recommended windows besides)`,
-    `- Wakes a day: ${o.maxWakes === null ? 'any (--max-wakes none)' : `at most ${o.maxWakes} at the figures' window, the busier left out (--max-wakes)`}`, '',
+    `- Wakes a day: ${o.maxWakes === null ? 'any (--max-wakes none)' : `at most ${o.maxWakes} at each workload's recommended window, the busier left out (--max-wakes)`}`,
+    `- Minimum saving: ${o.minSaving === null ? 'none (--min-saving none)' : `${usd(o.minSaving)} a month at each workload's recommended window, the smaller left out (--min-saving)`}`, '',
     '## Assumptions', '',
     ...e.assumptions.map((a) => `- ${a}`), '',
   ];

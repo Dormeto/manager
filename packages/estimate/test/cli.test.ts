@@ -146,14 +146,14 @@ describe('the estimate command', () => {
     const { aws, calls } = fakeAws();
     const d = deps(aws);
     const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
-    expect(await main(['--profile', 'p', '--ec2-uptime', '--out', out], d.deps)).toBe(0);
+    expect(await main(['--profile', 'p', '--ec2-uptime', '--min-saving', 'none', '--out', out], d.deps)).toBe(0);
     // The fake answers 14 datapoints: 14 periods of 5 minutes in 14 days.
     const json = JSON.parse(readFileSync(join(out, 'estimate-2026-10-10.json'), 'utf8'));
     expect(json.workloads[0].uptime.hoursPerDay).toBeCloseTo(5 / 60, 9);
     expect(d.out).toContain(`  uptime ${A} ${R}: 1 workload`);
     expect(calls.metrics).toBe(2);
     // A second run: from the cache.
-    expect(await main(['--profile', 'p', '--ec2-uptime', '--out', out], d.deps)).toBe(0);
+    expect(await main(['--profile', 'p', '--ec2-uptime', '--min-saving', 'none', '--out', out], d.deps)).toBe(0);
     expect(calls.metrics).toBe(2);
     expect(d.out).toContain(`  uptime ${A} ${R}: 1 workload (cache)`);
   });
@@ -162,7 +162,7 @@ describe('the estimate command', () => {
     const { aws } = fakeAws();
     const d = deps(aws);
     const out = mkdtempSync(join(tmpdir(), 'dormeto-estimate-out-'));
-    expect(await main(['--profile', 'p', '--uptime', '--out', out], d.deps)).toBe(0);
+    expect(await main(['--profile', 'p', '--uptime', '--min-saving', 'none', '--out', out], d.deps)).toBe(0);
     const json = JSON.parse(readFileSync(join(out, 'estimate-2026-10-10.json'), 'utf8'));
     expect([json.options.ec2Uptime, json.options.ecsUptime]).toEqual([true, true]);
     expect(json.workloads[0].uptime.hoursPerDay).toBeCloseTo(5 / 60, 9);

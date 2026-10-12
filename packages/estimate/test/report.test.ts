@@ -9,7 +9,7 @@ const workload = (name: string, usd15: number, recommended = 30) => ({
 });
 const E: Estimate = {
   generatedAt: '2026-10-10T12:00:30.000Z', organization: 'o-abc123', why: null,
-  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3 },
+  options: { accounts: null, regions: ['eu-west-1'], excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' }, discounts: { compute: 20, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1 },
   accounts: 2, accountsListed: 2, accountNames: { '111111111111': 'prod', '333333333333': 'sandbox' },
   dormeto: {
     manager: { count: 1, unitMonth: 5, usdMonth: 5 },
@@ -17,13 +17,14 @@ const E: Estimate = {
     workloads: { count: 12, unitMonth: 0.13, usdMonth: 1.56 },
     usdMonth: 7.08,
   },
-  totals: { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08, withDormetoMonth: 226.58 },
-  byAccount: { '111111111111': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
-  byRegion: { 'eu-west-1': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
+  totals: { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, excluded: 1, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 7.08, withDormetoMonth: 226.58 },
+  byAccount: { '111111111111': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, excluded: 1, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
+  byRegion: { 'eu-west-1': { workloads: 12, kinds: { asg: 9, ec2: 2, ecs: 1, eks: 0 }, excluded: 1, actualMonth: 400, usdMonthWindow: 180.5, usdMonthRecommended: 168.5, dormetoMonth: 1.82, withDormetoMonth: 221.32 } },
   workloads: Array.from({ length: 12 }, (_, i) => (i === 5 ? { ...workload('napping', 15), workload: { ...workload('napping', 15).workload, managed: true as const } } : workload(i === 3 ? 'docs' : `app${i}`, 10 + i))),
   leftOut: [{ workload: workload('gpu', 0).workload, reason: 'what it stops has no AWS list price' }],
   excluded: [],
   busy: [],
+  small: [],
   ineligible: [{ account: '111111111111', region: 'eu-west-1', loadBalancer: 'web', targetGroup: 'shared', hosts: [], reason: 'its target group is shared' }],
   unreachable: [{ account: '333333333333', name: 'sandbox', reason: 'not authorized to perform: sts:AssumeRole', fix: 'create a role this profile may assume, with read access, and name it with --role (tried OrganizationAccountAccessRole)' }],
   failedRegions: [{ account: '111111111111', region: 'eu-west-3', error: 'opt-in region not enabled' }],
@@ -68,10 +69,10 @@ describe('the estimate\'s reports', () => {
 
   it('the accounts: a row each and the total, their actual cost, their cost with Dormeto enabled and the savings', () => {
     expect(markdownReport(E)).toContain([
-      '| Account | Name | Workloads | ASG | EC2 | ECS | EKS | Actual monthly cost | Cost with Dormeto enabled | Savings |',
-      '|---|---|---|---|---|---|---|---|---|---|',
-      '| 111111111111 | prod | 12 | 9 | 2 | 1 | 0 | $400.00 | $221.32 | 45% |',
-      '| **Total** | | **12** | **9** | **2** | **1** | **0** | **$400.00** | **$226.58** | **43%** |',
+      '| Account | Name | Workloads | ASG | EC2 | ECS | EKS | Excluded | Actual monthly cost | Cost with Dormeto enabled | Savings |',
+      '|---|---|---|---|---|---|---|---|---|---|---|',
+      '| 111111111111 | prod | 12 | 9 | 2 | 1 | 0 | 1 | $400.00 | $221.32 | 45% |',
+      '| **Total** | | **12** | **9** | **2** | **1** | **0** | **1** | **$400.00** | **$226.58** | **43%** |',
       '',
       'Cost with Dormeto enabled: at a 1-hour idle window, Dormeto\'s cost included; the total includes the manager ($5.00), once per installation.',
     ].join('\n'));
@@ -121,14 +122,24 @@ describe('the estimate\'s reports', () => {
   });
 
   it('the workloads waking more than --max-wakes a day: apart, with their wakes and the saving left out; the options say the limit', () => {
-    const busy = { workload: { ...E.workloads[0]!.workload, targetGroup: 'busy', hosts: ['busy.example.com'], backend: { kind: 'asg' as const, id: 'busy-asg' } }, wakesPerDay: 5.93, usdMonth: 12.3 };
+    const busy = { workload: { ...E.workloads[0]!.workload, targetGroup: 'busy', hosts: ['busy.example.com'], backend: { kind: 'asg' as const, id: 'busy-asg' } }, wakesPerDay: 5.93, usdMonth: 12.3, minutes: 120 };
     const e = { ...E, busy: [busy] };
     expect(markdownReport(e)).toContain('## More than 3 wakes a day');
-    expect(markdownReport(e)).toContain('| 111111111111 | eu-west-1 | web | busy.example.com | asg busy-asg | 5.9 | $12.30 |');
-    expect(markdownReport(e)).toContain('- Wakes a day: at most 3 at the figures\' window, the busier left out (--max-wakes)');
+    expect(markdownReport(e)).toContain('| 111111111111 | eu-west-1 | web | busy.example.com | asg busy-asg | 120 min | 5.9 | $12.30 |');
+    expect(markdownReport(e)).toContain('- Wakes a day: at most 3 at each workload\'s recommended window, the busier left out (--max-wakes)');
     expect(summaryLines(e).join('\n')).toContain('More than 3 wakes a day: 1 workload left out (see the report)');
     expect(markdownReport({ ...E, options: { ...E.options, maxWakes: null } })).toContain('- Wakes a day: any (--max-wakes none)');
     expect(markdownReport(E)).not.toContain('## More than');
+  });
+
+  it('the workloads saving less than --min-saving a month: apart, with their saving; the options say the minimum', () => {
+    const small = { workload: { ...E.workloads[0]!.workload, targetGroup: 'pico', hosts: ['pico.example.com'], backend: { kind: 'asg' as const, id: 'pico-asg' } }, usdMonth: 0.42, minutes: 120 };
+    const e = { ...E, small: [small] };
+    expect(markdownReport(e)).toContain('## Saving less than $1.00 a month');
+    expect(markdownReport(e)).toContain('| 111111111111 | eu-west-1 | web | pico.example.com | asg pico-asg | 120 min | $0.42 |');
+    expect(markdownReport(e)).toContain('- Minimum saving: $1.00 a month at each workload\'s recommended window, the smaller left out (--min-saving)');
+    expect(summaryLines(e).join('\n')).toContain('Saving less than $1.00 a month: 1 workload left out (see the report)');
+    expect(markdownReport({ ...E, options: { ...E.options, minSaving: null } })).toContain('- Minimum saving: none (--min-saving none)');
   });
 
   it('ECS uptime: each measured service\'s hours a day; the options say whether it was measured', () => {
@@ -192,9 +203,9 @@ describe('the estimate\'s reports', () => {
     expect(accounts[2]).toMatch(/^ {2}├─+┼[─┼]+┤$/);
     expect(accounts[6]).toMatch(/^ {2}└─+┴[─┴]+┘$/);
     expect(cells(accounts)).toEqual([
-      ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
-      ['111111111111', 'prod', '12', '9', '2', '1', '0', '$400.00', '$221.32', '45%'],
-      ['Total', '', '12', '9', '2', '1', '0', '$400.00', '$226.58', '43%'],
+      ['Account', 'Name', 'Workloads', 'ASG', 'EC2', 'ECS', 'EKS', 'Excluded', 'Actual monthly cost', 'Cost with Dormeto enabled', 'Savings'],
+      ['111111111111', 'prod', '12', '9', '2', '1', '0', '1', '$400.00', '$221.32', '45%'],
+      ['Total', '', '12', '9', '2', '1', '0', '1', '$400.00', '$226.58', '43%'],
     ]);
     // Aligned: every line as long, the figures right-aligned under their headings, the columns' borders in line.
     aligned(accounts);
@@ -217,7 +228,7 @@ describe('the estimate\'s reports', () => {
   });
 
   it('the terminal\'s accounts: the ten saving the most, the others counted', () => {
-    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, kinds: { asg: 1, ec2: 0, ecs: 0, eks: 0 }, actualMonth: 2 * i, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39, withDormetoMonth: i + 0.39 }]));
+    const byAccount = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`1000000000${String(i).padStart(2, '0')}`, { workloads: 1, kinds: { asg: 1, ec2: 0, ecs: 0, eks: 0 }, excluded: 0, actualMonth: 2 * i, usdMonthWindow: i, usdMonthRecommended: i, dormetoMonth: 0.39, withDormetoMonth: i + 0.39 }]));
     const lines = summaryLines({ ...E, byAccount });
     const from = lines.indexOf('By account:');
     expect(lines[from + 4]).toMatch(/^ {2}│ 100000000011 /);

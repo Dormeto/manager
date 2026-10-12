@@ -25,13 +25,16 @@ export interface WorkloadEstimate {
   recommended: { minutes: number; usdMonth: number; wakesPerDay: number };
 }
 export interface LeftOut { workload: Workload; reason: string }
-// Waking more than --max-wakes a day at the report's window: left out, with its wakes and the saving it would add.
-export interface Busy { workload: Workload; wakesPerDay: number; usdMonth: number }
+// Left out at its recommended window (minutes): waking more than --max-wakes a day (Busy), or saving less than
+// --min-saving a month (Small), with what it would add.
+export interface Busy { workload: Workload; wakesPerDay: number; usdMonth: number; minutes: number }
+export interface Small { workload: Workload; usdMonth: number; minutes: number }
 // withDormetoMonth: the actual cost less the savings at the report's window, plus Dormeto's cost (an account's: its
 // routers and workloads; the total's: the manager too).
-// kinds: the workloads by backend (an Auto Scaling group, an EC2 instance, an ECS service, a Kubernetes owner on EKS).
+// kinds: the workloads by backend (an Auto Scaling group, an EC2 instance, an ECS service, a Kubernetes owner on EKS);
+// excluded: the workloads not estimated, whatever the reason (tags, left out, too many wakes, too small a saving).
 export interface Kinds { asg: number; ec2: number; ecs: number; eks: number }
-export interface Totals { workloads: number; kinds: Kinds; actualMonth: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number; withDormetoMonth: number }
+export interface Totals { workloads: number; kinds: Kinds; excluded: number; actualMonth: number; usdMonthWindow: number; usdMonthRecommended: number; dormetoMonth: number; withDormetoMonth: number }
 // Dormeto's cost by part: how many, the cost of one a month, theirs.
 export interface CostPart { count: number; unitMonth: number; usdMonth: number }
 export interface DormetoCost { manager: CostPart; routers: CostPart & { where: { account: string; region: string }[] }; workloads: CostPart; usdMonth: number }
@@ -52,8 +55,9 @@ export interface Estimate {
   leftOut: LeftOut[];
   // Excluded by their tags (--exclude-tags), before their requests were read.
   excluded: Excluded[];
-  // Left out for waking more than options.maxWakes a day at the report's window.
+  // Left out at their recommended window: waking more than options.maxWakes a day, saving less than options.minSaving.
   busy: Busy[];
+  small: Small[];
   ineligible: (Ineligible & { account: string; region: string })[];
   unreachable: Unreachable[];
   failedRegions: { account: string; region: string; error: string }[];
@@ -82,7 +86,7 @@ function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profi
   ];
 }
 
-const empty = (): Totals => ({ workloads: 0, kinds: { asg: 0, ec2: 0, ecs: 0, eks: 0 }, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
+const empty = (): Totals => ({ workloads: 0, kinds: { asg: 0, ec2: 0, ecs: 0, eks: 0 }, excluded: 0, actualMonth: 0, usdMonthWindow: 0, usdMonthRecommended: 0, dormetoMonth: 0, withDormetoMonth: 0 });
 const KIND: Record<string, keyof Kinds> = { instance: 'ec2', asg: 'asg', ecs: 'ecs', k8s: 'eks' };
 
 export async function estimateAll({ reached, regions, requests, hourly, priceFailure = () => null, baseline, options, now, excluded = [], uptime = null }: {
@@ -102,6 +106,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   const workloads: WorkloadEstimate[] = [];
   const leftOut: LeftOut[] = [];
   const busy: Busy[] = [];
+  const small: Small[] = [];
   for (const region of regions) {
     const read = requests.find((r) => r.account === region.account && r.region === region.region);
     const ran = uptime?.find((u) => u.account === region.account && u.region === region.region);
@@ -174,8 +179,13 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
       const at = row(options.window);
       const best = row(advice.recommended);
-      if (options.maxWakes !== null && at.wakesPerDay > options.maxWakes) {
-        busy.push({ workload, wakesPerDay: at.wakesPerDay, usdMonth: at.usdMonth! });
+      // Judged at its recommended window, the one a customer would set.
+      if (options.maxWakes !== null && best.wakesPerDay > options.maxWakes) {
+        busy.push({ workload, wakesPerDay: best.wakesPerDay, usdMonth: best.usdMonth!, minutes: advice.recommended });
+        continue;
+      }
+      if (options.minSaving !== null && best.usdMonth! < options.minSaving) {
+        small.push({ workload, usdMonth: best.usdMonth!, minutes: advice.recommended });
         continue;
       }
       // Its cost now: asleep never (while it ran, measured), priced as the savings are (the same baseline, prices and month).
@@ -206,6 +216,10 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
       t.dormetoMonth += router + DORMETO_COST.workload;
     }
   }
+  // Each account's (and region's) workloads not estimated, whatever the reason: an account whose all are is listed too.
+  for (const { workload: x } of [...excluded, ...leftOut, ...busy, ...small]) {
+    for (const t of [totals, (byAccount[x.account] ??= empty()), (byRegion[x.region] ??= empty())]) t.excluded += 1;
+  }
   if (workloads.length) totals.dormetoMonth += DORMETO_COST.manager;
   for (const t of [totals, ...Object.values(byAccount), ...Object.values(byRegion)]) t.withDormetoMonth = t.actualMonth - t.usdMonthWindow + t.dormetoMonth;
   const part = (count: number, unitMonth: number): CostPart => ({ count, unitMonth, usdMonth: count * unitMonth });
@@ -218,7 +232,7 @@ export async function estimateAll({ reached, regions, requests, hourly, priceFai
   return {
     generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length, accountsListed: reached.listed,
     accountNames: Object.fromEntries(reached.accounts.map((a) => [a.account, a.name])),
-    totals, dormeto, byAccount, byRegion, workloads, leftOut, excluded, busy,
+    totals, dormeto, byAccount, byRegion, workloads, leftOut, excluded, busy, small,
     ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
     unreachable: reached.unreachable,
     failedRegions: regions.filter((r) => r.error).map((r) => ({ account: r.account, region: r.region, error: r.error! })),

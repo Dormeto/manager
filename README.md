@@ -224,7 +224,7 @@ vision repository: `tools/estimate/bin/dormeto-estimate`, the same options).
 ```
 npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
   [--exclude-tags 'env=dev|test,team=web' ...] [--uptime | --ec2-uptime | --ecs-uptime] [--role <name>] [--baseline always|business-hours] [--timezone Europe/Paris] [--discount-compute 20] [--discount-databases 30]
-  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--out <dir>]
+  [--refresh discovery|metrics] [--window 60] [--max-wakes 3|none] [--min-saving 1|none] [--out <dir>]
 ```
 
 - **Accounts:** the organization's active accounts when the profile may list them (the management account or a
@@ -251,9 +251,11 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   0 tasks is estimated as one task from the hours it ran (without the option, it is left out). When it had a task is
   measured, not how many: a service scaled from 4 tasks to 1 at night stays priced at its count when discovered.
   Services Dormeto already manages are not measured. `--uptime` sets both `--ec2-uptime` and `--ecs-uptime`.
-- **Busy workloads:** `--max-wakes` (3 by default) leaves out a workload that would wake more than that many times a day
-  at the report's window (`--window`): its visitors would wait more than it saves. Each is listed apart in the report,
-  with its wakes a day and the saving left out; `--max-wakes none` keeps them all.
+- **Busy and small workloads:** judged at each workload's recommended window (the one a customer would set),
+  `--max-wakes` (3 by default) leaves out a workload that would wake more than that many times a day (its visitors would
+  wait more than it saves), and `--min-saving` ($1 by default) one that would save less than that a month (not worth
+  installing Dormeto for). Each is listed apart in the report with its window, wakes a day and the saving left out;
+  `none` keeps them all.
 - **Three phases:** discovery (discovery's scan of each enabled region, or `--regions`; what each eligible workload's
   backend would stop, as the router describes it), requests (each workload's `RequestCount` per minute over 14 days,
   five metrics per `GetMetricData` call), estimate (R10's replay priced by the product's price book, at `--window`
@@ -263,6 +265,8 @@ npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 1111111111
   account's regions for a day, requests while their 14 days end on the same UTC day, prices as the product's. An
   interrupted run resumes; `--refresh discovery` reads discovery and requests again, `--refresh metrics` the requests.
 - **Output:** the terminal summary, and `estimate-<date>.md` and `.json` in `--out` (the current directory by default).
+  The table by account counts each account's excluded workloads, whatever the reason (tags, left out, too many wakes,
+  too small a saving).
 - **Needs the router checkout** next to the manager (`../router`, as the release does): the estimate bundles its
   description of what a nap stops.
 - **Read-only:** `sts:GetCallerIdentity`, `sts:AssumeRole`, `organizations:DescribeOrganization`, `ListRoots`,

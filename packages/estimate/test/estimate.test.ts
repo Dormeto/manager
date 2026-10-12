@@ -15,7 +15,7 @@ const FROM = '2026-09-26T12:00:00.000Z';
 const T3: StoppedItem = { kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' };
 const FARGATE: StoppedItem = { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'arm64', os: 'Linux' };
 const HUGE: StoppedItem = { kind: 'ec2', type: 'x9.huge', count: 1, os: 'Linux' };
-const hourly = async (_region: string, item: StoppedItem) => (item.kind === 'ec2' && item.type === 't3.medium' ? 0.0456 : item.kind === 'fargate' ? 0.0099 : null);
+const hourly = async (_region: string, item: StoppedItem) => (item.kind === 'ec2' && item.type === 't3.medium' ? 0.0456 : item.kind === 'ec2' && item.type === 't4g.pico' ? 0.001 : item.kind === 'fargate' ? 0.0099 : null);
 const daily: [number, number][] = Array.from({ length: 14 }, (_, d) => [600 + d * 1440, 3]);
 const w = (account: string, region: string, name: string, stopped: StoppedItem[]): Workload => ({
   account, region, loadBalancer: 'web', loadBalancerArn: `arn:lb/${name}`, targetGroup: name, targetGroupArn: `arn:tg/${name}`, hosts: [`${name}.example.com`], backend: { kind: 'asg', id: name }, stopped, tags: {},
@@ -34,7 +34,7 @@ const requests: RegionRequests[] = [
   { account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/docs': [], 'arn:tg/gpu': daily, 'arn:tg/batch': daily }, unreadable: { 'arn:tg/blog': 'CloudWatch could not read the requests (Forbidden)' } },
   { account: B, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/crm': daily }, unreadable: {} },
 ];
-const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3 };
+const OPTIONS = { accounts: null, regions: null, excludeTags: [], ec2Uptime: false, ecsUptime: false, role: 'OrganizationAccountAccessRole', baseline: { kind: 'always' as const }, discounts: { compute: 0, databases: 0 }, refresh: null, window: 60, maxWakes: 3, minSaving: 1 };
 const run = (over: Partial<Parameters<typeof estimateAll>[0]> = {}) => estimateAll({ reached, regions, requests, hourly, baseline: { kind: 'always' }, options: OPTIONS, now: NOW, ...over });
 // The product's replay, as the estimate must call it (decision 5).
 const advise = (minutes: [number, number][], stopped: StoppedItem[], baseline = { kind: 'always' } as Parameters<typeof idleWindowAdvice>[0]['baseline'], current = 60, running: { from: string; to: string }[] | null = null) => idleWindowAdvice({
@@ -247,7 +247,7 @@ describe('the estimate', () => {
   });
 
   // Waking several times a day, a workload keeps its visitors waiting more than it saves (the user, 2026-10-11).
-  it('a workload waking more than --max-wakes a day at the report\'s window is left out of the totals, apart with its wakes and saving; none keeps it', async () => {
+  it('a workload waking more than --max-wakes a day at its recommended window is left out of the totals, apart with its wakes and saving; none keeps it', async () => {
     // Requests every 4 hours: about 6 wakes a day at a 1-hour window; every 8 hours: about 3.
     const every = (hours: number): [number, number][] => Array.from({ length: (14 * 24) / hours }, (_, k) => [10 + k * hours * 60, 2]);
     const busy = w(A, 'eu-west-1', 'busy', [T3]);
@@ -256,13 +256,50 @@ describe('the estimate', () => {
     const requests = [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/busy': every(4), 'arn:tg/calm': every(8) }, unreadable: {} }] as RegionRequests[];
     const e = await run({ regions, requests });
     expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['calm']);
-    expect(e.workloads[0]!.atWindow.wakesPerDay).toBeLessThanOrEqual(3);
-    expect(e.busy.map((b) => [b.workload.targetGroup, Math.round(b.wakesPerDay)])).toEqual([['busy', 6]]);
+    expect(e.workloads[0]!.recommended.wakesPerDay).toBeLessThanOrEqual(3);
+    expect(e.busy.map((b) => [b.workload.targetGroup, Math.round(b.wakesPerDay), b.minutes])).toEqual([['busy', 6, e.busy[0]!.minutes]]);
     expect(e.busy[0]!.usdMonth).toBeGreaterThan(0);
+    // Busy at the report's window, calm at its recommended one (requests every 90 minutes): kept.
+    const lull = w(A, 'eu-west-1', 'lull', [T3]);
+    const lulls = await run({ regions: [{ account: A, region: 'eu-west-1', workloads: [lull], ineligible: [] }] as RegionDiscovery[],
+      requests: [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/lull': every(1.5) }, unreadable: {} }] as RegionRequests[], options: { ...OPTIONS, minSaving: null } });
+    expect(lulls.workloads[0]!.atWindow.wakesPerDay).toBeGreaterThan(3);
+    expect(lulls.workloads[0]!.recommended.wakesPerDay).toBeLessThanOrEqual(3);
+    expect(lulls.busy).toEqual([]);
     expect(e.totals.workloads).toBe(1);
     const kept = await run({ regions, requests, options: { ...OPTIONS, maxWakes: null } });
     expect(kept.workloads.map((x) => x.workload.targetGroup)).toEqual(['busy', 'calm']);
     expect(kept.busy).toEqual([]);
+  });
+
+  // Dormeto costs something per workload and per router: a workload saving cents is not worth installing it for.
+  it('a workload saving less than --min-saving a month at its recommended window is left out, apart with its saving; none keeps it', async () => {
+    const pico = w(A, 'eu-west-1', 'pico', [{ kind: 'ec2', type: 't4g.pico', count: 1, os: 'Linux' }]);
+    const regions = [{ account: A, region: 'eu-west-1', workloads: [pico, W.priced], ineligible: [] }] as RegionDiscovery[];
+    const requests = [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/pico': daily, 'arn:tg/shop': daily }, unreadable: {} }] as RegionRequests[];
+    const e = await run({ regions, requests });
+    expect(e.workloads.map((x) => x.workload.targetGroup)).toEqual(['shop']);
+    expect(e.small.map((x) => x.workload.targetGroup)).toEqual(['pico']);
+    expect(e.small[0]!.usdMonth).toBeGreaterThan(0);
+    expect(e.small[0]!.usdMonth).toBeLessThan(1);
+    expect((await run({ regions, requests, options: { ...OPTIONS, minSaving: null } })).workloads.map((x) => x.workload.targetGroup)).toEqual(['pico', 'shop']);
+  });
+
+  // The user, 2026-10-11: each account's excluded workloads, whatever the reason (tags, left out, too many wakes, too
+  // small a saving); an account whose workloads are all excluded is listed too.
+  it('counts each account\'s excluded workloads, whatever the reason', async () => {
+    const every = (hours: number): [number, number][] => Array.from({ length: (14 * 24) / hours }, (_, k) => [10 + k * hours * 60, 2]);
+    const pico = w(A, 'eu-west-1', 'pico', [{ kind: 'ec2', type: 't4g.pico', count: 1, os: 'Linux' }]);
+    const busy = w(A, 'eu-west-1', 'busy', [T3]);
+    const regions = [{ account: A, region: 'eu-west-1', workloads: [W.priced, pico, busy, W.empty], ineligible: [] }] as RegionDiscovery[];
+    const requests = [{ account: A, region: 'eu-west-1', from: FROM, to: TO, minutes: { 'arn:tg/shop': daily, 'arn:tg/pico': daily, 'arn:tg/busy': every(4), 'arn:tg/batch': daily }, unreadable: {} }] as RegionRequests[];
+    const excluded = [{ workload: W.other, criterion: 'env=dev' }, { workload: { ...W.priced, targetGroup: 'dev' }, criterion: 'env=dev' }];
+    const e = await run({ regions, requests, excluded });
+    expect([e.workloads.length, e.small.length, e.busy.length, e.leftOut.length, e.excluded.length]).toEqual([1, 1, 1, 1, 2]);
+    expect(e.byAccount[A]).toMatchObject({ workloads: 1, excluded: 4 });
+    expect(e.byAccount[B]).toMatchObject({ workloads: 0, excluded: 1, actualMonth: 0 });
+    expect(e.totals).toMatchObject({ workloads: 1, excluded: 5 });
+    expect(e.byRegion['eu-west-1']!.excluded).toBe(5);
   });
 
   it('the workloads excluded by their tags, as given, apart from the estimate', async () => {

@@ -12,7 +12,9 @@ CLI script, of the same release).
   estimate, each cached; a terminal summary, and Markdown and JSON reports. EKS workloads too, read with the profile's
   own access to each cluster (a column EKS; a cluster it cannot read is listed with the reason). `--ec2-uptime` and
   `--ecs-uptime` (`--uptime`: both) count only the hours each EC2 instance ran and each ECS service had a task;
-  `--max-wakes` (3 by default, `none` to keep them) leaves out the workloads waking more than that a day.
+  `--max-wakes` (3 by default) and `--min-saving` ($1 by default) leave out the workloads that would wake more than
+  that a day, or save less than that a month, at their recommended window (`none` keeps them); the table by account
+  counts each account's excluded workloads, whatever the reason.
 
 ## 0.10.0 — 2026-10-11
 
