@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiInformationOutline, mdiOpenInNew, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiInformationOutline, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendLabel, duration, listSourceHref, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../format';
 import { useSession } from '../stores/session';
+import { pauseLine, type TargetOption } from '../pause';
+import ExcludeDialog from '../components/ExcludeDialog.vue';
+import PauseChip from '../components/PauseChip.vue';
+import PauseDialog from '../components/PauseDialog.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { Counts, WorkloadStatus, WorkloadSummary } from '../types';
@@ -20,6 +24,8 @@ const url = ref<string | null>(null);
 const confirm = ref<'nap' | 'wake' | null>(null);
 const acting = ref(false);
 const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
+const pauseOpen = ref(false);
+const excludeOpen = ref(false);
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
 
 const { error, loading, nextAt, run } = usePoll(async () => {
@@ -37,6 +43,42 @@ async function act(action: 'nap' | 'wake') {
     await api(`${path.value}/${action}`, { method: 'POST' });
     notice.value = { type: 'success', text: action === 'nap' ? 'Nap requested: the route switches to the waker, then the backends stop.' : 'Wake requested.' };
     setTimeout(run, 2000);
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  } finally {
+    acting.value = false;
+  }
+}
+
+// Pauses: the workload's own (resumed here), an exclusion's (lifted in Discovery), the router's (resumed in Routers).
+const pauses = computed(() => status.value?.pauses ?? []);
+const ownPause = computed(() => pauses.value.find((p) => p.scope === 'workload' && !p.exclusionId));
+const excluded = computed(() => pauses.value.some((p) => p.exclusionId));
+const excludeOptions = computed<TargetOption[]>(() => (status.value?.targetGroupArn
+  ? [{ kind: 'target-group', arn: status.value.targetGroupArn, label: `Target group ${shortId(status.value.targetGroupArn.replace(/\/[0-9a-f]+$/, ''))} (this workload)` }]
+  : []));
+
+async function change(action: 'pause' | 'resume', body?: object) {
+  pauseOpen.value = false;
+  acting.value = true;
+  try {
+    const result = await api<{ woken?: string[]; resumed?: boolean }>(`${path.value}/${action}`, { method: 'POST', ...(body ? { body: JSON.stringify(body) } : {}) });
+    notice.value = { type: 'success', text: action === 'pause' ? `Paused: never napped until resumed${result.woken?.length ? '; waking it now' : ''}.` : 'Resumed: it naps again when idle.' };
+    await run();
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  } finally {
+    acting.value = false;
+  }
+}
+
+async function exclude(body: object) {
+  excludeOpen.value = false;
+  acting.value = true;
+  try {
+    await api('/exclusions', { method: 'POST', body: JSON.stringify({ ...body, workload: { router: props.router, id: props.id } }) });
+    notice.value = { type: 'success', text: 'Excluded: woken and never napped, waiting for offboarding. Lift the exclusion in Discovery.' };
+    await run();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
   } finally {
@@ -63,7 +105,7 @@ const summary = computed(() => {
   if (!s) return [];
   return [
     { label: 'Route', value: routeLabel(s.route) },
-    { label: 'Nap', value: s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' },
+    { label: 'Nap', value: pauses.value.length ? 'never while paused' : s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' },
     { label: 'Last request', value: relative(s.lastRequestAt, now.value) },
     { label: 'Awake since', value: relative(s.awakeSince, now.value) },
     { label: 'Last state change', value: relative(s.updatedAt, now.value) },
@@ -79,17 +121,28 @@ const summary = computed(() => {
     <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
     <h1 class="text-headline-small">{{ id }}</h1>
     <StateChip v-if="status" :state="status.state" />
+    <PauseChip :pauses="pauses" />
     <span class="text-medium-emphasis">{{ router }}</span>
     <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     <template v-if="session.canOperate && status">
-      <v-btn :prepend-icon="mdiPowerSleep" variant="tonal" :disabled="status.state !== 'AWAKE' || acting" @click="confirm = 'nap'">Nap</v-btn>
+      <v-btn v-if="ownPause" :prepend-icon="mdiPlay" variant="tonal" :disabled="acting" @click="change('resume')">Resume</v-btn>
+      <v-btn v-else :prepend-icon="mdiPause" variant="tonal" :disabled="acting" @click="pauseOpen = true">Pause</v-btn>
+      <v-btn v-if="!excluded && excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" :disabled="acting" @click="excludeOpen = true">Exclude</v-btn>
+      <v-btn :prepend-icon="mdiPowerSleep" variant="tonal" :disabled="status.state !== 'AWAKE' || pauses.length > 0 || acting" @click="confirm = 'nap'">Nap</v-btn>
       <v-btn :prepend-icon="mdiWeatherSunny" color="primary" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state) || acting" @click="confirm = 'wake'">Wake</v-btn>
     </template>
   </div>
   <v-alert v-if="notice" :type="notice.type" closable class="mb-4" :text="notice.text" @click:close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
+  <v-alert v-if="pauses.length" type="info" variant="tonal" class="mb-4" :title="excluded ? 'Excluded: never napped, waiting for offboarding' : 'Paused: never napped, requests still wake it'">
+    <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">
+      {{ pauseLine(p, now) }}
+      <router-link v-if="p.exclusionId" to="/discovery" class="ml-1">Lift the exclusion in Discovery</router-link>
+      <router-link v-else-if="p.scope === 'router'" to="/routers" class="ml-1">Resume the router</router-link>
+    </div>
+  </v-alert>
   <v-progress-linear v-if="loading && !status" indeterminate color="primary" />
 
   <v-row v-if="status">
@@ -206,6 +259,8 @@ const summary = computed(() => {
     </v-col>
   </v-row>
 
+  <PauseDialog v-model="pauseOpen" :subject="id" @submit="change('pause', $event)" />
+  <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
     <v-card :title="confirm === 'nap' ? `Nap ${id}?` : `Wake ${id}?`">
       <v-card-text>{{ confirm === 'nap'

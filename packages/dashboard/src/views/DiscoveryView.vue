@@ -2,10 +2,13 @@
 // Organization discovery: the last run (scanned, skipped and failed account-regions, lint) and the candidate rules.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useDisplay } from 'vuetify';
-import { mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiPlay } from '@mdi/js';
+import { mdiCancel, mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiPlay } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
+import ExcludeDialog from '../components/ExcludeDialog.vue';
 import LintAlert from '../components/LintAlert.vue';
+import { exclusionTargets, exclusionText } from '../pause';
+import type { Exclusion } from '../types';
 import { STATUSES, idleShare, ruleLines, statusColor, statusHelp, statusLabel, targetText } from '../discovery';
 import { backendLabel, relative, shortId } from '../format';
 import { backendIcon } from '../icons';
@@ -26,14 +29,21 @@ const shown = ref<Status[]>(['pending-onboarding', 'pending-offboarding', 'manag
 const selected = ref<string[]>([]);
 const dismissDialog = ref(false);
 const note = ref('');
+const exclusions = ref<Exclusion[]>([]);
+const excludeOpen = ref(false);
+const notice = ref<{ type: 'success' | 'error'; text: string } | null>(null);
 let poll: number | undefined;
 
 async function load() {
   loading.value = true;
   try {
-    const result = await api<{ lastRun: RunRecord | null; candidates: Candidate[] }>('/discovery');
+    const [result, excluded] = await Promise.all([
+      api<{ lastRun: RunRecord | null; candidates: Candidate[] }>('/discovery'),
+      api<{ exclusions: Exclusion[] }>('/exclusions'),
+    ]);
     lastRun.value = result.lastRun;
     candidates.value = result.candidates;
+    exclusions.value = excluded.exclusions.sort((a, b) => b.at.localeCompare(a.at));
     badge.fromCounts(result.lastRun?.counts);
     error.value = '';
   } catch (err) {
@@ -76,6 +86,34 @@ async function changeDismissal(action: 'dismiss' | 'restore') {
   }
 }
 
+// Manual exclusions: a target group, load balancer or account kept away from Dormeto (operators).
+const excludeOptions = computed(() => {
+  const c = selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined;
+  return c ? exclusionTargets(c) : [];
+});
+
+async function exclude(body: object) {
+  excludeOpen.value = false;
+  try {
+    const result = await api<{ candidates: number; paused: { router: string; workloadId: string }[]; unpaused: string[] }>('/exclusions', { method: 'POST', body: JSON.stringify(body) });
+    notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated${result.paused.length ? `, paused ${result.paused.map((p) => p.workloadId).join(', ')}` : ''}${result.unpaused.length ? `; no registered router manages ${result.unpaused.join(', ')}` : ''}.` };
+    selected.value = [];
+    await load();
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
+async function lift(e: Exclusion) {
+  try {
+    const result = await api<{ candidates: number; resumed: { workloadId: string }[]; errors: string[] }>(`/exclusions/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+    notice.value = { type: result.errors.length ? 'error' : 'success', text: `Exclusion lifted: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} back${result.resumed.length ? `, resumed ${result.resumed.map((p) => p.workloadId).join(', ')}` : ''}${result.errors.length ? `; ${result.errors.join('; ')}` : ''}.` };
+    await load();
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
 onMounted(load);
 onBeforeUnmount(() => window.clearInterval(poll));
 
@@ -113,6 +151,7 @@ const headers = [
   <p class="text-medium-emphasis mb-4">Load balancer rules of every account and region of the perimeter, read with the read-only
     <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</p>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
+  <v-alert v-if="notice" :type="notice.type" closable class="mb-4" :text="notice.text" @click:close="notice = null" />
 
   <v-card class="mb-4" :loading="loading">
     <v-card-text v-if="!lastRun" class="text-medium-emphasis">No discovery run yet.</v-card-text>
@@ -142,6 +181,7 @@ const headers = [
     </v-chip-group>
     <v-spacer />
     <template v-if="session.canOperate && selected.length">
+      <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
       <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
       <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
     </template>
@@ -184,6 +224,26 @@ const headers = [
       <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap">{{ relative(item.firstSeenAt, now) }}</span></template>
     </v-data-table>
   </v-card>
+
+  <v-card id="exclusions" class="mt-4" title="Exclusions">
+    <v-card-subtitle class="text-wrap">Target groups, load balancers and accounts kept away from Dormeto: discovery never proposes them, whatever
+      the perimeter includes, and the managed workloads they match stay awake until offboarded.</v-card-subtitle>
+    <v-list v-if="exclusions.length" lines="three">
+      <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
+        <v-list-item-subtitle class="text-wrap">
+          {{ e.reason }} · by {{ e.by }} {{ relative(e.at, now) }} · {{ e.expiresAt ? (e.expired ? `expired ${relative(e.expiresAt, now)}` : `expires ${relative(e.expiresAt, now)}`) : 'no expiry' }}
+          <template v-if="e.paused?.length"> · paused {{ e.paused.map((p) => `${p.router}/${p.workloadId}`).join(', ') }}</template>
+        </v-list-item-subtitle>
+        <template #append>
+          <v-chip v-if="e.expired" variant="tonal" label class="mr-2">expired</v-chip>
+          <v-btn v-if="session.canOperate" variant="tonal" size="small" @click="lift(e)">Lift</v-btn>
+        </template>
+      </v-list-item>
+    </v-list>
+    <v-card-text v-else class="text-medium-emphasis">No exclusion. Select a candidate and choose Exclude to keep it, its load balancer or its account away from Dormeto.</v-card-text>
+  </v-card>
+
+  <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card title="Dismiss candidates">

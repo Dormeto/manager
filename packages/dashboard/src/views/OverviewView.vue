@@ -5,6 +5,8 @@ import { mdiAlertCircleOutline, mdiFilterRemoveOutline, mdiPowerSleep, mdiServer
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
+import { healthColor } from '../pause';
+import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
@@ -29,7 +31,12 @@ const cards = computed(() => [
   { title: 'Failed', value: count('FAILED'), icon: mdiAlertCircleOutline, color: 'error' },
 ]);
 const late = computed(() => routers.value.filter((r) => !r.error && checkHealth(r, now.value).late));
-const attention = computed(() => workloads.value.filter((w) => w.state === 'FAILED' || w.state === 'WAKING'));
+// Failed or waking workloads, and paused ones (a pause is easy to forget).
+const attention = computed(() => workloads.value.filter((w) => w.state === 'FAILED' || w.state === 'WAKING' || w.pauses?.length));
+const routerChip = (r: RouterInfo) => (r.error
+  ? { color: 'error', text: 'unreachable' }
+  : r.health ? { color: healthColor(r.health.status), text: r.health.status }
+    : checkHealth(r, now.value).late ? { color: 'warning', text: 'idle check late' } : { color: 'success', text: 'ok' });
 const total = (key: 'ignored' | 'deferred' | 'wakes') => workloads.value.reduce((n, w) => n + (w.stats7d?.[key] ?? 0), 0);
 const weekly = computed(() => [
   { title: 'Wakes (7 days)', value: total('wakes'), icon: mdiWeatherSunsetUp, color: 'primary' },
@@ -78,18 +85,19 @@ const weekly = computed(() => [
         <v-list v-if="attention.length" lines="two">
           <v-list-item v-for="w in attention" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${w.router}/${w.workloadId}`"
             :title="w.workloadId" :subtitle="`${w.router} · changed ${relative(w.updatedAt, now)}`">
-            <template #append><StateChip :state="w.state" /></template>
+            <template #append><span class="d-inline-flex align-center ga-1"><PauseChip :pauses="w.pauses" /><StateChip :state="w.state" /></span></template>
           </v-list-item>
         </v-list>
-        <v-card-text v-else class="text-medium-emphasis">Every workload is awake or asleep.</v-card-text>
+        <v-card-text v-else class="text-medium-emphasis">Every workload is awake or asleep, none paused.</v-card-text>
       </v-card>
     </v-col>
     <v-col cols="12" md="5">
       <v-card title="Routers">
         <v-list lines="two">
-          <v-list-item v-for="r in routers" :key="r.name" :title="r.name" :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${checkHealth(r, now).text}`">
+          <v-list-item v-for="r in routers" :key="r.name" :title="r.name" to="/routers"
+            :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${r.health?.problems[0]?.text ?? checkHealth(r, now).text}`">
             <template #append>
-              <v-chip :color="r.error ? 'error' : checkHealth(r, now).late ? 'warning' : 'success'" variant="tonal" label>{{ r.error ? 'unreachable' : checkHealth(r, now).late ? 'idle check late' : 'ok' }}</v-chip>
+              <span class="d-inline-flex align-center ga-1"><PauseChip :pauses="r.pauses" /><v-chip :color="routerChip(r).color" variant="tonal" label>{{ routerChip(r).text }}</v-chip></span>
             </template>
           </v-list-item>
         </v-list>

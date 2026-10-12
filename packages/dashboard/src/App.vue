@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { useRoute } from 'vue-router';
-import { mdiAccountCircle, mdiAccountGroup, mdiClipboardTextClock, mdiCompassOutline, mdiLogout, mdiServerNetwork, mdiThemeLightDark, mdiViewDashboardOutline } from '@mdi/js';
+import { mdiAccountCircle, mdiAccountGroup, mdiClipboardTextClock, mdiCompassOutline, mdiLogout, mdiRouterNetwork, mdiServerNetwork, mdiThemeLightDark, mdiViewDashboardOutline } from '@mdi/js';
 import { signOut } from './auth';
 import { getConfig } from './config';
 import { useDiscoveryBadge } from './stores/discovery';
@@ -20,6 +20,7 @@ const signedIn = computed(() => !route.meta.public);
 const items = computed(() => [
   { title: 'Overview', to: '/', icon: mdiViewDashboardOutline },
   { title: 'Workloads', to: '/workloads', icon: mdiServerNetwork },
+  { title: 'Routers', to: '/routers', icon: mdiRouterNetwork },
   { title: 'Discovery', to: '/discovery', icon: mdiCompassOutline, badge: badge.pending },
   ...(session.isAdmin ? [{ title: 'Users', to: '/users', icon: mdiAccountGroup }, { title: 'Audit', to: '/audit', icon: mdiClipboardTextClock }] : []),
 ]);

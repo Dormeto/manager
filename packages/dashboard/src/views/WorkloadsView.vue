@@ -6,6 +6,7 @@ import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative } from '../format';
+import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
@@ -56,7 +57,7 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
       <template #[`item.workloadId`]="{ item }">
         <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="font-weight-medium">{{ item.workloadId }}</router-link>
       </template>
-      <template #[`item.state`]="{ item }"><StateChip :state="item.state" /></template>
+      <template #[`item.state`]="{ item }"><span class="d-inline-flex align-center ga-1"><StateChip :state="item.state" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.since`]="{ item }"><span class="nowrap">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">
         <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="nowrap">{{ item.url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>

@@ -7,6 +7,17 @@ export interface Settings {
   maxHolders: number;
 }
 
+// A pause of a workload or of its router (router management); exclusionId when a manual exclusion paused it.
+export interface Pause {
+  scope: 'workload' | 'router';
+  by: string;
+  at: string;
+  reason: string;
+  until: string | null;
+  keepAsleep: boolean;
+  exclusionId?: string;
+}
+
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
@@ -19,6 +30,7 @@ export interface WorkloadSummary {
   failedAt: string | null;
   updatedAt: string | null;
   pendingWake: boolean;
+  pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored: number; deferred: number; wakes: number } | null;
   settings: Settings;
 }
@@ -58,6 +70,8 @@ export interface WorkloadStatus {
   wakeCount: number;
   holders: number;
   pendingWake: boolean;
+  pauses?: Pause[];
+  targetGroupArn?: string;
   lastRequestAt: string | null;
   nap: { eligibleAt: string; latestAt: string; inSeconds: number } | null;
   route: string; // over all the rules: app, waker, mixed, unknown
@@ -75,13 +89,76 @@ export interface WorkloadStatus {
   noWakeRules: Rule[];
 }
 
+export interface Problem {
+  level: 'warning' | 'error';
+  text: string;
+}
+
+// One row of the Routers view (health, pauses and workload states from routers 0.16 and later).
 export interface RouterInfo {
   name: string;
   region: string;
+  account?: string;
   version?: string | null;
   build?: string | null;
   workloads?: number;
   error?: string;
   checkSchedule?: string | null;
   lastScheduledCheckAt?: string | null;
+  health?: { status: 'ok' | 'warning' | 'error'; problems: Problem[] };
+  pauses?: Pause[];
+  workloadStates?: Record<string, number>;
+  paused?: number;
+  lastActivityAt?: string | null;
+}
+
+export interface Configured<T> {
+  value: T;
+  source: 'terraform' | 'manager';
+}
+
+// GET /api/routers/{name}: the router action.
+export interface RouterDetails {
+  name: string;
+  region: string;
+  account?: string;
+  router: { name: string; version: string; build: string };
+  configuration: {
+    checkSchedule: Configured<string | null>;
+    ipLists: Configured<{ name: string; url: string; action: string; refreshHours: number }[]>;
+    noWakeRules: Configured<Rule[]>;
+    metrics: Configured<boolean | null>;
+  };
+  pauses: Pause[];
+  workloads: { total: number; byState: Record<string, number>; paused: number; lastActivityAt: string | null };
+  health: {
+    status: 'ok' | 'warning' | 'error';
+    problems: Problem[];
+    checkSchedule: string | null;
+    lastScheduledCheckAt: string | null;
+    lambda: { error?: string; controller?: { errors: number; throttles: number }; waker?: { errors: number; throttles: number; peakConcurrency: number } };
+    queues: { error?: string; check?: number; controller?: number };
+    ipLists: { name: string; entries: number; fetchedAt: string | null; error?: string }[];
+  };
+}
+
+export type ExclusionKind = 'target-group' | 'load-balancer' | 'account';
+
+export interface ExclusionTarget {
+  kind: ExclusionKind;
+  arn?: string;
+  account: string;
+  region?: string;
+  name: string;
+}
+
+export interface Exclusion {
+  id: string;
+  target: ExclusionTarget;
+  reason: string;
+  by: string;
+  at: string;
+  expiresAt?: string;
+  paused?: { router: string; workloadId: string }[];
+  expired?: boolean;
 }
