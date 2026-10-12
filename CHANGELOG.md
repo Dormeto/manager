@@ -27,6 +27,8 @@ that authenticates with Amazon Cognito).
 - Workloads: the AWS account first; the kinds of each workload's backends as icons (routers 0.23.3); its idle share over
   7 days, as in Discovery.
 - The views take the whole width of the window.
+- A workload's state shows with an icon and a tooltip saying what it means, dated from when it began (Awake since, Asleep
+  since…), not from its last write; Routers names its Actions column and cuts a long health problem short.
 - Organization access says its status with an icon, the counts and event-driven refresh explained in its tooltip; the
   panel lists only what needs attention.
 
