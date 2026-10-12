@@ -152,6 +152,12 @@ function forwardOf(rule: Rule): Forward {
 const hostsOf = (rule: Rule): string[] =>
   (rule.Conditions ?? []).filter((c) => c.Field === 'host-header').flatMap((c) => c.HostHeaderConfig?.Values ?? c.Values ?? []);
 
+// A rule's conditions, whatever their order and their values' order: equal for two rules matching the same requests.
+const conditionsKey = (rule: Rule): string => (rule.Conditions ?? []).map((c) => {
+  const values = c.HostHeaderConfig?.Values ?? c.PathPatternConfig?.Values ?? c.Values;
+  return `${c.Field}=${values ? [...values].sort().join('|') : JSON.stringify(c)}`;
+}).sort().join('&');
+
 function conditionsOf(rule: Rule): string {
   if (rule.IsDefault) return 'default';
   const parts = (rule.Conditions ?? []).map((c) => {
@@ -259,8 +265,12 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   onClusters?.(clusters);
 
   // The application target group of each rule: the one it forwards to, or, managed, its target group that is not the waker.
+  // Managed: a rule tagged dormeto:workload, or one forwarding to a waker target group (tagged so by onboarding): the
+  // controller makes the rule of Dormeto's Ingress, or patches a lone Ingress's, and never tags them (spec section 6).
+  const wakerOf = (row: Row) => row.forward.all.map((arn) => groups.get(arn)).filter((g) => g?.TargetType === 'lambda')
+    .map((g) => tags.get(g!.TargetGroupArn ?? '')?.[WORKLOAD_TAG]).find(Boolean);
   for (const row of visible) {
-    row.managed = tags.get(row.rule.RuleArn ?? '')?.[WORKLOAD_TAG];
+    row.managed = tags.get(row.rule.RuleArn ?? '')?.[WORKLOAD_TAG] ?? wakerOf(row);
     if (row.forward.type !== 'forward') continue;
     if (row.managed) row.app = row.forward.all.map((arn) => groups.get(arn)).find((g) => g && g.TargetType !== 'lambda');
     else if (row.forward.groups.length === 1) {
@@ -273,6 +283,16 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
     const covered = row.managed ? tags.get(row.rule.RuleArn ?? '')?.[SHADOWS_TAG] : undefined;
     const customer = covered ? visible.find((r) => r.rule.RuleArn === covered) : undefined;
     if (customer) customer.shadowedBy = row.managed;
+  }
+  // Dormeto's Ingress in a group forwards to its own target group, before the customer rule whose conditions it copies:
+  // that rule is the workload's, and its target group (the one onboarded) the workload's application target group.
+  for (const row of visible) {
+    if (!row.managed || !row.app || tags.get(row.rule.RuleArn ?? '')?.[WORKLOAD_TAG]) continue;
+    const customer = visible.find((r) => !r.managed && r.app && r.listener.ListenerArn === row.listener.ListenerArn
+      && rank(r.rule.Priority) > rank(row.rule.Priority) && conditionsKey(r.rule) === conditionsKey(row.rule));
+    if (!customer) continue;
+    customer.shadowedBy = row.managed;
+    row.app = customer.app;
   }
   // Target groups receiving traffic from a weighted forward of several target groups (canary, blue-green).
   const weighted = new Set(visible.filter((r) => !r.managed && r.forward.type === 'forward' && r.forward.groups.length > 1).flatMap((r) => r.forward.groups));

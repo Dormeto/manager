@@ -247,6 +247,55 @@ describe('scanRegion with the region\'s clusters', () => {
     expect(described).toEqual([]);
   });
 
+  // An onboarded Ingress workload (spec section 6): the controller makes Dormeto's rule from Dormeto's Ingress, untagged,
+  // forwarding to Dormeto's own target group and to the waker target group (tagged dormeto:workload by onboarding), before
+  // the customer rule it shadows; a lone Ingress's own rule is patched to forward to the waker too. Read on dev-eks: both
+  // were offered again to onboard, and Dormeto's target group with them.
+  it('an onboarded Ingress workload is managed by the waker target group it forwards to, the customer rule it shadows with it, and Dormeto\'s own target group is no candidate', async () => {
+    const L = `${ARN.replace(':targetgroup', ':listener')}/app/group/1/l443`;
+    const tg = (name: string, type: string, targets: string[], tags: Record<string, string>) => ({ TargetGroupArn: `${ARN}/${name}/1`, TargetGroupName: name, TargetType: type, targets, tags });
+    const customer = tg('k8s-demo-web-c', 'ip', ['10.0.1.1', '10.0.1.2'], controllerTags('demo/web-web:80'));
+    const dormeto = tg('k8s-demo-web-d', 'ip', ['10.0.1.1', '10.0.1.2'], controllerTags('demo/dormeto-wl1-web:80'));
+    const waker = tg('dmt-dev-wl1', 'lambda', [], { 'dormeto:workload': 'wl1', 'dormeto:router': 'dmt-dev' });
+    const conditions = [{ Field: 'host-header', HostHeaderConfig: { Values: ['web.example.com'] } }, { Field: 'path-pattern', PathPatternConfig: { Values: ['/*'] } }];
+    const forward = (...groups: [{ TargetGroupArn: string }, number][]) => [{ Type: 'forward', Order: 1, ForwardConfig: { TargetGroups: groups.map(([g, w]) => ({ TargetGroupArn: g.TargetGroupArn, Weight: w })) } }];
+    const scan = async (rules: Record<string, unknown>[], awake = true) => {
+      const groups = [customer, dormeto, waker];
+      const { ports: base } = scanPorts();
+      const elbv2 = {
+        ...base.elbv2,
+        async describeLoadBalancers() { return { LoadBalancers: [{ LoadBalancerArn: `${ARN.replace(':targetgroup', ':loadbalancer')}/app/group/1`, LoadBalancerName: 'group', Type: 'application' }] }; },
+        async describeListeners() { return { Listeners: [{ ListenerArn: L, Port: 443, Protocol: 'HTTPS' }] }; },
+        async describeRules() { return { Rules: [...rules, { RuleArn: 'r-default', Priority: 'default', IsDefault: true, Conditions: [], Actions: [{ Type: 'fixed-response', Order: 1 }] }] }; },
+        async describeTargetGroups() { return { TargetGroups: groups.map(({ targets: _, tags: __, ...g }) => g) }; },
+        async describeTags({ ResourceArns }: { ResourceArns: string[] }) {
+          return { TagDescriptions: ResourceArns.map((a) => ({ ResourceArn: a, Tags: Object.entries(groups.find((g) => g.TargetGroupArn === a)?.tags ?? {}).map(([Key, Value]) => ({ Key, Value })) })) };
+        },
+        async describeTargetHealth({ TargetGroupArn }: { TargetGroupArn: string }) {
+          const targets = awake ? groups.find((g) => g.TargetGroupArn === TargetGroupArn)?.targets ?? [] : [];
+          return { TargetHealthDescriptions: targets.map((Id) => ({ Target: { Id }, TargetHealth: { State: 'healthy' } })) };
+        },
+      };
+      const objects = demo(awake ? {} : { '/api/v1/pods': [] });
+      return scanRegion({ ...base, elbv2, kubernetes: ports({ 'eks-demo': { cluster: CLUSTER('eks-demo'), client: cluster(objects) } }) }, WHERE, { now: () => Date.UTC(2026, 9, 11) });
+    };
+    const view = (found: Awaited<ReturnType<typeof scan>>) => found.filter((c) => c.targetGroup).map((c) => [c.targetGroup, c.eligibility, c.workloadId ?? null]);
+    const grouped = (app: number, wake: number) => [
+      { RuleArn: 'r-dormeto', Priority: '1', Conditions: conditions, Actions: forward([dormeto, app], [waker, wake]) },
+      { RuleArn: 'r-customer', Priority: '2', Conditions: conditions, Actions: forward([customer, 1]) },
+    ];
+    expect(view(await scan(grouped(1, 0)))).toEqual([['k8s-demo-web-c', 'managed', 'wl1']]);
+    expect(view(await scan(grouped(0, 1), false))).toEqual([['k8s-demo-web-c', 'managed', 'wl1']]);
+    // A lone Ingress patched: its own rule forwards to its target group and the waker.
+    expect(view(await scan([{ RuleArn: 'r-solo', Priority: '1', Conditions: conditions, Actions: forward([customer, 1], [waker, 0]) }]))).toEqual([['k8s-demo-web-c', 'managed', 'wl1']]);
+    // A customer rule with other conditions is not Dormeto's to cover: the target group stays as the rules make it.
+    const other = [{ Field: 'host-header', HostHeaderConfig: { Values: ['other.example.com'] } }];
+    const found = view(await scan([...grouped(1, 0), { RuleArn: 'r-other', Priority: '3', Conditions: other, Actions: forward([customer, 1]) }]));
+    expect(found).toEqual([['k8s-demo-web-c', 'managed', 'wl1']]);
+    expect((await scan([...grouped(1, 0), { RuleArn: 'r-other', Priority: '3', Conditions: other, Actions: forward([customer, 1]) }])).find((c) => c.targetGroup === 'k8s-demo-web-c')?.reason)
+      .toBe('1 of 3 rules sharing the target group are not part of the workload');
+  });
+
   it('the discovery role may list and describe the clusters, and describe the instances behind a target group', () => {
     expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['eks:ListClusters', 'eks:DescribeCluster', 'ec2:DescribeInstances']));
   });
