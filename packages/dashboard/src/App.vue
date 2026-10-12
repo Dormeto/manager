@@ -72,7 +72,7 @@ function toggleTheme() {
       </v-menu>
     </v-app-bar>
     <v-main>
-      <v-container fluid class="pa-4 pa-md-6" style="max-width: 1400px">
+      <v-container fluid class="pa-4 pa-md-6">
         <router-view />
       </v-container>
     </v-main>
