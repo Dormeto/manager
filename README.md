@@ -75,3 +75,8 @@ tfenv exec apply dev.tfplan                    # delegation policy, StackSet dmt
 
 Only the accounts of `discovery_accounts` get the role, so discovery can never read any other account of the
 organization.
+
+The same stack creates `DmtCommandRole` and `DmtRouterBoundary` in `command_account_id` (dev: 038606077307), by API
+calls through that account's administrator profile `command_profile` (an account invited into the organization has no
+`OrganizationAccountAccessRole`): only the manager's operations role may assume it, to install routers there. Apply it
+again after a router version that changes `dist/router-boundary.json`.

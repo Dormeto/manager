@@ -31,3 +31,17 @@ variable "discovery_accounts" {
     error_message = "discovery_accounts must be 12-digit account IDs."
   }
 }
+
+variable "command_account_id" {
+  description = "Member account that gets DmtCommandRole and DmtRouterBoundary, so that the manager installs routers there by API calls (the manager's own account gets them from the platform stack)."
+  type        = string
+  validation {
+    condition     = can(regex("^\\d{12}$", var.command_account_id))
+    error_message = "command_account_id must be a 12-digit account ID."
+  }
+}
+
+variable "command_profile" {
+  description = "Administrator profile of command_account_id."
+  type        = string
+}

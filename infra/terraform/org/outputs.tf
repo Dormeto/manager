@@ -5,3 +5,7 @@ output "organization_id" {
 output "discovery_principal" {
   value = local.discovery_principal
 }
+
+output "command_role_arn" {
+  value = module.command_role.role_arn
+}
