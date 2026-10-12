@@ -4,7 +4,7 @@ import { computed, ref } from 'vue';
 import { mdiAlertCircleOutline, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { checkHealth, relative } from '../format';
+import { attentionMore, checkHealth, relative } from '../format';
 import { healthColor } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
@@ -17,18 +17,19 @@ const attention = ref<WorkloadSummary[]>([]);
 const byState = ref<Record<string, number>>({});
 const stats7d = ref({ wakes: 0, ignored: 0, deferred: 0 });
 const loaded = ref(false);
+const attentionTotal = ref(0);
 const routers = ref<RouterInfo[]>([]);
+// One request (its routers too): a router that does not report is called once per poll.
 const { error, loading, nextAt, run } = usePoll(async () => {
-  const [w, r] = await Promise.all([
-    api<{ workloads: WorkloadSummary[]; byState: Record<string, number>; stats7d: { wakes: number; ignored: number; deferred: number } }>('/workloads?attention=1&limit=20'),
-    api<{ routers: RouterInfo[] }>('/routers'),
-  ]);
+  const w = await api<{ workloads: WorkloadSummary[]; total: number; byState: Record<string, number>; stats7d: { wakes: number; ignored: number; deferred: number }; routers: RouterInfo[] }>('/workloads?attention=1&limit=20&routers=1');
   attention.value = w.workloads;
+  attentionTotal.value = w.total ?? w.workloads.length;
   byState.value = w.byState ?? {};
   stats7d.value = w.stats7d ?? { wakes: 0, ignored: 0, deferred: 0 };
-  routers.value = r.routers;
+  routers.value = w.routers ?? [];
   loaded.value = true;
 });
+const more = computed(() => attentionMore(attentionTotal.value, attention.value.length));
 
 const count = (...states: string[]) => states.reduce((n, s) => n + (byState.value[s] ?? 0), 0);
 const cards = computed(() => [
@@ -94,6 +95,7 @@ const weekly = computed(() => [
           </v-list-item>
         </v-list>
         <v-card-text v-else class="text-medium-emphasis">Every workload is awake or asleep, none paused.</v-card-text>
+        <v-card-actions v-if="more"><v-btn variant="text" to="/workloads?attention=1">{{ more }}</v-btn></v-card-actions>
       </v-card>
     </v-col>
     <v-col cols="12" md="5">

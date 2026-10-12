@@ -354,7 +354,42 @@ export function createApi({
         rows.push(...((result.value as { workloads?: Record<string, unknown>[] }).workloads ?? []).map((w) => ({ router: router.name, ...(account ? { account } : {}), region: router.region, ...w })));
       } else errors.push({ router: router.name, message: (result.reason as Error).message });
     }
-    return { rows, errors };
+    // The routers' rows as well (the Overview): from their summaries, or from the list answer of those that do not report.
+    const routerRows = () => shown.map((router) => {
+      const summary = summaries.get(router);
+      if (summary) return reportingRow(router, summary, workloads);
+      const result = called[silent.indexOf(router)]!;
+      return result.status === 'fulfilled' ? listedRow(router, result.value as Listed) : { ...where(router), error: (result.reason as Error).message, reporting: false };
+    });
+    return { rows, errors, routerRows };
+  }
+
+  // A router that reports, from its summary and its workloads' summaries.
+  function reportingRow(router: Router, summary: RouterSummary, workloads: WorkloadSummary[]) {
+    const own = workloads.filter((w) => w.account === summary.account && w.region === summary.region);
+    const health = (summary.health ?? {}) as { status?: string; problems?: unknown[]; lastScheduledCheckAt?: string | null };
+    const updated = own.map((w) => Date.parse(String(w.updatedAt ?? ''))).filter((ms) => ms > 0);
+    return {
+      ...where(router), version: summary.version, build: summary.build, workloads: Object.values(summary.counts).reduce((n, c) => n + c, 0),
+      checkSchedule: summary.checkSchedule, lastScheduledCheckAt: health.lastScheduledCheckAt ?? summary.checkedAt,
+      health: { status: health.status ?? 'unknown', problems: health.problems ?? [] }, pauses: summary.pauses, workloadStates: summary.counts,
+      paused: summary.pauses.length ? own.length : own.filter((w) => (w.pauses as unknown[] | undefined)?.length).length,
+      lastActivityAt: updated.length ? new Date(Math.max(...updated)).toISOString() : null, reporting: true, checkedAt: summary.checkedAt,
+    };
+  }
+  // A router that does not report, from its list answer (no health: its check schedule tells whether it is late).
+  function listedRow(router: Router, listed: Listed) {
+    const own = (listed.workloads ?? []) as { state?: string; pauses?: unknown[]; updatedAt?: string }[];
+    const workloadStates: Record<string, number> = {};
+    for (const w of own) workloadStates[String(w.state)] = (workloadStates[String(w.state)] ?? 0) + 1;
+    const updated = own.map((w) => Date.parse(String(w.updatedAt ?? ''))).filter((ms) => ms > 0);
+    const pauses = (listed.router as { pauses?: unknown[] } | undefined)?.pauses ?? [];
+    return {
+      ...where(router), version: listed.router?.version ?? null, build: listed.router?.build ?? null, workloads: own.length,
+      checkSchedule: listed.router?.checkSchedule ?? null, lastScheduledCheckAt: listed.router?.lastScheduledCheckAt ?? null, pauses, workloadStates,
+      paused: pauses.length ? own.length : own.filter((w) => w.pauses?.length).length,
+      lastActivityAt: updated.length ? new Date(Math.max(...updated)).toISOString() : null, reporting: false,
+    };
   }
 
   // A router older than the action (0.15 and earlier for router, pause, resume, request-nap).
@@ -459,16 +494,7 @@ export function createApi({
           const result = called[silent.indexOf(router)]!;
           return { ...(result.status === 'fulfilled' ? result.value : { ...where(router), error: (result.reason as Error).message }), reporting: false };
         }
-        const own = workloads.filter((w) => w.account === summary.account && w.region === summary.region);
-        const health = (summary.health ?? {}) as { status?: string; problems?: unknown[]; lastScheduledCheckAt?: string | null };
-        const updated = own.map((w) => Date.parse(String(w.updatedAt ?? ''))).filter((ms) => ms > 0);
-        return {
-          ...where(router), version: summary.version, build: summary.build, workloads: Object.values(summary.counts).reduce((n, c) => n + c, 0),
-          checkSchedule: summary.checkSchedule, lastScheduledCheckAt: health.lastScheduledCheckAt ?? summary.checkedAt,
-          health: { status: health.status ?? 'unknown', problems: health.problems ?? [] }, pauses: summary.pauses, workloadStates: summary.counts,
-          paused: summary.pauses.length ? own.length : own.filter((w) => (w.pauses as unknown[] | undefined)?.length).length,
-          lastActivityAt: updated.length ? new Date(Math.max(...updated)).toISOString() : null, reporting: true, checkedAt: summary.checkedAt,
-        };
+        return reportingRow(router, summary, workloads);
       });
       return reply(200, { routers: rows, ...(routerVersion ? { available: { version: routerVersion } } : {}) });
     }
@@ -480,7 +506,7 @@ export function createApi({
 
     if (method === 'GET' && resource === 'workloads' && !a) {
       const q = event.queryStringParameters ?? {};
-      const { rows, errors } = await listAll(identity);
+      const { rows, errors, routerRows } = await listAll(identity);
       const seen = rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') }));
       // Counts and 7-day totals of what the caller sees, whatever the filters (the Overview).
       const byState: Record<string, number> = {};
@@ -505,7 +531,7 @@ export function createApi({
       if (!Number.isInteger(start) || start < 0) throw new HttpError(400, 'bad_request', q.cursor ? 'invalid cursor' : 'invalid offset');
       const page = matching.slice(start, start + limit);
       const cursor = start + limit < matching.length ? Buffer.from(String(start + limit)).toString('base64url') : null;
-      return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors });
+      return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors, ...(q.routers === '1' ? { routers: routerRows() } : {}) });
     }
 
     if (resource === 'workloads' && a && b) {

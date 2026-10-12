@@ -2,6 +2,7 @@
 import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
@@ -17,23 +18,37 @@ const workloads = ref<WorkloadSummary[]>([]);
 const total = ref(0);
 const errors = ref<{ router: string; message: string }[]>([]);
 const search = ref('');
+// Only the workloads that need attention (the Overview's link): failed, waking or paused.
+const route = useRoute();
+const router = useRouter();
+const attentionOnly = ref(route.query.attention === '1');
 // Pages from the API (scale design §4): the page, its size and the search are the server's.
 const page = ref(1);
 const perPage = ref(25);
 const late = ref<RouterInfo[]>([]);
 let routersCheckedAt = 0;
 const { error, loading, nextAt, run } = usePoll(async () => {
-  const query = new URLSearchParams({ limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), ...(search.value.trim() ? { q: search.value.trim() } : {}) });
-  const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[] }>(`/workloads?${query}`);
+  // Router health every minute is enough (the warning is about checks late by 15 minutes), in the same request.
+  const withRouters = Date.now() - routersCheckedAt > 60_000;
+  const query = new URLSearchParams({
+    limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), ...(search.value.trim() ? { q: search.value.trim() } : {}),
+    ...(attentionOnly.value ? { attention: '1' } : {}), ...(withRouters ? { routers: '1' } : {}),
+  });
+  const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] }>(`/workloads?${query}`);
   workloads.value = result.workloads;
   total.value = result.total ?? result.workloads.length;
   errors.value = result.errors;
-  // Router health every minute is enough: the warning is about checks late by 15 minutes.
-  if (Date.now() - routersCheckedAt > 60_000) {
+  if (withRouters && result.routers) {
     routersCheckedAt = Date.now();
-    late.value = (await api<{ routers: RouterInfo[] }>('/routers')).routers.filter((r) => !r.error && checkHealth(r, now.value).late);
+    late.value = result.routers.filter((r) => !r.error && checkHealth(r, now.value).late);
   }
 });
+function allWorkloads() {
+  attentionOnly.value = false;
+  page.value = 1;
+  void router.replace({ query: {} });
+  void run();
+}
 
 const headers = [
   { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId, sortable: false },
@@ -64,6 +79,7 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
     <h1 class="text-headline-small">Workloads</h1>
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
+    <v-chip v-if="attentionOnly" closable label @click:close="allWorkloads">Needing attention</v-chip>
     <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line style="min-width: 200px; max-width: 280px" />
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />

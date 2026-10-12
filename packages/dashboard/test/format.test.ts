@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendArn, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { attentionMore, backendArn, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -92,5 +92,13 @@ describe('concurrencyText', () => {
     expect(concurrencyText(null)).toBe('—');
     // Routers before 0.22.3 give the worst case as the need.
     expect(concurrencyText({ limit: 10, needed: 18 })).toBe('limit 10, needs up to 18');
+  });
+});
+
+describe('attentionMore', () => {
+  it('says how many more workloads need attention than the Overview shows', () => {
+    expect(attentionMore(35, 20)).toBe('15 more need attention');
+    expect(attentionMore(21, 20)).toBe('1 more needs attention');
+    expect(attentionMore(20, 20)).toBeNull();
   });
 });

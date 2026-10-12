@@ -91,6 +91,12 @@ export function concurrencyText(c: { limit?: number; needed?: number; worstCase?
   return `limit ${n(c.limit)}, needs up to ${n(c.needed)} (waker 24-hour peak and queues); ${n(c.worstCase)} if every workload not awake woke at once`;
 }
 
+// The workloads needing attention beyond those the Overview shows, or null.
+export function attentionMore(total: number, shown: number): string | null {
+  const more = total - shown;
+  return more > 0 ? `${more} more need${more === 1 ? 's' : ''} attention` : null;
+}
+
 // Countdown shown next to the refresh button.
 export function refreshLabel({ seconds, nextAt, loading }: { seconds: number; nextAt: number | null; loading: boolean }, now = Date.now()) {
   if (loading) return 'Refreshing…';

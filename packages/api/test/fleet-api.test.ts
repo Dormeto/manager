@@ -167,6 +167,15 @@ describe('workloads and routers from the summaries', () => {
     expect(json(await s.api(event('/api/workloads/dmt-dev/nope'))).url).toBeNull();
   });
 
+  it('gives the Overview its routers in the same request: a router that does not report is called once, by its list', async () => {
+    const s = setup({ summaries: [routerSummary('eu-west-1', 'dmt-dev')] });
+    const body = json(await s.api(event('/api/workloads', { attention: '1', limit: '20', routers: '1' })));
+    expect(s.calls).toEqual([['dmtr-dev-eu-west-3', 'list']]);
+    expect(body.routers.map((r: Record<string, unknown>) => [r.name, r.reporting, r.version, r.workloads])).toEqual([['dmt-dev', true, '0.21.1', 2], ['dmtr-dev-eu-west-3', false, '0.20.1', 1]]);
+    // Without the parameter, no router rows.
+    expect(json(await s.api(event('/api/workloads', { attention: '1', limit: '20' }))).routers).toBeUndefined();
+  });
+
   it('gives the Overview its counts, 7-day totals and the workloads that need attention, without listing them all', async () => {
     const s = setup({ workloads: [
       workloadSummary('eu-west-1', 'dmt-dev', 'a', 'AWAKE', { stats7d: { wakes: 2, ignored: 5, deferred: 1 } }),
