@@ -5,7 +5,36 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## 0.3.1 — 2026-10-07
+## 0.4.0 — 2026-10-08
+
+Router 0.24.0. Access: apply the access module or the AWS CLI script of this release again in every member account (from
+0.3.1, which was not published: the routers' permissions boundary allows reading the account's Cognito user pool clients).
+Then upgrade the routers to 0.24.0. 0.3.1's changes below ship in this version.
+
+Upgrade note: `mfa` is `operators` by default, so after the upgrade every administrator and operator acts as a viewer
+until they set up an authenticator app from the Account page (sessions opened before the upgrade sign in again first).
+Set `mfa = "optional"` to keep today's behavior, and keep at least two administrators with an authenticator: the last one
+who loses theirs is reset with the AWS CLI (the README's Lost authenticator).
+
+- Health alerts: every 5 minutes the manager's watchdog checks what each router reports. A router that stops reporting
+  (its idle check stopped, as a broken schedule does), or reports a problem, opens an alert sent to the addresses of
+  `alert_emails` and to any subscription of the `alerts_topic_arn` topic, and its resolution. A problem that comes back
+  within 6 hours is not sent again; a burst sends 10 messages and a digest. CloudWatch alarms watch the watchdog, the
+  router events not stored and the list function. The Overview lists the open alerts (instead of a banner per late
+  router), Routers dates them.
+- IP lists from the manager (`ip_lists`): downloaded once for every router, hourly at each list's refresh period, checked
+  (a version that lost more than half its entries is refused; change the URL to accept it), and published to a bucket the
+  organization's routers read. Routers 0.24.0 read them every 5 minutes, only what changed, the data checked against its
+  SHA-256; a catalog change reaches them without an upgrade; nothing goes to the router table. Installed routers get them
+  on their own, a router written in Terraform with `ip_lists_catalog` (output `ip_lists_catalog`). Routers shows them; the
+  watchdog alarms on a list that failed or grew old.
+- Two-step verification (`mfa`, `operators` by default): administrators and operators set up an authenticator app from
+  the Account page, and keep viewer rights until they do; `optional` or `required` for everyone otherwise. Users shows
+  who has it, and an administrator resets another user's lost authenticator (audited).
+- Router health no longer blames infrastructure as code for every drift repair; each of its problems carries a stable
+  code.
+
+## 0.3.1 — 2026-10-07 (not published: in 0.4.0)
 
 Router 0.23.3. Access: apply the access module or the AWS CLI script of this release again in every member account (the
 routers' permissions boundary allows reading the account's Cognito user pool clients, which ELB requires to change a rule

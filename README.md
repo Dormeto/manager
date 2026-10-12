@@ -34,7 +34,7 @@ Customers install a release with the manager module (https://dormeto.com/get-sta
 
 ```hcl
 module "dormeto" {
-  source          = "https://releases.dormeto.com/manager/0.3.1/terraform-aws-dormeto-0.3.1.zip//modules/manager"
+  source          = "https://releases.dormeto.com/manager/0.4.0/terraform-aws-dormeto-0.4.0.zip//modules/manager"
   env             = "prod"
   organization_id = "o-exampleorgid"
   admin_emails    = ["you@example.com"]
@@ -103,6 +103,32 @@ bucket), through `DmtCommandRole` in the target account: installed routers live 
 roles under `/dormeto/router/`), and the role may only create roles there carrying the permissions boundary
 `DmtRouterBoundary`, and change or delete only `dmtr-*` resources, never a router written in Terraform nor the manager. In the manager's account both are created by the `access` module (see below); one operation at a
 time per target group, router or workload, one per load balancer (lock), three per account and region.
+
+## Health alerts, IP lists and MFA (R6)
+
+- **Health alerts:** the watchdog (`dmt-<env>-manager-watchdog`, every 5 minutes, a second bundle of the API package)
+  compares the routers the manager knows with what they report: a router silent for 3 periods of its schedule, or
+  reporting problems (stable codes from router 0.24.0, its texts before), opens an alarm item (`ALARM#<subject>`); each
+  opening, raise or resolution is published to `dmt-<env>-manager-alerts` (6-hour damping, 10 messages and a digest per
+  run). `alert_emails` subscribes addresses; the Overview lists the open alarms (`GET /api/alerts`). CloudWatch alarms
+  watch the watchdog (errors, silence), the router events' dead-letter queue and the list function.
+- **IP lists:** `ip_lists` is written as `catalog.json` in `dmt-<env>-manager-ip-lists-<account>`; the list function
+  (`dmt-<env>-manager-ip-lists`, the router bundle's `lists.handler`, hourly) publishes each list's data and manifest and
+  `status.json`. Routers 0.24.0 read them (installed routers get the catalog in their blueprint, routers written in
+  Terraform `ip_lists_catalog`); the Routers view shows them (`GET /api/ip-lists`), the watchdog alarms on a list that
+  failed or grew old.
+- **MFA:** `mfa` sets the user pool's MFA (`ON` only for `required`) and the API's policy (`MFA_MODE`): the API reads each
+  user's MFA with `AdminGetUser` (cached 5 minutes when on, 30 seconds when off, `/api/me?fresh=1`), and lowers an
+  administrator or operator without it to viewer under `operators`. The Account page sets up TOTP with the user's access
+  token; Users resets another user's. The smoke user is enrolled by `scripts/smoke.mjs` at its first run (secret in SSM
+  `/dmt-<env>/manager/smoke-totp`). No client may write a user's email (with the scope the Account page needs, a stolen
+  access token could otherwise move the account to another address).
+- **Lost authenticator:** another administrator resets it from Users (keep at least two administrators with one). The
+  last administrator, with AWS credentials of the manager's account:
+  `aws cognito-idp admin-set-user-mfa-preference --user-pool-id <user_pool_id> --username <email>
+  --software-token-mfa-settings Enabled=false,PreferredMfa=false`, and under `required` also
+  `aws cognito-idp admin-delete-software-token --user-pool-id <user_pool_id> --username <email>` (a recent AWS CLI); they
+  set up a new one at their next sign-in.
 
 ## Organization access (discovery)
 
