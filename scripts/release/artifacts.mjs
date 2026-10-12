@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // The artifacts of a release (vision docs/specs/2026-10-06-packaging-design.md, section 4): the layout the manager module
-// reads (its artifacts_dir), assembled from the manager's builds and the router bundle of the pinned version. Dev plans
+// reads (its artifacts_dir), assembled from the manager's builds and the router bundle of the pinned version (package.json
+// dormeto.router). Dev plans
 // platform from it; the release archive carries it.
 //   manifest.json                       { version, router }
 //   lambda/<api|discovery|fleet>/index.mjs, lambda/operations/{index,check}.mjs
@@ -18,7 +19,10 @@ function list(dir, base = dir) {
 }
 
 export function assembleArtifacts({ manager, router, out }) {
+  // The router bundle of the version the manager pins (package.json dormeto.router), never another checkout's.
   const routerVersion = version(router);
+  const pinned = JSON.parse(readFileSync(join(manager, 'package.json'), 'utf8')).dormeto?.router;
+  if (routerVersion !== pinned) throw new Error(`router checkout is ${routerVersion}, the manager pins ${pinned} (package.json dormeto.router)`);
   const sources = {
     'lambda/api/index.mjs': join(manager, 'packages/api/dist/index.mjs'),
     'lambda/discovery/index.mjs': join(manager, 'packages/discovery/dist/index.mjs'),

@@ -28,26 +28,7 @@ variable "envs" {
 
 data "aws_partition" "current" {}
 
+# The policy as a document (one source with the release's dormeto-organization-policy.json), its principal filled.
 resource "aws_organizations_resource_policy" "dormeto" {
-  content = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "DormetoReadOrganization"
-      Effect    = "Allow"
-      Principal = { AWS = [for env in var.envs : "arn:${data.aws_partition.current.partition}:iam::${var.manager_account_id}:role/dmt-${env}-manager-discovery"] }
-      Action = [
-        "organizations:DescribeOrganization",
-        "organizations:DescribeOrganizationalUnit",
-        "organizations:DescribeAccount",
-        "organizations:ListRoots",
-        "organizations:ListAccounts",
-        "organizations:ListAccountsForParent",
-        "organizations:ListOrganizationalUnitsForParent",
-        "organizations:ListParents",
-        "organizations:ListChildren",
-        "organizations:ListTagsForResource",
-      ]
-      Resource = "*"
-    }]
-  })
+  content = replace(file("${path.module}/organization-policy.json"), "\"$${principals}\"", jsonencode([for env in var.envs : "arn:${data.aws_partition.current.partition}:iam::${var.manager_account_id}:role/dmt-${env}-manager-discovery"]))
 }

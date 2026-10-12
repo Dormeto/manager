@@ -23,5 +23,8 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",
     "@aws-sdk/client-ssm": "^3.1146.0",
     "@aws-sdk/credential-providers": "^3.1146.0"
+  },
+  "dormeto": {
+    "router": "0.22.6"
   }
 }

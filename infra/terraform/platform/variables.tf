@@ -100,7 +100,7 @@ variable "discovery_role_name" {
 }
 
 variable "command_role_name" {
-  description = "Role the manager assumes in each account to install routers and act on their rules (DmtCommandRole, modules/command-role); a path may precede the name."
+  description = "Role the manager assumes in each account to install routers and act on their rules (DmtCommandRole, modules/access); a path may precede the name."
   type        = string
   default     = "DmtCommandRole"
 }

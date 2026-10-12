@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DormetoReadOrganization",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "${principals}"
+      },
+      "Action": [
+        "organizations:DescribeOrganization",
+        "organizations:DescribeOrganizationalUnit",
+        "organizations:DescribeAccount",
+        "organizations:ListRoots",
+        "organizations:ListAccounts",
+        "organizations:ListAccountsForParent",
+        "organizations:ListOrganizationalUnitsForParent",
+        "organizations:ListParents",
+        "organizations:ListChildren",
+        "organizations:ListTagsForResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

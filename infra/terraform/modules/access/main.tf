@@ -1,5 +1,5 @@
 # Dormeto's organization roles in one member account (vision docs/specs/2026-10-06-packaging-design.md, section 3): the
-# read-only discovery role, and the command role with its permissions boundary (module command-role). Published with each
+# read-only discovery role, and the command role with its permissions boundary (module command-role, nested: the module is self-contained). Published with each
 # release; the manager supposes these roles are there, under these names unless its Terraform names others.
 terraform {
   required_providers {
@@ -95,7 +95,7 @@ resource "aws_iam_role_policy" "discovery" {
 }
 
 module "command_role" {
-  source             = "../command-role"
+  source             = "./command-role"
   count              = var.create_command_role ? 1 : 0
   role_name          = var.command_role_name
   manager_account_id = var.manager_account_id

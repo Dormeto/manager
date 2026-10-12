@@ -14,7 +14,7 @@ nap and wake, and the discovery of the load balancer rules that Dormeto could ma
 | `infra/terraform/modules/manager` | The manager module (what a release installs): DynamoDB, the Lambdas, HTTP API + JWT authorizer, Step Functions, EventBridge, Cognito, CloudFront + S3, optional custom domain and SES |
 | `infra/terraform/modules/access`, `organization` | The organization roles of an account, the delegation policy of the management account |
 | `infra/terraform/platform` | Dev: the manager module with the local build, its certificate and DNS |
-| `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots), `release/artifacts.mjs` (the module's artifacts from the builds) |
+| `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots), `release/` (the module's artifacts from the builds, a release and its publication) |
 
 The manager never reads the router tables or the workload resources itself: each router controller answers the `list`,
 `status`, `force-wake`, `nap` and `discover` actions (router ≥ 0.11.0).
@@ -77,8 +77,8 @@ Terraform modules of `infra/terraform/modules`, published with each release, and
   `false` and is listed in the first one's `organization_role_envs`.
 - `organization`, in the management account: the Organizations delegation policy.
 
-`node scripts/access-cli.mjs --account <id> --manager-account <id> --env <env>[,<env>…]` prints the same as AWS CLI
-commands. Each discovery run checks both roles in every account (the command role through the access check function
+Each release also publishes `dormeto-access-commands-<version>.sh`, the same with the AWS CLI (settings at its top;
+`scripts/release/access-script.mjs`). Each discovery run checks both roles in every account (the command role through the access check function
 `dmt-<env>-manager-access-check`, which only assumes it) and the Discovery view's Organization access panel lists what is
 missing: onboarding and router installs are refused where the command role is missing.
 
