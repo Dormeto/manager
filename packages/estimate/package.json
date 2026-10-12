@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/bin.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/estimate.mjs --external:@aws-sdk/*"
   },
   "dependencies": {
     "@dormeto/discovery": "*",

@@ -18,7 +18,8 @@
     "test": "npm run test --workspaces --if-present && node --test scripts/*.test.mjs scripts/release/*.test.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
-    "artifacts": "node scripts/release/artifacts.mjs"
+    "artifacts": "node scripts/release/artifacts.mjs",
+    "estimate": "npm run -s build -w @dormeto/estimate && node packages/estimate/dist/estimate.mjs"
   },
   "devDependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1146.0",

@@ -1,0 +1,127 @@
+// Phase 3 of the estimate (vision docs/specs/2026-10-10-savings-estimate-design.md §6): each eligible workload's
+// requests replayed by the product's idle window advisor (R10) and priced by its price book, at the router's default
+// window (15 minutes) and at the recommended one; what cannot be estimated, with the reason; the totals by account,
+// region and all, net of Dormeto's cost. Conservative where the facts are unknown before install (decision 5).
+import { DORMETO_COST, idleWindowAdvice, type Baseline, type StoppedItem } from '@dormeto/fleet';
+import type { Reached, Unreachable } from './accounts.js';
+import type { Ineligible, RegionDiscovery, Workload } from './discover.js';
+import type { Options } from './options.js';
+import type { RegionRequests } from './requests.js';
+
+const DEFAULT_WINDOW = 15;
+const WAKE_MS = 60_000;
+
+export interface WorkloadEstimate {
+  workload: Workload;
+  quiet: boolean; // no request in 14 days
+  at15: { usdMonth: number; wakesPerDay: number; asleepHours: number };
+  recommended: { minutes: number; usdMonth: number; wakesPerDay: number };
+}
+export interface LeftOut { workload: Workload; reason: string }
+export interface Totals { workloads: number; usdMonth15: number; usdMonthRecommended: number; dormetoMonth: number }
+export interface Estimate {
+  generatedAt: string;
+  organization: string | null;
+  why: string | null;
+  options: Omit<Options, 'out' | 'profile'>;
+  accounts: number;
+  totals: Totals;
+  byAccount: Record<string, Totals>;
+  byRegion: Record<string, Totals>;
+  workloads: WorkloadEstimate[];
+  leftOut: LeftOut[];
+  ineligible: (Ineligible & { account: string; region: string })[];
+  unreachable: Unreachable[];
+  failedRegions: { account: string; region: string; error: string }[];
+  assumptions: string[];
+}
+
+const NOTHING = 'nothing running to stop (an Auto Scaling group at 0, an ECS service on EC2 capacity, or no instance)';
+
+function assumptionsOf(baseline: Baseline, options: Omit<Options, 'out' | 'profile'>): string[] {
+  return [
+    'Every request counts as activity and as a wake: no waker is installed yet to set scanners and other filtered requests apart, so the workloads stay awake longer here than they would (smaller savings).',
+    'A wake lasts 60 seconds in the replay; the visitors\' wait is not estimated before install.',
+    'Databases are not attached to load balancers: they are not counted (an installed router naps the ones attached to a workload).',
+    `Prices: AWS's on-demand list prices, Spot prices for Spot capacity, less the discounts given (compute ${options.discounts.compute}%, databases ${options.discounts.databases}%); storage, load balancers and data transfer are not counted.`,
+    `Savings counted within ${baseline.kind === 'always' ? 'every hour (24/7)' : `business hours (weekdays 08:00 to 20:00, ${baseline.timeZone})`}.`,
+    `Dormeto's cost: about $${DORMETO_COST.manager} a month for the manager, $${DORMETO_COST.router} per account and region with workloads, $${DORMETO_COST.workload} per workload.`,
+  ];
+}
+
+const empty = (): Totals => ({ workloads: 0, usdMonth15: 0, usdMonthRecommended: 0, dormetoMonth: 0 });
+
+export async function estimateAll({ reached, regions, requests, hourly, baseline, options, now }: {
+  reached: Reached;
+  regions: RegionDiscovery[];
+  requests: RegionRequests[];
+  hourly: (region: string, item: StoppedItem) => Promise<number | null>;
+  baseline: Baseline;
+  options: Omit<Options, 'out' | 'profile'>;
+  now: number;
+}): Promise<Estimate> {
+  const workloads: WorkloadEstimate[] = [];
+  const leftOut: LeftOut[] = [];
+  for (const region of regions) {
+    const read = requests.find((r) => r.account === region.account && r.region === region.region);
+    for (const workload of region.workloads) {
+      if (!workload.stopped.length) {
+        leftOut.push({ workload, reason: NOTHING });
+        continue;
+      }
+      const unreadable = read?.unreadable[workload.targetGroupArn];
+      const minutes = read?.minutes[workload.targetGroupArn];
+      if (unreadable || !read || !minutes) {
+        leftOut.push({ workload, reason: `requests unreadable: ${unreadable ?? 'not read'}` });
+        continue;
+      }
+      const unknown = workload.stopped.find((i) => (i as { kind: string }).kind === 'unknown') as { reason?: string } | undefined;
+      if (unknown) {
+        leftOut.push({ workload, reason: `its backend could not be described (${unknown.reason ?? 'unknown'})` });
+        continue;
+      }
+      const advice = await idleWindowAdvice({
+        requests: { from: read.from, to: read.to, minutes }, current: DEFAULT_WINDOW, checkMinutes: 5, wakeMs: WAKE_MS, startAsleep: false,
+        actualWakes: 0, actualFrom: null, stopped: workload.stopped, hourly: (item) => hourly(workload.region, item).catch(() => null), baseline,
+        wakerTargetGroup: false, now,
+      });
+      if (!advice.priced) {
+        leftOut.push({ workload, reason: 'what it stops has no AWS list price' });
+        continue;
+      }
+      const row = (m: number) => advice.windows.find((w) => w.minutes === m)!;
+      const at = row(DEFAULT_WINDOW);
+      const best = row(advice.recommended);
+      workloads.push({
+        workload, quiet: minutes.length === 0,
+        at15: { usdMonth: at.usdMonth!, wakesPerDay: at.wakesPerDay, asleepHours: at.asleepHours },
+        recommended: { minutes: advice.recommended, usdMonth: best.usdMonth!, wakesPerDay: best.wakesPerDay },
+      });
+    }
+  }
+  // Totals, with Dormeto's cost: a router per account and region with workloads, each workload, the manager once.
+  const totals = empty();
+  const byAccount: Record<string, Totals> = {};
+  const byRegion: Record<string, Totals> = {};
+  const routed = new Set<string>();
+  for (const x of workloads) {
+    const where = `${x.workload.account}#${x.workload.region}`;
+    const router = routed.has(where) ? 0 : DORMETO_COST.router;
+    routed.add(where);
+    for (const t of [totals, (byAccount[x.workload.account] ??= empty()), (byRegion[x.workload.region] ??= empty())]) {
+      t.workloads += 1;
+      t.usdMonth15 += x.at15.usdMonth;
+      t.usdMonthRecommended += x.recommended.usdMonth;
+      t.dormetoMonth += router + DORMETO_COST.workload;
+    }
+  }
+  if (workloads.length) totals.dormetoMonth += DORMETO_COST.manager;
+  return {
+    generatedAt: new Date(now).toISOString(), organization: reached.organization, why: reached.why, options, accounts: reached.accounts.length,
+    totals, byAccount, byRegion, workloads, leftOut,
+    ineligible: regions.flatMap((r) => r.ineligible.map((i) => ({ account: r.account, region: r.region, ...i }))),
+    unreachable: reached.unreachable,
+    failedRegions: regions.filter((r) => r.error).map((r) => ({ account: r.account, region: r.region, error: r.error! })),
+    assumptions: assumptionsOf(baseline, options),
+  };
+}
