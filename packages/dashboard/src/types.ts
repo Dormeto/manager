@@ -341,3 +341,19 @@ export interface SavingsSummary {
   discounts?: Discounts; // those of its latest day (R9.5)
 }
 
+
+// A workload's idle window advice (R10): GET /api/workloads/<router>/<id>/idle-window. asleepHours: hours asleep a day.
+export interface IdleWindowRow { minutes: number; asleepHours: number; usdMonth: number | null; wakesPerDay: number; waitSecondsPerDay: number | null }
+export interface IdleWindowAdvice {
+  computedAt: string;
+  from: string;
+  to: string;
+  current: number;
+  recommended: number;
+  checkMinutes: number;
+  wakeSeconds: number | null;
+  priced: boolean;
+  windows: IdleWindowRow[];
+  actual: { wakes: number; replayedWakes: number; noisy: boolean };
+  wakerTargetGroup: boolean;
+}

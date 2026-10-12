@@ -18,6 +18,7 @@ import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
+import IdleWindowCard from '../components/IdleWindowCard.vue';
 import { stateSince } from '../state';
 import { backendCost, barSavings, discountText } from '../costs';
 import type { Backend } from '../types';
@@ -300,6 +301,10 @@ const summary = computed(() => {
 
     <v-col cols="12">
       <HistoryCard :router="router" :id="id" :now="now" />
+    </v-col>
+
+    <v-col cols="12">
+      <IdleWindowCard :router="router" :id="id" />
     </v-col>
 
     <v-col cols="12" md="7">

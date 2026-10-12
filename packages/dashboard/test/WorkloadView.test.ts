@@ -6,6 +6,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
+import IdleWindowCard from '../src/components/IdleWindowCard.vue';
 import { useSession } from '../src/stores/session';
 import StateBar from '../src/components/StateBar.vue';
 import { barSavings } from '../src/costs';
@@ -107,6 +108,14 @@ describe('Workload view', () => {
     expect(bar.props()).toMatchObject({ states: states7d, idleHours7d: 150, requests7d: 12 });
     wrapper.unmount();
     current = status;
+  });
+
+  it('shows its Idle window card after its history (R10)', async () => {
+    const wrapper = await mountView();
+    const card = wrapper.findComponent(IdleWindowCard);
+    expect(card.exists()).toBe(true);
+    expect(card.props()).toEqual({ router: 'dmtr-dev', id: '5cdfbf844b925bf8' });
+    wrapper.unmount();
   });
 
   it('says why the last wake failed, how many times in a row, and when a request retries it (R7b)', async () => {
