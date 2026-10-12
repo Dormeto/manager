@@ -27,6 +27,7 @@ service is not priced), which also brings 0.5.0's `ec2:ModifyInstanceAttribute`.
   in one menu; each backend and target has its id, ARN and service in a tooltip, a backend its list price an hour and a
   month and its saving a month. A router written in Terraform shows a chip saying where it is changed; one the manager
   installed shows none.
+- Audit: a long action or target is cut on one line, its full text in a tooltip.
 
 ## 0.6.0 — 2026-10-08 (not published: in 0.7.0)
 
