@@ -480,12 +480,38 @@ describe('cluster access', () => {
     expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
   });
 
-  it('a command role without the EKS statements fails the access entries, naming the access module to apply again', async () => {
-    const denied = Object.assign(new Error('User is not authorized to perform: eks:CreateAccessEntry'), { name: 'AccessDeniedException' });
-    const s = setup({ eks: fakeEks([eksCluster('eks-demo')], { deny: denied }) });
-    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+  // An access module older than 0.10.0 has no EKS statement: the router still naps everything else, so its install or
+  // upgrade goes on, saying why its clusters are left; only what needs a cluster fails.
+  const listDenied = () => Object.assign(new Error('User is not authorized to perform: eks:ListClusters'), { name: 'AccessDeniedException' });
+  const createDenied = () => Object.assign(new Error('User is not authorized to perform: eks:CreateAccessEntry'), { name: 'AccessDeniedException' });
+
+  it('a router installed or upgraded where the command role has no EKS statement: the access entries are skipped, saying to apply the access module again', async () => {
+    for (const eks of [fakeEks([eksCluster('eks-demo')], { denyList: listDenied(), deny: createDenied() }), fakeEks([eksCluster('eks-demo')], { deny: createDenied() })]) {
+      const s = setup({ eks });
+      const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      const step = (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'access entries')!;
+      expect(step.status).toBe('skipped');
+      expect(step.detail).toMatch(/^the command role may not (list the EKS clusters|manage the access entries of cluster eks-demo): apply the access module \(or the AWS CLI script\) of the manager's release again \(statement Eks(Clusters|AccessEntries)\)/);
+    }
+  });
+
+  it('onboarding a Kubernetes candidate where the command role has no EKS statement fails, naming the access module to apply again', async () => {
+    const s = setup({ candidates: [k8sCandidate()], eks: fakeEks([eksCluster('eks-demo')], { denyList: listDenied(), deny: createDenied() }) });
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
-    expect((await s.records.getOperation(op.id))!.error).toMatch(/^access entries: the command role may not manage the access entries of cluster eks-demo: apply the access module \(or the AWS CLI script\) of the manager's release again \(statement EksAccessEntries\)/);
+    expect((await s.records.getOperation(op.id))!.error).toBe('access entries: the command role may not list the EKS clusters: apply the access module (or the AWS CLI script) of the manager\'s release again (statement EksClusters): User is not authorized to perform: eks:ListClusters');
+    expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
+  });
+
+  it('uninstalling a router where the command role has no EKS statement goes on, saying which entries are left', async () => {
+    const s = setup({ eks: fakeEks([eksCluster('eks-demo')], { denyList: listDenied() }) });
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    const op = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const step = (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'remove access entries')!;
+    expect(step).toMatchObject({ status: 'skipped' });
+    expect(step.detail).toMatch(/^the command role may not list the EKS clusters: .*; remove the access entries of the router's roles \(dmtr-dev-eu-west-3-controller, dmtr-dev-eu-west-3-waker, dmtr-dev-eu-west-3-onboarder\) from the region's clusters by hand$/);
   });
 
   it('uninstalling a router removes its roles\' access entries from the clusters before its roles', async () => {

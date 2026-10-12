@@ -5,7 +5,7 @@ import { exclusionCriterion, matches, restatus, type Candidate, type DiscoverySt
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, OperationType, Records } from './records.js';
-import { ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
+import { ClusterAccessDenied, ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
 
 const MINUTE = 60_000;
 // An operation lasts at most its slot waits (SLOT_WAIT_MAX) and the steps after them: the workflow's timeout is 25 hours
@@ -473,7 +473,14 @@ export function createEngine(deps: EngineDeps) {
         }
         const routerRoles = await routerRolesOf(op);
         const discoveryRole = `arn:aws:iam::${op.target.account}:role/${deps.settings.discoveryRole ?? 'DmtDiscoveryRole'}`;
-        const results = await ensureClusterAccess((await access(op)).eks, { routerRoles, discoveryRole });
+        let results;
+        try {
+          results = await ensureClusterAccess((await access(op)).eks, { routerRoles, discoveryRole });
+        } catch (err) {
+          // A router's install or upgrade goes on without its clusters; what needs a cluster fails.
+          if (err instanceof ClusterAccessDenied && (op.type === 'install-router' || op.type === 'upgrade-router')) return { status: 'skipped', detail: err.message };
+          throw err;
+        }
         op.context.clusters = results.filter((r) => r.ready).map((r) => r.cluster);
         if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
         return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
@@ -530,7 +537,15 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done' };
       }
       case 'remove access entries': {
-        const results = await removeClusterAccess((await access(op)).eks, { routerRoles: await routerRolesOf(op) });
+        const routerRoles = await routerRolesOf(op);
+        let results;
+        try {
+          results = await removeClusterAccess((await access(op)).eks, { routerRoles });
+        } catch (err) {
+          if (!(err instanceof ClusterAccessDenied)) throw err;
+          const names = routerRoles.map((arn) => arn.split('/').at(-1)).join(', ');
+          return { status: 'skipped', detail: `${err.message}; remove the access entries of the router's roles (${names}) from the region's clusters by hand` };
+        }
         if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
         return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
       }

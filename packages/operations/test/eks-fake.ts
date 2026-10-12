@@ -7,8 +7,8 @@ export const cluster = (name: string, { mode = 'API', public: open = true, cidrs
 });
 
 // EKS as it answers: entries by cluster and principal, associated policies, every write recorded; deny: error thrown by
-// every write.
-export function fakeEks(clusters: ReturnType<typeof cluster>[], { deny }: { deny?: Error } = {}): EksPort & { writes: [string, Record<string, unknown>][]; entries: Map<string, { kubernetesGroups: string[] }>; policies: Map<string, string[]> } {
+// every write; denyList: by the clusters' listing too (a command role without any EKS statement).
+export function fakeEks(clusters: ReturnType<typeof cluster>[], { deny, denyList }: { deny?: Error; denyList?: Error } = {}): EksPort & { writes: [string, Record<string, unknown>][]; entries: Map<string, { kubernetesGroups: string[] }>; policies: Map<string, string[]> } {
   const entries = new Map<string, { kubernetesGroups: string[] }>();
   const policies = new Map<string, string[]>();
   const writes: [string, Record<string, unknown>][] = [];
@@ -20,7 +20,10 @@ export function fakeEks(clusters: ReturnType<typeof cluster>[], { deny }: { deny
   };
   return {
     writes, entries, policies,
-    async listClusters() { return { clusters: clusters.map((c) => c.name) }; },
+    async listClusters() {
+      if (denyList) throw denyList;
+      return { clusters: clusters.map((c) => c.name) };
+    },
     async describeCluster({ name }) { return { cluster: clusters.find((c) => c.name === name) }; },
     async describeAccessEntry(input) {
       const entry = entries.get(key(input));

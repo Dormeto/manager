@@ -21,15 +21,26 @@ export interface ClusterAccess {
   detail: string;
 }
 
+// The command role lacks an EKS statement (an access module older than the release): the router naps everything else.
+export class ClusterAccessDenied extends Error {
+  override name = 'ClusterAccessDenied';
+}
 const denied = (err: unknown) => /AccessDenied|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`);
-const deniedError = (name: string, err: unknown) => new Error(`the command role may not manage the access entries of cluster ${name}: apply the access module (or the AWS CLI script) of the manager's release again (statement EksAccessEntries): ${(err as Error).message}`);
+const APPLY_AGAIN = 'apply the access module (or the AWS CLI script) of the manager\'s release again';
+const deniedError = (name: string, err: unknown) => new ClusterAccessDenied(`the command role may not manage the access entries of cluster ${name}: ${APPLY_AGAIN} (statement EksAccessEntries): ${(err as Error).message}`);
 const notFound = (err: unknown) => (err as Error).name === 'ResourceNotFoundException';
 
 async function clusterNames(eks: EksPort): Promise<string[]> {
   const names: string[] = [];
   let next: string | undefined;
   do {
-    const page = await eks.listClusters(next ? { nextToken: next } : {});
+    let page;
+    try {
+      page = await eks.listClusters(next ? { nextToken: next } : {});
+    } catch (err) {
+      if (denied(err)) throw new ClusterAccessDenied(`the command role may not list the EKS clusters: ${APPLY_AGAIN} (statement EksClusters): ${(err as Error).message}`);
+      throw err;
+    }
     names.push(...(page.clusters ?? []));
     next = page.nextToken;
   } while (next);
