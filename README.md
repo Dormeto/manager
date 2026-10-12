@@ -218,7 +218,8 @@ time per target group, router or workload, one per load balancer (lock), three p
 ## Savings estimate before install
 
 `npm run estimate -- --profile <profile>` estimates what Dormeto would save on an AWS account or organization before
-anything is installed, from a laptop with read access (vision docs/specs/2026-10-10-savings-estimate-design.md).
+anything is installed, from a laptop with read access (vision docs/specs/2026-10-10-savings-estimate-design.md; from the
+vision repository: `tools/estimate/bin/dormeto-estimate`, the same options).
 
 ```
 npm run estimate -- --profile prospect[,prospect-prod...] [--accounts 111111111111,222222222222] [--regions eu-west-1,eu-west-3]
