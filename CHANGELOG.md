@@ -9,7 +9,44 @@ CLI script, of the same release).
 
 - `npm run estimate -- --profile <profile>` (the repository's tool, not in a release): what Dormeto would save on an AWS
   account or organization before anything is installed, with read access only. Discovery, CloudWatch requests and the
-  estimate, each cached; a terminal summary, and Markdown and JSON reports.
+  estimate, each cached; a terminal summary, and Markdown and JSON reports. EKS workloads too, read with the profile's
+  own access to each cluster (a column EKS; a cluster it cannot read is listed with the reason).
+
+## 0.10.0 — 2026-10-11
+
+Router 0.29.0. Access: apply the access module or the AWS CLI script of this release again in every member account:
+`DmtDiscoveryRole` reads the EKS clusters (`eks:ListClusters`, `eks:DescribeCluster`); `DmtCommandRole` manages the
+routers' EKS access entries (statements `EksClusters`, `EksAccessEntries`, `EksAccessEntriesRemoved`, `EksDiscoveryView`:
+the routers' roles in the Kubernetes group `dormeto:router` and `DmtDiscoveryRole` with `AmazonEKSViewPolicy`, nothing
+else); the routers' permissions boundary allows `eks:DescribeCluster`. Then upgrade the routers to 0.29.0 (the upgrade
+makes the access entries in the account and region's clusters) and apply `dormeto-kubernetes-0.10.0.yaml` of the release
+in each cluster whose workloads Dormeto should nap (`kubectl apply -f`). Without them nothing changes for the other
+workloads: Kubernetes candidates are said not onboardable, with the reason.
+
+- Kubernetes workloads on Amazon EKS: a target group of the AWS Load Balancer Controller (from an Ingress or a
+  TargetGroupBinding) serving the pods of one Deployment or StatefulSet is napped by scaling it to 0 and woken by giving
+  back its replicas (routers 0.29.0). A KEDA ScaledObject is paused for the nap; an HPA needs nothing. The cluster's API
+  endpoint must be public and open to every address (private clusters wait for the in-cluster agent).
+- Discovery reads the clusters of each account and region and traces each Kubernetes target group to its owner (pods by
+  address, the ReplicaSet, the Deployment or StatefulSet), with its Ingress or TargetGroupBinding, HPA, KEDA
+  ScaledObject, GitOps owner (Argo CD, Flux), capacity (Fargate or nodes) and node autoscaler (Karpenter, Cluster
+  Autoscaler). Ineligible, with the reason: a private endpoint, pods of several owners, pods of a DaemonSet or a Job, a
+  ScaledObject that already scales to zero, access missing.
+- Installing or upgrading a router makes the access entries of its roles in the clusters of its account and region,
+  and asks the router what it may do there (the router's view lists the clusters, their reach and the rights missing);
+  a cluster on `aws-auth` only, or one the router cannot reach, is left with the procedure. Removing a router deletes
+  its roles' entries (EKS keeps an entry whose role is gone, and it does not work for a router installed again).
+- Onboarding a Kubernetes workload adds Dormeto's Ingress to the customer's IngressGroup (the customer's Ingress is never
+  changed), or patches a lone Ingress (restored exactly at offboarding), or instruments a TargetGroupBinding's rules as
+  any other; the dialog says which, gives the Argo CD or Flux snippet when a GitOps owner was found, and the access
+  check's result. Its wake timeout defaults to 5 minutes (pods may wait for a node).
+- Savings: Fargate pods are priced as Fargate; pods on EC2 nodes as their share of their node's price (the larger of
+  their CPU and memory requests over the node's allocatable, Spot as Spot, the compute discount applied), only where a
+  node autoscaler removes the nodes they free ("nothing saved: the nodes stay" otherwise). The control plane and the
+  nodes' DaemonSets are not saved; pods without requests are not priced.
+- The release carries `dormeto-kubernetes-<version>.yaml`: the rights of the group `dormeto:router` (a ClusterRole with
+  exactly what the router checks, its binding, and an admission policy keeping the group's Ingress creations and
+  deletions to Dormeto's own, Kubernetes 1.30 or later).
 
 ## 0.9.0 — 2026-10-10
 
