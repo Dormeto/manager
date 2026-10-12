@@ -43,8 +43,15 @@ resource "aws_dynamodb_table" "manager" {
 
 data "archive_file" "api" {
   type        = "zip"
-  source_file = "${path.module}/../../../packages/api/dist/index.mjs"
-  output_path = "${path.module}/.build/${local.name}-api.zip"
+  source_file = local.artifact.api
+  output_path = "${path.root}/.build/${local.name}-api.zip"
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 data "aws_iam_policy_document" "lambda_assume" {
@@ -73,7 +80,7 @@ data "aws_iam_policy_document" "api" {
     # this role in other accounts).
     sid       = "RouterControllers"
     actions   = ["lambda:InvokeFunction"]
-    resources = concat([for r in var.routers : "arn:aws:lambda:${r.region}:${var.account_id}:function:${r.controller}"], ["arn:aws:lambda:*:*:function:dmtr-${var.env}-controller"])
+    resources = concat([for r in var.routers : "arn:aws:lambda:${r.region}:${local.account_id}:function:${r.controller}"], ["arn:aws:lambda:*:*:function:dmtr-${var.env}-controller"])
   }
   statement {
     sid       = "Operations"
@@ -136,13 +143,13 @@ resource "aws_lambda_function" "api" {
       # Routers run in the manager account until onboarding deploys them elsewhere (R4).
       ROUTERS                 = local.routers
       OPERATIONS              = aws_sfn_state_machine.operations.arn
-      MANAGER_ACCOUNT         = var.account_id
+      MANAGER_ACCOUNT         = local.account_id
       ENV                     = var.env
       ROUTER_VERSION          = local.router_version
       TABLE                   = aws_dynamodb_table.manager.name
       VERSION                 = local.version
       USER_POOL_ID            = aws_cognito_user_pool.main.id
-      DASHBOARD_URL           = "https://${var.dashboard_domain}/"
+      DASHBOARD_URL           = "https://${local.dashboard_host}/"
       DISCOVERY_STATE_MACHINE = aws_sfn_state_machine.discovery.arn
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name

@@ -1,16 +1,16 @@
 output "dashboard_url" {
-  value = "https://${var.dashboard_domain}/"
+  value = module.manager.dashboard_url
 }
 
 output "user_pool_id" {
-  value = aws_cognito_user_pool.main.id
+  value = module.manager.user_pool_id
 }
 
 output "dashboard_client_id" {
-  value = aws_cognito_user_pool_client.dashboard.id
+  value = module.manager.dashboard_client_id
 }
 
 output "api_endpoint" {
   description = "Direct HTTP API endpoint (browsers use /api/* on the dashboard host)."
-  value       = aws_apigatewayv2_api.api.api_endpoint
+  value       = module.manager.api_endpoint
 }

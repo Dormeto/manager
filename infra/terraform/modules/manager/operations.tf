@@ -3,17 +3,15 @@
 # execution; the state machine calls the operations Lambda (`next`) until the operation is done.
 
 locals {
-  router_dir     = "${path.module}/../../../../router"
-  router_version = jsondecode(file("${local.router_dir}/package.json")).version
-  # The router bundle the manager installs: run `npm run package` in the router repository before planning.
+  # The router bundle the manager installs, of the release's router version.
   router_bundle = {
-    "router.zip"     = "${local.router_dir}/dist/router-${local.router_version}.zip"
-    "blueprint.json" = "${local.router_dir}/dist/blueprint-${local.router_version}.json"
+    "router.zip"     = local.artifact.router
+    "blueprint.json" = local.artifact.blueprint
   }
 }
 
 resource "aws_s3_bucket" "artifacts" {
-  bucket = "${local.name}-artifacts-${var.account_id}"
+  bucket = "${local.name}-artifacts-${local.account_id}"
 }
 
 resource "aws_s3_bucket_public_access_block" "artifacts" {
@@ -39,6 +37,13 @@ resource "aws_s3_object" "router_bundle" {
   key      = "router/${local.router_version}/${each.key}"
   source   = each.value
   etag     = filemd5(each.value)
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 resource "aws_iam_role" "operations" {
@@ -82,8 +87,15 @@ resource "aws_iam_role_policy" "operations" {
 
 data "archive_file" "operations" {
   type        = "zip"
-  source_file = "${path.module}/../../../packages/operations/dist/index.mjs"
-  output_path = "${path.module}/.build/${local.name}-operations.zip"
+  source_file = local.artifact.operations
+  output_path = "${path.root}/.build/${local.name}-operations.zip"
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "operations" {
@@ -126,8 +138,15 @@ resource "aws_lambda_function" "operations" {
 # function (whose steps act under the command role).
 data "archive_file" "access_check" {
   type        = "zip"
-  source_file = "${path.module}/../../../packages/operations/dist/check.mjs"
-  output_path = "${path.module}/.build/${local.name}-access-check.zip"
+  source_file = local.artifact.access_check
+  output_path = "${path.root}/.build/${local.name}-access-check.zip"
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "access_check" {
@@ -167,7 +186,7 @@ data "aws_iam_policy_document" "states_assume" {
     condition {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
-      values   = [var.account_id]
+      values   = [local.account_id]
     }
   }
 }

@@ -11,8 +11,10 @@ nap and wake, and the discovery of the load balancer rules that Dormeto could ma
 |---|---|
 | `packages/api` | API Lambda (TypeScript, HTTP API payload 2.0): identity and roles, routers, workloads, actions, discovery, users, audit |
 | `packages/dashboard` | Vue 3 + Vuetify 4 single-page application, sign-in with the Cognito managed login (PKCE) |
-| `infra/terraform/platform` | DynamoDB, API Lambda, HTTP API + JWT authorizer, Cognito, CloudFront + S3, ACM, Route 53 |
-| `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots) |
+| `infra/terraform/modules/manager` | The manager module (what a release installs): DynamoDB, the Lambdas, HTTP API + JWT authorizer, Step Functions, EventBridge, Cognito, CloudFront + S3, optional custom domain and SES |
+| `infra/terraform/modules/access`, `organization` | The organization roles of an account, the delegation policy of the management account |
+| `infra/terraform/platform` | Dev: the manager module with the local build, its certificate and DNS |
+| `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots), `release/artifacts.mjs` (the module's artifacts from the builds) |
 
 The manager never reads the router tables or the workload resources itself: each router controller answers the `list`,
 `status`, `force-wake`, `nap` and `discover` actions (router ≥ 0.11.0).
@@ -36,10 +38,12 @@ npm install
 npm test && npm run typecheck
 npm run build                                   # API, discovery and operations bundles, dashboard (published by Terraform)
 (cd ../router && npm run package)               # the router bundle the manager installs (sibling repository)
+npm run artifacts                               # dist/artifacts: the module's layout, as a release carries it
 cd infra/terraform/platform
 echo 'admin_emails = ["you@example.com"]' > env/dev.local.tfvars
 tfenv exec init -backend-config=env/dev.backend.hcl
-tfenv exec apply -var-file=env/dev.tfvars -var-file=env/dev.local.tfvars
+tfenv exec plan -var-file=env/dev.tfvars -var-file=env/dev.local.tfvars -out=dev.tfplan
+tfenv exec apply dev.tfplan
 cd ../../.. && node scripts/smoke.mjs --env dev  # API checks as the smoke user
 npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://localhost:5173 against the dev API
 ```

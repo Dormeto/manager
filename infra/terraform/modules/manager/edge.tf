@@ -1,35 +1,7 @@
 # Dashboard: SPA on a private S3 bucket and the API under /api/*, behind CloudFront on <dashboard_domain>.
 
-resource "aws_acm_certificate" "edge" {
-  provider                  = aws.us_east_1
-  domain_name               = var.dashboard_domain
-  subject_alternative_names = [var.auth_domain]
-  validation_method         = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_route53_record" "certificate_validation" {
-  for_each = { for o in aws_acm_certificate.edge.domain_validation_options : o.domain_name => o }
-
-  zone_id         = var.zone_id
-  name            = each.value.resource_record_name
-  type            = each.value.resource_record_type
-  records         = [each.value.resource_record_value]
-  ttl             = 60
-  allow_overwrite = true
-}
-
-resource "aws_acm_certificate_validation" "edge" {
-  provider                = aws.us_east_1
-  certificate_arn         = aws_acm_certificate.edge.arn
-  validation_record_fqdns = [for r in aws_route53_record.certificate_validation : r.fqdn]
-}
-
 resource "aws_s3_bucket" "dashboard" {
-  bucket = "${local.name}-dashboard-${var.account_id}"
+  bucket = "${local.name}-dashboard-${local.account_id}"
 }
 
 resource "aws_s3_bucket_public_access_block" "dashboard" {
@@ -70,7 +42,7 @@ resource "aws_s3_bucket_policy" "dashboard" {
 }
 
 locals {
-  dist = "${path.module}/../../../packages/dashboard/dist"
+  dist = "${local.artifacts_dir}/dashboard"
   content_types = {
     html  = "text/html; charset=utf-8"
     js    = "text/javascript; charset=utf-8"
@@ -103,8 +75,15 @@ resource "aws_s3_object" "config" {
     env        = var.env
     authority  = "https://${aws_cognito_user_pool.main.endpoint}"
     clientId   = aws_cognito_user_pool_client.dashboard.id
-    authDomain = var.auth_domain
+    authDomain = local.auth_host
   })
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 resource "aws_cloudfront_origin_access_control" "dashboard" {
@@ -146,7 +125,7 @@ resource "aws_cloudfront_response_headers_policy" "dashboard" {
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data:",
         "font-src 'self'",
-        "connect-src 'self' https://cognito-idp.${var.region}.amazonaws.com https://${var.auth_domain}",
+        "connect-src 'self' https://cognito-idp.${local.region}.amazonaws.com https://${local.auth_host}",
         "base-uri 'self'",
         "form-action 'self'",
         "object-src 'none'",
@@ -192,7 +171,7 @@ data "aws_cloudfront_origin_request_policy" "api" {
 resource "aws_cloudfront_distribution" "dashboard" {
   enabled             = true
   comment             = "Dormeto manager ${var.env}"
-  aliases             = [var.dashboard_domain]
+  aliases             = local.custom_domain ? [var.domain.dashboard] : []
   default_root_object = "index.html"
   http_version        = "http2and3"
   is_ipv6_enabled     = true
@@ -248,17 +227,19 @@ resource "aws_cloudfront_distribution" "dashboard" {
     }
   }
 
+  # Without a domain, CloudFront's own (*.cloudfront.net).
   viewer_certificate {
-    acm_certificate_arn      = aws_acm_certificate_validation.edge.certificate_arn
-    ssl_support_method       = "sni-only"
-    minimum_protocol_version = "TLSv1.2_2021"
+    acm_certificate_arn            = local.custom_domain ? var.domain.certificate_arn : null
+    cloudfront_default_certificate = !local.custom_domain
+    ssl_support_method             = local.custom_domain ? "sni-only" : null
+    minimum_protocol_version       = local.custom_domain ? "TLSv1.2_2021" : "TLSv1"
   }
 }
 
 resource "aws_route53_record" "dashboard" {
-  for_each = toset(["A", "AAAA"])
-  zone_id  = var.zone_id
-  name     = var.dashboard_domain
+  for_each = local.zone_id == null ? toset([]) : toset(["A", "AAAA"])
+  zone_id  = local.zone_id
+  name     = var.domain.dashboard
   type     = each.value
 
   alias {

@@ -106,8 +106,15 @@ resource "aws_iam_role_policy" "fleet" {
 
 data "archive_file" "fleet" {
   type        = "zip"
-  source_file = "${path.module}/../../../packages/fleet/dist/index.mjs"
-  output_path = "${path.module}/.build/${local.name}-fleet.zip"
+  source_file = local.artifact.fleet
+  output_path = "${path.root}/.build/${local.name}-fleet.zip"
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "fleet" {

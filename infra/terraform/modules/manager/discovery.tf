@@ -6,24 +6,15 @@
 # account's, trusted by every environment that shares them (R5a review I2): a second environment in the account sets
 # create_organization_roles = false and is listed in the first one's organization_role_envs.
 module "organization_roles" {
-  source              = "../modules/access"
+  source              = "../access"
   count               = var.create_organization_roles ? 1 : 0
-  manager_account_id  = var.account_id
+  manager_account_id  = local.account_id
   envs                = local.organization_role_envs
   organization_id     = var.organization_id
   discovery_role_name = var.discovery_role_name
   command_role_name   = var.command_role_name
-  boundary_policy     = file("${local.router_dir}/dist/router-boundary.json")
-}
-
-moved {
-  from = module.discovery_role
-  to   = module.organization_roles[0]
-}
-
-moved {
-  from = module.command_role
-  to   = module.organization_roles[0].module.command_role[0]
+  # Checked with the other artifacts (a missing one fails the plan with its path).
+  boundary_policy = try(file(local.artifact.boundary), "{}")
 }
 
 resource "aws_iam_role" "discovery" {
@@ -73,8 +64,15 @@ resource "aws_iam_role_policy" "discovery" {
 
 data "archive_file" "discovery" {
   type        = "zip"
-  source_file = "${path.module}/../../../packages/discovery/dist/index.mjs"
-  output_path = "${path.module}/.build/${local.name}-discovery.zip"
+  source_file = local.artifact.discovery
+  output_path = "${path.root}/.build/${local.name}-discovery.zip"
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_artifacts) == 0
+      error_message = local.missing_message
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "discovery" {
@@ -130,7 +128,7 @@ resource "aws_iam_role" "discovery_run" {
       Effect    = "Allow"
       Principal = { Service = "states.amazonaws.com" }
       Action    = "sts:AssumeRole"
-      Condition = { StringEquals = { "aws:SourceAccount" = var.account_id } }
+      Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
     }]
   })
 }
@@ -143,11 +141,11 @@ data "aws_iam_policy_document" "discovery_run" {
   # The Distributed Map runs each account as a child execution of this state machine.
   statement {
     actions   = ["states:StartExecution"]
-    resources = ["arn:aws:states:${var.region}:${var.account_id}:stateMachine:${local.discovery_state_machine}"]
+    resources = ["arn:aws:states:${local.region}:${local.account_id}:stateMachine:${local.discovery_state_machine}"]
   }
   statement {
     actions   = ["states:DescribeExecution", "states:StopExecution"]
-    resources = ["arn:aws:states:${var.region}:${var.account_id}:execution:${local.discovery_state_machine}/*"]
+    resources = ["arn:aws:states:${local.region}:${local.account_id}:execution:${local.discovery_state_machine}/*"]
   }
 }
 
@@ -252,13 +250,13 @@ data "aws_iam_policy_document" "scheduler_assume" {
     condition {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
-      values   = [var.account_id]
+      values   = [local.account_id]
     }
     # EventBridge Scheduler presents its schedule group as the source, not the schedule (router lesson, 2026-10-04).
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = ["arn:aws:scheduler:${var.region}:${var.account_id}:schedule-group/default"]
+      values   = ["arn:aws:scheduler:${local.region}:${local.account_id}:schedule-group/default"]
     }
   }
 }

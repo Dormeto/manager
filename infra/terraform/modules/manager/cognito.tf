@@ -1,11 +1,13 @@
 # Sign-in: Cognito user pool with managed login on auth.<dashboard_domain>; users are invited by administrators.
 
 locals {
-  ses_identity_arn = "arn:aws:ses:${var.region}:${var.account_id}:identity/${var.email_identity}"
+  ses_identity_arn = var.ses_identity == null ? null : "arn:aws:ses:${local.region}:${local.account_id}:identity/${var.ses_identity}"
 }
 
-# Cognito sends the invitations through the dormeto.com SES identity (verified by the website stack).
+# With an SES identity (dev: dormeto.com, verified by the website stack), Cognito sends the invitations through it;
+# without, Cognito sends them itself (about 50 a day, no SES production access needed).
 resource "aws_ses_identity_policy" "cognito" {
+  count    = var.ses_identity == null ? 0 : 1
   identity = local.ses_identity_arn
   name     = "${local.name}-cognito"
   policy = jsonencode({
@@ -16,8 +18,8 @@ resource "aws_ses_identity_policy" "cognito" {
       Action    = ["ses:SendEmail", "ses:SendRawEmail"]
       Resource  = local.ses_identity_arn
       Condition = {
-        StringEquals = { "aws:SourceAccount" = var.account_id }
-        ArnLike      = { "aws:SourceArn" = "arn:aws:cognito-idp:${var.region}:${var.account_id}:userpool/*" }
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:cognito-idp:${local.region}:${local.account_id}:userpool/*" }
       }
     }]
   })
@@ -39,7 +41,7 @@ resource "aws_cognito_user_pool" "main" {
     allow_admin_create_user_only = true
     invite_message_template {
       email_subject = "Your Dormeto account"
-      email_message = "You are invited to the Dormeto dashboard: https://${var.dashboard_domain}/<br><br>Sign in with {username} and the temporary password <b>{####}</b>, then choose your own password. The temporary password expires in 7 days."
+      email_message = "You are invited to the Dormeto dashboard: https://${local.dashboard_host}/<br><br>Sign in with {username} and the temporary password <b>{####}</b>, then choose your own password. The temporary password expires in 7 days."
       sms_message   = "Dormeto: sign in as {username} with {####}"
     }
   }
@@ -61,9 +63,9 @@ resource "aws_cognito_user_pool" "main" {
   }
 
   email_configuration {
-    email_sending_account = "DEVELOPER"
+    email_sending_account = var.ses_identity == null ? "COGNITO_DEFAULT" : "DEVELOPER"
     source_arn            = local.ses_identity_arn
-    from_email_address    = var.email_from
+    from_email_address    = var.ses_identity == null ? null : var.email_from
   }
 
   depends_on = [aws_ses_identity_policy.cognito]
@@ -89,8 +91,8 @@ resource "aws_cognito_user_pool_client" "dashboard" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
   supported_identity_providers         = ["COGNITO"]
-  callback_urls                        = concat(["https://${var.dashboard_domain}/callback"], local.local_callbacks)
-  logout_urls                          = concat(["https://${var.dashboard_domain}/"], local.local_logouts)
+  callback_urls                        = concat(["https://${local.dashboard_host}/callback"], local.local_callbacks)
+  logout_urls                          = concat(["https://${local.dashboard_host}/"], local.local_logouts)
   explicit_auth_flows                  = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
   prevent_user_existence_errors        = "ENABLED"
   enable_token_revocation              = true
@@ -106,9 +108,10 @@ resource "aws_cognito_user_pool_client" "dashboard" {
 }
 
 resource "aws_cognito_user_pool_domain" "main" {
-  domain                = var.auth_domain
+  # Without a domain, a prefix domain (<prefix>.auth.<region>.amazoncognito.com).
+  domain                = local.custom_domain ? var.domain.auth : local.cognito_prefix
   user_pool_id          = aws_cognito_user_pool.main.id
-  certificate_arn       = aws_acm_certificate_validation.edge.certificate_arn
+  certificate_arn       = local.custom_domain ? var.domain.certificate_arn : null
   managed_login_version = 2
 
   # A custom domain needs its parent (the dashboard host) to resolve.
@@ -116,8 +119,9 @@ resource "aws_cognito_user_pool_domain" "main" {
 }
 
 resource "aws_route53_record" "auth" {
-  zone_id = var.zone_id
-  name    = var.auth_domain
+  count   = local.zone_id == null ? 0 : 1
+  zone_id = local.zone_id
+  name    = var.domain.auth
   type    = "A"
 
   alias {
@@ -184,11 +188,11 @@ resource "random_password" "smoke" {
 resource "aws_cognito_user" "smoke" {
   count          = var.smoke_user ? 1 : 0
   user_pool_id   = aws_cognito_user_pool.main.id
-  username       = "smoke@${var.dashboard_domain}"
+  username       = "smoke@${local.dashboard_host}"
   message_action = "SUPPRESS"
   password       = random_password.smoke[0].result
   attributes = {
-    email          = "smoke@${var.dashboard_domain}"
+    email          = "smoke@${local.dashboard_host}"
     email_verified = "true"
   }
 }

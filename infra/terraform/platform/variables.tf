@@ -84,17 +84,6 @@ variable "log_retention_days" {
   default = 30
 }
 
-locals {
-  name = "dmt-${var.env}-manager"
-  # The environments trusted by the organization roles created here: this one first.
-  organization_role_envs = distinct(concat([var.env], var.organization_role_envs))
-  # Routers (installed by the manager or written in Terraform) are named dmt-<env>.
-  name_prefix = "dmt-${var.env}"
-  # Routers written in Terraform, with their account (the manager's).
-  routers = jsonencode([for r in var.routers : merge({ for k, v in r : k => v if v != null }, { account = var.account_id })])
-  version = jsondecode(file("${path.module}/../../../package.json")).version
-}
-
 variable "organization_id" {
   description = "AWS organization of the discovery perimeter: the discovery Lambda only assumes roles of this organization."
   type        = string
