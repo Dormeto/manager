@@ -100,6 +100,22 @@ describe('exclusions', () => {
     expect(audit.at(-1)).toMatchObject({ action: 'exclude', result: 'error: the operation pausing its workloads could not start (workflow not started: ThrottlingException): nothing excluded, try again' });
   });
 
+  it('an exclusion whose candidates cannot be re-scoped is not kept either: no operation is started', async () => {
+    const { api, store, created } = setup();
+    const replace = store.replaceCandidates.bind(store);
+    let calls = 0;
+    store.replaceCandidates = async (after, before) => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('Throttled'), { name: 'ThrottlingException' });
+      return replace(after, before);
+    };
+    const res = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }));
+    expect(res.statusCode).toBe(503);
+    expect(await store.listExclusions()).toEqual([]);
+    expect(created).toEqual([]);
+    expect((await store.getCandidate(TG))!.status).toBe('managed');
+  });
+
   it('excludes a load balancer: every candidate on it', async () => {
     const { api, store } = setup();
     const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'load-balancer', arn: LB }, reason: 'legacy' })));

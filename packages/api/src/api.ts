@@ -832,16 +832,17 @@ export function createApi({
         // Stored first: the exclusion stands even if a router cannot be reached. The workflow pauses its workloads
         // (scale design §6): the API answers at once, whatever their number.
         await d.store.putExclusion(exclusion);
-        const candidates = await rescoped(d, [target.account]);
         // The workflow pauses it in the routers of the target group's account and region (it knows installed routers by
-        // another name).
+        // another name). Without its operation nothing would pause its workloads: the exclusion is not kept, the caller
+        // tries again (an operation that throws never started).
         let op: Operation;
+        let candidates: number;
         try {
+          candidates = await rescoped(d, [target.account]);
           op = await operations.create('exclude', { exclusionId: exclusion.id, ...(hint ? { hint: { workloadId: hint.id } } : {}) }, identity.email);
         } catch (err) {
-          // Without its operation nothing would pause its workloads: the exclusion is not kept, the caller tries again.
           await d.store.deleteExclusion(exclusion.id);
-          await rescoped(d, [target.account]);
+          await rescoped(d, [target.account]).catch(() => 0);
           throw new HttpError(503, 'unavailable', `the operation pausing its workloads could not start (${(err as Error).message}): nothing excluded, try again`);
         }
         const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), `operation ${op.id}`].join('; ');

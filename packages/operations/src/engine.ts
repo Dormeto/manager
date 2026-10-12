@@ -267,7 +267,9 @@ export function createEngine(deps: EngineDeps) {
       await finish(op, 'failed', `workflow not started: ${(err as Error).message}`);
       throw err;
     }
-    await records.putOperation(op);
+    // Started: the workflow runs it whatever happens now, so create never throws past this point (a caller undoing what it
+    // did would leave the workflow acting alone); only its execution's name would be missing from the record.
+    await records.putOperation(op).catch((err) => deps.log.warn('OperationNotUpdated', { id, error: (err as Error).message }));
     deps.log.info('OperationCreated', { id, type, target, by });
     return op;
   }

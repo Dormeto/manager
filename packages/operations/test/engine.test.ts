@@ -311,6 +311,20 @@ describe('operations engine', () => {
     expect((await s.records.getOperation(uninstall.id))!.error).toBe('find router: router dmt-dev was installed by Terraform: remove it with Terraform');
   });
 
+  it('a started workflow whose record cannot take its execution afterwards still answers the operation, which runs', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    const put = s.records.putOperation.bind(s.records);
+    let puts = 0;
+    s.records.putOperation = async (op) => {
+      puts += 1;
+      if (puts === 2) throw Object.assign(new Error('Throughput exceeded'), { name: 'ProvisionedThroughputExceededException' });
+      return put(op);
+    };
+    const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
+    expect(s.started).toEqual([op.id]);
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+  });
+
   it('a workflow failure releases what the operation holds and records the error', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
