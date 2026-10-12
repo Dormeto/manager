@@ -89,6 +89,17 @@ describe('exclusions', () => {
     expect(audit).toEqual([{ id: 'x2', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'exclude', target: 'target group dmt-dev-asg-app', result: `migration; until ${expiresAt}; operation op1` }]);
   });
 
+  it('an exclusion whose pause operation cannot start is not kept: its candidates come back and the call fails', async () => {
+    const { api, store, operations, audit } = setup();
+    operations.create = async () => { throw new Error('workflow not started: ThrottlingException'); };
+    const res = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }));
+    expect(res.statusCode).toBe(503);
+    expect(json(res).message).toBe('the operation pausing its workloads could not start (workflow not started: ThrottlingException): nothing excluded, try again');
+    expect(await store.listExclusions()).toEqual([]);
+    expect((await store.getCandidate(TG))!.status).toBe('managed');
+    expect(audit.at(-1)).toMatchObject({ action: 'exclude', result: 'error: the operation pausing its workloads could not start (workflow not started: ThrottlingException): nothing excluded, try again' });
+  });
+
   it('excludes a load balancer: every candidate on it', async () => {
     const { api, store } = setup();
     const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'load-balancer', arn: LB }, reason: 'legacy' })));
