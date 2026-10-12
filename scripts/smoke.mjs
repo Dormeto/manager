@@ -36,7 +36,8 @@ const health = await call('/health');
 check(health.status === 200 && health.body?.status === 'ok', 'health without token', `${health.status} version ${health.body?.version} (${health.ms} ms)`);
 const anonymous = await call('/workloads');
 check(anonymous.status === 401, 'workloads without token are refused', String(anonymous.status));
-const me = await call('/me', { token });
+// fresh: the MFA as Cognito says now (the API caches it), as the Account page reads it after a set-up.
+const me = await call('/me?fresh=1', { token });
 check(me.status === 200 && me.body?.role === 'admin', 'identity and role', `${me.body?.email} ${me.body?.role}`);
 // The MFA policy (R6c): an administrator acts as one once their authenticator is set up.
 check(me.body?.effectiveRole === 'admin', 'acting as admin', `MFA ${me.body?.mfa?.mode ?? '—'}, ${me.body?.mfa?.enabled ? 'on' : 'off'}`);

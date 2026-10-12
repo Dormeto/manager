@@ -7,14 +7,18 @@ import { totp } from './totp.mjs';
 const SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 const tokens = { IdToken: 'id', AccessToken: 'access', RefreshToken: 'refresh', ExpiresIn: 3600 };
 
-function fakes({ enrolled, stored }) {
+function fakes({ enrolled, stored, used = false }) {
   const calls = [];
-  const state = { enrolled, stored };
+  const state = { enrolled, stored, used };
   let now = 1_700_000_000_000;
   const cognito = async (name, input) => {
     calls.push([name, input]);
     if (name === 'InitiateAuth') return state.enrolled ? { ChallengeName: 'SOFTWARE_TOKEN_MFA', Session: 's1' } : { AuthenticationResult: tokens };
     if (name === 'RespondToAuthChallenge') {
+      if (state.used) {
+        state.used = false;
+        throw Object.assign(new Error('Your software token has already been used once.'), { name: 'ExpiredCodeException' });
+      }
       if (input.ChallengeResponses.SOFTWARE_TOKEN_MFA_CODE !== totp(SECRET, now)) throw Object.assign(new Error('Invalid code'), { name: 'CodeMismatchException' });
       return { AuthenticationResult: tokens };
     }
@@ -50,4 +54,12 @@ test('a policy without MFA for the smoke user (optional) leaves it as it is', as
   const f = fakes({ enrolled: false, stored: 'none' });
   assert.deepEqual(await signInSmoke({ smoke, ...f, enroll: false }), tokens);
   assert.deepEqual(f.calls.map(([name]) => name), ['InitiateAuth']);
+});
+
+test('a code already used (a sign-in a moment ago) waits for the next one, once', async () => {
+  const f = fakes({ enrolled: true, stored: SECRET, used: true });
+  const before = f.now();
+  assert.deepEqual(await signInSmoke({ smoke, ...f }), tokens);
+  assert.deepEqual(f.calls.map(([name]) => name), ['InitiateAuth', 'RespondToAuthChallenge', 'InitiateAuth', 'RespondToAuthChallenge']);
+  assert.ok(Math.floor(f.now() / 30_000) > Math.floor(before / 30_000), 'the next 30-second step');
 });

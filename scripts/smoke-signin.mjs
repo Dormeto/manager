@@ -8,7 +8,18 @@ const STEP_MS = 30_000;
 // cognito(name, input): a Cognito user pools call; ssm: { get(), put(value) } of the secret's parameter ('none' until
 // enrolled); enroll: false leaves a user without an authenticator as it is (policy optional).
 export async function signInSmoke({ smoke, cognito, ssm, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, enroll = true }) {
-  const signIn = async () => {
+  const nextStep = () => sleep(STEP_MS - (now() % STEP_MS) + 1000);
+  // A code is accepted once: a sign-in a moment ago (another script, a rerun) used this step's, so the next one is waited.
+  const signIn = async (retry = true) => {
+    try {
+      return await attempt();
+    } catch (err) {
+      if (!retry || err.name !== 'ExpiredCodeException') throw err;
+      await nextStep();
+      return signIn(false);
+    }
+  };
+  const attempt = async () => {
     const out = await cognito('InitiateAuth', { ClientId: smoke.clientId, AuthFlow: 'USER_PASSWORD_AUTH', AuthParameters: { USERNAME: smoke.username, PASSWORD: smoke.password } });
     if (out.AuthenticationResult) return out;
     if (out.ChallengeName !== 'SOFTWARE_TOKEN_MFA') throw new Error(`smoke sign-in: unexpected challenge ${out.ChallengeName}`);
@@ -29,7 +40,7 @@ export async function signInSmoke({ smoke, cognito, ssm, sleep = (ms) => new Pro
   if (verified.Status !== 'SUCCESS') throw new Error('smoke sign-in: the authenticator code was refused');
   await cognito('SetUserMFAPreference', { AccessToken, SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true } });
   await ssm.put(SecretCode);
-  await sleep(STEP_MS - (now() % STEP_MS) + 1000);
+  await nextStep();
   return (await signIn()).AuthenticationResult;
 }
 
