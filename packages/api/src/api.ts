@@ -5,6 +5,7 @@ import {
   type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
+import { reporting, type RouterSummary, type WorkloadSummary } from '@dormeto/fleet';
 
 export interface Router {
   name: string;
@@ -139,6 +140,12 @@ export interface ApiOptions {
   operations?: OperationsApi;
   managerAccount?: string;
   routerVersion?: string; // the router version the manager installs and upgrades to
+  // Routers and workloads as the routers report them (scale design §4): read instead of calling every router.
+  fleet?: { listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]> };
+  // What the caller may see in listings (everything for now; R11 scopes it by tags).
+  visible?: (identity: Identity, item: { account?: string; region: string }) => boolean;
+  callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
+  callConcurrency?: number; // at most this many such calls at once (10)
 }
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -202,7 +209,10 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
 }
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
-export function createApi({ routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion }: ApiOptions) {
+export function createApi({
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion,
+  fleet, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10,
+}: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
   let routers: Router[] = terraformRouters;
@@ -242,9 +252,63 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
     }
   }
 
+  // A router called directly (it does not report): its answer within the timeout, at most callConcurrency at once.
+  function bounded<T>(promise: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RouterError(`no answer within ${callTimeoutMs} ms`)), callTimeoutMs); });
+    return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+  }
+  async function each<T, R>(items: T[], work: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+    const out: PromiseSettledResult<R>[] = new Array(items.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(callConcurrency, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        try {
+          out[i] = { status: 'fulfilled', value: await bounded(work(items[i]!)) };
+        } catch (reason) {
+          out[i] = { status: 'rejected', reason };
+        }
+      }
+    }));
+    return out;
+  }
+
+  // The summary of each registered router that reports (its account: the manager's when the configuration has none).
+  const accountOfRouter = (router: Router) => router.account ?? managerAccount ?? '';
+  async function reports(): Promise<{ summaries: Map<Router, RouterSummary>; workloads: WorkloadSummary[] }> {
+    if (!fleet) return { summaries: new Map(), workloads: [] };
+    const [summaries, workloads] = await Promise.all([fleet.listRouters(), fleet.listWorkloads()]);
+    const out = new Map<Router, RouterSummary>();
+    for (const router of routers) {
+      const summary = summaries.find((x) => x.account === accountOfRouter(router) && x.region === router.region);
+      if (summary && reporting(summary, now())) out.set(router, summary);
+    }
+    return { summaries: out, workloads };
+  }
+
+  // Every workload: from the summaries of the routers that report, from the others by their list action.
   async function listAll() {
-    const results = await Promise.allSettled(routers.map((r) => invoke(r, { action: 'list' })));
-    return results.map((result, i) => ({ router: routers[i]!, result }));
+    const { summaries, workloads } = await reports();
+    const silent = routers.filter((r) => !summaries.has(r));
+    const called = await each(silent, (r) => invoke(r, { action: 'list' }));
+    const rows: Record<string, unknown>[] = [];
+    const errors: { router: string; message: string }[] = [];
+    for (const router of routers) {
+      const summary = summaries.get(router);
+      if (summary) {
+        rows.push(...workloads.filter((w) => w.account === summary.account && w.region === summary.region)
+          .sort((a, b) => a.workloadId.localeCompare(b.workloadId))
+          .map(({ account: _a, router: _r, checkedAt: _c, stateAt: _s, ...w }) => ({ ...w, router: router.name, account: summary.account })));
+        continue;
+      }
+      const result = called[silent.indexOf(router)]!;
+      if (result.status === 'fulfilled') {
+        const account = accountOfRouter(router);
+        rows.push(...((result.value as { workloads?: Record<string, unknown>[] }).workloads ?? []).map((w) => ({ router: router.name, ...(account ? { account } : {}), region: router.region, ...w })));
+      } else errors.push({ router: router.name, message: (result.reason as Error).message });
+    }
+    return { rows, errors };
   }
 
   // A router older than the action (0.15 and earlier for router, pause, resume, request-nap).
@@ -339,7 +403,28 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
     }
 
     if (method === 'GET' && resource === 'routers' && !a) {
-      return reply(200, { routers: await Promise.all(routers.map(routerRow)), ...(routerVersion ? { available: { version: routerVersion } } : {}) });
+      const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
+      const { summaries, workloads } = await reports();
+      const silent = shown.filter((r) => !summaries.has(r));
+      const called = await each(silent, (r) => routerRow(r));
+      const rows = shown.map((router) => {
+        const summary = summaries.get(router);
+        if (!summary) {
+          const result = called[silent.indexOf(router)]!;
+          return { ...(result.status === 'fulfilled' ? result.value : { ...where(router), error: (result.reason as Error).message }), reporting: false };
+        }
+        const own = workloads.filter((w) => w.account === summary.account && w.region === summary.region);
+        const health = (summary.health ?? {}) as { status?: string; problems?: unknown[]; lastScheduledCheckAt?: string | null };
+        const updated = own.map((w) => Date.parse(String(w.updatedAt ?? ''))).filter((ms) => ms > 0);
+        return {
+          ...where(router), version: summary.version, build: summary.build, workloads: Object.values(summary.counts).reduce((n, c) => n + c, 0),
+          checkSchedule: summary.checkSchedule, lastScheduledCheckAt: health.lastScheduledCheckAt ?? summary.checkedAt,
+          health: { status: health.status ?? 'unknown', problems: health.problems ?? [] }, pauses: summary.pauses, workloadStates: summary.counts,
+          paused: summary.pauses.length ? own.length : own.filter((w) => (w.pauses as unknown[] | undefined)?.length).length,
+          lastActivityAt: updated.length ? new Date(Math.max(...updated)).toISOString() : null, reporting: true, checkedAt: summary.checkedAt,
+        };
+      });
+      return reply(200, { routers: rows, ...(routerVersion ? { available: { version: routerVersion } } : {}) });
     }
     if (resource === 'routers' && a) {
       const router = routerOf(a);
@@ -348,13 +433,33 @@ export function createApi({ routers: terraformRouters, invoke, audit, now = Date
     }
 
     if (method === 'GET' && resource === 'workloads' && !a) {
-      const all = await listAll();
-      const workloads = all.flatMap(({ router, result }) => (result.status === 'fulfilled'
-        ? ((result.value as { workloads?: Record<string, unknown>[] }).workloads ?? []).map((w) => ({ router: router.name, ...w }))
-        : []));
-      const errors = all.filter(({ result }) => result.status === 'rejected')
-        .map(({ router, result }) => ({ router: router.name, message: ((result as PromiseRejectedResult).reason as Error).message }));
-      return reply(200, { workloads, errors });
+      const q = event.queryStringParameters ?? {};
+      const { rows, errors } = await listAll();
+      const seen = rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') }));
+      // Counts and 7-day totals of what the caller sees, whatever the filters (the Overview).
+      const byState: Record<string, number> = {};
+      const stats7d = { wakes: 0, ignored: 0, deferred: 0 };
+      for (const w of seen) {
+        byState[String(w.state)] = (byState[String(w.state)] ?? 0) + 1;
+        const stats = w.stats7d as typeof stats7d | null | undefined;
+        for (const k of ['wakes', 'ignored', 'deferred'] as const) stats7d[k] += stats?.[k] ?? 0;
+      }
+      const states = q.state ? q.state.split(',') : null;
+      const text = q.q?.toLowerCase();
+      // Needs attention: failed or waking, or paused (a pause is easy to forget).
+      const attention = (w: Record<string, unknown>) => w.state === 'FAILED' || w.state === 'WAKING' || Boolean((w.pauses as unknown[] | undefined)?.length);
+      const matching = seen.filter((w) => (!states || states.includes(String(w.state))) && (!q.router || w.router === q.router)
+        && (!text || `${w.name ?? ''} ${w.workloadId}`.toLowerCase().includes(text)) && (q.attention !== '1' || attention(w)));
+      // Pages: an opaque cursor (the offset); without a limit, every workload.
+      const limit = q.limit ? Math.min(Math.max(Number(q.limit) || 0, 1), 1000) : matching.length;
+      // From a cursor (the next page) or an offset (a page number).
+      let start = 0;
+      if (q.cursor) start = Number(Buffer.from(q.cursor, 'base64url').toString('utf8'));
+      else if (q.offset) start = Number(q.offset);
+      if (!Number.isInteger(start) || start < 0) throw new HttpError(400, 'bad_request', q.cursor ? 'invalid cursor' : 'invalid offset');
+      const page = matching.slice(start, start + limit);
+      const cursor = start + limit < matching.length ? Buffer.from(String(start + limit)).toString('base64url') : null;
+      return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors });
     }
 
     if (resource === 'workloads' && a && b) {

@@ -103,6 +103,8 @@ export interface RouterInfo {
   name: string;
   region: string;
   account?: string;
+  reporting?: boolean; // its state comes from its events (router 0.21.0 and later with the manager's bus)
+  checkedAt?: string;
   source?: 'terraform' | 'manager';
   version?: string | null;
   build?: string | null;

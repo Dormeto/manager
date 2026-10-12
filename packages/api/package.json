@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@dormeto/discovery": "*",
-    "@dormeto/operations": "*"
+    "@dormeto/operations": "*",
+    "@dormeto/fleet": "*"
   }
 }

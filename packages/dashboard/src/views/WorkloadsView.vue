@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
@@ -14,13 +14,19 @@ import type { RouterInfo, WorkloadSummary } from '../types';
 const now = useNow();
 const { smAndDown } = useDisplay();
 const workloads = ref<WorkloadSummary[]>([]);
+const total = ref(0);
 const errors = ref<{ router: string; message: string }[]>([]);
 const search = ref('');
+// Pages from the API (scale design §4): the page, its size and the search are the server's.
+const page = ref(1);
+const perPage = ref(25);
 const late = ref<RouterInfo[]>([]);
 let routersCheckedAt = 0;
 const { error, loading, nextAt, run } = usePoll(async () => {
-  const result = await api<{ workloads: WorkloadSummary[]; errors: { router: string; message: string }[] }>('/workloads');
+  const query = new URLSearchParams({ limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), ...(search.value.trim() ? { q: search.value.trim() } : {}) });
+  const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[] }>(`/workloads?${query}`);
   workloads.value = result.workloads;
+  total.value = result.total ?? result.workloads.length;
   errors.value = result.errors;
   // Router health every minute is enough: the warning is about checks late by 15 minutes.
   if (Date.now() - routersCheckedAt > 60_000) {
@@ -30,15 +36,26 @@ const { error, loading, nextAt, run } = usePoll(async () => {
 });
 
 const headers = [
-  { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId },
-  { title: 'Router', key: 'router' },
-  { title: 'State', key: 'state' },
+  { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId, sortable: false },
+  { title: 'Router', key: 'router', sortable: false },
+  { title: 'State', key: 'state', sortable: false },
   { title: 'Since', key: 'since', sortable: false },
   { title: 'URL', key: 'url', sortable: false },
-  { title: 'Wake mode', key: 'wakeMode' },
-  { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end' as const, value: (w: WorkloadSummary) => w.stats7d?.wakes ?? null },
-  { title: 'Wakes (total)', key: 'wakeCount', align: 'end' as const },
+  { title: 'Wake mode', key: 'wakeMode', sortable: false },
+  { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end' as const, value: (w: WorkloadSummary) => w.stats7d?.wakes ?? null, sortable: false },
+  { title: 'Wakes (total)', key: 'wakeCount', align: 'end' as const, sortable: false },
 ];
+function options(o: { page: number; itemsPerPage: number }) {
+  if (o.page === page.value && o.itemsPerPage === perPage.value) return;
+  page.value = o.page;
+  perPage.value = o.itemsPerPage;
+  void run();
+}
+let typing: ReturnType<typeof setTimeout> | undefined;
+watch(search, () => {
+  clearTimeout(typing);
+  typing = setTimeout(() => { page.value = 1; void run(); }, 300);
+});
 const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSince ?? w.updatedAt : w.updatedAt, now.value);
 </script>
 
@@ -53,7 +70,8 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
   <v-alert v-for="e in errors" :key="e.router" type="warning" class="mb-4" :title="`Router ${e.router} unreachable`" :text="e.message" />
   <v-alert v-for="r in late" :key="r.name" type="warning" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`" :text="`${checkHealth(r, now).text}.`" />
   <v-card>
-    <v-data-table :mobile="smAndDown" :headers="headers" :items="workloads" :search="search" :loading="loading && !workloads.length" :item-value="(w: WorkloadSummary) => `${w.router}/${w.workloadId}`" :items-per-page="25">
+    <v-data-table-server :mobile="smAndDown" :headers="headers" :items="workloads" :items-length="total" :loading="loading && !workloads.length"
+      :item-value="(w: WorkloadSummary) => `${w.router}/${w.workloadId}`" :page="page" :items-per-page="perPage" :sort-by="[]" :must-sort="false" @update:options="options">
       <template #[`item.name`]="{ item }">
         <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="font-weight-medium">{{ item.name ?? item.workloadId }}</router-link>
       </template>
@@ -62,6 +80,6 @@ const since = (w: WorkloadSummary) => relative(w.state === 'AWAKE' ? w.awakeSinc
       <template #[`item.url`]="{ item }">
         <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="nowrap">{{ item.url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
       </template>
-    </v-data-table>
+    </v-data-table-server>
   </v-card>
 </template>

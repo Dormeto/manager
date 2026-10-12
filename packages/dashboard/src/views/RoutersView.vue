@@ -112,6 +112,10 @@ const headers = [
         </v-tooltip>
         <span v-else class="text-body-small text-medium-emphasis">upgrade to 0.16 for health</span>
         <div v-if="item.error" class="text-body-small text-error">{{ item.error }}</div>
+        <v-tooltip v-if="item.reporting === false && !item.error" location="top" max-width="380"
+          text="The manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager's event bus).">
+          <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" label class="mt-1" tabindex="0">not reporting</v-chip></template>
+        </v-tooltip>
       </template>
       <template #[`item.lastScheduledCheckAt`]="{ item }"><span class="nowrap">{{ relative(item.lastScheduledCheckAt, now) }}</span></template>
       <template #[`item.workloads`]="{ item }">

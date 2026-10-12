@@ -63,7 +63,7 @@ describe('workloads', () => {
     const res = await api(event('GET', '/api/workloads'));
     expect(res.statusCode).toBe(200);
     expect(json(res)).toEqual({
-      workloads: [{ router: 'dmt-dev', workloadId: 'demo', state: 'AWAKE' }],
+      workloads: [{ router: 'dmt-dev', region: 'eu-west-1', workloadId: 'demo', state: 'AWAKE' }], total: 1, byState: { AWAKE: 1 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 }, cursor: null,
       errors: [{ router: 'dmt-test', message: 'router unreachable' }],
     });
   });
@@ -78,7 +78,7 @@ describe('workloads', () => {
     });
     expect(json(await api(event('GET', '/api/routers'))).routers[0]).toEqual({
       name: 'dmt-dev', region: 'eu-west-1', source: 'terraform', version: '0.11.2', build: 'abc', workloads: 2,
-      checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z',
+      checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-04T11:58:00.000Z', reporting: false,
     });
   });
 

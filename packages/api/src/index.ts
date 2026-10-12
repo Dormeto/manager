@@ -8,6 +8,7 @@ import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand,
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { createStore } from '@dormeto/discovery';
+import { createFleetStore } from '@dormeto/fleet';
 import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
@@ -133,5 +134,7 @@ export const handler = createApi({
   discovery,
   operations: process.env.OPERATIONS ? operations : undefined,
   managerAccount: process.env.MANAGER_ACCOUNT,
+  // Routers and workloads as the routers report them (scale design §4).
+  fleet: createFleetStore({ dynamo, table }),
   routerVersion: process.env.ROUTER_VERSION,
 });

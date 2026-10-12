@@ -54,18 +54,18 @@ describe('routers', () => {
       name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', source: 'terraform', version: '0.16.0', build: 'abc', workloads: 4,
       checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-05T11:58:00.000Z',
       health: { status: 'warning', problems: [{ level: 'warning', text: 'controller: 5 errors in 24 hours' }] },
-      pauses: ROUTER_INFO.pauses, workloadStates: { AWAKE: 1, ASLEEP: 3 }, paused: 4, lastActivityAt: '2026-10-05T11:30:00.000Z',
+      pauses: ROUTER_INFO.pauses, workloadStates: { AWAKE: 1, ASLEEP: 3 }, paused: 4, lastActivityAt: '2026-10-05T11:30:00.000Z', reporting: false,
     });
     expect(routers[1]).toEqual({
       name: 'dmt-old', region: 'eu-west-3', account: '121014831971', source: 'terraform', version: '0.15.0', build: 'old', workloads: 2,
-      checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-05T11:58:00.000Z',
+      checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-05T11:58:00.000Z', reporting: false,
     });
   });
 
   it('reports an unreachable router apart', async () => {
     const { api } = setup({ router: () => { throw new RouterError('throttled'); } });
     const { routers } = json(await api(event('GET', '/api/routers')));
-    expect(routers[0]).toEqual({ name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', source: 'terraform', error: 'throttled' });
+    expect(routers[0]).toEqual({ name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', source: 'terraform', error: 'throttled', reporting: false });
   });
 
   it('gives the details of one router: configuration and health figures', async () => {

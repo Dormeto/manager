@@ -12,18 +12,25 @@ import RefreshIndicator from '../components/RefreshIndicator.vue';
 import type { RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
-const workloads = ref<WorkloadSummary[]>([]);
+// Counts, 7-day totals and the workloads that need attention, from the API (never every workload).
+const attention = ref<WorkloadSummary[]>([]);
+const byState = ref<Record<string, number>>({});
+const stats7d = ref({ wakes: 0, ignored: 0, deferred: 0 });
+const loaded = ref(false);
 const routers = ref<RouterInfo[]>([]);
 const { error, loading, nextAt, run } = usePoll(async () => {
   const [w, r] = await Promise.all([
-    api<{ workloads: WorkloadSummary[] }>('/workloads'),
+    api<{ workloads: WorkloadSummary[]; byState: Record<string, number>; stats7d: { wakes: number; ignored: number; deferred: number } }>('/workloads?attention=1&limit=20'),
     api<{ routers: RouterInfo[] }>('/routers'),
   ]);
-  workloads.value = w.workloads;
+  attention.value = w.workloads;
+  byState.value = w.byState ?? {};
+  stats7d.value = w.stats7d ?? { wakes: 0, ignored: 0, deferred: 0 };
   routers.value = r.routers;
+  loaded.value = true;
 });
 
-const count = (...states: string[]) => workloads.value.filter((w) => states.includes(w.state)).length;
+const count = (...states: string[]) => states.reduce((n, s) => n + (byState.value[s] ?? 0), 0);
 const cards = computed(() => [
   { title: 'Awake', value: count('AWAKE'), icon: mdiWeatherSunny, color: 'success' },
   { title: 'Asleep', value: count('ASLEEP'), icon: mdiPowerSleep, color: 'info' },
@@ -31,13 +38,11 @@ const cards = computed(() => [
   { title: 'Failed', value: count('FAILED'), icon: mdiAlertCircleOutline, color: 'error' },
 ]);
 const late = computed(() => routers.value.filter((r) => !r.error && checkHealth(r, now.value).late));
-// Failed or waking workloads, and paused ones (a pause is easy to forget).
-const attention = computed(() => workloads.value.filter((w) => w.state === 'FAILED' || w.state === 'WAKING' || w.pauses?.length));
 const routerChip = (r: RouterInfo) => (r.error
   ? { color: 'error', text: 'unreachable' }
   : r.health ? { color: healthColor(r.health.status), text: r.health.status }
     : checkHealth(r, now.value).late ? { color: 'warning', text: 'idle check late' } : { color: 'success', text: 'ok' });
-const total = (key: 'ignored' | 'deferred' | 'wakes') => workloads.value.reduce((n, w) => n + (w.stats7d?.[key] ?? 0), 0);
+const total = (key: 'ignored' | 'deferred' | 'wakes') => stats7d.value[key];
 const weekly = computed(() => [
   { title: 'Wakes (7 days)', value: total('wakes'), icon: mdiWeatherSunsetUp, color: 'primary' },
   { title: 'Requests that did not wake (7 days)', value: total('ignored') + total('deferred'), icon: mdiFilterRemoveOutline, color: 'secondary' },
@@ -55,7 +60,7 @@ const weekly = computed(() => [
     :text="`${checkHealth(r, now).text}. The scheduled idle check of the router is not running: check its schedule and the dmt-<env>-check-failures queue.`" />
   <v-row>
     <v-col v-for="card in cards" :key="card.title" cols="6" md="3">
-      <v-card :loading="loading && !workloads.length">
+      <v-card :loading="loading && !loaded">
         <v-card-text class="d-flex align-center ga-3">
           <v-avatar :color="card.color" variant="tonal" rounded="lg"><v-icon :icon="card.icon" /></v-avatar>
           <div>
