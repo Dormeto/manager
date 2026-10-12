@@ -12,9 +12,13 @@ import type { RouterInfo } from '../types';
 import LintAlert from '../components/LintAlert.vue';
 import { exclusionTargets, exclusionText } from '../pause';
 import type { Exclusion } from '../types';
-import { STATUSES, idleShare, ruleLines, statusColor, statusHelp, statusLabel, targetText } from '../discovery';
-import { backendLabel, relative, shortId } from '../format';
-import { backendIcon } from '../icons';
+import { STATUSES, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
+import { relative } from '../format';
+import BackendLabel from '../components/BackendLabel.vue';
+import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
+import IdleBar from '../components/IdleBar.vue';
+import RegionLabel from '../components/RegionLabel.vue';
+import StatusHelp from '../components/StatusHelp.vue';
 import { useNow } from '../now';
 import { useDiscoveryBadge } from '../stores/discovery';
 import { useSession } from '../stores/session';
@@ -209,10 +213,11 @@ const headers = [
 
   <div class="d-flex flex-wrap align-center ga-2 mb-2">
     <v-chip-group v-model="shown" multiple column>
-      <v-tooltip v-for="s in STATUSES" :key="s" :text="statusHelp(s)" location="top" max-width="300">
+      <v-tooltip v-for="s in STATUSES" :key="s" location="top" max-width="380">
         <template #activator="{ props }">
           <v-chip v-bind="props" :value="s" :color="statusColor(s)" filter variant="tonal">{{ statusLabel(s) }} ({{ counts[s] }})</v-chip>
         </template>
+        <StatusHelp :status="s" />
       </v-tooltip>
     </v-chip-group>
     <v-spacer />
@@ -228,11 +233,12 @@ const headers = [
   <v-card>
     <v-data-table v-model="selected" :mobile="smAndDown" :headers="headers" :items="visible" :loading="loading" item-value="id"
       :show-select="session.canOperate" :items-per-page="50">
-      <template #[`item.status`]="{ item }"><v-chip :color="statusColor(item.status)" variant="tonal" label>{{ statusLabel(item.status) }}</v-chip></template>
+      <template #[`item.status`]="{ item }"><DiscoveryStatusChip :status="item.status" /></template>
       <template #[`item.account`]="{ item }">
         <div>{{ item.accountName }}</div>
         <div class="text-body-small text-medium-emphasis mono">{{ item.account }}</div>
       </template>
+      <template #[`item.region`]="{ item }"><RegionLabel :region="item.region" /></template>
       <template #[`item.conditions`]="{ item }">
         <div class="font-weight-medium">{{ item.conditions }}</div>
         <div class="text-body-small text-medium-emphasis">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
@@ -243,17 +249,11 @@ const headers = [
         </div>
       </template>
       <template #[`item.backend`]="{ item }">
-        <span v-if="item.backend" class="d-inline-flex align-center ga-2">
-          <img v-if="backendIcon(item.backend.kind)" :src="backendIcon(item.backend.kind)!" alt="" width="22" height="22" class="backend-icon">
-          <span>{{ backendLabel(item.backend.kind) }} <span class="mono">{{ shortId(item.backend.id) }}</span></span>
-        </span>
+        <BackendLabel v-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
         <span v-else-if="item.workloadId" class="text-medium-emphasis">workload <span class="mono">{{ item.workloadId }}</span></span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
-        <div v-if="item.idleHours7d !== null" class="d-flex align-center justify-end ga-2" style="min-width: 120px">
-          <v-progress-linear :model-value="(100 * item.idleHours7d) / 168" color="info" height="6" rounded style="max-width: 70px" />
-          <span class="nowrap">{{ idleShare(item) }}</span>
-        </div>
+        <IdleBar v-if="item.idleHours7d !== null" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
       </template>
       <template #[`item.statusReason`]="{ item }">
         <span class="text-medium-emphasis">{{ item.statusReason }}</span>

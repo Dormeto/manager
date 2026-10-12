@@ -1,4 +1,6 @@
 // Display helpers: relative times, durations, state colors and labels.
+import { partitionOf } from './regions';
+
 export function relative(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return '—';
   const seconds = Math.round((now - Date.parse(iso)) / 1000);
@@ -23,6 +25,14 @@ const BACKEND_LABELS: Record<string, string> = {
   instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster',
 };
 export const backendLabel = (kind: string): string => BACKEND_LABELS[kind] ?? kind;
+
+// The ARN of a candidate's backend: recorded by discovery (scans since 2026-10-05), or rebuilt for an instance or an ECS
+// service of an older scan; an Auto Scaling group's needs its id (null).
+export function backendArn(backend: { kind: string; id: string; arn?: string }, where: { account: string; region: string }): string | null {
+  if (backend.arn) return backend.arn;
+  if (backend.id.startsWith('arn:')) return backend.id;
+  return backend.kind === 'instance' ? `arn:${partitionOf(where.region)}:ec2:${where.region}:${where.account}:instance/${backend.id}` : null;
+}
 
 // "service/cluster/name" → "name"; ARNs are long.
 export const shortId = (id: string): string => (id.startsWith('arn:') ? id.split('/').at(-1) ?? id : id);

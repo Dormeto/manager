@@ -12,6 +12,7 @@ import { useSession } from '../stores/session';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
+import RegionLabel from '../components/RegionLabel.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import type { RouterInfo } from '../types';
 
@@ -93,7 +94,7 @@ const headers = [
       item-value="name" show-expand hide-default-footer>
       <template #[`item.name`]="{ item }">
         <div class="font-weight-medium">{{ item.name }}</div>
-        <div class="text-body-small text-medium-emphasis"><span v-if="item.account" class="mono">{{ item.account }}</span> · {{ item.region }}</div>
+        <div class="text-body-small text-medium-emphasis d-flex align-center ga-1"><span v-if="item.account" class="mono">{{ item.account }}</span><span v-if="item.account">·</span><RegionLabel :region="item.region" /></div>
       </template>
       <template #[`item.version`]="{ item }">
         <span v-if="item.version">{{ item.version }} <span class="text-body-small text-medium-emphasis mono">{{ item.build }}</span></span>
