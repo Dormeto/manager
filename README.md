@@ -122,7 +122,7 @@ Figures from our test environment in eu-west-1 and eu-west-3, and how each was m
 laptop with read access, with the [Dormeto CLI](https://github.com/Dormeto/cli):
 
 ```bash
-brew install dormeto/tap/dormeto        # or: npx @dormeto/cli, or: curl -fsSL https://dormeto.com/install.sh | sh
+brew install dormeto/tap/dormeto        # or: curl -fsSL https://dormeto.com/install.sh | sh
 dormeto estimate --profile <your-aws-profile> --uptime
 ```
 

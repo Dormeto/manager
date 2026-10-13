@@ -8,8 +8,8 @@ CLI script, of the same release).
 ## Unreleased
 
 - The savings estimate before install is now the Dormeto CLI (https://github.com/Dormeto/cli, 0.1.0 on 2026-10-13:
-  Homebrew, npm, the install script and `go install`): `dormeto estimate --profile <profile>`. The repository's
-  `npm run estimate` and `packages/estimate`, never released, are removed.
+  Homebrew, the install script, `go install`, and the release's zip on Windows): `dormeto estimate --profile <profile>`.
+  The repository's `npm run estimate` and `packages/estimate`, never released, are removed.
 
 ## 0.10.0 — 2026-10-11
 
