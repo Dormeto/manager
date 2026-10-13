@@ -1,6 +1,5 @@
 // The product's Node code as the export runs it: the packages' TypeScript sources (their ./x.js specifiers name .ts
-// files, which plain Node cannot import) bundled by esbuild with the estimate's build flags, the router's modules with
-// them (packages/estimate/src/stopped.ts imports them from ../router, as here). The bundle is written inside the
+// files, which plain Node cannot import) bundled by esbuild, the router's modules with them. The bundle is written inside the
 // repository (node_modules/.cache), where the AWS SDK it leaves external resolves, imported, then removed.
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -18,7 +17,6 @@ export { scanRegion } from './packages/discovery/src/scan.ts';
 export { decide, matches, resourceTagsMatch, scanAccounts, targetPairs } from './packages/discovery/src/filters.ts';
 export { clustersOf, kubernetesBackend } from './packages/discovery/src/kubernetes.ts';
 export { loadInventory } from './packages/discovery/src/org.ts';
-export { main } from './packages/estimate/src/cli.ts';
 export { describeStopped, strategyCounts } from '../router/lambda/src/lib/stopped.mjs';
 `;
 

@@ -119,15 +119,15 @@ Figures from our test environment in eu-west-1 and eu-west-3, and how each was m
 ## Get started
 
 **Estimate first.** What Dormeto would save on an AWS account or organization, before anything is installed, from a
-laptop with read access (Node.js 24 or later; the router checkout sits next to the manager):
+laptop with read access, with the [Dormeto CLI](https://github.com/Dormeto/cli):
 
 ```bash
-git clone https://github.com/Dormeto/manager.git && git clone https://github.com/Dormeto/router.git
-cd manager && npm ci
-npm run estimate -- --profile <your-aws-profile> --uptime
+brew install dormeto/tap/dormeto        # or: npx @dormeto/cli, or: curl -fsSL https://dormeto.com/install.sh | sh
+dormeto estimate --profile <your-aws-profile> --uptime
 ```
 
-It writes a summary and a Markdown and JSON report: [options, phases and permissions](docs/estimate.md).
+It writes a summary and a Markdown and JSON report; the options, phases, reports and permissions are in the
+[CLI's documentation](https://github.com/Dormeto/cli).
 
 **Install** the manager in one account with Terraform, from a versioned release:
 
@@ -162,7 +162,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 |---|---|
 | [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced, Spot, discounts, the daily job, the idle window advisor |
-| [Savings estimate](docs/estimate.md) | The estimate command: accounts, filters, uptime, companion databases, cache, permissions |
+| [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto estimate`: accounts, filters, uptime, companion databases, cache, permissions |
 | [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules |
 | [Development](docs/development.md) | Build, test, a development environment, screenshots, releases |
 
@@ -175,7 +175,6 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | `packages/discovery` | Discovery: the organization's accounts and regions, the load balancer rules that could nap, the organization access checks |
 | `packages/operations` | Operations, one step at a time in Step Functions: onboarding, offboarding, router installs and upgrades |
 | `packages/fleet` | The routers' events: workload states, history, savings and prices, the idle window replay |
-| `packages/estimate` | The savings estimate before install (`npm run estimate`) |
 | `infra/terraform/modules/manager` | The manager module (what a release installs): DynamoDB, the Lambdas, HTTP API + JWT authorizer, Step Functions, EventBridge, Cognito, CloudFront + S3, optional custom domain and SES |
 | `infra/terraform/modules/access`, `organization` | The organization roles of an account, the delegation policy of the management account |
 | `infra/terraform/platform` | Dev: the manager module with the local build, its certificate and DNS |

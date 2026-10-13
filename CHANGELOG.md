@@ -7,18 +7,9 @@ CLI script, of the same release).
 
 ## Unreleased
 
-- `npm run estimate -- --profile <profile>` (the repository's tool, not in a release): what Dormeto would save on an AWS
-  account or organization before anything is installed, with read access only. Discovery, CloudWatch requests and the
-  estimate, each cached; a terminal summary, and Markdown and JSON reports. EKS workloads too, read with the profile's
-  own access to each cluster (a column EKS; a cluster it cannot read is listed with the reason). `--ec2-uptime` and
-  `--ecs-uptime` (`--uptime`: both) count only the hours each EC2 instance ran and each ECS service had a task;
-  `--max-wakes` (3 by default) and `--min-saving` ($1 by default) leave out the workloads that would wake more than
-  that a day, or save less than that a month, at their recommended window (`none` keeps them); the table by account
-  counts each account's excluded workloads, whatever the reason. Discovery reads `--parallel` accounts at a time (5 by
-  default), with its progress on one line in a terminal. Companion RDS databases (instances and Aurora provisioned
-  clusters) are found by security group and napped with their workload, unless shared, excluded by their tags, unstoppable,
-  or their workload wakes more than `--max-wakes-rds` (2 by default) times a day; `--rds-uptime` (in `--uptime`) measures
-  when they were available, a stopped one included.
+- The savings estimate before install is now the Dormeto CLI (https://github.com/Dormeto/cli, 0.1.0 on 2026-10-13:
+  Homebrew, npm, the install script and `go install`): `dormeto estimate --profile <profile>`. The repository's
+  `npm run estimate` and `packages/estimate`, never released, are removed.
 
 ## 0.10.0 — 2026-10-11
 
