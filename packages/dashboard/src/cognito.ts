@@ -3,6 +3,8 @@
 import { getConfig } from './config';
 
 export async function cognito<T = Record<string, unknown>>(target: string, body: Record<string, unknown>): Promise<T> {
+  // Demo data (npm run dev:mock, development only): the set-up succeeds in the browser.
+  if (import.meta.env.VITE_MOCK === '1') return (await (await import('./mock')).mockCognito(target, body)) as T;
   // authority: https://cognito-idp.<region>.amazonaws.com/<user pool id>
   const endpoint = new URL(getConfig().authority).origin;
   const res = await fetch(`${endpoint}/`, {
