@@ -22,6 +22,9 @@ const info = computed(() => regionInfo(props.region));
 </template>
 
 <style scoped>
-/* 4:3, sized with the text around it (table cell or caption). */
-.flag { flex: none; height: 1em; width: calc(4em / 3); border-radius: 2px; object-fit: cover; box-shadow: 0 0 0 1px rgba(var(--v-border-color), 0.2); }
+.region-label { line-height: 1; border-radius: 4px; vertical-align: -0.12em; }
+.region-label:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
+/* 4:3, sized with the text around it (table cell or caption); a faint ring and sheen so light flags hold on glass. */
+.flag { flex: none; height: 1em; width: calc(4em / 3); border-radius: 3px; object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(var(--v-border-color), 0.22), 0 1px 3px rgba(var(--v-theme-on-surface), 0.12); }
 </style>
