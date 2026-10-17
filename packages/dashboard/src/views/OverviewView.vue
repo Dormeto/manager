@@ -144,7 +144,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
     <v-divider class="mx-7" />
     <v-card-text class="dm-fleet__map">
       <div class="dm-eyebrow mb-3">Your fleet, live</div>
-      <FleetMap />
+      <FleetMap :routers="routers" />
     </v-card-text>
   </v-card>
 
