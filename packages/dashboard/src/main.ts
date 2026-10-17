@@ -8,20 +8,13 @@ import App from './App.vue';
 import { loadConfig } from './config';
 import { initAuth } from './auth';
 import { router } from './router';
-import { THEMES } from './theme';
-
-// The night by default, like the website; the light theme when the user chose it.
-let theme = 'dark';
-try {
-  theme = window.localStorage.getItem('dmt-theme') ?? theme;
-} catch {
-  // Storage unavailable: the night.
-}
+import { THEMES, initialTheme } from './theme';
 
 const vuetify = createVuetify({
   icons: { defaultSet: 'mdi', aliases, sets: { mdi } },
   theme: {
-    defaultTheme: theme,
+    // The user's choice, else the system's.
+    defaultTheme: initialTheme(),
     themes: THEMES,
   },
   defaults: {

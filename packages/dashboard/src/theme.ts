@@ -1,6 +1,7 @@
-// The dashboard's themes, those of the website: the night by default, a cool light one for the day. The state colors are
-// Vuetify's names (success: awake, info: asleep, warning: waking, error: failed), but napping's: a pale orange of its own,
-// told apart from waking's orange, the same in the state chip, the history and the 7-day bar (user request).
+// The dashboard's themes, those of the website: the night, and a cool light one for the day; the system's unless the user
+// chose one. The state colors are Vuetify's names (success: awake, info: asleep, warning: waking, error: failed), but
+// napping's: a pale orange of its own, told apart from waking's orange, the same in the state chip, the history and the
+// 7-day bar (user request).
 type Theme = { dark?: boolean; colors: Record<string, string>; variables?: Record<string, string | number> };
 
 export const THEMES: { light: Theme; dark: Theme } = {
@@ -24,3 +25,14 @@ export const THEMES: { light: Theme; dark: Theme } = {
     variables: { 'border-color': '#ffffff', 'border-opacity': 0.09, 'medium-emphasis-opacity': 0.66, 'high-emphasis-opacity': 0.94 },
   },
 };
+
+// The theme to start with: the user's choice (the bar's toggle stores it), else the system's (prefers-color-scheme).
+export function initialTheme(): 'light' | 'dark' {
+  try {
+    const chosen = window.localStorage.getItem('dmt-theme');
+    if (chosen === 'light' || chosen === 'dark') return chosen;
+  } catch {
+    // Storage unavailable: the system's.
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
