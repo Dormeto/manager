@@ -481,3 +481,80 @@ run "idle_window_requests" {
     error_message = "The API knows the discovery function (R10): DISCOVERY_FUNCTION."
   }
 }
+
+run "organization_conditions_by_default" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for c in [
+        [for s in data.aws_iam_policy_document.discovery.statement : s if s.sid == "AssumeDiscoveryRoles"][0].condition,
+        [for s in data.aws_iam_policy_document.operations.statement : s if s.sid == "AssumeCommandRoles"][0].condition,
+      ] : length(c) == 1 && one(c).variable == "aws:ResourceOrgID" && one(c).values[0] == "o-abcdefghij"
+    ])
+    error_message = "With an organization, the roles are assumed within it (aws:ResourceOrgID)."
+  }
+  assert {
+    condition = alltrue([
+      for c in [
+        [for s in data.aws_iam_policy_document.manager_bus.statement : s if s.sid == "OrganizationRouters"][0].condition,
+        [for s in data.aws_iam_policy_document.lists.statement : s if s.sid == "OrganizationRouters"][0].condition,
+      ] : length(c) == 1 && one(c).variable == "aws:PrincipalOrgID" && one(c).values[0] == "o-abcdefghij"
+    ])
+    error_message = "With an organization, the routers' events and lists are accepted within it (aws:PrincipalOrgID)."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.DISCOVERY_MODE == "organization" && aws_lambda_function.discovery.environment[0].variables.DISCOVERY_MODE == "organization"
+    error_message = "The perimeter's default mode is organization."
+  }
+}
+
+run "account_deployment_without_an_organization" {
+  command = plan
+
+  variables {
+    organization_id = null
+    discovery_mode  = "account"
+  }
+
+  assert {
+    condition = alltrue([
+      for c in [
+        [for s in data.aws_iam_policy_document.discovery.statement : s if s.sid == "AssumeDiscoveryRoles"][0].condition,
+        [for s in data.aws_iam_policy_document.operations.statement : s if s.sid == "AssumeCommandRoles"][0].condition,
+      ] : length(c) == 1 && one(c).variable == "aws:ResourceAccount" && one(c).values[0] == "111122223333"
+    ])
+    error_message = "Without an organization, the roles are assumed in the manager's account only (aws:ResourceAccount)."
+  }
+  assert {
+    condition = alltrue([
+      for c in [
+        [for s in data.aws_iam_policy_document.manager_bus.statement : s if s.sid == "OrganizationRouters"][0].condition,
+        [for s in data.aws_iam_policy_document.lists.statement : s if s.sid == "OrganizationRouters"][0].condition,
+      ] : length(c) == 1 && one(c).variable == "aws:PrincipalAccount" && one(c).values[0] == "111122223333"
+    ])
+    error_message = "Without an organization, the routers' events and lists are accepted from the manager's account only (aws:PrincipalAccount)."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.DISCOVERY_MODE == "account" && aws_lambda_function.discovery.environment[0].variables.DISCOVERY_MODE == "account"
+    error_message = "The perimeter's default mode is account."
+  }
+}
+
+run "organization_mode_needs_an_organization" {
+  command = plan
+
+  variables {
+    organization_id = null
+  }
+  expect_failures = [var.discovery_mode]
+}
+
+run "discovery_mode_is_validated" {
+  command = plan
+
+  variables {
+    discovery_mode = "other"
+  }
+  expect_failures = [var.discovery_mode]
+}

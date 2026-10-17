@@ -1,6 +1,6 @@
 export * from './types.js';
 export { all, lbDimension, scanRegion, tgDimension, type Rule, type ScanPorts } from './scan.js';
-export { DEFAULT_CONFIG, validateConfig } from './config.js';
+export { DEFAULT_CONFIG, defaultConfig, validateConfig } from './config.js';
 export { decide, describeCriterion, matches, matchesAccount, resourceTagsMatch, scanAccounts, targetPairs } from './filters.js';
 export { covers, lint } from './lint.js';
 export { computeStatus, nextCandidates, rescope, restatus } from './lifecycle.js';

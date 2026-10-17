@@ -64,6 +64,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     store,
     organizations,
     managerAccount,
+    defaultMode: process.env.DISCOVERY_MODE,
     roleName,
     assumeRole: assumeDiscovery,
     ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),

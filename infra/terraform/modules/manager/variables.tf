@@ -18,11 +18,26 @@ variable "artifacts_dir" {
 }
 
 variable "organization_id" {
-  description = "AWS organization of the discovery perimeter: the manager assumes roles, and accepts router events, within it only."
+  description = "AWS organization of the discovery perimeter: the manager assumes roles, and accepts router events, within it only. Null: the manager is outside any organization and works within its own account only (account deployment)."
   type        = string
+  default     = null
   validation {
-    condition     = can(regex("^o-[a-z0-9]{10,32}$", var.organization_id))
+    condition     = var.organization_id == null || can(regex("^o-[a-z0-9]{10,32}$", var.organization_id))
     error_message = "organization_id must look like o-xxxxxxxxxx."
+  }
+}
+
+variable "discovery_mode" {
+  description = "The mode of the discovery perimeter's default configuration (the one an administrator has not saved yet): organization (the accounts of the organization) or account (the manager's own account). Account is required without an organization_id."
+  type        = string
+  default     = "organization"
+  validation {
+    condition     = contains(["organization", "account"], var.discovery_mode)
+    error_message = "discovery_mode must be organization or account."
+  }
+  validation {
+    condition     = var.organization_id != null || var.discovery_mode == "account"
+    error_message = "Without organization_id, discovery_mode must be account (organization mode needs an organization_id)."
   }
 }
 

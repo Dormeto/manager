@@ -61,10 +61,11 @@ data "aws_iam_policy_document" "operations" {
     sid       = "AssumeCommandRoles"
     actions   = ["sts:AssumeRole"]
     resources = ["arn:aws:iam::*:role/${var.command_role_name}"]
+    # Within the organization, or within the manager's own account when there is none (account deployment).
     condition {
       test     = "StringEquals"
-      variable = "aws:ResourceOrgID"
-      values   = [var.organization_id]
+      variable = var.organization_id == null ? "aws:ResourceAccount" : "aws:ResourceOrgID"
+      values   = [var.organization_id == null ? local.account_id : var.organization_id]
     }
   }
   statement {

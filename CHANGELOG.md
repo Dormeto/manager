@@ -5,11 +5,21 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.11.0 — 2026-10-17
 
+Router 0.29.0. Access: nothing to apply again (the access and organization modules and the AWS CLI script are
+unchanged).
+
+- The manager module's `organization_id` is optional, for `dormeto install`'s account deployment (a manager in an account
+  outside any organization): without it the manager assumes the discovery and command roles, and accepts the routers'
+  events and lists, within its own account only. The new `discovery_mode` input (`organization` by default, or
+  `account`, required without an organization) is the mode of the discovery perimeter's default configuration, the one an
+  administrator has not saved yet (`DISCOVERY_MODE` of the API and of discovery).
 - The savings estimate before install is now the Dormeto CLI (https://github.com/Dormeto/cli, 0.1.0 on 2026-10-13:
   Homebrew, the install script, `go install`, and the release's zip on Windows): `dormeto estimate --profile <profile>`.
   The repository's `npm run estimate` and `packages/estimate`, never released, are removed.
+- The release script's `--version` and `--out` build a release locally, before it is published (the changelog's Unreleased
+  section stands for a version without its own); `--publish` stays for the package's version.
 
 ## 0.10.0 — 2026-10-11
 

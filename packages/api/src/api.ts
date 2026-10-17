@@ -1,8 +1,8 @@
 // Manager API: HTTP API (payload 2.0) behind the Cognito JWT authorizer. The routers answer through their controller;
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
 import {
-  CANDIDATE_STATUSES, DEFAULT_CONFIG, EXCLUSION_KINDS, InvalidCursor, activeExclusions, lint, rescope, restatus, validateConfig, withExclusions,
-  type Candidate, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
+  CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, lint, rescope, restatus, validateConfig, withExclusions,
+  type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
@@ -146,6 +146,7 @@ export interface ApiOptions {
   discovery?: DiscoveryApi;
   operations?: OperationsApi;
   managerAccount?: string;
+  discoveryMode?: string; // the mode of the perimeter's default configuration (DISCOVERY_MODE: organization or account)
   routerVersion?: string; // the router version the manager installs and upgrades to
   // Routers and workloads as the routers report them (scale design §4): read instead of calling every router.
   fleet?: {
@@ -316,7 +317,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
   }
 }
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, routerVersion, alerts, ipLists, mfa, savings,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
   fleet, idleRequests, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -1152,10 +1153,10 @@ export function createApi({
       const inventory = (await d.store.getInventory()) ?? { accounts: [], ous: {} };
       // The lint counts the active manual exclusions, as runs do.
       const exclusions = await d.store.listExclusions();
-      const linted = (config: typeof DEFAULT_CONFIG) => lint(withExclusions(config, exclusions, now()), inventory);
+      const linted = (config: DiscoveryConfig) => lint(withExclusions(config, exclusions, now()), inventory);
       if (method === 'GET') {
         const stored = await d.store.getConfig();
-        const config = stored?.config ?? DEFAULT_CONFIG;
+        const config = stored?.config ?? defaultConfig(discoveryMode);
         return reply(200, { config, updatedAt: stored?.updatedAt ?? null, updatedBy: stored?.updatedBy ?? null, lint: linted(config) });
       }
       if (method === 'PUT') {
@@ -1220,7 +1221,7 @@ export function createApi({
   async function rescoped(d: DiscoveryApi, accounts?: string[]) {
     const load = accounts ? Promise.all(accounts.map((a) => d.store.accountCandidates(a))).then((x) => x.flat()) : d.store.listCandidates();
     const [stored, exclusions, inventory, candidates] = await Promise.all([d.store.getConfig(), d.store.listExclusions(), d.store.getInventory(), load]);
-    const changed = rescope(candidates, withExclusions(stored?.config ?? DEFAULT_CONFIG, exclusions, now()), inventory ?? { accounts: [], ous: {} }, now());
+    const changed = rescope(candidates, withExclusions(stored?.config ?? defaultConfig(discoveryMode), exclusions, now()), inventory ?? { accounts: [], ous: {} }, now());
     await d.store.replaceCandidates(changed, candidates);
     return changed.length;
   }

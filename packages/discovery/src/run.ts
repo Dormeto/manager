@@ -2,7 +2,7 @@
 // perimeter), one step per account (its role assumed, its regions scanned 8 at a time, the candidates that changed
 // written, its result recorded), finalize (accounts that left the perimeter, run record, lint, lock released). Step
 // Functions runs the account steps in a Distributed Map; runDiscovery runs the three in process.
-import { DEFAULT_CONFIG } from './config.js';
+import { defaultConfig } from './config.js';
 import { withExclusions } from './exclusions.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
@@ -31,6 +31,7 @@ export interface RunDeps {
   store: DiscoveryStore;
   organizations?: OrganizationsPort; // organization mode
   managerAccount: string;
+  defaultMode?: string; // the mode of the default configuration, while none is saved (DISCOVERY_MODE: organization or account)
   roleName?: string;
   assumeRole(account: string): Promise<unknown>; // credentials for the account's discovery role
   assumeCommand?(account: string): Promise<unknown>; // the account's command role, only to check it (packaging design §3)
@@ -87,7 +88,7 @@ function singleAccount(id: string): OrgInventory {
 
 // Manual exclusions act as global excludes (an excluded account is never read).
 async function currentConfig(deps: RunDeps, now: () => number): Promise<DiscoveryConfig> {
-  return withExclusions((await deps.store.getConfig())?.config ?? DEFAULT_CONFIG, await deps.store.listExclusions(), now());
+  return withExclusions((await deps.store.getConfig())?.config ?? defaultConfig(deps.defaultMode), await deps.store.listExclusions(), now());
 }
 
 async function inventoryOf(deps: RunDeps, config: DiscoveryConfig): Promise<OrgInventory> {

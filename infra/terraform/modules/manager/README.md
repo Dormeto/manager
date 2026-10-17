@@ -16,7 +16,10 @@ output "dormeto" {
 }
 ```
 
-The provider you configure sets the account and region. Optional inputs: `domain` (a custom domain with its
+The provider you configure sets the account and region. Outside any organization, leave `organization_id` out (null) and set `discovery_mode = "account"`: the manager then
+assumes roles and accepts router events within its own account only (`dormeto install` deploys it this way). Optional
+inputs: `discovery_mode` (the mode of the discovery perimeter's default configuration, the one an administrator has not
+saved yet: `organization` by default, or `account`; `account` is required without `organization_id`), `domain` (a custom domain with its
 certificate in us-east-1 and the Route 53 zone), `ses_identity` and `email_from` (Cognito sends the invitations through
 your SES identity; without, it sends them itself, about 50 a day), `discovery_role_name` and `command_role_name` (the
 roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRole` by default), `create_organization_roles`

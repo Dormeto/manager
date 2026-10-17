@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildRelease, publishRelease } from './release.mjs';
+import { buildRelease, publishRelease, releaseOptions } from './release.mjs';
 import { fakeRepos } from './fake-repos.mjs';
 
 const MODULES = new URL('../../infra/terraform/modules/', import.meta.url).pathname;
@@ -51,6 +51,46 @@ test('a missing build output or changelog section stops the release', () => {
   assert.throws(() => build({ without: ['manager/packages/fleet/dist/index.mjs'] }), /missing build output: .*fleet\/dist\/index\.mjs/);
   assert.throws(() => build({ without: ['router/kubernetes/dormeto-router.yaml'] }), /missing build output: .*router\/kubernetes\/dormeto-router\.yaml/);
   assert.throws(() => build({ with: { 'manager/CHANGELOG.md': '# Changelog\n\n## 0.1.0\n\n- First.\n' } }), /CHANGELOG\.md has no section for 0\.2\.0/);
+});
+
+const UNRELEASED = '# Changelog\n\n## Unreleased\n\n- Work in progress.\n\n## 0.2.0 — 2026-10-06\n\n- The manager as a Terraform module.\n';
+
+test('a local build names its files with --version and takes the Unreleased section, headed with it', () => {
+  const { release } = build({ with: { 'manager/CHANGELOG.md': UNRELEASED } });
+  assert.ok(release.dir.endsWith('/out/0.2.0'));
+  const repos = fakeRepos({ with: { 'manager/CHANGELOG.md': UNRELEASED } });
+  const local = buildRelease({ ...repos, modules: MODULES, version: '0.11.0-dev', allowUnreleased: true });
+  assert.ok(local.dir.endsWith('/out/0.11.0-dev'));
+  assert.deepEqual(readdirSync(local.dir).sort(), [
+    'CHANGELOG.md', 'SHA256SUMS', 'dormeto-access-0.11.0-dev.zip', 'dormeto-access-commands-0.11.0-dev.sh', 'dormeto-kubernetes-0.11.0-dev.yaml',
+    'dormeto-organization-0.11.0-dev.zip', 'dormeto-organization-policy.json', 'terraform-aws-dormeto-0.11.0-dev.zip',
+  ]);
+  assert.equal(readFileSync(join(local.dir, 'CHANGELOG.md'), 'utf8'), '## 0.11.0-dev\n\n- Work in progress.\n');
+  assert.match(readFileSync(join(local.dir, 'dormeto-access-commands-0.11.0-dev.sh'), 'utf8'), /Dormeto 0\.11\.0-dev/);
+  const sums = readFileSync(join(local.dir, 'SHA256SUMS'), 'utf8').trim().split('\n').map((l) => l.split('  ')[1]);
+  assert.deepEqual(sums, readdirSync(local.dir).sort().filter((f) => f !== 'SHA256SUMS'));
+});
+
+test('a version with its own section uses it even when an Unreleased section exists; neither section stops the release', () => {
+  const { release } = build({ with: { 'manager/CHANGELOG.md': UNRELEASED } });
+  assert.equal(readFileSync(join(release.dir, 'CHANGELOG.md'), 'utf8').trim(), '## 0.2.0 — 2026-10-06\n\n- The manager as a Terraform module.');
+  assert.throws(() => build({ with: { 'manager/CHANGELOG.md': '# Changelog\n\n## 0.1.0\n\n- First.\n' } }), /CHANGELOG\.md has no section for 0\.2\.0/);
+});
+
+test('the package version without its own section stops the release, even when an Unreleased section exists; a local build must allow it', () => {
+  const noSection = { 'manager/CHANGELOG.md': '# Changelog\n\n## Unreleased\n\n- Work in progress.\n\n## 0.1.0 — 2026-10-04\n\n- First.\n' };
+  assert.throws(() => build({ with: noSection }), /CHANGELOG\.md has no section for 0\.2\.0/);
+  const repos = fakeRepos({ with: noSection });
+  assert.throws(() => buildRelease({ ...repos, modules: MODULES, version: '0.11.0-dev' }), /CHANGELOG\.md has no section for 0\.11\.0-dev/);
+});
+
+test('the options: --version and --out, the package version and dist/release by default; --publish refused for another version', () => {
+  const pkg = { version: '0.10.0' };
+  assert.deepEqual(releaseOptions([], pkg, '/m'), { version: '0.10.0', out: '/m/dist/release', publish: false });
+  assert.deepEqual(releaseOptions(['--version', '0.11.0-dev', '--out', '/tmp/x'], pkg, '/m'), { version: '0.11.0-dev', out: '/tmp/x', publish: false });
+  assert.equal(releaseOptions(['--publish', '--version', '0.10.0'], pkg, '/m').publish, true);
+  for (const args of [['--version'], ['--out'], ['--version', '--publish'], ['--out', '--no-build']]) assert.throws(() => releaseOptions(args, pkg, '/m'), /needs a value/, args.join(' '));
+  assert.throws(() => releaseOptions(['--publish', '--version', '0.11.0-dev'], pkg, '/m'), /--publish is refused with --version 0\.11\.0-dev: a published version is the package's \(0\.10\.0\)/);
 });
 
 // A fake S3: objects in a map; conditional puts as S3's (If-None-Match: *).

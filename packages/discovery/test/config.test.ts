@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, validateConfig } from '../src/config.js';
+import { DEFAULT_CONFIG, defaultConfig, validateConfig } from '../src/config.js';
 
 const valid = {
   version: 1,
@@ -91,5 +91,15 @@ describe('validateConfig', () => {
   it('has a default without any filter, so a new installation scans nothing', () => {
     expect(DEFAULT_CONFIG.filters).toEqual([]);
     expect(validateConfig(DEFAULT_CONFIG).errors).toEqual([]);
+  });
+
+  it('has a default of the account mode when the manager is deployed outside an organization, the rest unchanged', () => {
+    expect(defaultConfig('account')).toEqual({ ...DEFAULT_CONFIG, mode: 'account' });
+    expect(defaultConfig(undefined)).toEqual(DEFAULT_CONFIG);
+    expect(defaultConfig('organization')).toEqual(DEFAULT_CONFIG);
+    expect(defaultConfig('x')).toEqual(DEFAULT_CONFIG);
+    expect(defaultConfig('account').mode).toBe('account');
+    expect(DEFAULT_CONFIG.mode).toBe('organization');
+    expect(validateConfig(defaultConfig('account')).errors).toEqual([]);
   });
 });
