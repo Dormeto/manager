@@ -170,6 +170,7 @@ resource "aws_lambda_function" "api" {
       ROUTERS                 = local.routers
       OPERATIONS              = aws_sfn_state_machine.operations.arn
       MANAGER_ACCOUNT         = local.account_id
+      DISCOVERY_MODE          = var.discovery_mode
       ENV                     = var.env
       ROUTER_VERSION          = local.router_version
       TABLE                   = aws_dynamodb_table.manager.name

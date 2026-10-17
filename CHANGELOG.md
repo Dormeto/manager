@@ -7,6 +7,11 @@ CLI script, of the same release).
 
 ## Unreleased
 
+- The manager module's `organization_id` is optional, for `dormeto install`'s account deployment (a manager in an account
+  outside any organization): without it the manager assumes the discovery and command roles, and accepts the routers'
+  events and lists, within its own account only. The new `discovery_mode` input (`organization` by default, or
+  `account`, required without an organization) is the mode of the discovery perimeter's default configuration, the one an
+  administrator has not saved yet (`DISCOVERY_MODE` of the API and of discovery).
 - The savings estimate before install is now the Dormeto CLI (https://github.com/Dormeto/cli, 0.1.0 on 2026-10-13:
   Homebrew, the install script, `go install`, and the release's zip on Windows): `dormeto estimate --profile <profile>`.
   The repository's `npm run estimate` and `packages/estimate`, never released, are removed.

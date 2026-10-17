@@ -32,10 +32,11 @@ data "aws_iam_policy_document" "discovery" {
     sid       = "AssumeDiscoveryRoles"
     actions   = ["sts:AssumeRole"]
     resources = ["arn:aws:iam::*:role/${var.discovery_role_name}"]
+    # Within the organization, or within the manager's own account when there is none (account deployment).
     condition {
       test     = "StringEquals"
-      variable = "aws:ResourceOrgID"
-      values   = [var.organization_id]
+      variable = var.organization_id == null ? "aws:ResourceAccount" : "aws:ResourceOrgID"
+      values   = [var.organization_id == null ? local.account_id : var.organization_id]
     }
   }
   statement {
@@ -91,6 +92,8 @@ resource "aws_lambda_function" "discovery" {
       TABLE     = aws_dynamodb_table.manager.name
       ENV       = var.env
       ROLE_NAME = var.discovery_role_name
+      # The perimeter's mode while no configuration is saved.
+      DISCOVERY_MODE = var.discovery_mode
       # The access check function checks the command role of each account.
       ACCESS_CHECK_FUNCTION = aws_lambda_function.access_check.function_name
       # Dev only: a synthetic organization added to the real one (acceptance at scale, scale design §7).

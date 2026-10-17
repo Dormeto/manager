@@ -64,10 +64,11 @@ data "aws_iam_policy_document" "lists" {
       type        = "AWS"
       identifiers = ["*"]
     }
+    # Within the organization, or within the manager's own account when there is none (account deployment).
     condition {
       test     = "StringEquals"
-      variable = "aws:PrincipalOrgID"
-      values   = [var.organization_id]
+      variable = var.organization_id == null ? "aws:PrincipalAccount" : "aws:PrincipalOrgID"
+      values   = [var.organization_id == null ? local.account_id : var.organization_id]
     }
   }
   statement {
