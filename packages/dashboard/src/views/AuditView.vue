@@ -102,6 +102,9 @@ const failed = (e: Entry) => e.result.startsWith('error');
 .dm-result--error { display: flex; align-items: flex-start; gap: 6px; max-width: 36rem; padding: 6px 0; font-size: 0.875rem; line-height: 1.45; white-space: normal;
   overflow-wrap: anywhere; user-select: text; }
 .dm-result__icon { flex: none; margin-top: 3px; }
+/* The others' chip wraps too, rather than widen the table past the card (which would cut the results anew). */
+.dm-result.v-chip { max-width: 24rem; height: auto; min-height: var(--v-chip-height); padding-block: 3px; white-space: normal; }
+.dm-result :deep(.v-chip__content) { min-width: 0; overflow-wrap: anywhere; }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 32px 0; }
 .dm-audit :deep(.v-data-table-rows-loading > td), .dm-audit :deep(.v-data-table-rows-no-data > td) { height: auto !important; }
 .dm-audit :deep(.v-data-table-footer) { padding-inline: 12px; border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
