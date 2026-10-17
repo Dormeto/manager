@@ -29,6 +29,18 @@ What the manager prices for each nap, how it adds savings up, and how a workload
   each state over 7 days, what its naps saved, its last nap priced), kept 5 minutes while its state stays the same. The
   bar of all workloads (`GET /api/workloads/states`) adds up each workload's figures kept `states_cache_minutes` (60 by
   default) whatever its state: a refresh reads every workload's history, 20 at a time.
+- **Energy (an estimate):** with a workload's costs, its figures carry `energy: { kwh, co2Kg, estimated }`, what its
+  naps did not use over the last 30 days: its last nap's items (as priced above) over its hours asleep within the
+  baseline (`costs.saved.hours`), in its own region. Cloud Carbon Footprint's coefficients for AWS: 0.74 to 3.5 W per
+  vCPU at 50% use, 0.392 W per GB of memory, a PUE of 1.135; EC2 and RDS shapes from the type's family and size (an RDS
+  Multi-AZ instance twice), Fargate by its size, Aurora Serverless v2 at its minimum capacity (an ACU: 0.25 vCPU and
+  2 GB); then the region's grid factor in kg CO2e per kWh (a region it does not list at the average of those it does).
+  Left out: items of unknown size, pods on nodes without a node autoscaler (the nodes stay); `estimated` counts the
+  items it could weigh. The bar of all workloads adds up those with an estimate: `energy: { kwh, co2Kg, workloads,
+  estimated }` (`workloads`: how many). Absent without prices (no `savings`, or discounts unreadable: no costs), and
+  `workloads: 0` while no nap stopped anything of a known size: the Overview's energy card then says "No estimate yet".
+  That card reads `GET /api/workloads/states` (when the Overview opens, then every 10 minutes), never the workloads one
+  by one; the computation is the API's (`@dormeto/fleet/energy`), the dashboard only says it.
 - **Daily job:** `dmt-<env>-manager-savings` (00:30 UTC; run it by hand with `{"day": "YYYY-MM-DD"}`) puts each
   workload's day as `SAV#<date>` / `<account>#<region>#<workloadId>` (kept `history_days`) and the summary
   (`T#default` / `SAVINGS`): the last 30 days, this month, the cumulative total (each day added once), the top workloads,
