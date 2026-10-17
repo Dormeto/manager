@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@dormeto/manager-api": "*",
+    "@dormeto/fleet": "*",
     "@types/qrcode": "1.5.5",
     "@vitejs/plugin-vue": "^6.0.9",
     "@vue/test-utils": "^2.5.1",

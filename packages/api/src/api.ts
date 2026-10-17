@@ -6,7 +6,7 @@ import {
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
-import { addEnergy, savedEnergy, type Energy } from './energy.js';
+import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';

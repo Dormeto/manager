@@ -1,6 +1,6 @@
 // The manager API's answers, computed from the demo model at each request (npm run dev:mock).
 import type { Candidate } from '@dormeto/discovery/types';
-import { addEnergy, savedEnergy } from '@dormeto/manager-api/energy';
+import { addEnergy, savedEnergy } from '@dormeto/fleet/energy';
 import type { AccessReport } from '../access';
 import type {
   AlertsInfo, Backend, Costs, Counts, Discounts, Exclusion, FleetStates, IdleWindowAdvice, IpListsInfo, Operation, Problem, RouterDetails, RouterInfo,

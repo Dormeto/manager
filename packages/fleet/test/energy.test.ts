@@ -1,4 +1,4 @@
-// The energy and carbon a nap saves (energy.ts, moved from the dashboard: the API computes it): an estimate from what the
+// The energy and carbon a nap saves (energy.ts: the API computes it, the dashboard's demo mode too): an estimate from what the
 // nap stopped, never a measure.
 import { describe, expect, it } from 'vitest';
 import { addEnergy, gridIntensity, itemWatts, savedEnergy, shape } from '../src/energy.js';

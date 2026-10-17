@@ -1,8 +1,9 @@
 // The energy a nap saves, and its carbon, as an estimate (the overview's energy card, a workload's costs area): what the
 // nap stopped (its items) times the hours asleep, with Cloud Carbon Footprint's coefficients for AWS (compute at 50%
 // utilisation, memory, the data centres' PUE) and the region's grid intensity. Not a measure: the instances' real load and
-// AWS's own figures differ. The dashboard's demo mode imports it too (@dormeto/manager-api/energy).
-import type { StoppedItem } from '@dormeto/fleet';
+// AWS's own figures differ. The API computes it (@dormeto/fleet/energy), the dashboard's demo mode too: this module and the
+// one it reads its type from (prices.ts) import nothing else, so neither pulls the fleet's store nor the AWS SDK.
+import type { StoppedItem } from './prices.js';
 
 // Cloud Carbon Footprint, AWS: watts per vCPU at 0% and 100%, watts per GB of memory, power usage effectiveness.
 const MIN_W = 0.74, MAX_W = 3.5, UTILISATION = 0.5, MEMORY_W = 0.392, PUE = 1.135;
