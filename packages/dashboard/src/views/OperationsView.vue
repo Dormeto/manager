@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // Operations (onboarding, R4b): onboardings, offboardings and router installations run by the workflow, with their steps.
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
-  mdiAlertCircleOutline, mdiArrowUpBoldCircleOutline, mdiCancel, mdiCheck, mdiChevronDown, mdiClose, mdiDeleteOutline, mdiLinkVariant, mdiLinkVariantOff,
+  mdiAlertCircleOutline, mdiArrowDown, mdiArrowUp, mdiArrowUpBoldCircleOutline, mdiCancel, mdiCheck, mdiChevronDown, mdiClose, mdiDeleteOutline, mdiLinkVariant, mdiLinkVariantOff,
   mdiMinus, mdiMinusCircleOutline, mdiPlayCircleOutline, mdiPlusCircleOutline, mdiRouterNetwork,
 } from '@mdi/js';
 import { api } from '../api';
@@ -27,6 +27,19 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   operations.value = (await api<{ operations: Operation[] }>('/operations')).operations;
 });
 const running = computed(() => operations.value.filter((o) => o.status === 'running').length);
+// Sorting and the page size, as the table had them: a key sorts ascending, then descending, then no more (newest first, as
+// the API lists them); 25 a page, or as many as chosen.
+type SortKey = 'status' | 'by' | 'createdAt';
+const SORTS: { key: SortKey; title: string }[] = [{ key: 'status', title: 'Status' }, { key: 'by', title: 'By' }, { key: 'createdAt', title: 'Started' }];
+const sortBy = ref<{ key: SortKey; order: 'asc' | 'desc' }[]>([]);
+const sortOf = (key: SortKey) => sortBy.value.find((s) => s.key === key)?.order;
+function sortOn(key: SortKey) {
+  const order = sortOf(key);
+  sortBy.value = !order ? [{ key, order: 'asc' }] : order === 'asc' ? [{ key, order: 'desc' }] : [];
+}
+const PER_PAGE = [{ title: '10', value: 10 }, { title: '25', value: 25 }, { title: '50', value: 50 }, { title: '100', value: 100 }, { title: 'All', value: -1 }];
+const perPage = ref(25);
+watch([sortBy, perPage], () => { page.value = 1; });
 const statusColor = (s: Operation['status']) => ({ running: 'primary', succeeded: 'success', failed: 'error' })[s];
 
 // Presentation: an icon per kind of operation, one per status.
@@ -59,7 +72,16 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
       AWS API calls. A step waits for a lock, a slot or a resource being created; a failed onboarding is undone.</p>
     <v-alert v-if="error" type="error" class="mb-4" :text="error" />
 
-    <v-data-iterator v-model:page="page" :items="operations" item-value="id" :items-per-page="25" :loading="loading && !operations.length">
+    <div v-if="operations.length" class="dm-ops-tools">
+      <span class="dm-ops-tools__label">Sort</span>
+      <v-btn v-for="s in SORTS" :key="s.key" data-test="sort" size="small" :variant="sortOf(s.key) ? 'tonal' : 'text'" :color="sortOf(s.key) ? 'primary' : undefined"
+        :append-icon="sortOf(s.key) === 'asc' ? mdiArrowUp : sortOf(s.key) === 'desc' ? mdiArrowDown : undefined" :aria-pressed="Boolean(sortOf(s.key))"
+        :aria-label="`Sort by ${s.title.toLowerCase()}${sortOf(s.key) ? (sortOf(s.key) === 'asc' ? ', ascending' : ', descending') : ''}`" @click="sortOn(s.key)">{{ s.title }}</v-btn>
+      <v-spacer />
+      <v-select v-model="perPage" :items="PER_PAGE" label="Per page" density="compact" hide-details class="dm-ops-tools__size" />
+    </div>
+
+    <v-data-iterator v-model:page="page" :items="operations" item-value="id" :sort-by="sortBy" :items-per-page="perPage" :loading="loading && !operations.length">
       <template #loader><v-card><DmLoader label="Reading the operations…" /></v-card></template>
       <template #no-data>
         <v-card>
@@ -143,6 +165,11 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
 .dm-narrow { max-width: 1120px; margin-inline: auto; }
 .dm-lead { max-width: 68rem; font-size: 0.98rem; line-height: 1.55; text-wrap: pretty; }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 32px 16px !important; text-align: start; }
+
+/* Sorting and the page size, above the cards. */
+.dm-ops-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; }
+.dm-ops-tools__label { margin-inline-end: 4px; font: 500 0.64rem/1 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-ops-tools__size { flex: 0 0 132px; }
 
 /* "running": a dot that breathes. */
 .dm-pulse { display: inline-block; flex: none; width: 7px; height: 7px; margin-inline-end: 7px; border-radius: 50%; background: currentColor; animation: dm-pulse 1.8s ease-in-out infinite; }
