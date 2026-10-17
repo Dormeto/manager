@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.11.0 — 2026-10-17
+
+Router 0.29.0. Access: nothing to apply again (the access and organization modules and the AWS CLI script are
+unchanged).
 
 - The manager module's `organization_id` is optional, for `dormeto install`'s account deployment (a manager in an account
   outside any organization): without it the manager assumes the discovery and command roles, and accepts the routers'
