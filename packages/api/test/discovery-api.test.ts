@@ -8,8 +8,8 @@ const RUN: RunRecord = { startedAt: '2026-10-04T11:00:00.000Z', finishedAt: '202
 const NOW_ISO = new Date(NOW).toISOString();
 const R2 = candidate('r2', { region: 'eu-west-3', status: 'ineligible', statusReason: 'fixed response', eligibility: 'ineligible', backend: null });
 
-function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], operations }: {
-  visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; workloads?: Record<string, unknown>[]; operations?: OperationsApi;
+function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], operations, defaultMode }: {
+  visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; workloads?: Record<string, unknown>[]; operations?: OperationsApi; defaultMode?: string;
 } = {}) {
   const audit: AuditEntry[] = [];
   const runs: string[] = [];
@@ -24,7 +24,7 @@ function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], op
       listRouters: async () => [], listWorkloads: async () => { throw new Error('the Discovery view never lists every workload'); },
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
-    ...(visible ? { visible } : {}), ...(operations ? { operations } : {}),
+    ...(visible ? { visible } : {}), ...(operations ? { operations } : {}), ...(defaultMode ? { discoveryMode: defaultMode } : {}),
   });
   return { api, audit, runs, store };
 }
@@ -124,6 +124,12 @@ describe('discovery routes', () => {
     const body = json(await api(event('GET', '/api/discovery/config')));
     expect(body.config.filters).toEqual([]);
     expect(body.lint).toEqual([]);
+    expect(body.config.mode).toBe('organization');
+  });
+
+  it('returns the default configuration in the default mode of the deployment: account outside an organization', async () => {
+    const { api } = setup(undefined, { defaultMode: 'account' });
+    expect(json(await api(event('GET', '/api/discovery/config'))).config.mode).toBe('account');
   });
 
   it('saves a valid configuration for admins only, with its lint, audited', async () => {

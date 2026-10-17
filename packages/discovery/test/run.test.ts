@@ -169,6 +169,17 @@ describe('runDiscovery', () => {
     expect(s.assumed).toEqual([A.id]);
   });
 
+  it('uses the default mode when no configuration is saved: account reads the manager account only, organization the organization', async () => {
+    const account = setup();
+    await runDiscovery({ ...account.deps, defaultMode: 'account' }, { source: 'manual' });
+    expect(account.org.calls).toEqual([]);
+    expect((await account.store.getInventory())!.accounts.map((a) => a.id)).toEqual([A.id]);
+    const organization = setup();
+    await runDiscovery(organization.deps, { source: 'manual' });
+    expect(organization.org.calls).not.toEqual([]);
+    expect((await organization.store.getInventory())!.accounts.length).toBe(3);
+  });
+
   it('reads account tags only when a criterion uses them, and records the lint of the run', async () => {
     const s = setup({ cfg: config({ filters: [filter('dev', [{ accountTags: { env: ['dev'] } }, { hosts: ['*.example.org'] }])] }) });
     await s.ready;
