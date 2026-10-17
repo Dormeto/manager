@@ -1,4 +1,4 @@
-// How the energy and carbon a nap saves are said (energy.ts): the API estimates them (packages/api/test/energy.test.ts).
+// How the energy and carbon a nap saves are said (energy.ts): the API estimates them (packages/fleet/test/energy.test.ts).
 import { describe, expect, it } from 'vitest';
 import { equivalents, rounded } from '../src/energy';
 

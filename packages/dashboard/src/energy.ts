@@ -1,4 +1,4 @@
-// The energy a nap saves, and its carbon, as the API estimates it (packages/api/src/energy.ts: what the nap stopped times
+// The energy a nap saves, and its carbon, as the API estimates it (packages/fleet/src/energy.ts: what the nap stopped times
 // the hours asleep, with Cloud Carbon Footprint's coefficients for AWS and each region's grid intensity); here, only how
 // it is said. Not a measure: the instances' real load and AWS's own figures differ.
 
