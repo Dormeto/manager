@@ -7,7 +7,7 @@ import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
-import { equivalents, rounded, savedEnergy } from '../energy';
+import { equivalents, rounded } from '../energy';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
@@ -207,14 +207,9 @@ const since = computed(() => {
   return at.at ? { label: at.label, when: relative(at.at, now.value) } : null;
 });
 // The costs area: what its naps saved in the last 30 days, a month at that rate, the base cost an hour (as its 7-day bar
-// says them), and the energy its naps did not use, with its carbon (energy.ts, an estimate).
+// says them), and the energy its naps did not use, with its carbon (the API's estimate, with its costs).
 const savings = computed(() => barSavings(status.value?.costs));
-const energy = computed(() => {
-  const c = status.value?.costs;
-  if (!c) return null;
-  const e = savedEnergy(c.items.map((i) => i.item), c.saved.hours, status.value?.region ?? '');
-  return e.estimated ? e : null;
-});
+const energy = computed(() => (status.value?.energy?.estimated ? status.value.energy : null));
 const everyday = computed(() => {
   if (!energy.value) return [];
   const [phone, , , car] = equivalents(energy.value);

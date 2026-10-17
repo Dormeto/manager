@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useNow } from '../now';
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { mdiAlertCircleOutline, mdiArrowRight, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
@@ -14,7 +14,7 @@ import RefreshIndicator from '../components/RefreshIndicator.vue';
 import AlertsCard from '../components/AlertsCard.vue';
 import DmLogo from '../components/DmLogo.vue';
 import FleetMap from '../components/FleetMap.vue';
-import type { AlertsInfo, RouterInfo, WorkloadSummary } from '../types';
+import type { AlertsInfo, FleetStates, RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
 // Counts, 7-day totals and the workloads that need attention, from the API (never every workload).
@@ -41,6 +41,29 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   loaded.value = true;
 });
 const more = computed(() => attentionMore(attentionTotal.value, attention.value.length));
+// The energy the naps did not use (the energy card), as the API estimates it with the bar of all workloads: its figures
+// kept an hour, asked again every 10 minutes, as the Workloads view does (never every workload from here).
+const FLEET_MS = 600_000;
+const fleetStates = ref<FleetStates | null>(null);
+const fleetLoaded = ref(false);
+const fleetError = ref('');
+async function loadFleet() {
+  try {
+    fleetStates.value = await api<FleetStates>('/workloads/states');
+    fleetError.value = '';
+  } catch (err) {
+    // The last answer stays; none yet, the card says why.
+    if (!fleetStates.value) fleetError.value = (err as Error).message;
+  } finally {
+    fleetLoaded.value = true;
+  }
+}
+let fleetTimer: ReturnType<typeof setInterval> | undefined;
+onMounted(() => {
+  void loadFleet();
+  fleetTimer = setInterval(() => void loadFleet(), FLEET_MS);
+});
+onUnmounted(() => clearInterval(fleetTimer));
 
 const count = (...states: string[]) => states.reduce((n, s) => n + (byState.value[s] ?? 0), 0);
 const cards = computed(() => [
@@ -64,7 +87,6 @@ const weekly = computed(() => [
   { title: 'Wakes (7 days)', value: total('wakes'), icon: mdiWeatherSunsetUp, color: 'primary' },
   { title: 'Requests that did not wake (7 days)', value: total('ignored') + total('deferred'), icon: mdiFilterRemoveOutline, color: 'secondary' },
 ]);
-const regions = computed(() => Object.fromEntries(routers.value.map((r) => [r.name, r.region])));
 
 // The numbers count up when they change (a tween per key).
 const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -129,7 +151,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
   <v-row class="mb-1">
     <v-col cols="12" lg="7"><SavingsCard class="h-100" /></v-col>
     <v-col cols="12" lg="5" class="d-flex flex-column ga-4">
-      <EnergyCard :regions="regions" />
+      <EnergyCard :energy="fleetStates?.energy" :loaded="fleetLoaded" :error="fleetError" />
       <div class="dm-kpis">
         <v-card v-for="card in weekly" :key="card.title">
           <v-card-text class="d-flex align-center ga-3">

@@ -1,33 +1,17 @@
 <script setup lang="ts">
-// The energy the fleet's naps saved over the last 30 days, and its carbon, as an estimate (energy.ts): each workload's
-// last nap's items times its hours asleep, in its router's region; then an everyday equivalent, one after the other.
+// The energy the fleet's naps saved over the last 30 days, and its carbon, as the API estimates it with the bar of all
+// workloads (GET /workloads/states, the Overview's): each workload's last nap's items times its hours asleep, in its own
+// region; then an everyday equivalent, one after the other. Without a workload estimated, no estimate yet (never a zero).
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { mdiCar, mdiCellphone, mdiCoffeeOutline, mdiLeaf, mdiTelevisionPlay } from '@mdi/js';
-import { api } from '../api';
-import { usePoll } from '../poll';
-import { addEnergy, equivalents, rounded, savedEnergy, type Energy } from '../energy';
+import { equivalents, rounded, type FleetEnergy } from '../energy';
 import DmLoader from './DmLoader.vue';
-import type { WorkloadSummary } from '../types';
 
-const props = defineProps<{ regions: Record<string, string> }>();
-const energy = ref<Energy | null>(null);
-const workloads = ref(0);
-const loaded = ref(false);
+// energy: none without prices; loaded: the Overview has its answer; error: it could not read it.
+const props = defineProps<{ energy?: FleetEnergy | null; loaded: boolean; error?: string }>();
+const energy = computed(() => (props.energy?.workloads ? props.energy : null));
+const workloads = computed(() => energy.value?.workloads ?? 0);
 const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-
-const { error } = usePoll(async () => {
-  const answer = await api<{ workloads: WorkloadSummary[] }>('/workloads?states=1&limit=1000');
-  let total: Energy = { kwh: 0, co2Kg: 0, estimated: 0 };
-  let counted = 0;
-  for (const w of answer.workloads) {
-    if (!w.costs) continue;
-    const e = savedEnergy(w.costs.items.map((i) => i.item), w.costs.saved.hours, props.regions[w.router] ?? '');
-    if (e.estimated) { total = addEnergy(total, e); counted += 1; }
-  }
-  energy.value = total;
-  workloads.value = counted;
-  loaded.value = true;
-});
 
 // The numbers count up when they arrive.
 const shown = ref({ kwh: 0, co2Kg: 0 });
@@ -43,7 +27,7 @@ watch(energy, (e) => {
     if (p < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
-});
+}, { immediate: true });
 
 const ICONS = { phone: mdiCellphone, stream: mdiTelevisionPlay, tea: mdiCoffeeOutline, car: mdiCar };
 const items = computed(() => (energy.value ? equivalents(energy.value).map((e) => ({ ...e, icon: ICONS[e.icon] })) : []));
@@ -61,7 +45,7 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
         <span class="dm-eyebrow">Energy not used · last 30 days</span>
       </div>
       <v-alert v-if="error" type="warning" variant="tonal" density="compact" :text="error" />
-      <template v-else-if="loaded && energy">
+      <template v-else-if="energy">
         <div class="d-flex flex-wrap align-end ga-6">
           <div>
             <div class="dm-energy__value">{{ rounded(shown.kwh) }}<span> kWh</span></div>
@@ -75,12 +59,15 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
         <div class="dm-energy__equivs">
           <div v-for="(e, i) in items" :key="e.text" class="dm-energy__equiv" :class="{ 'is-lit': i === index }">
             <v-icon :icon="e.icon" size="20" />
-            <div><b>{{ rounded(e.value) }}</b><span>{{ e.text }}</span></div>
+            <div><b>≈ {{ rounded(e.value) }}</b><span>{{ e.text }}</span></div>
           </div>
         </div>
-        <div class="text-body-small text-medium-emphasis">Estimate from {{ workloads }} workload{{ workloads === 1 ? '' : 's' }}: what each nap stopped,
-          with Cloud Carbon Footprint's coefficients for AWS. Not a measure.</div>
+        <div class="text-body-small text-medium-emphasis">Estimate from {{ workloads }} workload{{ workloads === 1 ? '' : 's' }}: each one's last nap's items
+          applied to every hour asleep over the last 30 days, at 50% CPU use, in its region (an unknown region at the average); items of
+          unknown size and pods without a node autoscaler left out. Cloud Carbon Footprint's coefficients for AWS. Not a measure.</div>
       </template>
+      <div v-else-if="loaded" class="text-body-medium text-medium-emphasis">No estimate yet: it comes with the naps' figures, from what each nap
+        stopped (its instances, databases, tasks or pods of a known size) and its hours asleep.</div>
       <DmLoader v-else label="Weighing the naps…" :size="48" />
     </v-card-text>
   </v-card>

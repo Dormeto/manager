@@ -1,5 +1,6 @@
 // The manager API's answers, computed from the demo model at each request (npm run dev:mock).
 import type { Candidate } from '@dormeto/discovery/types';
+import { addEnergy, savedEnergy } from '@dormeto/manager-api/energy';
 import type { AccessReport } from '../access';
 import type {
   AlertsInfo, Backend, Costs, Counts, Discounts, Exclusion, FleetStates, IdleWindowAdvice, IpListsInfo, Operation, Problem, RouterDetails, RouterInfo,
@@ -143,6 +144,9 @@ export function costsOf(d: Demo, w: DemoWorkload, now: number): Costs {
 }
 
 const states7d = (w: DemoWorkload, now: number) => ({ from: iso(now - 7 * DAY), to: iso(now), totals: historyView(w.entries, now - 7 * DAY, now).totals });
+// The energy its naps did not use, as the API estimates it with its costs (its own energy.ts): its last nap's items over its
+// hours asleep, in its region.
+const energyOf = (w: DemoWorkload, c: Costs) => savedEnergy(c.items.map((i) => i.item), c.saved.hours, w.region);
 
 // Requests while not awake (the router's daily counters): scanners ignored, requests deferred, wakes by trigger.
 const IGNORED = ['scanner path', 'bot user agent', 'list ipsum', 'HEAD', 'rule health-checks', 'list tor-exits'];
@@ -172,6 +176,7 @@ function kinds(w: DemoWorkload): string[] {
 
 export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = false, states = false } = {}): WorkloadSummary & { region: string; targetGroupArn: string } {
   const total = countsOf(w, now - 7 * DAY, now);
+  const costs = states ? costsOf(d, w, now) : null;
   return {
     router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode,
     wakeCount: w.wakeCount, awakeSince: w.awakeSince === null ? null : iso(w.awakeSince), wakeStartedAt: w.wakeStartedAt === null ? null : iso(w.wakeStartedAt),
@@ -180,7 +185,7 @@ export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = fals
     pendingWake: w.pendingWake, backends: kinds(w), pauses: pausesOf(d, w), settings: w.settings, targetGroupArn: w.targetGroupArn,
     stats7d: { ignored: sum(total.ignored), deferred: sum(total.deferred), wakes: sum(total.wakes) },
     ...(idle && w.idleHours7d !== null ? { idleHours7d: w.idleHours7d, requests7d: w.requests7d } : {}),
-    ...(states ? { states7d: states7d(w, now), costs: costsOf(d, w, now) } : {}),
+    ...(costs ? { states7d: states7d(w, now), costs, energy: energyOf(w, costs) } : {}),
   };
 }
 
@@ -235,7 +240,7 @@ export function workloadStatus(d: Demo, w: DemoWorkload, now: number): WorkloadS
     workloadId: w.workloadId, name: w.name, url: row.url, router: { version: router.version, build: router.build }, state: w.state, updatedAt: row.updatedAt,
     awakeSince: row.awakeSince, wakeStartedAt: row.wakeStartedAt, failedAt: row.failedAt, failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: row.nextAttemptAt ?? null, fallbacks: [], wakeCount: w.wakeCount, holders: w.state === 'WAKING' ? 1 : 0, pendingWake: w.pendingWake, pauses,
-    targetGroupArn: w.targetGroupArn, source: w.source, account: w.account, region: w.region, states7d: row.states7d, costs: row.costs,
+    targetGroupArn: w.targetGroupArn, source: w.source, account: w.account, region: w.region, states7d: row.states7d, costs: row.costs, energy: row.energy,
     ...(w.idleHours7d !== null ? { idleHours7d: w.idleHours7d, requests7d: w.requests7d } : {}), drift: w.drift,
     lastRequestAt: lastRequestAt === null ? null : iso(lastRequestAt),
     nap: w.state === 'AWAKE' && !pauses.length && eligibleAt !== null
@@ -294,9 +299,13 @@ export function fleetStates(d: Demo, now: number): FleetStates {
   let hourly = 0;
   let monthly = 0;
   let priced = 0;
+  let energy = { kwh: 0, co2Kg: 0, estimated: 0 };
+  let estimated = 0;
   for (const w of d.workloads) {
     for (const [state, seconds] of Object.entries(states7d(w, now).totals)) totals[state] = (totals[state] ?? 0) + seconds;
     const c = costsOf(d, w, now);
+    const e = energyOf(w, c);
+    if (e.estimated) { energy = addEnergy(energy, e); estimated += 1; }
     saved.usd += c.saved.usd;
     saved.hours += c.saved.hours;
     saved.unpricedHours += c.saved.unpricedHours;
@@ -310,6 +319,7 @@ export function fleetStates(d: Demo, now: number): FleetStates {
   return {
     workloads: d.workloads.length, computedAt: iso(now - 7 * MINUTE), cacheMinutes: 60, states7d: { from: iso(now - 7 * DAY), to: iso(now), totals },
     costs: { baseline: ALWAYS, saved: { usd: round(saved.usd), hours: round(saved.hours, 1), unpricedHours: round(saved.unpricedHours, 1) }, hourly: priced ? round(hourly, 4) : null, monthly: priced ? round(monthly) : null, priced, ...(discounts ? { discounts } : {}) },
+    energy: { ...energy, workloads: estimated },
   };
 }
 

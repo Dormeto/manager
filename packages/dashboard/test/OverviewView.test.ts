@@ -8,8 +8,17 @@ import OverviewView from '../src/views/OverviewView.vue';
 
 const late = new Date(Date.now() - 60 * 60_000).toISOString();
 const failing = { alerts: false };
+const paths: string[] = [];
+// The bar of all workloads (GET /workloads/states), with the energy the API estimates (PR #1).
+const ENERGY = { kwh: 1234.5, co2Kg: 345.6, workloads: 2, estimated: 5 };
+let fleetStates: Record<string, unknown> = {
+  workloads: 2, computedAt: late, cacheMinutes: 60, states7d: { from: late, to: late, totals: {} },
+  costs: { baseline: { kind: 'always' }, saved: { usd: 1, hours: 2, unpricedHours: 0 }, hourly: 0.1, monthly: 10, priced: 1 }, energy: ENERGY,
+};
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string) => {
+    paths.push(path);
+    if (path === '/workloads/states') return structuredClone(fleetStates);
     if (path === '/alerts' && failing.alerts) throw new Error('SNS throttled');
     if (path === '/alerts') {
       return {
@@ -24,6 +33,16 @@ vi.mock('../src/api', () => ({
   }),
 }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+// Reduced motion: the figures show at once, without counting up.
+window.matchMedia ??= ((query: string) => ({ matches: query.includes('reduce'), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+async function mountOverview() {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+  const wrapper = mount(OverviewView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+  await flushPromises();
+  return wrapper;
+}
 
 describe('Overview', () => {
   it('shows the open alarms in the Alerts card, instead of a banner per late router', async () => {
@@ -64,5 +83,33 @@ describe('Overview', () => {
     expect(new Set(links)).toEqual(new Set(['/routers/dmt-dev']));
     wrapper.unmount();
   });
-});
 
+  it('says the energy the naps did not use as the API estimates it, from the bar of all workloads: never every workload (PR #1)', async () => {
+    paths.length = 0;
+    const wrapper = await mountOverview();
+    const card = wrapper.find('.dm-energy');
+    expect(card.text()).toMatch(/1,200\s*kWh/);
+    expect(card.text()).toMatch(/350\s*kg CO₂e/);
+    // Everyday equivalents, approximate: 1234.5 kWh / 15 Wh a smartphone charge.
+    expect(card.text()).toContain('≈ 82,000smartphone charges');
+    // The method, in the card's note.
+    expect(card.text()).toContain('Estimate from 2 workloads');
+    for (const part of ['50% CPU use', 'every hour asleep over the last 30 days', 'an unknown region at the average', 'left out', 'Cloud Carbon Footprint']) expect(card.text()).toContain(part);
+    expect(paths.filter((p) => p === '/workloads/states')).toHaveLength(1);
+    expect(paths.some((p) => /states=1/.test(p))).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('says no estimate yet rather than a zero: no workload estimated, or no prices (PR #1)', async () => {
+    for (const energy of [{ kwh: 0, co2Kg: 0, workloads: 0, estimated: 0 }, undefined]) {
+      const saved = fleetStates;
+      fleetStates = { ...fleetStates, energy };
+      const wrapper = await mountOverview();
+      const card = wrapper.find('.dm-energy');
+      expect(card.text()).toContain('No estimate yet');
+      expect(card.text()).not.toMatch(/\d\s*kWh/);
+      fleetStates = saved;
+      wrapper.unmount();
+    }
+  });
+});
