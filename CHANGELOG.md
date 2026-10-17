@@ -7,9 +7,6 @@ CLI script, of the same release).
 
 ## Unreleased
 
-Router 0.29.0. Access: nothing to apply again (the access and organization modules and the AWS CLI script are
-unchanged).
-
 - The dashboard's redesign, in the website's design: night and light themes (the system's until the user chooses one in
   the top bar), the Dormeto fonts and animated icon (loaders, the navigation's own icons), every view restyled. The
   Overview shows the fleet live (the icons of its first 96 workloads by router, each router's count, "+N more" to its

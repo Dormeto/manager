@@ -64,8 +64,8 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
           </div>
         </div>
         <div class="text-body-small text-medium-emphasis">Estimate from {{ workloads }} workload{{ workloads === 1 ? '' : 's' }}: each one's last nap's items
-          applied to every hour asleep within the savings baseline over the last 30 days (with business hours, weekdays 08:00 to 20:00 only),
-          at 50% CPU use, in its region (an unknown region at the average); items of unknown size and pods without a node autoscaler left
+          applied to every hour asleep within the savings baseline over the last 30 days (business hours or every hour, as the manager is
+          set), at 50% CPU use, in its region (an unknown region at the average); items of unknown size and pods without a node autoscaler left
           out. Cloud Carbon Footprint's coefficients for AWS. Not a measure.</div>
       </template>
       <div v-else-if="loaded" class="text-body-medium text-medium-emphasis">No estimate yet: it comes with the naps' figures, from what each nap
