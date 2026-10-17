@@ -36,8 +36,6 @@ const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
 });
 const initials = (email: string) => (email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?';
 const failed = (e: Entry) => e.result.startsWith('error');
-// A result longer than its chip shows: whole in a tooltip.
-const LONG = 18;
 </script>
 
 <template>
@@ -76,18 +74,13 @@ const LONG = 18;
         </v-tooltip>
       </template>
       <template #[`item.result`]="{ item }">
-        <!-- A long result: cut in its chip, whole in a tooltip (only then: each tooltip renders its own overlay). -->
-        <v-tooltip v-if="item.result.length >= LONG" location="top" max-width="480" open-on-focus :text="item.result">
-          <template #activator="{ props }">
-            <v-chip v-bind="props" :color="failed(item) ? 'error' : undefined" variant="tonal" label class="dm-result" tabindex="0">
-              <template #prepend><v-icon :icon="failed(item) ? mdiAlertCircleOutline : mdiCheck" :color="failed(item) ? 'error' : 'success'" size="14" class="mr-1" /></template>
-              <span class="text-truncate">{{ item.result }}</span>
-            </v-chip>
-          </template>
-        </v-tooltip>
-        <v-chip v-else :color="failed(item) ? 'error' : undefined" variant="tonal" label class="dm-result">
-          <template #prepend><v-icon :icon="failed(item) ? mdiAlertCircleOutline : mdiCheck" :color="failed(item) ? 'error' : 'success'" size="14" class="mr-1" /></template>
-          <span class="text-truncate">{{ item.result }}</span>
+        <!-- Whole: an error in red, wrapping and selectable (a chip's text is not), as before the redesign; else a chip. -->
+        <div v-if="failed(item)" data-test="audit-result" class="dm-result dm-result--error text-error">
+          <v-icon :icon="mdiAlertCircleOutline" color="error" size="14" class="dm-result__icon" /><span>{{ item.result }}</span>
+        </div>
+        <v-chip v-else data-test="audit-result" variant="tonal" label class="dm-result">
+          <template #prepend><v-icon :icon="mdiCheck" color="success" size="14" class="mr-1" /></template>
+          <span>{{ item.result }}</span>
         </v-chip>
       </template>
     </v-data-table>
@@ -106,9 +99,9 @@ const LONG = 18;
 .dm-who__email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.875rem; }
 .dm-who__role { font: 500 0.6rem/1.5 var(--dm-mono); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }
 .dm-avatar { flex: none; background: linear-gradient(155deg, rgb(69, 137, 202), rgb(3, 75, 128)); color: rgb(255, 255, 255); font-size: 0.66rem; font-weight: 600; }
-.dm-result { max-width: 10rem; }
-.dm-result :deep(.v-chip__content) { min-width: 0; }
-.dm-result:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
+.dm-result--error { display: flex; align-items: flex-start; gap: 6px; max-width: 36rem; padding: 6px 0; font-size: 0.875rem; line-height: 1.45; white-space: normal;
+  overflow-wrap: anywhere; user-select: text; }
+.dm-result__icon { flex: none; margin-top: 3px; }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 32px 0; }
 .dm-audit :deep(.v-data-table-rows-loading > td), .dm-audit :deep(.v-data-table-rows-no-data > td) { height: auto !important; }
 .dm-audit :deep(.v-data-table-footer) { padding-inline: 12px; border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
