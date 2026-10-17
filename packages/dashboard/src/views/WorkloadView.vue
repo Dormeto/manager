@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiChevronDown, mdiInformationOutline, mdiPencilOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
+import { equivalents, rounded, savedEnergy } from '../energy';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
@@ -19,11 +20,14 @@ import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import IdleWindowCard from '../components/IdleWindowCard.vue';
+import DmLogo from '../components/DmLogo.vue';
+import DmLoader from '../components/DmLoader.vue';
 import { stateSince } from '../state';
 import { backendCost, barSavings, discountText } from '../costs';
 import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
+import { useCountUp } from '../count-up';
 import type { Counts, WorkloadStatus } from '../types';
 
 const now = useNow();
@@ -188,42 +192,95 @@ const summary = computed(() => {
     { label: 'Workload id', value: s.workloadId },
   ];
 });
-</script>
 
+// The hero's icon (guide): asleep, napping or waking (its rays turn), awake; failed or unknown awake, its chip says it.
+const mood = computed<'sleep' | 'load' | 'wake'>(() => {
+  const s = status.value?.state;
+  if (!s) return error.value ? 'wake' : 'load';
+  return s === 'ASLEEP' ? 'sleep' : s === 'NAPPING' || s === 'WAKING' ? 'load' : 'wake';
+});
+const sky = computed(() => (status.value?.state === 'FAILED' ? 'failed' : mood.value));
+const since = computed(() => {
+  const s = status.value;
+  if (!s) return null;
+  const at = stateSince(s);
+  return at.at ? { label: at.label, when: relative(at.at, now.value) } : null;
+});
+// The costs area: what its naps saved in the last 30 days, a month at that rate, the base cost an hour (as its 7-day bar
+// says them), and the energy its naps did not use, with its carbon (energy.ts, an estimate).
+const savings = computed(() => barSavings(status.value?.costs));
+const energy = computed(() => {
+  const c = status.value?.costs;
+  if (!c) return null;
+  const e = savedEnergy(c.items.map((i) => i.item), c.saved.hours, status.value?.region ?? '');
+  return e.estimated ? e : null;
+});
+const everyday = computed(() => {
+  if (!energy.value) return [];
+  const [phone, , , car] = equivalents(energy.value);
+  return [{ ...phone!, icon: mdiCellphone }, { ...car!, icon: mdiCar }];
+});
+// The figures count up when they arrive (presentation: the conditions read the values themselves).
+const savedUp = useCountUp(() => savings.value?.saved.usd ?? 0);
+const monthlyUp = useCountUp(() => savings.value?.monthly ?? 0);
+const hourlyUp = useCountUp(() => savings.value?.hourly ?? 0);
+const kwhUp = useCountUp(() => energy.value?.kwh ?? 0);
+const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
+</script>
 <template>
-  <div data-test="header" class="d-flex flex-wrap align-center ga-3 mb-4">
-    <v-btn :icon="mdiArrowLeft" variant="text" to="/workloads" aria-label="Back to the workloads" />
-    <h1 class="text-headline-small">{{ title }}</h1>
-    <StateChip v-if="status" :state="status.state" :failure="status.failure" />
-    <StateBar v-if="status" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" />
-    <PauseChip :pauses="pauses" />
-    <router-link :to="`/routers/${encodeURIComponent(router)}`" class="text-medium-emphasis">{{ router }}</router-link>
-    <a v-if="url" :href="url" target="_blank" rel="noopener">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
-    <v-spacer />
-    <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
-    <!-- Its actions in one menu (user request): wake and nap when its state allows, pause or resume, rename and offboard what
-         the manager onboarded (offboard also a workload of a router it did not install), exclude its target group. -->
-    <v-menu v-if="session.canOperate && status" location="bottom end">
-      <template #activator="{ props: menu }">
-        <v-btn v-bind="menu" data-test="actions" variant="tonal" :append-icon="mdiChevronDown" :disabled="acting">Actions</v-btn>
-      </template>
-      <v-list density="compact" min-width="200">
-        <v-list-item data-test="action" :prepend-icon="mdiWeatherSunny" title="Wake" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state)" @click="confirm = 'wake'" />
-        <v-list-item data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="status.state !== 'AWAKE' || pauses.length > 0" @click="confirm = 'nap'" />
-        <v-list-item v-if="ownPause" data-test="action" :prepend-icon="mdiPlay" title="Resume" @click="change('resume')" />
-        <v-list-item v-else data-test="action" :prepend-icon="mdiPause" title="Pause" @click="pauseOpen = true" />
-        <v-list-item v-if="status.source === 'manager'" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
-        <v-list-item v-if="!excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
-        <template v-if="status.source !== 'terraform'">
-          <v-divider class="my-1" />
-          <v-list-item data-test="action" :prepend-icon="mdiLogoutVariant" title="Offboard" base-color="error" @click="confirm = 'offboard'" />
-        </template>
-      </v-list>
-    </v-menu>
-  </div>
+  <!-- The hero, the page's header: the workload's state as the Dormeto icon, where it runs, its 7-day bar, its actions. -->
+  <v-card data-test="header" class="dm-hero mb-4">
+    <div class="dm-hero__sky" :data-mood="sky" aria-hidden="true" />
+    <div class="dm-hero__body">
+      <div class="dm-hero__icon"><DmLogo :state="mood" :size="88" /></div>
+      <div class="dm-hero__main">
+        <div class="dm-hero__head">
+        <div class="dm-hero__where">
+          <v-btn :icon="mdiArrowLeft" variant="text" size="small" density="comfortable" to="/workloads" aria-label="Back to the workloads" class="dm-hero__back" />
+          <span class="dm-eyebrow">Fleet</span>
+          <span class="dm-hero__sep" aria-hidden="true">/</span>
+          <router-link :to="`/routers/${encodeURIComponent(router)}`" class="dm-hero__router">{{ router }}</router-link>
+          <template v-if="status?.region"><span class="dm-hero__sep" aria-hidden="true">·</span><span class="dm-hero__region">{{ status.region }}</span></template>
+        </div>
+        <h1 class="text-headline-small dm-hero__title">{{ title }}</h1>
+        </div>
+        <div class="dm-hero__info">
+        <div class="dm-hero__chips">
+          <StateChip v-if="status" :state="status.state" :failure="status.failure" />
+          <PauseChip :pauses="pauses" />
+          <span v-if="since" class="dm-hero__since">{{ since.label }} <strong>{{ since.when }}</strong></span>
+          <a v-if="url" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
+        </div>
+        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" />
+        </div>
+      </div>
+      <div class="dm-hero__side">
+        <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
+        <!-- Its actions in one menu (user request): wake and nap when its state allows, pause or resume, rename and offboard what
+             the manager onboarded (offboard also a workload of a router it did not install), exclude its target group. -->
+        <v-menu v-if="session.canOperate && status" location="bottom end">
+          <template #activator="{ props: menu }">
+            <v-btn v-bind="menu" data-test="actions" color="primary" variant="flat" :append-icon="mdiChevronDown" :disabled="acting" class="dm-hero__actions">Actions</v-btn>
+          </template>
+          <v-list density="compact" min-width="220">
+            <v-list-item data-test="action" :prepend-icon="mdiWeatherSunny" title="Wake" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state)" @click="confirm = 'wake'" />
+            <v-list-item data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="status.state !== 'AWAKE' || pauses.length > 0" @click="confirm = 'nap'" />
+            <v-list-item v-if="ownPause" data-test="action" :prepend-icon="mdiPlay" title="Resume" @click="change('resume')" />
+            <v-list-item v-else data-test="action" :prepend-icon="mdiPause" title="Pause" @click="pauseOpen = true" />
+            <v-list-item v-if="status.source === 'manager'" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
+            <v-list-item v-if="!excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
+            <template v-if="status.source !== 'terraform'">
+              <v-divider class="my-1" />
+              <v-list-item data-test="action" :prepend-icon="mdiLogoutVariant" title="Offboard" base-color="error" @click="confirm = 'offboard'" />
+            </template>
+          </v-list>
+        </v-menu>
+      </div>
+    </div>
+  </v-card>
   <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
-  <v-alert v-if="pauses.length" type="info" variant="tonal" class="mb-4" :title="excluded ? 'Excluded: never napped, waiting for offboarding' : 'Paused: never napped, requests still wake it'">
+  <v-alert v-if="pauses.length" type="info" variant="tonal" class="mb-4 dm-alert-links" :title="excluded ? 'Excluded: never napped, waiting for offboarding' : 'Paused: never napped, requests still wake it'">
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">
       {{ pauseLine(p, now) }}
       <router-link v-if="p.exclusionId" to="/discovery" class="ml-1">Lift the exclusion in Discovery</router-link>
@@ -237,25 +294,22 @@ const summary = computed(() => {
   <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" title="On fallback instance types">
     {{ fallbackText }}: AWS had no capacity for their own types at the last wake; the next nap gives them back.
   </v-alert>
-  <v-progress-linear v-if="loading && !status" indeterminate color="primary" />
+  <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
 
-  <v-row v-if="status">
-    <v-col cols="12" md="5">
-      <v-card title="Summary">
-        <v-table density="comfortable">
-          <tbody>
-            <tr v-for="row in summary" :key="row.label"><th class="text-medium-emphasis font-weight-regular">{{ row.label }}</th><td>{{ row.value }}</td></tr>
-          </tbody>
-        </v-table>
-      </v-card>
-    </v-col>
-    <v-col cols="12" md="7">
-      <v-card title="Backends" class="mb-4">
-        <v-list density="comfortable">
+  <!-- Two columns of cards, 16 px apart: the backends, history and idle window (wide content) on the left; the summary, rules,
+       targets, filtering and settings (short ones) on the right, so both end at about the same height. -->
+  <div v-if="status" class="dm-layout">
+    <div v-if="status.recommendations.length" class="dm-stack dm-layout__wide">
+      <v-alert v-for="r in status.recommendations" :key="r.backend" type="info" variant="tonal" :title="`Recommendation for ${shortId(r.backend)}`" :text="r.message" />
+    </div>
+
+    <div class="dm-stack">
+      <v-card title="Backends">
+        <v-list density="comfortable" class="bg-transparent">
           <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="backendArn(b, where)" :service="backendService(b.kind)" :rows="costRows(b)"
             :note="costRows(b).some((r) => r.label === 'Base cost') ? costNote : null">
             <template #default="{ tip }">
-              <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : shortId(b.id)">
+              <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : shortId(b.id)" class="dm-backend">
                 <template v-if="backendIcon(b.kind)" #prepend>
                   <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
                 </template>
@@ -269,14 +323,58 @@ const summary = computed(() => {
           </ResourceTooltip>
         </v-list>
         <v-card-text v-if="status.ignoredTargets.length" class="pt-0 text-body-small">Ignored: {{ status.ignoredTargets.map((t) => `${t.id} (${t.reason})`).join(', ') }}</v-card-text>
+        <div v-if="status.costs && savings" class="dm-costs">
+          <div class="dm-eyebrow mb-3">Costs · last 30 days</div>
+          <div class="dm-costs__figures">
+            <div class="dm-figure">
+              <div :class="['dm-figure__value', { 'text-success': savings.saved.usd > 0 }]">{{ !savings.saved.usd && savings.saved.unpricedHours ? 'not priced yet' : usd(savedUp) }}</div>
+              <div class="dm-figure__label">saved by its naps{{ savings.saved.usd && savings.saved.unpricedHours ? ', part not priced' : '' }}</div>
+            </div>
+            <div v-if="typeof savings.monthly === 'number'" class="dm-figure">
+              <div class="dm-figure__value">{{ usd(monthlyUp) }}</div>
+              <div class="dm-figure__label">a month at that rate</div>
+            </div>
+            <div v-if="typeof savings.hourly === 'number'" class="dm-figure">
+              <div class="dm-figure__value">{{ usdHourly(hourlyUp) }}</div>
+              <div class="dm-figure__label">base cost an hour</div>
+            </div>
+          </div>
+          <div v-if="energy" data-test="energy" class="dm-energy">
+            <v-avatar color="success" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiLeaf" size="20" /></v-avatar>
+            <div class="dm-energy__main">
+              <div class="dm-energy__label">Energy not used (estimate)</div>
+              <div class="dm-energy__values">
+                <span><strong>{{ rounded(kwhUp) }}</strong> kWh</span>
+                <span class="text-success"><strong>{{ rounded(co2Up) }}</strong> kg CO₂e</span>
+              </div>
+              <div class="dm-energy__everyday">
+                <span v-for="e in everyday" :key="e.text" class="dm-energy__equiv"><v-icon :icon="e.icon" size="15" />≈ {{ rounded(e.value) }} {{ e.text }}</span>
+              </div>
+              <div class="dm-energy__note">Cloud Carbon Footprint's coefficients for AWS; not a measure.</div>
+            </div>
+          </div>
+          <div class="dm-costs__note">{{ costNote }}</div>
+        </div>
       </v-card>
-      <v-card v-if="status.rules?.length || status.issues?.length" :title="(status.rules?.length ?? 0) > 1 ? `Rules (${status.rules!.length}, found from the target group)` : 'Rule'" class="mb-4">
+      <HistoryCard :router="router" :id="id" :now="now" />
+      <IdleWindowCard :router="router" :id="id" />
+    </div>
+
+    <div class="dm-stack">
+      <v-card title="Summary">
+        <v-table density="compact" class="dm-summary">
+          <tbody>
+            <tr v-for="row in summary" :key="row.label"><th class="text-medium-emphasis font-weight-regular">{{ row.label }}</th><td :class="{ mono: row.label === 'Workload id' }">{{ row.value }}</td></tr>
+          </tbody>
+        </v-table>
+      </v-card>
+      <v-card v-if="status.rules?.length || status.issues?.length" :title="(status.rules?.length ?? 0) > 1 ? `Rules (${status.rules!.length}, found from the target group)` : 'Rule'">
         <v-alert v-if="status.issues?.length" type="warning" variant="tonal" density="compact" class="mx-4 mt-2"
           title="Not napped: some rules cannot be switched">
           <div v-for="issue in status.issues" :key="issue" class="text-body-small">{{ issue }}</div>
           <div class="text-body-small mt-1">Add the waker target group and the <code>dormeto:workload</code> tag to these rules, or remove them.</div>
         </v-alert>
-        <v-list density="compact" class="py-0">
+        <v-list density="compact" class="py-0 bg-transparent dm-wrap">
           <v-list-item v-for="r in status.rules" :key="r.arn" :title="r.conditions" :subtitle="r.issue ?? `priority ${r.priority ?? '—'}`">
             <template #append>
               <v-chip v-if="r.issue" color="warning" variant="tonal" label size="small">not switched</v-chip>
@@ -285,9 +383,9 @@ const summary = computed(() => {
           </v-list-item>
         </v-list>
       </v-card>
-      <v-card v-if="status.drift?.length" title="Drift repaired" class="mb-4">
+      <v-card v-if="status.drift?.length" title="Drift repaired">
         <v-card-subtitle class="text-wrap">Infrastructure as code changed what onboarding added; the router put it back.</v-card-subtitle>
-        <v-list density="compact" class="py-0">
+        <v-list density="compact" class="py-0 bg-transparent dm-wrap">
           <v-list-item v-for="(d, i) in status.drift" :key="`${d.at}-${i}`" :title="d.kind" :subtitle="`${d.detail} · ${relative(d.at, now)} · ${d.by}`" />
         </v-list>
       </v-card>
@@ -303,45 +401,28 @@ const summary = computed(() => {
           </ResourceTooltip>
         </v-card-text>
       </v-card>
-    </v-col>
-
-    <v-col v-if="status.recommendations.length" cols="12">
-      <v-alert v-for="r in status.recommendations" :key="r.backend" type="info" variant="tonal" :title="`Recommendation for ${shortId(r.backend)}`" :text="r.message" />
-    </v-col>
-
-    <v-col cols="12">
-      <HistoryCard :router="router" :id="id" :now="now" />
-    </v-col>
-
-    <v-col cols="12">
-      <IdleWindowCard :router="router" :id="id" />
-    </v-col>
-
-    <v-col cols="12" md="7">
       <v-card :title="`Requests while not awake (today · ${stats?.days ?? 7} days)`">
         <v-card-text v-if="statsError" class="text-error">{{ statsError }}</v-card-text>
-        <v-row v-else no-gutters>
-          <v-col v-for="kind in (['ignored', 'deferred', 'wakes'] as const)" :key="kind" cols="12" sm="4" class="pa-2">
-            <div class="text-title-small mb-1">{{ { ignored: 'Ignored', deferred: 'Deferred', wakes: 'Wakes by trigger' }[kind] }}</div>
+        <div v-else class="dm-requests">
+          <div v-for="kind in (['ignored', 'deferred', 'wakes'] as const)" :key="kind">
+            <div class="dm-subhead mb-2">{{ { ignored: 'Ignored', deferred: 'Deferred', wakes: 'Wakes by trigger' }[kind] }}</div>
             <div v-if="!rows(kind).length" class="text-medium-emphasis text-body-medium">none</div>
-            <div v-for="row in rows(kind)" :key="row.key" class="d-flex text-body-medium py-1">
-              <span class="flex-grow-1">{{ row.key }}</span><span class="nowrap">{{ row.today }} · <strong>{{ row.total }}</strong></span>
+            <div v-for="row in rows(kind)" :key="row.key" class="d-flex ga-2 text-body-medium py-1 dm-count-row">
+              <span class="flex-grow-1 dm-count-row__key">{{ row.key }}</span><span class="nowrap dm-num"><span class="text-medium-emphasis">{{ row.today }}</span> · <strong>{{ row.total }}</strong></span>
             </div>
-          </v-col>
-        </v-row>
+          </div>
+        </div>
       </v-card>
-    </v-col>
-    <v-col cols="12" md="5">
-      <v-card title="Wake filtering">
+      <v-card title="Wake filtering" class="dm-links">
         <v-card-text>
           <div class="mb-3"><strong>Mode:</strong> {{ status.wakeMode === 'browser' ? 'browser (only the waiter page probe, the x-dormeto-wake header or a wake rule wakes)' : 'any request that passes the filters wakes' }}</div>
           <div v-for="r in [...status.noWakeRules, ...status.wakeRules]" :key="`${r.level}/${r.name}`" class="mb-2 text-body-medium">
             <v-chip :color="r.level === 'wake' ? 'success' : 'secondary'" variant="tonal" label class="mr-2">{{ r.level === 'wake' ? 'wake' : `no-wake · ${r.level}` }}</v-chip>
             <strong>{{ r.name }}</strong>: <span :class="{ 'text-error': r.invalid }">{{ r.invalid ? `invalid, ${r.invalid}` : ruleText(r.conditions) }}</span>
           </div>
-          <div v-if="status.ipLists.length" class="mt-3">
-            <div class="text-title-small">IP reputation lists</div>
-            <div class="text-body-small text-medium-emphasis mb-1">Lists of scanner and cloud networks, public or stored in S3, set on the router and applied to all its workloads; the router downloads them again daily by default.</div>
+          <div v-if="status.ipLists.length" class="mt-4">
+            <div class="dm-subhead">IP reputation lists</div>
+            <div class="text-body-small text-medium-emphasis mb-2">Lists of scanner and cloud networks, public or stored in S3, set on the router and applied to all its workloads; the router downloads them again daily by default.</div>
             <div v-for="l in status.ipLists" :key="l.name" class="text-body-medium">
               <a v-if="listSourceHref(l.url)" :href="listSourceHref(l.url) ?? undefined" target="_blank" rel="noopener" :title="l.url">{{ l.name }}</a><span v-else>{{ l.name }}</span>
               <v-tooltip location="top" max-width="340" open-on-click open-on-focus>
@@ -355,13 +436,11 @@ const summary = computed(() => {
           </div>
         </v-card-text>
       </v-card>
-    </v-col>
-    <v-col cols="12">
       <v-card title="Settings">
-        <v-card-text class="d-flex flex-wrap ga-6 text-body-medium">
+        <v-card-text class="d-flex flex-wrap align-center ga-2 text-body-medium">
           <v-tooltip v-for="row in settingRows(status.settings)" :key="row.key" location="top" max-width="380" open-on-click open-on-focus>
             <template #activator="{ props }">
-              <span v-bind="props" class="setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
+              <span v-bind="props" class="setting dm-setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
                 {{ row.label }} <strong>{{ row.value }}</strong><v-icon :icon="mdiInformationOutline" size="x-small" class="ml-1 text-medium-emphasis" />
               </span>
             </template>
@@ -369,22 +448,27 @@ const summary = computed(() => {
             <div class="text-body-small mt-2"><strong>Acceptable:</strong> {{ row.range }}</div>
           </v-tooltip>
           <v-spacer />
-          <span class="text-medium-emphasis">Router {{ status.router.version }} ({{ status.router.build }})</span>
+          <span class="text-medium-emphasis dm-version">Router {{ status.router.version }} ({{ status.router.build }})</span>
         </v-card-text>
       </v-card>
-    </v-col>
-  </v-row>
+    </div>
+  </div>
 
   <PauseDialog v-model="pauseOpen" :subject="title" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
     <v-card :title="confirm === 'nap' ? `Nap ${title}?` : confirm === 'offboard' ? `Offboard ${title}?` : `Wake ${title}?`">
-      <v-card-text>{{ confirm === 'nap'
+      <template #prepend>
+        <v-avatar :color="confirm === 'nap' ? stateColor('ASLEEP') : confirm === 'offboard' ? 'error' : 'primary'" variant="tonal" rounded="lg" size="36">
+          <v-icon :icon="confirm === 'nap' ? mdiPowerSleep : confirm === 'offboard' ? mdiLogoutVariant : mdiWeatherSunny" size="20" />
+        </v-avatar>
+      </template>
+      <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
         : confirm === 'offboard'
           ? 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
           : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
-      <v-card-actions>
+      <v-card-actions class="px-4 pb-4">
         <v-spacer />
         <v-btn variant="text" @click="confirm = null">Cancel</v-btn>
         <v-btn :color="confirm === 'nap' ? stateColor('ASLEEP') : 'primary'" variant="flat" @click="act(confirm!)">{{ confirm === 'nap' ? 'Nap' : confirm === 'offboard' ? 'Offboard' : 'Wake' }}</v-btn>
@@ -393,3 +477,95 @@ const summary = computed(() => {
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
 </template>
+
+<style scoped>
+.dm-num { font-variant-numeric: tabular-nums; }
+.dm-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.dm-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.dm-layout__wide { grid-column: 1 / -1; }
+@media (min-width: 1280px) { .dm-layout { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); } }
+/* The requests while not awake: a column per kind, as many as the card's width holds (two in the narrow column). */
+.dm-requests { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 16px 24px; padding: 4px 16px 16px; }
+
+/* The hero: a sky that follows the state, the icon in its dashed orbit, the name, its chips, its week. */
+.dm-hero { position: relative; overflow: hidden; }
+.dm-hero__sky { position: absolute; inset: 0; pointer-events: none; transition: background 1.4s;
+  background: radial-gradient(60% 120% at 0% 0%, rgba(var(--v-theme-moon), 0.12), transparent 60%), radial-gradient(50% 90% at 100% 100%, rgba(var(--v-theme-primary), 0.16), transparent 70%); }
+.dm-hero__sky[data-mood="wake"] { background: radial-gradient(60% 120% at 0% 0%, rgba(var(--v-theme-sun), 0.2), transparent 60%), radial-gradient(50% 90% at 100% 100%, rgba(var(--v-theme-primary), 0.14), transparent 70%); }
+.dm-hero__sky[data-mood="load"] { background: radial-gradient(60% 120% at 0% 0%, rgba(var(--v-theme-primary), 0.24), transparent 60%), radial-gradient(50% 90% at 100% 100%, rgba(var(--v-theme-sun), 0.12), transparent 70%); }
+.dm-hero__sky[data-mood="failed"] { background: radial-gradient(60% 120% at 0% 0%, rgba(var(--v-theme-error), 0.18), transparent 60%), radial-gradient(50% 90% at 100% 100%, rgba(var(--v-theme-primary), 0.12), transparent 70%); }
+.dm-hero__body { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 28px; align-items: center; padding: 26px 28px; }
+.dm-hero__icon { display: grid; place-items: center; width: 124px; height: 124px; border-radius: 50%; border: 1px dashed rgba(var(--v-border-color), 0.18); }
+.dm-hero__main { min-width: 0; }
+.dm-hero__where { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: -6px 0 2px -8px; font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.12em; text-transform: uppercase; }
+.dm-hero__back { margin-right: -2px; }
+.dm-hero__sep { opacity: 0.4; }
+.dm-hero__router { color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); text-decoration: none; transition: color 0.2s; }
+.dm-hero__router:hover { color: rgb(var(--v-theme-primary)); }
+.dm-hero__router:focus-visible, .dm-hero__url:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; border-radius: 4px; }
+.dm-hero__region { color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-hero__title { margin: 2px 0 12px; overflow-wrap: anywhere; }
+.dm-hero__chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.dm-hero__since { font-size: 0.9rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-hero__since strong { color: rgb(var(--v-theme-on-surface)); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dm-hero__url { display: inline-flex; align-items: center; min-width: 0; font-size: 0.9rem; color: rgb(var(--v-theme-primary)); text-decoration: none; overflow-wrap: anywhere; }
+.dm-hero__url:hover { text-decoration: underline; text-underline-offset: 3px; }
+.dm-hero__week { margin-top: 14px; max-width: 560px; }
+.dm-hero__side { align-self: stretch; display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.dm-hero__actions { min-width: 132px; }
+
+/* Lists and tables inside cards: on the glass. */
+.dm-backend :deep(.v-list-item-title) { font-weight: 600; letter-spacing: -0.01em; }
+.dm-backend :deep(.v-list-item-subtitle), .dm-wrap :deep(.v-list-item-subtitle) { display: block; -webkit-line-clamp: none; line-clamp: none; }
+.dm-summary :deep(th) { width: 42%; font-size: 0.86rem !important; }
+.dm-summary :deep(td) { font-variant-numeric: tabular-nums; }
+.dm-summary :deep(td.mono) { font-size: 0.8rem; }
+
+/* The costs area: three figures, then the energy its naps did not use. */
+.dm-costs { margin: 4px 16px 16px; padding: 16px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 16px; background: rgba(var(--v-theme-on-surface), 0.02); }
+.dm-costs__figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.dm-figure { padding: 10px 14px; border-radius: 14px; background: rgba(var(--v-theme-on-surface), 0.035); }
+.dm-figure__value { font-size: 1.45rem; font-weight: 600; line-height: 1.15; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.dm-figure__label { font-size: 0.78rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-energy { display: flex; align-items: flex-start; gap: 12px; margin-top: 12px; padding: 12px 14px; border-radius: 14px;
+  background: rgba(var(--v-theme-success), 0.07); border: 1px solid rgba(var(--v-theme-success), 0.2); }
+.dm-energy__main { min-width: 0; }
+.dm-energy__label { font: 500 0.68rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgb(var(--v-theme-success)); }
+.dm-energy__values { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; margin-top: 2px; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.dm-energy__values strong { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.02em; }
+.dm-energy__everyday { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 2px; }
+.dm-energy__equiv { display: inline-flex; align-items: center; gap: 5px; font-size: 0.84rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-energy__note { margin-top: 2px; font-size: 0.78rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-costs__note { margin-top: 10px; font-size: 0.78rem; line-height: 1.45; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+
+/* Links in the text: the theme's, underlined when pointed at. */
+.dm-links a, .dm-alert-links a { color: rgb(var(--v-theme-primary)); text-decoration: none; font-weight: 500; }
+.dm-links a:hover, .dm-alert-links a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.dm-subhead { font: 500 0.66rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), 0.6); }
+.dm-count-row__key { min-width: 0; overflow-wrap: anywhere; }
+.dm-count-row + .dm-count-row { border-top: 1px dashed rgba(var(--v-border-color), var(--v-border-opacity)); }
+.dm-setting { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 999px;
+  background: rgba(var(--v-theme-on-surface), 0.02); transition: border-color 0.2s, background-color 0.2s; }
+.dm-setting:hover { border-color: rgba(var(--v-theme-primary), 0.4); background: rgba(var(--v-theme-primary), 0.06); }
+.dm-version { font: 500 0.72rem/1.4 var(--dm-mono); letter-spacing: 0.04em; }
+
+@media (max-width: 960px) {
+  .dm-hero__body { grid-template-columns: auto minmax(0, 1fr); gap: 18px 22px; padding: 22px; }
+  .dm-hero__icon { width: 96px; height: 96px; }
+  .dm-hero__icon :deep(svg) { width: 68px; height: 68px; }
+  .dm-hero__side { grid-column: 1 / -1; flex-direction: row-reverse; align-items: center; }
+}
+/* Phones: the icon beside the name, the chips and the week under them at full width. */
+@media (max-width: 600px) {
+  .dm-hero__body { gap: 14px; padding: 18px 16px; }
+  .dm-hero__main { display: contents; }
+  .dm-hero__head { min-width: 0; }
+  .dm-hero__info { grid-column: 1 / -1; }
+  .dm-hero__icon { width: 60px; height: 60px; }
+  .dm-hero__icon :deep(svg) { width: 44px; height: 44px; }
+  .dm-hero__where { letter-spacing: 0.08em; gap: 2px 6px; }
+  .dm-hero__title { font-size: 1.6rem !important; margin-bottom: 0; }
+  .dm-hero__week { margin-top: 12px; }
+  .dm-costs { margin: 4px 12px 12px; padding: 12px; }
+}
+</style>

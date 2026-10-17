@@ -7,19 +7,20 @@ defineProps<{ id: string; arn: string | null; service: string; rows?: { label: s
 <template>
   <v-tooltip location="top" max-width="600">
     <template #activator="{ props: tip }"><slot :tip="tip" /></template>
-    <table class="resource">
+    <table class="resource"><tbody>
       <tr><th>Id</th><td class="mono">{{ id }}</td></tr>
       <tr><th>ARN</th><td class="mono">{{ arn ?? '—' }}</td></tr>
       <tr><th>Service</th><td>{{ service }}</td></tr>
       <tr v-for="r in rows ?? []" :key="r.label"><th>{{ r.label }}</th><td>{{ r.value }}</td></tr>
-    </table>
+    </tbody></table>
     <div v-if="note" class="mt-1 note">{{ note }}</div>
   </v-tooltip>
 </template>
 
 <style scoped>
-.resource th { text-align: left; font-weight: 400; opacity: 0.8; padding-right: 12px; vertical-align: top; white-space: nowrap; }
-.resource td { word-break: break-word; }
+.resource { border-collapse: collapse; }
+.resource th { text-align: left; font: 500 0.66rem/1.9 var(--dm-mono); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.65; padding: 1px 14px 1px 0; vertical-align: top; white-space: nowrap; }
+.resource td { padding: 1px 0; word-break: break-word; font-variant-numeric: tabular-nums; }
 .mono { word-break: break-all; }
 .note { opacity: 0.8; }
 </style>

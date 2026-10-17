@@ -189,6 +189,30 @@ describe('Workload view', () => {
   });
 
 
+  it('says in its costs area the energy its naps did not use and its carbon, an estimate with Cloud Carbon Footprint\'s coefficients', async () => {
+    // A db.t4g.micro (2 vCPU, 1 GB) stopped 600 hours: about 5.26 W, 3.2 kWh; in eu-west-3 (0.051 kg CO2e a kWh), 0.16 kg.
+    current = {
+      ...status, account: '111122223333', region: 'eu-west-3',
+      backends: [{ kind: 'rds-instance', id: 'shop-db', status: 'stopped', companion: true }],
+      costs: {
+        baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: '2026-10-09T04:51:00.000Z', savedShare: 0.9,
+        items: [{ item: { kind: 'rds', class: 'db.t4g.micro', engine: 'postgres', multiAz: false }, hourly: 0.017 }], saved: { usd: 3.2, hours: 600, unpricedHours: 0 },
+      },
+    };
+    const wrapper = await mountView();
+    const energy = wrapper.find('[data-test="energy"]');
+    expect(energy.text()).toContain('Energy not used (estimate)');
+    expect(energy.text()).toMatch(/3\.2\s*kWh/);
+    expect(energy.text()).toMatch(/0\.16\s*kg CO₂e/);
+    expect(energy.text()).toContain('Cloud Carbon Footprint\'s coefficients for AWS; not a measure');
+    wrapper.unmount();
+    // Without costs (no priced nap yet), no energy is said.
+    current = status;
+    const plain = await mountView();
+    expect(plain.find('[data-test="energy"]').exists()).toBe(false);
+    plain.unmount();
+  });
+
   it('dates the state from when it began, not from the last write of the workload', async () => {
     setActivePinia(createPinia());
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads/:router/:id', component: WorkloadView }] });

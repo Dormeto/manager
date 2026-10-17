@@ -29,6 +29,8 @@ tfenv exec plan -var-file=env/dev.tfvars -var-file=env/dev.local.tfvars -out=dev
 tfenv exec apply dev.tfplan
 cd ../../.. && node scripts/smoke.mjs --env dev  # API checks as the smoke user
 npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://localhost:5173 against the dev API
+npm run dev:mock -w @dormeto/manager-dashboard  # the dashboard with demo data, no sign-in (development only)
+# its organization is generated: http://localhost:5173/?demo=acme,workloads=60,routers=5 (or VITE_MOCK_SCENARIO), see src/mock/scenario.ts
 ```
 
 Screenshots of the dashboard (the website's, for example), signed in as the smoke user, with example values in place of

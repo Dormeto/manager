@@ -10,6 +10,7 @@ import { usd } from '../format';
 import { discountText } from '../costs';
 import { useSession } from '../stores/session';
 import DiscountsDialog from './DiscountsDialog.vue';
+import DmLoader from './DmLoader.vue';
 import type { Discounts, SavingsSettings, SavingsSummary } from '../types';
 
 const session = useSession();
@@ -62,35 +63,42 @@ const unpriced = computed(() => {
 </script>
 
 <template>
-  <v-card title="Savings (estimated)">
+  <v-card title="Savings (estimated)" class="dm-savings">
     <v-card-text v-if="loaded && !summary" class="text-medium-emphasis">No estimate yet: the first one is computed tonight at 00:30 UTC, from the
       history of the naps.</v-card-text>
     <v-card-text v-else-if="summary">
       <div class="d-flex flex-wrap align-end ga-6">
         <div>
-          <div class="text-headline-large">{{ usd(summary.last30.usd) }}</div>
+          <div class="text-headline-large dm-savings__total">{{ usd(summary.last30.usd) }}</div>
           <div class="text-body-small text-medium-emphasis">last 30 days, {{ Math.round(summary.last30.asleepHours).toLocaleString('en-US') }} hours asleep</div>
         </div>
-        <div class="text-body-medium">this month {{ usd(summary.month.usd) }} · {{ usd(summary.cumulative.usd) }} since {{ day(summary.cumulative.since) }}</div>
+        <div class="text-body-medium dm-savings__more">this month {{ usd(summary.month.usd) }} · {{ usd(summary.cumulative.usd) }} since {{ day(summary.cumulative.since) }}</div>
       </div>
       <div class="bars my-3" role="img" :aria-label="`Savings by day, the last 30 days to ${day(summary.day)}`">
-        <v-tooltip v-for="d in summary.last30.days" :key="d.date" location="top" :text="`${day(d.date)}: ${usd(d.usd)}`">
-          <template #activator="{ props }"><span v-bind="props" data-test="bar" class="bar bg-success" :style="{ height: `${Math.max(2, (d.usd / peak) * 100)}%` }" /></template>
+        <v-tooltip v-for="(d, i) in summary.last30.days" :key="d.date" location="top" :text="`${day(d.date)}: ${usd(d.usd)}`">
+          <template #activator="{ props }"><span v-bind="props" data-test="bar" class="bar" :style="{ height: `${Math.max(2, (d.usd / peak) * 100)}%`, animationDelay: `${i * 18}ms` }" /></template>
         </v-tooltip>
       </div>
       <div class="text-body-medium mb-2">Dormeto costs about {{ usd(summary.dormeto.usdMonth) }} a month: net about
         {{ usd(summary.last30.usd - (summary.dormeto.usdMonth * covered) / 30) }} over {{ covered === 30 ? 'the last 30 days' : `the ${covered} day${covered === 1 ? '' : 's'} computed` }}.</div>
-      <v-list v-if="summary.top.length" density="compact" class="py-0">
-        <v-list-item v-for="w in summary.top.slice(0, 5)" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${encodeURIComponent(w.router)}/${encodeURIComponent(w.workloadId)}`"
-          :title="w.name ?? w.workloadId" :subtitle="w.router">
-          <template #append><span class="text-body-medium">{{ usd(w.usd) }}</span></template>
-        </v-list-item>
-      </v-list>
+      <div v-if="summary.top.length" class="dm-top">
+        <div class="dm-eyebrow mb-2">Top savers</div>
+        <v-list density="compact" class="py-0">
+          <v-list-item v-for="(w, i) in summary.top.slice(0, 5)" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${encodeURIComponent(w.router)}/${encodeURIComponent(w.workloadId)}`"
+            :title="w.name ?? w.workloadId" :subtitle="w.router" class="dm-top__row">
+            <template #prepend><span class="dm-top__rank">{{ i + 1 }}</span></template>
+            <template #append>
+              <span class="dm-top__bar" aria-hidden="true"><i :style="{ width: `${(w.usd / (summary.top[0]?.usd || 1)) * 100}%` }" /></span>
+              <span class="dm-top__usd">{{ usd(w.usd) }}</span>
+            </template>
+          </v-list-item>
+        </v-list>
+      </div>
       <div class="text-body-small text-medium-emphasis mt-2">AWS list prices of what the naps stopped, against {{ baseline }}. Storage, load balancers and
         data transfer keep running and are not counted, nor the EKS control plane and the nodes' DaemonSets: Kubernetes pods count as their share of their
         nodes, where an autoscaler removes the nodes they free; the discounts are an average rate.{{ unpriced }}</div>
     </v-card-text>
-    <v-progress-linear v-else indeterminate color="primary" />
+    <DmLoader v-else label="Adding up the naps…" :size="48" />
     <v-card-text v-if="loaded" class="d-flex align-center ga-2 pt-0 text-body-medium">
       <span data-test="discounts">{{ discountsLine }}<template v-if="pending"> Applies from the next day computed.</template></span>
       <v-btn v-if="session.isAdmin" data-test="edit-discounts" class="ml-auto" size="small" variant="text" :prepend-icon="mdiPencil" @click="editing = true">Edit</v-btn>
@@ -101,6 +109,22 @@ const unpriced = computed(() => {
 </template>
 
 <style scoped>
-.bars { display: flex; align-items: flex-end; gap: 2px; height: 48px; }
-.bar { flex: 1; min-width: 2px; border-radius: 2px 2px 0 0; }
+.dm-savings__total { font-size: clamp(2.2rem, 1.8rem + 1.2vw, 2.9rem) !important; font-weight: 600; letter-spacing: -0.05em; line-height: 1 !important; }
+.dm-savings__more { padding: 6px 12px; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.05); }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 84px; padding-top: 8px; }
+.bar { flex: 1; min-width: 3px; border-radius: 4px 4px 1px 1px; background: linear-gradient(180deg, rgb(var(--v-theme-secondary)), rgba(var(--v-theme-primary), 0.55));
+  transform-origin: bottom; animation: dm-bar 0.7s var(--dm-ease) both; transition: filter 0.2s; }
+.bar:hover { filter: brightness(1.3); }
+@keyframes dm-bar { from { transform: scaleY(0); } }
+.dm-top { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
+.dm-top__row { min-height: 46px !important; border-radius: 12px !important; }
+.dm-top__rank { display: grid; place-items: center; width: 26px; height: 26px; margin-right: 12px; border-radius: 8px; background: rgba(var(--v-theme-on-surface), 0.06);
+  font: 600 0.75rem var(--dm-mono); }
+.dm-top__row:first-child .dm-top__rank { background: rgba(var(--v-theme-secondary), 0.18); color: rgb(var(--v-theme-secondary)); }
+.dm-top__bar { display: block; width: 110px; height: 6px; margin-right: 14px; border-radius: 3px; background: rgba(var(--v-theme-on-surface), 0.07); overflow: hidden; }
+.dm-top__bar i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, rgba(var(--v-theme-primary), 0.7), rgb(var(--v-theme-secondary))); animation: dm-grow 1s var(--dm-ease) backwards; transform-origin: left; }
+.dm-top__usd { min-width: 72px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+@keyframes dm-grow { from { transform: scaleX(0); } }
+@media (max-width: 520px) { .dm-top__bar { display: none; } }
+@media (prefers-reduced-motion: reduce) { .bar, .dm-top__bar i { animation: none; } }
 </style>

@@ -9,6 +9,11 @@ export interface Config {
 let config: Config | null = null;
 
 export async function loadConfig(): Promise<Config> {
+  // Demo data (npm run dev:mock, development only): no deployment to read it from.
+  if (import.meta.env.VITE_MOCK === '1') {
+    config ??= { env: 'demo', authority: 'https://example.invalid', clientId: 'demo', authDomain: 'example.invalid' };
+    return config;
+  }
   if (!config) {
     const res = await fetch('/config.json', { cache: 'no-store' });
     if (!res.ok) throw new Error(`config.json: HTTP ${res.status}`);

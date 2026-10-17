@@ -4,7 +4,10 @@ import type { Config } from './config';
 
 let manager: UserManager | null = null;
 
+// Demo data (npm run dev:mock, development only): a signed-in administrator, no identity provider; src/mock is loaded
+// only behind import.meta.env.VITE_MOCK, so that a build leaves it out.
 export function initAuth(config: Config): void {
+  if (import.meta.env.VITE_MOCK === '1') return;
   manager = new UserManager({
     authority: config.authority,
     client_id: config.clientId,
@@ -24,17 +27,25 @@ function users(): UserManager {
   return manager;
 }
 
-export const currentUser = (): Promise<User | null> => users().getUser();
+export async function currentUser(): Promise<User | null> {
+  if (import.meta.env.VITE_MOCK === '1') return (await import('./mock')).mockUser();
+  return users().getUser();
+}
 
-export const signIn = (returnTo: string): Promise<void> => users().signinRedirect({ state: { returnTo } });
+export async function signIn(returnTo: string): Promise<void> {
+  if (import.meta.env.VITE_MOCK === '1') return window.location.assign('/');
+  return users().signinRedirect({ state: { returnTo } });
+}
 
 export async function completeSignIn(): Promise<string> {
+  if (import.meta.env.VITE_MOCK === '1') return '/';
   const user = await users().signinRedirectCallback();
   return (user.state as { returnTo?: string } | undefined)?.returnTo ?? '/';
 }
 
 // Cognito has no end_session_endpoint in its discovery document: its own /logout endpoint ends the session.
 export async function signOut(config: Config): Promise<void> {
+  if (import.meta.env.VITE_MOCK === '1') return window.location.assign('/');
   await users().removeUser();
   const target = encodeURIComponent(`${window.location.origin}/`);
   window.location.assign(`https://${config.authDomain}/logout?client_id=${config.clientId}&logout_uri=${target}`);
@@ -42,6 +53,7 @@ export async function signOut(config: Config): Promise<void> {
 
 // ID token for the API (it carries the email and the groups); renewed with the refresh token when expired.
 export async function idToken(): Promise<string | null> {
+  if (import.meta.env.VITE_MOCK === '1') return 'mock';
   const user = await users().getUser();
   if (user && !user.expired && user.id_token) return user.id_token;
   try {
@@ -53,6 +65,7 @@ export async function idToken(): Promise<string | null> {
 
 // Access token for the user's own calls to Cognito (MFA set-up); renewed as the ID token.
 export async function accessToken(): Promise<string | null> {
+  if (import.meta.env.VITE_MOCK === '1') return 'mock';
   const user = await users().getUser();
   if (user && !user.expired && user.access_token) return user.access_token;
   try {

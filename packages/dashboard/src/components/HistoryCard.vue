@@ -5,6 +5,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { duration, stateColor, usd } from '../format';
+import DmLoader from './DmLoader.vue';
 import { STATE_ORDER, causeText, collapseRows, dayRows, stateLabel, type Phase } from '../history';
 import type { WorkloadHistory } from '../types';
 
@@ -47,9 +48,9 @@ const LEGEND = STATE_ORDER;
 </script>
 
 <template>
-  <v-card title="History">
+  <v-card title="History" class="dm-history">
     <template #append>
-      <v-btn-toggle v-model="days" mandatory density="compact" variant="outlined" divided>
+      <v-btn-toggle v-model="days" mandatory density="compact" variant="outlined" divided rounded="lg" class="dm-period" aria-label="Period">
         <v-btn :value="1" size="small">24 hours</v-btn>
         <v-btn :value="7" size="small">7 days</v-btn>
         <v-btn :value="30" size="small">30 days</v-btn>
@@ -57,54 +58,83 @@ const LEGEND = STATE_ORDER;
     </template>
     <v-card-text v-if="error" class="text-error">{{ error }}</v-card-text>
     <v-card-text v-else-if="history?.phases">
-      <div class="text-body-medium mb-3">{{ summary.join(' · ') }}</div>
+      <div class="dm-history__summary mb-4">
+        <span class="dm-history__lead">{{ summary[0] }}</span>
+        <span v-if="summary.length > 1" class="text-medium-emphasis">{{ summary.slice(1).join(' · ') }}</span>
+      </div>
       <v-alert v-if="history.truncated" type="info" variant="tonal" density="compact" class="mb-2" text="More than 5,000 changes in this period: only the latest are drawn, the time before them is unknown." />
-      <div class="d-flex ga-2 text-body-small text-medium-emphasis">
+      <div class="d-flex ga-3 dm-history__axis">
         <span class="day-label" />
         <div class="ticks"><span v-for="(h, i) in ['00:00', '06:00', '12:00', '18:00']" :key="h" :style="{ left: `${i * 25}%` }">{{ h }}</span></div>
       </div>
-      <template v-for="item in rows" :key="item.kind === 'day' ? item.row.day.getTime() : `gap-${item.first.getTime()}`">
-        <div v-if="item.kind === 'gap'" data-test="gap" class="d-flex align-center ga-2 mb-1 text-body-small text-medium-emphasis">
-          <span class="day-label">{{ item.days === 1 ? dayLabel(item.first) : `${dayLabel(item.first)} to ${dayLabel(item.last)}` }}</span>
-          <span>No history: it starts when the manager first sees the workload, and is kept for the manager's history_days.</span>
-        </div>
-        <div v-else data-test="day" class="d-flex align-center ga-2 mb-1">
-          <span class="text-body-small text-medium-emphasis day-label">{{ dayLabel(item.row.day) }}</span>
-          <div class="bar">
-            <v-tooltip v-for="(s, i) in item.row.segments" :key="i" location="top" :text="segmentLabel(s.phase, s.merged)">
-              <template #activator="{ props: tip }">
-                <div v-bind="tip" data-test="segment" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
-                  :class="['segment', `bg-${stateColor(s.state)}`]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
-              </template>
-            </v-tooltip>
+      <div class="dm-history__days">
+        <template v-for="(item, index) in rows" :key="item.kind === 'day' ? item.row.day.getTime() : `gap-${item.first.getTime()}`">
+          <div v-if="item.kind === 'gap'" data-test="gap" class="d-flex align-center ga-3 dm-history__row text-body-small text-medium-emphasis">
+            <span class="day-label">{{ item.days === 1 ? dayLabel(item.first) : `${dayLabel(item.first)} to ${dayLabel(item.last)}` }}</span>
+            <span class="dm-history__gap">No history: it starts when the manager first sees the workload, and is kept for the manager's history_days.</span>
           </div>
-        </div>
-      </template>
-      <div class="d-flex flex-wrap ga-3 mt-2 text-body-small text-medium-emphasis">
-        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-1"><span :class="['swatch', `bg-${stateColor(state)}`]" />{{ stateLabel(state) }}</span>
+          <div v-else data-test="day" class="d-flex align-center ga-3 dm-history__row">
+            <span class="text-body-small text-medium-emphasis day-label">{{ dayLabel(item.row.day) }}</span>
+            <div class="bar" :style="{ '--row': index }">
+              <v-tooltip v-for="(s, i) in item.row.segments" :key="i" location="top" :text="segmentLabel(s.phase, s.merged)">
+                <template #activator="{ props: tip }">
+                  <div v-bind="tip" data-test="segment" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
+                    :class="['segment', `bg-${stateColor(s.state)}`]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
+                </template>
+              </v-tooltip>
+            </div>
+          </div>
+        </template>
       </div>
-      <v-table v-if="transitions.length" density="compact" class="mt-3">
-        <thead><tr><th>When</th><th>Change</th><th>Why</th><th>Wake</th></tr></thead>
-        <tbody>
-          <tr v-for="t in transitions" :key="`${t.at}#${t.to}`" data-test="transition">
-            <td class="text-no-wrap">{{ when(t.at) }}</td>
-            <td class="text-no-wrap">{{ t.from ?? 'first seen' }} → {{ t.to }}</td>
-            <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
-            <td class="text-no-wrap">{{ t.durationMs ? duration(Math.round(t.durationMs / 1000)) : '' }}</td>
-          </tr>
-        </tbody>
-      </v-table>
+      <div class="dm-history__legend">
+        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-2"><span :class="['swatch', `bg-${stateColor(state)}`]" />{{ stateLabel(state) }}</span>
+      </div>
+      <div v-if="transitions.length" class="dm-history__changes">
+        <v-table density="compact" fixed-header>
+          <thead><tr><th>When</th><th>Change</th><th>Why</th><th class="text-end">Wake</th></tr></thead>
+          <tbody>
+            <tr v-for="t in transitions" :key="`${t.at}#${t.to}`" data-test="transition">
+              <td class="text-no-wrap text-medium-emphasis dm-num">{{ when(t.at) }}</td>
+              <td class="text-no-wrap"><span class="dm-change">{{ t.from ?? 'first seen' }} <span class="dm-change__arrow">→</span> <span :class="['swatch', 'mr-1', `bg-${stateColor(t.to)}`]" />{{ t.to }}</span></td>
+              <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
+              <td class="text-no-wrap text-end dm-num">{{ t.durationMs ? duration(Math.round(t.durationMs / 1000)) : '' }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </div>
     </v-card-text>
-    <v-progress-linear v-else indeterminate color="primary" />
+    <DmLoader v-else label="Reading the history…" :size="48" />
   </v-card>
 </template>
 
 <style scoped>
-.day-label { width: 92px; flex: none; }
-.ticks { position: relative; flex: 1; height: 18px; }
+.dm-history__summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 0.92rem; }
+.dm-history__lead { font-size: 1.2rem; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.dm-history__axis { font: 500 0.66rem/1 var(--dm-mono); letter-spacing: 0.06em; color: rgba(var(--v-theme-on-surface), 0.55); margin-bottom: 6px; }
+.dm-history__days { display: grid; gap: 5px; }
+.dm-history__row { min-height: 14px; }
+.dm-history__gap { font-style: italic; opacity: 0.85; }
+.day-label { width: 92px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.ticks { position: relative; flex: 1; height: 14px; }
 .ticks span { position: absolute; top: 0; }
-/* Napping shares waking's color (the state chips), lighter here to tell them apart. */
-.bar { position: relative; flex: 1; height: 14px; border-radius: 3px; background: rgba(var(--v-theme-on-surface), 0.06); overflow: hidden; }
-.segment { position: absolute; top: 0; bottom: 0; }
-.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.ticks span::before { content: ""; position: absolute; left: 0; top: 12px; width: 1px; height: 4px; background: rgba(var(--v-theme-on-surface), 0.25); }
+/* A day's phases on a rounded track; napping shares waking's hue, lighter, to tell them apart. Each row is revealed from
+   the left, one after the other. */
+.bar { position: relative; flex: 1; height: 12px; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.06); overflow: hidden;
+  animation: dm-reveal 0.9s var(--dm-ease) both; animation-delay: calc(var(--row, 0) * 45ms); }
+.segment { position: absolute; top: 0; bottom: 0; border-radius: 3px; outline: none; transition: filter 0.2s, box-shadow 0.2s; }
+.segment:hover { filter: brightness(1.18); }
+.segment:focus-visible { box-shadow: inset 0 0 0 2px rgb(var(--v-theme-on-surface)); }
+@keyframes dm-reveal { from { clip-path: inset(0 100% 0 0 round 999px); } to { clip-path: inset(0 0 0 0 round 999px); } }
+.dm-history__legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 14px; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.dm-history__changes { margin-top: 18px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 14px; overflow: hidden; }
+.dm-history__changes :deep(.v-table__wrapper) { max-height: 340px; }
+.dm-history__changes :deep(thead th) { background: rgb(var(--v-theme-surface)) !important; }
+.dm-num { font-variant-numeric: tabular-nums; }
+.dm-change { font: 500 0.74rem/1 var(--dm-mono); letter-spacing: 0.02em; }
+.dm-change__arrow { opacity: 0.5; }
+.dm-period :deep(.v-btn) { font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
+@media (max-width: 600px) { .day-label { width: 74px; } }
 </style>
