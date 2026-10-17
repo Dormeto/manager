@@ -59,7 +59,7 @@ test('a local build names its files with --version and takes the Unreleased sect
   const { release } = build({ with: { 'manager/CHANGELOG.md': UNRELEASED } });
   assert.ok(release.dir.endsWith('/out/0.2.0'));
   const repos = fakeRepos({ with: { 'manager/CHANGELOG.md': UNRELEASED } });
-  const local = buildRelease({ ...repos, modules: MODULES, version: '0.11.0-dev' });
+  const local = buildRelease({ ...repos, modules: MODULES, version: '0.11.0-dev', allowUnreleased: true });
   assert.ok(local.dir.endsWith('/out/0.11.0-dev'));
   assert.deepEqual(readdirSync(local.dir).sort(), [
     'CHANGELOG.md', 'SHA256SUMS', 'dormeto-access-0.11.0-dev.zip', 'dormeto-access-commands-0.11.0-dev.sh', 'dormeto-kubernetes-0.11.0-dev.yaml',
@@ -77,11 +77,19 @@ test('a version with its own section uses it even when an Unreleased section exi
   assert.throws(() => build({ with: { 'manager/CHANGELOG.md': '# Changelog\n\n## 0.1.0\n\n- First.\n' } }), /CHANGELOG\.md has no section for 0\.2\.0/);
 });
 
+test('the package version without its own section stops the release, even when an Unreleased section exists; a local build must allow it', () => {
+  const noSection = { 'manager/CHANGELOG.md': '# Changelog\n\n## Unreleased\n\n- Work in progress.\n\n## 0.1.0 — 2026-10-04\n\n- First.\n' };
+  assert.throws(() => build({ with: noSection }), /CHANGELOG\.md has no section for 0\.2\.0/);
+  const repos = fakeRepos({ with: noSection });
+  assert.throws(() => buildRelease({ ...repos, modules: MODULES, version: '0.11.0-dev' }), /CHANGELOG\.md has no section for 0\.11\.0-dev/);
+});
+
 test('the options: --version and --out, the package version and dist/release by default; --publish refused for another version', () => {
   const pkg = { version: '0.10.0' };
   assert.deepEqual(releaseOptions([], pkg, '/m'), { version: '0.10.0', out: '/m/dist/release', publish: false });
   assert.deepEqual(releaseOptions(['--version', '0.11.0-dev', '--out', '/tmp/x'], pkg, '/m'), { version: '0.11.0-dev', out: '/tmp/x', publish: false });
   assert.equal(releaseOptions(['--publish', '--version', '0.10.0'], pkg, '/m').publish, true);
+  for (const args of [['--version'], ['--out'], ['--version', '--publish'], ['--out', '--no-build']]) assert.throws(() => releaseOptions(args, pkg, '/m'), /needs a value/, args.join(' '));
   assert.throws(() => releaseOptions(['--publish', '--version', '0.11.0-dev'], pkg, '/m'), /--publish is refused with --version 0\.11\.0-dev: a published version is the package's \(0\.10\.0\)/);
 });
 

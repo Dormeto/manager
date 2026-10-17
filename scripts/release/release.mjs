@@ -26,11 +26,11 @@ const files = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => 
 const copyModule = (from, to) => cpSync(from, to, { recursive: true, filter: (path) => !LOCAL.test(relative(from, path)) });
 const zip = (dir, archive) => execFileSync('zip', ['-X', '-r', '-q', archive, '.'], { cwd: dir });
 
-export function changelogSection(changelog, version) {
+export function changelogSection(changelog, version, { allowUnreleased = false } = {}) {
   const lines = changelog.split('\n');
   let start = lines.findIndex((l) => l === `## ${version}` || l.startsWith(`## ${version} `));
   // A build of unreleased work: its section is the Unreleased one, headed with the version.
-  const unreleased = start < 0;
+  const unreleased = start < 0 && allowUnreleased;
   if (unreleased) start = lines.findIndex((l) => l === '## Unreleased');
   if (start < 0) throw new Error(`CHANGELOG.md has no section for ${version}`);
   const end = lines.findIndex((l, i) => i > start && l.startsWith('## '));
@@ -41,7 +41,12 @@ export function changelogSection(changelog, version) {
 
 // The command line's version and output directory; a published version is a released one, the package's.
 export function releaseOptions(args, pkg, manager) {
-  const option = (name) => { const at = args.indexOf(`--${name}`); return at < 0 ? undefined : args[at + 1]; };
+  const option = (name) => {
+    const at = args.indexOf(`--${name}`);
+    if (at < 0) return undefined;
+    if (!args[at + 1] || args[at + 1].startsWith('--')) throw new Error(`--${name} needs a value`);
+    return args[at + 1];
+  };
   const version = option('version') ?? pkg.version;
   const publish = args.includes('--publish');
   if (publish && version !== pkg.version) throw new Error(`--publish is refused with --version ${version}: a published version is the package's (${pkg.version})`);
@@ -56,8 +61,8 @@ function assertNoAccountValues(dir, paths = files(dir)) {
   }
 }
 
-export function buildRelease({ manager, router, modules, out, version }) {
-  const changelog = changelogSection(readFileSync(join(manager, 'CHANGELOG.md'), 'utf8'), version);
+export function buildRelease({ manager, router, modules, out, version, allowUnreleased = false }) {
+  const changelog = changelogSection(readFileSync(join(manager, 'CHANGELOG.md'), 'utf8'), version, { allowUnreleased });
   const kubernetes = join(router, 'kubernetes/dormeto-router.yaml');
   if (!existsSync(kubernetes)) throw new Error(`missing build output: ${kubernetes} (the router checkout at the pinned version)`);
   const stage = mkdtempSync(join(tmpdir(), 'dmt-release-stage-'));
@@ -139,7 +144,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { version, out, publish } = releaseOptions(args, pkg, manager);
   if (version === pkg.version && git('tag', '--list', `v${pkg.version}`)) throw new Error(`tag v${pkg.version} exists: bump the version`);
   if (!args.includes('--no-build')) execFileSync('npm', ['run', 'build'], { cwd: manager, stdio: 'inherit' });
-  const release = buildRelease({ manager, router: option('router') ?? join(manager, '../router'), modules: join(manager, 'infra/terraform/modules'), out, version });
+  const release = buildRelease({ manager, router: option('router') ?? join(manager, '../router'), modules: join(manager, 'infra/terraform/modules'), out, version, allowUnreleased: version !== pkg.version });
   for (const file of release.files) console.log(`${String(statSync(join(release.dir, file)).size).padStart(10)}  ${file}`);
   if (publish) {
     const bucket = option('bucket');
