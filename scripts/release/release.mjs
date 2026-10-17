@@ -4,7 +4,10 @@
 // group in an EKS cluster (the router's kubernetes/dormeto-router.yaml), checksums and the changelog section, published
 // once per version under releases.dormeto.com/manager/<version>/.
 // Usage: node scripts/release/release.mjs [--no-build] [--router <router checkout at the pinned version>]
-//          [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
+//          [--version <version>] [--out <directory>] [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
+// --version and --out build a release locally, before it is published (dormeto install --release <out>/<version>): the
+// files are named with that version, the release lands in <out>/<version>/ (dist/release by default), and the changelog's
+// Unreleased section stands for a version without its own. --publish only publishes package.json's version.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -25,10 +28,24 @@ const zip = (dir, archive) => execFileSync('zip', ['-X', '-r', '-q', archive, '.
 
 export function changelogSection(changelog, version) {
   const lines = changelog.split('\n');
-  const start = lines.findIndex((l) => l === `## ${version}` || l.startsWith(`## ${version} `));
+  let start = lines.findIndex((l) => l === `## ${version}` || l.startsWith(`## ${version} `));
+  // A build of unreleased work: its section is the Unreleased one, headed with the version.
+  const unreleased = start < 0;
+  if (unreleased) start = lines.findIndex((l) => l === '## Unreleased');
   if (start < 0) throw new Error(`CHANGELOG.md has no section for ${version}`);
   const end = lines.findIndex((l, i) => i > start && l.startsWith('## '));
-  return `${lines.slice(start, end < 0 ? undefined : end).join('\n').trim()}\n`;
+  const section = lines.slice(start, end < 0 ? undefined : end);
+  if (unreleased) section[0] = `## ${version}`;
+  return `${section.join('\n').trim()}\n`;
+}
+
+// The command line's version and output directory; a published version is a released one, the package's.
+export function releaseOptions(args, pkg, manager) {
+  const option = (name) => { const at = args.indexOf(`--${name}`); return at < 0 ? undefined : args[at + 1]; };
+  const version = option('version') ?? pkg.version;
+  const publish = args.includes('--publish');
+  if (publish && version !== pkg.version) throw new Error(`--publish is refused with --version ${version}: a published version is the package's (${pkg.version})`);
+  return { version, out: option('out') ?? join(manager, 'dist/release'), publish };
 }
 
 function assertNoAccountValues(dir, paths = files(dir)) {
@@ -119,11 +136,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const pkg = JSON.parse(readFileSync(join(manager, 'package.json'), 'utf8'));
   const git = (...a) => execFileSync('git', a, { cwd: manager, encoding: 'utf8' }).trim();
   if (git('status', '--porcelain')) throw new Error('the working tree has changes: a release is built from a commit');
-  if (git('tag', '--list', `v${pkg.version}`)) throw new Error(`tag v${pkg.version} exists: bump the version`);
+  const { version, out, publish } = releaseOptions(args, pkg, manager);
+  if (version === pkg.version && git('tag', '--list', `v${pkg.version}`)) throw new Error(`tag v${pkg.version} exists: bump the version`);
   if (!args.includes('--no-build')) execFileSync('npm', ['run', 'build'], { cwd: manager, stdio: 'inherit' });
-  const release = buildRelease({ manager, router: option('router') ?? join(manager, '../router'), modules: join(manager, 'infra/terraform/modules'), out: join(manager, 'dist/release'), version: pkg.version });
+  const release = buildRelease({ manager, router: option('router') ?? join(manager, '../router'), modules: join(manager, 'infra/terraform/modules'), out, version });
   for (const file of release.files) console.log(`${String(statSync(join(release.dir, file)).size).padStart(10)}  ${file}`);
-  if (args.includes('--publish')) {
+  if (publish) {
     const bucket = option('bucket');
     if (!bucket) throw new Error('--publish needs --bucket');
     const { S3Client } = await import('@aws-sdk/client-s3');
