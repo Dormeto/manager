@@ -30,6 +30,9 @@ const groups = computed<{ title: string; items: NavItem[] }[]>(() => [
   ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit')] }] : []),
 ]);
 const initials = computed(() => (session.email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?');
+// The role, and the one the user acts with when MFA lowers it (nothing at all under "required"): in the account menu and
+// the drawer alike.
+const roleText = computed(() => `Role: ${session.role}${session.loaded && session.effectiveRole !== session.role ? ` (acting as ${session.effectiveRole ?? 'nothing'})` : ''}`);
 
 // Pending onboardings and offboardings of the last discovery run, next to Discovery.
 onMounted(() => {
@@ -53,7 +56,6 @@ function toggleTheme() {
       <router-link to="/" class="dm-brand dm-wakes" aria-label="Dormeto overview">
         <DmLogo still :size="34" :zzz="false" />
         <span class="dm-brand__name">Dormeto</span>
-        <v-chip size="x-small" color="secondary" variant="tonal" label class="dm-brand__env">{{ env }}</v-chip>
       </router-link>
       <v-list nav density="comfortable" class="px-3">
         <template v-for="group in groups" :key="group.title">
@@ -71,7 +73,7 @@ function toggleTheme() {
           <v-avatar size="34" class="dm-me__avatar">{{ initials }}</v-avatar>
           <div class="dm-me__who">
             <div class="dm-me__email">{{ session.email }}</div>
-            <div class="dm-me__role">{{ session.acting }}</div>
+            <div class="dm-me__role">{{ roleText }}</div>
           </div>
         </div>
       </template>
@@ -79,7 +81,11 @@ function toggleTheme() {
     <v-app-bar flat border="b" density="comfortable" class="dm-bar">
       <v-app-bar-nav-icon v-if="signedIn" aria-label="Menu" @click="drawer = !drawer" />
       <v-app-bar-title>
-        <span v-if="!signedIn || mobile" class="d-inline-flex align-center ga-2 font-weight-bold"><DmLogo still :size="26" :zzz="false" />Dormeto</span>
+        <span class="d-inline-flex align-center ga-2">
+          <span v-if="!signedIn || mobile" class="d-inline-flex align-center ga-2 font-weight-bold"><DmLogo still :size="26" :zzz="false" />Dormeto</span>
+          <!-- The environment, in the bar whatever the drawer: dev or prod at a glance. -->
+          <v-chip color="secondary" variant="tonal" label class="dm-env">{{ env }}</v-chip>
+        </span>
       </v-app-bar-title>
       <v-btn :icon="dark ? mdiWeatherSunny : mdiWeatherNight" :aria-label="dark ? 'Switch to the light theme' : 'Switch to the night theme'" @click="toggleTheme" />
       <v-menu v-if="signedIn && session.email">
@@ -87,7 +93,7 @@ function toggleTheme() {
           <v-btn v-bind="props" icon aria-label="Account"><v-avatar size="30" class="dm-me__avatar">{{ initials }}</v-avatar></v-btn>
         </template>
         <v-list density="compact" min-width="260">
-          <v-list-item :title="session.email" :subtitle="`Role: ${session.role}${session.loaded && session.effectiveRole !== session.role ? ` (acting as ${session.effectiveRole ?? 'nothing'})` : ''}`" />
+          <v-list-item :title="session.email" :subtitle="roleText" />
           <v-divider />
           <v-list-item :prepend-icon="mdiAccountCogOutline" title="Account and two-step verification" to="/account" />
           <v-list-item :prepend-icon="mdiLogout" title="Sign out" @click="signOut(getConfig())" />
@@ -108,7 +114,7 @@ function toggleTheme() {
 <style scoped>
 .dm-brand { display: flex; align-items: center; gap: 11px; padding: 20px 22px 14px; color: inherit; text-decoration: none; }
 .dm-brand__name { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.03em; }
-.dm-brand__env { margin-left: auto; font-family: var(--dm-mono); }
+.dm-env { font-family: var(--dm-mono); }
 .dm-nav-group { font: 500 0.64rem/1 var(--dm-mono) !important; letter-spacing: 0.12em; text-transform: uppercase; min-height: 32px !important; padding-inline-start: 12px !important; margin-top: 10px; }
 .dm-me { display: flex; align-items: center; gap: 10px; margin: 12px; padding: 10px 12px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 14px; }
 .dm-me__avatar { background: linear-gradient(155deg, #4589ca, #034b80); color: #fff; font-size: 0.72rem; font-weight: 600; }
