@@ -1,6 +1,7 @@
 // Demo mode of the dashboard (npm run dev:mock, development only): the manager API, the sign-in and the user's Cognito
 // calls answered in the browser from a demo organization kept in memory (a reload starts it again). Loaded only when
-// VITE_MOCK is 1, by dynamic imports behind that test (api.ts, auth.ts, cognito.ts): a build never contains it.
+// DEMO is on (enabled.ts: development with VITE_MOCK=1), by dynamic imports behind it (api.ts, auth.ts, cognito.ts): a build
+// never contains it.
 import { User } from 'oidc-client-ts';
 import type { Status } from '@dormeto/discovery/types';
 import { ApiError } from '../api';

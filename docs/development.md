@@ -31,6 +31,7 @@ cd ../../.. && node scripts/smoke.mjs --env dev  # API checks as the smoke user
 npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://localhost:5173 against the dev API
 npm run dev:mock -w @dormeto/manager-dashboard  # the dashboard with demo data, no sign-in (development only)
 # its organization is generated: http://localhost:5173/?demo=acme,workloads=60,routers=5 (or VITE_MOCK_SCENARIO), see src/mock/scenario.ts
+# the build refuses VITE_MOCK (vite.config.ts), and the release a dashboard holding the demo (scripts/release/artifacts.mjs)
 ```
 
 Screenshots of the dashboard (the website's, for example), signed in as the smoke user, with example values in place of

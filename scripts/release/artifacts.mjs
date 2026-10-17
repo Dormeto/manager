@@ -34,6 +34,14 @@ function list(dir, base = dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? list(join(dir, e.name), base) : [relative(base, join(dir, e.name))]));
 }
 
+// The dashboard's demo mode (src/mock, npm run dev:mock) never ships: a build holding its chunk (mock-…) or its markers (the
+// demo's storage key, its sign-in's address) is refused. The build refuses VITE_MOCK and leaves src/mock out anyway.
+const DEMO_MARKERS = ['dormeto.demo', 'example.invalid'];
+export function demoIn(dist) {
+  return list(dist).filter((file) => /(^|\/)mock-[^/]*$/.test(file)
+    || (/\.(m?js|html|css|json|map)$/.test(file) && DEMO_MARKERS.some((marker) => readFileSync(join(dist, file), 'utf8').includes(marker)))).sort();
+}
+
 export function assembleArtifacts({ manager, router, out }) {
   // The router bundle of the version the manager pins (package.json dormeto.router), never another checkout's.
   const routerVersion = version(router);
@@ -58,6 +66,8 @@ export function assembleArtifacts({ manager, router, out }) {
   for (const source of [...Object.values(bundles), ...Object.values(sources)]) {
     if (!existsSync(source)) throw new Error(`missing build output: ${source} (npm run build here, npm run package in the router)`);
   }
+  const demo = demoIn(sources.dashboard);
+  if (demo.length) throw new Error(`the dashboard build holds the demo mode (${demo.join(', ')}): build it without VITE_MOCK`);
   rmSync(out, { recursive: true, force: true });
   for (const [target, source] of Object.entries(bundles)) zipOne(source, join(out, target));
   for (const [target, source] of Object.entries(sources)) {

@@ -1,4 +1,5 @@
 import { idToken, signIn } from './auth';
+import { DEMO, demo } from './mock/enabled';
 
 export class ApiError extends Error {
   // body: the error answer of the API, for example the validation errors of a configuration.
@@ -10,7 +11,7 @@ export class ApiError extends Error {
 // JSON call to the manager API with the ID token; an expired session goes back to the sign-in.
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Demo data (npm run dev:mock, development only): answered in the browser, errors as ApiError.
-  if (import.meta.env.VITE_MOCK === '1') return (await (await import('./mock')).mockApi(path, init)) as T;
+  if (DEMO) return (await (await demo()).mockApi(path, init)) as T;
   const token = await idToken();
   if (!token) {
     await signIn(window.location.pathname + window.location.search);

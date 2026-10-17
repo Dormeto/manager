@@ -2,7 +2,7 @@
 // the manager's builds and the router bundle of the pinned version.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { assembleArtifacts } from './artifacts.mjs';
@@ -46,4 +46,16 @@ test('the same builds give the same zips: an unchanged function is never redeplo
   const first = readFileSync(join(repos.out, 'lambda/api.zip'));
   assembleArtifacts(repos);
   assert.ok(first.equals(readFileSync(join(repos.out, 'lambda/api.zip'))));
+});
+
+test('refuses a dashboard build holding the demo mode (its chunk or its markers), before writing anything', () => {
+  for (const extra of [
+    { 'manager/packages/dashboard/dist/assets/mock-9f8e.js': 'export const demo = 1;' },
+    { 'manager/packages/dashboard/dist/assets/app-1a2b.js': 'sessionStorage.getItem("dormeto.demo")' },
+    { 'manager/packages/dashboard/dist/assets/config-3c4d.js': 'const c = { authority: "https://example.invalid" };' },
+  ]) {
+    const repos = fakeRepos({ with: extra });
+    assert.throws(() => assembleArtifacts(repos), /dashboard build holds the demo mode \(assets\/(mock-9f8e|app-1a2b|config-3c4d)\.js\): build it without VITE_MOCK/);
+    assert.equal(existsSync(repos.out), false);
+  }
 });
