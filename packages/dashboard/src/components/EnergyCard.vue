@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The energy the fleet's naps saved over the last 30 days, and its carbon, as the API estimates it with the bar of all
-// workloads (GET /workloads/states, the Overview's): each workload's last nap's items times its hours asleep, in its own
-// region; then an everyday equivalent, one after the other. Without a workload estimated, no estimate yet (never a zero).
+// workloads (GET /workloads/states, the Overview's): each workload's last nap's items times its hours asleep within the
+// savings baseline, in its own region; then an everyday equivalent, one after the other. Without a workload estimated, no
+// estimate yet (never a zero).
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { mdiCar, mdiCellphone, mdiCoffeeOutline, mdiLeaf, mdiTelevisionPlay } from '@mdi/js';
 import { equivalents, rounded, type FleetEnergy } from '../energy';
@@ -63,8 +64,9 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
           </div>
         </div>
         <div class="text-body-small text-medium-emphasis">Estimate from {{ workloads }} workload{{ workloads === 1 ? '' : 's' }}: each one's last nap's items
-          applied to every hour asleep over the last 30 days, at 50% CPU use, in its region (an unknown region at the average); items of
-          unknown size and pods without a node autoscaler left out. Cloud Carbon Footprint's coefficients for AWS. Not a measure.</div>
+          applied to every hour asleep within the savings baseline over the last 30 days (with business hours, weekdays 08:00 to 20:00 only),
+          at 50% CPU use, in its region (an unknown region at the average); items of unknown size and pods without a node autoscaler left
+          out. Cloud Carbon Footprint's coefficients for AWS. Not a measure.</div>
       </template>
       <div v-else-if="loaded" class="text-body-medium text-medium-emphasis">No estimate yet: it comes with the naps' figures, from what each nap
         stopped (its instances, databases, tasks or pods of a known size) and its hours asleep.</div>

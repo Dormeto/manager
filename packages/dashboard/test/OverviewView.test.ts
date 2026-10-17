@@ -94,7 +94,7 @@ describe('Overview', () => {
     expect(card.text()).toContain('≈ 82,000smartphone charges');
     // The method, in the card's note.
     expect(card.text()).toContain('Estimate from 2 workloads');
-    for (const part of ['50% CPU use', 'every hour asleep over the last 30 days', 'an unknown region at the average', 'left out', 'Cloud Carbon Footprint']) expect(card.text()).toContain(part);
+    for (const part of ['50% CPU use', 'every hour asleep within the savings baseline over the last 30 days', 'an unknown region at the average', 'left out', 'Cloud Carbon Footprint']) expect(card.text()).toContain(part);
     expect(paths.filter((p) => p === '/workloads/states')).toHaveLength(1);
     expect(paths.some((p) => /states=1|limit=1000/.test(p))).toBe(false);
     wrapper.unmount();

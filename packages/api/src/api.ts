@@ -524,7 +524,8 @@ export function createApi({
     })();
     return discountsAsked;
   }
-  // energy: with the costs, what the last nap's items saved over its hours asleep, in the workload's region (energy.ts).
+  // energy: with the costs, what the last nap's items saved over its hours asleep within the baseline (costs.saved.hours),
+  // in the workload's region (@dormeto/fleet/energy).
   type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs; energy?: Energy };
   const statesKept = new Map<string, { state: unknown; at: number; value: States }>();
   // A workload's figures and when they were computed: kept maxAgeMs, and, for its own row and view, while its state stays
