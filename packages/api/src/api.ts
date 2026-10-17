@@ -6,6 +6,7 @@ import {
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { addEnergy, savedEnergy, type Energy } from './energy.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
@@ -523,7 +524,8 @@ export function createApi({
     })();
     return discountsAsked;
   }
-  type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs };
+  // energy: with the costs, what the last nap's items saved over its hours asleep, in the workload's region (energy.ts).
+  type States = { states7d: { from: string; to: string; totals: Record<string, number> }; costs?: Costs; energy?: Energy };
   const statesKept = new Map<string, { state: unknown; at: number; value: States }>();
   // A workload's figures and when they were computed: kept maxAgeMs, and, for its own row and view, while its state stays
   // the same.
@@ -553,6 +555,7 @@ export function createApi({
           saved: { usd: realized.usd, hours: realized.hours, unpricedHours: realized.unpriced.reduce((n, u) => n + u.hours, 0) },
           ...(anyDiscount(discounts) ? { discounts } : {}),
         };
+        value.energy = savedEnergy(value.costs.items.map((i) => i.item), value.costs.saved.hours, region);
       }
       const entry = { state: summary?.state, at: t, value };
       // Figures without their costs because the discounts could not be read are not kept.
@@ -567,7 +570,8 @@ export function createApi({
   const statesOf = async (account: string, region: string, id: string, summary: { state?: unknown; historySince?: unknown } | null) => (await statesEntry(account, region, id, summary))?.value;
 
   // All the workloads the caller sees (user request: the bar of the Workloads view): their seconds in each state over 7
-  // days and their savings added up, from each workload's figures kept statesCacheMs whatever its state.
+  // days, their savings and the energy their naps did not use (the Overview, PR #1) added up, from each workload's figures
+  // kept statesCacheMs whatever its state.
   async function allStates(seen: Record<string, unknown>[]) {
     // Read before the figures: those kept are then priced with them (final review 1).
     const discounts = savings ? await discountsOf().catch(() => null) : null;
@@ -587,6 +591,8 @@ export function createApi({
     const priced = entries.map((e) => e.value.costs).filter((c): c is Costs => Boolean(c));
     const hourlyOf = (c: Costs) => c.items.reduce((n, i) => n + (i.hourly ?? 0), 0);
     const pricedOnes = priced.filter((c) => c.items.some((i) => i.hourly !== null));
+    // The workloads with an estimate (an item of a known shape): none, no estimate yet (never a zero said as one).
+    const estimated = entries.map((e) => e.value.energy).filter((e): e is Energy => Boolean(e?.estimated));
     return {
       workloads: seen.length, computedAt: new Date(computedAt).toISOString(), cacheMinutes: statesCacheMs / 60_000,
       states7d: { from: new Date(computedAt - STATES_DAYS * DAY_MS).toISOString(), to: new Date(computedAt).toISOString(), totals },
@@ -599,6 +605,7 @@ export function createApi({
           priced: pricedOnes.length,
           ...(anyDiscount(discounts) ? { discounts } : {}),
         },
+        energy: { ...estimated.reduce(addEnergy, { kwh: 0, co2Kg: 0, estimated: 0 }), workloads: estimated.length },
       } : {}),
     };
   }

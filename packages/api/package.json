@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./spot": "./src/spot.ts"
+    "./spot": "./src/spot.ts",
+    "./energy": "./src/energy.ts"
   },
   "scripts": {
     "test": "vitest run",
