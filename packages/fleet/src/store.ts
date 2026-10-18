@@ -96,6 +96,12 @@ export interface SavingsSummary {
 // The discounts for commitments (R9.5), set by administrators (T#default / SAVINGS#SETTINGS).
 export interface SavingsSettings extends Discounts { updatedAt: string | null; updatedBy: string | null }
 
+// The manager's daily update check (design 2026-10-18-daily-update-check-design.md), set by administrators (UPDATE#CHECK).
+export interface UpdateCheck { enabled: boolean; alert: boolean; updatedAt?: string; updatedBy?: string }
+// The last check (UPDATE#RESULT): latest is the newest version above the running one, null when up to date; notified, the
+// last version sent to the alert topic.
+export interface UpdateResult { checkedAt: string; running: string; latest: string | null; error?: string; notified?: string }
+
 // A workload whose last wake failed (R7b): its failure until a successful wake.
 export interface FailureEntry {
   account: string;
@@ -281,6 +287,25 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       await dynamo.send(new PutItemCommand({
         TableName: table, Item: { ...key('SAVINGS#SETTINGS'), data: { S: JSON.stringify({ compute: discounts.compute, databases: discounts.databases }) }, updatedAt: { S: new Date(now()).toISOString() }, updatedBy: { S: by } },
       }));
+    },
+
+    // The daily update check: off until an administrator turns it on. Consistent reads: turning it off stops the next run.
+    async getUpdateCheck(): Promise<UpdateCheck> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key('UPDATE#CHECK'), ConsistentRead: true }));
+      const d = data<{ enabled?: boolean; alert?: boolean }>(Item);
+      return { enabled: d?.enabled === true, alert: d?.alert === true, ...(Item?.updatedAt?.S ? { updatedAt: Item.updatedAt.S } : {}), ...(Item?.updatedBy?.S ? { updatedBy: Item.updatedBy.S } : {}) };
+    },
+    async putUpdateCheck(check: UpdateCheck & { updatedBy: string }): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key('UPDATE#CHECK'), data: { S: JSON.stringify({ enabled: check.enabled, alert: check.alert }) }, updatedAt: { S: new Date(now()).toISOString() }, updatedBy: { S: check.updatedBy } },
+      }));
+    },
+    async getUpdateResult(): Promise<UpdateResult | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key('UPDATE#RESULT'), ConsistentRead: true }));
+      return data<UpdateResult>(Item);
+    },
+    async putUpdateResult(result: UpdateResult): Promise<void> {
+      await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key('UPDATE#RESULT'), data: { S: JSON.stringify(result) } } }));
     },
 
     // AWS list prices (R9), per region and item: 30 days (a Spot price a day, R9.5); the absence of one a day (a new

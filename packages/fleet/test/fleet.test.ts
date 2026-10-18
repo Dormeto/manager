@@ -510,6 +510,17 @@ describe('state history (R8)', () => {
     expect(await store.getSavingsSettings()).toEqual({ compute: 20, databases: 30, updatedAt: new Date(NOW).toISOString(), updatedBy: 'admin@example.com' });
   });
 
+  it('keeps the daily update check off by default, with who set it and when; and its last result', async () => {
+    const store = createFleetStore({ dynamo: fakeDynamo(), table: 'dmt-dev-manager', now: () => NOW });
+    expect(await store.getUpdateCheck()).toEqual({ enabled: false, alert: false });
+    expect(await store.getUpdateResult()).toBeNull();
+    await store.putUpdateCheck({ enabled: true, alert: true, updatedBy: 'admin@example.com' });
+    expect(await store.getUpdateCheck()).toEqual({ enabled: true, alert: true, updatedAt: new Date(NOW).toISOString(), updatedBy: 'admin@example.com' });
+    const result = { checkedAt: new Date(NOW).toISOString(), running: '0.13.0', latest: '0.14.0', notified: '0.14.0' };
+    await store.putUpdateResult(result);
+    expect(await store.getUpdateResult()).toEqual(result);
+  });
+
   it('reads the discounts consistently: a change is seen at once after it is saved (final review 5)', async () => {
     const dynamo = fakeDynamo();
     const sent: Record<string, unknown>[] = [];
