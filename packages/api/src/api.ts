@@ -10,6 +10,7 @@ import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
+import type { UpdateService } from './update.js';
 
 export type Router = FleetRouter;
 
@@ -143,6 +144,7 @@ export interface ApiOptions {
   newId?: () => string;
   version: string;
   users?: UsersService;
+  update?: UpdateService; // the manager's self-update: only when installed with the Dormeto CLI
   preferences?: PreferencesStore;
   discovery?: DiscoveryApi;
   operations?: OperationsApi;
@@ -318,7 +320,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
   }
 }
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
   fleet, idleRequests, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -388,11 +390,12 @@ export function createApi({
   }
 
   // Mutating call: always audited, with its result or its error.
-  async function audited(identity: Identity, action: string, target: string, run: () => Promise<{ result: string; response: ApiResponse }>) {
+  // `run` may name the target it found (a plan's version), else the one given is kept.
+  async function audited(identity: Identity, action: string, target: string, run: () => Promise<{ result: string; response: ApiResponse; target?: string }>) {
     const entry = { id: newId(), at: new Date(now()).toISOString(), who: identity.email, role: identity.role, action, target };
     try {
-      const { result, response } = await run();
-      await audit.write({ ...entry, result });
+      const { result, response, target: found } = await run();
+      await audit.write({ ...entry, ...(found ? { target: found } : {}), result });
       return response;
     } catch (err) {
       await audit.write({ ...entry, result: `error: ${(err as Error).message}` });
@@ -1035,6 +1038,32 @@ export function createApi({
     if (method === 'GET' && resource === 'audit' && !a) {
       need(identity, 'admin');
       return reply(200, { entries: await audit.list() });
+    }
+
+    if (resource === 'update' && !b) {
+      need(identity, 'admin');
+      if (method === 'GET' && !a) return reply(200, update ? await update.state() : { installedWithCli: false, version });
+      if (update && method === 'GET' && a === 'changes') {
+        const to = event.queryStringParameters?.to;
+        if (!to) throw new HttpError(400, 'bad_request', 'to is required');
+        return reply(200, await update.changes(to));
+      }
+      if (update && method === 'POST' && a === 'plan') {
+        const target = bodyOf(event).version;
+        if (typeof target !== 'string') throw new HttpError(400, 'bad_request', 'version is required');
+        return audited(identity, 'update-plan', target, async () => {
+          const pending = await update.plan(target, identity.email);
+          return { result: 'requested', response: reply(202, pending) };
+        });
+      }
+      if (update && method === 'POST' && a === 'apply') {
+        const planBuild = bodyOf(event).planBuild;
+        if (typeof planBuild !== 'string') throw new HttpError(400, 'bad_request', 'planBuild is required');
+        return audited(identity, 'update-apply', planBuild, async () => {
+          const pending = await update.apply(planBuild, identity.email);
+          return { result: 'requested', response: reply(202, pending), target: pending.version };
+        });
+      }
     }
 
     if (resource === 'users' && users) {

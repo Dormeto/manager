@@ -9,7 +9,10 @@ import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand,
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { ListSubscriptionsByTopicCommand, SNSClient, type Subscription } from '@aws-sdk/client-sns';
-import { S3Client } from '@aws-sdk/client-s3';
+import { CloudWatchLogsClient, GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
+import { BatchGetBuildsCommand, CodeBuildClient, ListBuildsForProjectCommand } from '@aws-sdk/client-codebuild';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { randomBytes } from 'node:crypto';
 import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { createStore } from '@dormeto/discovery';
 import { createFleetStore, createPriceBook } from '@dormeto/fleet';
@@ -20,6 +23,7 @@ import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
 import { readJson } from './s3-json.js';
+import { createUpdate, type Build, type Pending } from './update.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
 const routers: Router[] = JSON.parse(process.env.ROUTERS ?? '[]');
@@ -173,6 +177,73 @@ const ipLists = listsBucket ? {
   status: () => readJson<{ lists?: [] }>(s3, listsBucket, 'status.json'),
 } : undefined;
 
+// The manager's self-update (only for an install made with the CLI, which gives the API its install bucket): requests go
+// to the install bucket, its builds and their logs are read, and the pending request is kept in the table.
+const installBucket = process.env.INSTALL_BUCKET;
+const update = installBucket ? (() => {
+  const codebuild = new CodeBuildClient({});
+  const logs = new CloudWatchLogsClient({});
+  const project = process.env.INSTALL_PROJECT ?? '';
+  const pendingKey = { pk: { S: 'T#default' }, sk: { S: 'UPDATE#REQUEST' } };
+  return createUpdate({
+    async get(key) {
+      try {
+        return await (await s3.send(new GetObjectCommand({ Bucket: installBucket, Key: key }))).Body!.transformToString();
+      } catch (err) {
+        if ((err as Error).name === 'NoSuchKey' || (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
+        throw err;
+      }
+    },
+    async put(key, body) {
+      await s3.send(new PutObjectCommand({ Bucket: installBucket, Key: key, Body: body, ContentType: 'application/json' }));
+    },
+    async builds() {
+      const { ids = [] } = await codebuild.send(new ListBuildsForProjectCommand({ projectName: project, sortOrder: 'DESCENDING' }));
+      if (ids.length === 0) return [];
+      const { builds = [] } = await codebuild.send(new BatchGetBuildsCommand({ ids: ids.slice(0, 20) }));
+      const byId = new Map(builds.map((b) => [b.id, b]));
+      return ids.slice(0, 20).flatMap((id) => {
+        const b = byId.get(id);
+        return b ? [{
+          id, status: b.buildStatus ?? 'UNKNOWN', phase: b.currentPhase ?? null, startedAt: b.startTime?.toISOString() ?? null, endedAt: b.endTime?.toISOString() ?? null,
+          env: Object.fromEntries((b.environment?.environmentVariables ?? []).map((v) => [v.name ?? '', v.value ?? ''])), logStream: b.logs?.streamName ?? null,
+        } satisfies Build] : [];
+      });
+    },
+    async logLines(group, stream) {
+      const lines: string[] = [];
+      let token: string | undefined;
+      for (let page = 0; page < 10; page++) {
+        const out = await logs.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, startFromHead: true, nextToken: token }));
+        lines.push(...(out.events ?? []).map((e) => (e.message ?? '').replace(/\r?\n$/, '')));
+        if (!out.nextForwardToken || out.nextForwardToken === token) break;
+        token = out.nextForwardToken;
+      }
+      return lines;
+    },
+    async fetchText(url) {
+      try {
+        const res = await fetch(url);
+        return res.ok ? await res.text() : null;
+      } catch {
+        return null;
+      }
+    },
+    pending: {
+      async get() {
+        const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: pendingKey }));
+        return Item?.pending?.S ? (JSON.parse(Item.pending.S) as Pending) : null;
+      },
+      async put(p) {
+        await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...pendingKey, pending: { S: JSON.stringify(p) } } }));
+      },
+    },
+  }, {
+    env: process.env.ENV ?? '', logGroup: process.env.INSTALL_LOG_GROUP ?? '', version: process.env.VERSION ?? '0.0.0',
+    releasesUrl: process.env.RELEASES_URL || 'https://releases.dormeto.com/manager', now: () => new Date(), random: () => randomBytes(4).toString('hex'),
+  });
+})() : undefined;
+
 const users = createUsers({ cognito, ses, userPoolId: process.env.USER_POOL_ID ?? '', sender: process.env.EMAIL_SENDER === 'cognito' ? 'cognito' : 'ses' });
 // The MFA policy (R6c): the manager module's mfa.
 // A missing or unknown value is the module's default, never less (review M2).
@@ -186,6 +257,7 @@ export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
   users,
+  update,
   // Under required, an authenticator set up at sign-in (managed login) is turned on in the user's settings.
   mfa: { mode: mfaMode satisfies MfaMode, enabled: (username) => users.mfaEnabled(username, { activate: mfaMode === 'required' }) },
   preferences,

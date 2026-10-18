@@ -1,5 +1,6 @@
-// The manager's self-update. Pure part: version order, the versions offered, the plan summary, a changelog section's
-// Access line and request ids (no I/O).
+// The manager's self-update. The pure part comes first: version order, the versions offered, the plan summary, a
+// changelog section's Access line and request ids (no I/O). The service follows, over a port.
+import { HttpError } from './api.js';
 
 export const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 
@@ -89,4 +90,219 @@ export function accessOf(section: string): { access: string | null; accessNeeded
 export function requestId(now: Date, random: string): string {
   if (!/^[0-9a-f]{8}$/.test(random)) throw new Error(`not 8 lowercase hex characters: ${random}`);
   return `${now.toISOString().slice(0, 19).replace(/[-:]/g, '')}Z-${random}`;
+}
+
+// ---- The service ----
+
+export type Build = { id: string; status: string; phase: string | null; startedAt: string | null; endedAt: string | null; env: Record<string, string>; logStream: string | null };
+export type Pending = { key: string; id: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string };
+
+export type UpdatePort = {
+  // The install bucket, by key (`<env>/…`): null when the object is absent, an error for any other failure.
+  get(key: string): Promise<string | null>;
+  put(key: string, body: string): Promise<void>;
+  // The install project's newest builds, newest first.
+  builds(): Promise<Build[]>;
+  logLines(group: string, stream: string): Promise<string[]>;
+  // null on any failure.
+  fetchText(url: string): Promise<string | null>;
+  pending: { get(): Promise<Pending | null>; put(p: Pending | null): Promise<void> };
+};
+
+export type BuildView = {
+  id: string; by: 'dashboard' | 'cli'; action: string | null; version: string | null; status: string; phase: string | null;
+  startedAt: string | null; endedAt: string | null; steps: string[]; tail: string[];
+};
+
+export type UpdateState = {
+  installedWithCli: true;
+  version: string;
+  applied: { version: string; build: string; at: string | null } | null;
+  cli: string | null;
+  versions: Array<VersionEntry & { disabled?: string }>;
+  build: BuildView | null;
+  pending: (Pending & { notStarted?: true }) | null;
+  plan: { build: string; version: string; summary: PlanSummary } | null;
+};
+
+export type UpdateService = {
+  state(): Promise<UpdateState>;
+  changes(to: string): Promise<Section[]>;
+  plan(version: string, who: string): Promise<Pending>;
+  apply(planBuild: string, who: string): Promise<Pending>;
+};
+
+type Result = { build: string; status: string; message: string; action: string; version: string };
+
+const NOT_STARTED_MS = 120_000;
+const TAIL = 40;
+const BUILDS = 20;
+const LOG_PAGES = 10;
+const FAILED = new Set(['FAILED', 'FAULT', 'TIMED_OUT', 'STOPPED']);
+const PLAN_BUILD = /^dmt-[a-z0-9-]+-install:[0-9a-f-]{36}$/;
+const isPlan = (action: string | null) => action === 'plan' || action === 'plan-destroy';
+const isApply = (action: string | null) => action === 'apply' || action === 'apply-destroy';
+
+function parse<T>(text: string | null): T | null {
+  if (text === null) return null;
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === 'object' ? (value as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+const textOrNull = (v: unknown) => (typeof v === 'string' ? v : null);
+
+// A version's own section of a CHANGELOG.md: from its `## <version>` heading to the next `## `.
+function sectionOf(changelog: string, version: string): string | null {
+  const lines = changelog.split('\n');
+  const start = lines.findIndex((l) => l === `## ${version}` || l.startsWith(`## ${version} `));
+  if (start < 0) return null;
+  let end = lines.findIndex((l, i) => i > start && l.startsWith('## '));
+  if (end < 0) end = lines.length;
+  return lines.slice(start, end).join('\n').trimEnd();
+}
+
+export function createUpdate(port: UpdatePort, o: { env: string; logGroup: string; version: string; releasesUrl: string; now: () => Date; random: () => string }): UpdateService {
+  const key = (path: string) => `${o.env}/${path}`;
+
+  async function published(): Promise<VersionEntry[]> {
+    const list = parse<{ versions?: unknown }>(await port.fetchText(`${o.releasesUrl}/versions.json`));
+    if (list && Array.isArray(list.versions)) {
+      return list.versions
+        .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object' && typeof (e as { version?: unknown }).version === 'string')
+        .map((e) => ({ version: e.version as string, router: textOrNull(e.router), minCli: textOrNull(e.minCli), published: textOrNull(e.published) }));
+    }
+    const latest = parse<Record<string, unknown>>(await port.fetchText(`${o.releasesUrl}/latest.json`));
+    return typeof latest?.version === 'string' ? [{ version: latest.version, router: textOrNull(latest.router), minCli: null, published: textOrNull(latest.published) }] : [];
+  }
+
+  // The release the CLI staged in the install bucket: the version of its terraform-aws-dormeto-<v>.zip checksum line.
+  async function staged(): Promise<VersionEntry | null> {
+    const sums = await port.get(key('release/SHA256SUMS'));
+    const version = /^\S+\s+\*?terraform-aws-dormeto-(\S+)\.zip$/m.exec(sums ?? '')?.[1];
+    return version && VERSION.test(version) ? { version, router: null, minCli: null, published: null, staged: true } : null;
+  }
+
+  async function offers() {
+    const cli = parse<{ version?: unknown }>(await port.get(key('cli.json')))?.version;
+    const cliVersion = typeof cli === 'string' ? cli : null;
+    return { cli: cliVersion, versions: offered(await published(), o.version, cliVersion, await staged()) };
+  }
+
+  const resultOf = async (id: string) => parse<Result>(await port.get(key(`results/${id}.json`)));
+
+  // What a build is: a request build's action and version come from its result (else from the pending item); a CLI
+  // build's from its environment.
+  async function describe(b: Build, pending: Pending | null): Promise<{ by: 'dashboard' | 'cli'; action: string | null; version: string | null }> {
+    if (b.env.ACTION !== 'request') return { by: 'cli', action: b.env.ACTION || null, version: b.env.RELEASE_VERSION || null };
+    const id = (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '');
+    const result = id ? await resultOf(id) : null;
+    const mine = pending && pending.id === id ? pending : null;
+    return { by: 'dashboard', action: result?.action || mine?.action || null, version: result?.version || mine?.version || null };
+  }
+
+  async function pendingNow(pending: Pending | null): Promise<UpdateState['pending']> {
+    if (!pending) return null;
+    const result = await resultOf(pending.id);
+    if (result?.status === 'succeeded' || result?.status === 'failed') {
+      await port.pending.put(null);
+      return null;
+    }
+    if (!result && o.now().getTime() - Date.parse(pending.at) > NOT_STARTED_MS) return { ...pending, notStarted: true };
+    return pending;
+  }
+
+  // The newest plan build is the confirmable plan when a dashboard plan succeeded, with its release.json, and no plan
+  // build started nor apply succeeded after it.
+  async function confirmable(builds: Build[], pending: Pending | null): Promise<UpdateState['plan']> {
+    for (const b of builds) {
+      const { by, action } = await describe(b, pending);
+      if (isApply(action) && b.status === 'SUCCEEDED') return null;
+      if (!isPlan(action)) continue;
+      if (by !== 'dashboard' || action !== 'plan') return null;
+      const id = (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '');
+      if ((await resultOf(id))?.status !== 'succeeded') return null;
+      const release = parse<{ version?: unknown }>(await port.get(key(`plans/${b.id}/release.json`)));
+      const planJson = await port.get(key(`plans/${b.id}/plan.json`));
+      if (typeof release?.version !== 'string' || planJson === null) return null;
+      return { build: b.id, version: release.version, summary: summarizePlan(planJson) };
+    }
+    return null;
+  }
+
+  async function view(b: Build, pending: Pending | null): Promise<BuildView> {
+    const lines = b.logStream ? await port.logLines(o.logGroup, b.logStream) : [];
+    return {
+      id: b.id, ...(await describe(b, pending)), status: b.status, phase: b.phase, startedAt: b.startedAt, endedAt: b.endedAt,
+      steps: lines.filter((l) => l.startsWith('dormeto: ')).map((l) => l.slice('dormeto: '.length)),
+      tail: FAILED.has(b.status) ? lines.slice(-TAIL) : [],
+    };
+  }
+
+  async function state(): Promise<UpdateState> {
+    const [builds, storedPending, { cli, versions }] = await Promise.all([port.builds(), port.pending.get(), offers()]);
+    const applied = parse<{ version?: unknown; build?: unknown }>(await port.get(key('applied.json')));
+    return {
+      installedWithCli: true,
+      version: o.version,
+      applied: typeof applied?.version === 'string' && typeof applied.build === 'string'
+        ? { version: applied.version, build: applied.build, at: builds.find((b) => b.id === applied.build)?.endedAt ?? null }
+        : null,
+      cli,
+      versions,
+      build: builds[0] ? await view(builds[0], storedPending) : null,
+      pending: await pendingNow(storedPending),
+      plan: await confirmable(builds, storedPending),
+    };
+  }
+
+  function busy(s: UpdateState) {
+    if (s.build?.status === 'IN_PROGRESS') throw new HttpError(409, 'busy', 'an install build is running');
+    if (s.pending && !s.pending.notStarted) throw new HttpError(409, 'busy', 'a request is waiting for its build');
+  }
+
+  async function request(body: { action: 'plan' | 'apply'; version: string; planBuild?: string }, who: string): Promise<Pending> {
+    const id = requestId(o.now(), o.random());
+    const at = o.now().toISOString();
+    const requestKey = key(`requests/${id}.json`);
+    await port.put(requestKey, JSON.stringify({ ...body, requestedBy: who, requestedAt: at }));
+    const pending: Pending = { key: requestKey, id, ...body, at, who };
+    await port.pending.put(pending);
+    return pending;
+  }
+
+  return {
+    state,
+
+    async changes(to) {
+      const { versions } = await offers();
+      if (!versions.some((v) => v.version === to)) throw new HttpError(400, 'bad_request', `${to} is not a version to update to`);
+      return Promise.all(versions.filter((v) => compareVersions(v.version, to) <= 0).map(async (v): Promise<Section> => {
+        const changelog = v.staged ? await port.get(key('release/CHANGELOG.md')).catch(() => null) : await port.fetchText(`${o.releasesUrl}/${v.version}/CHANGELOG.md`);
+        const notes = changelog === null ? null : sectionOf(changelog, v.version);
+        return { version: v.version, notes, ...(notes === null ? { access: null, accessNeeded: false } : accessOf(notes)) };
+      }));
+    },
+
+    async plan(version, who) {
+      if (!VERSION.test(version)) throw new HttpError(400, 'bad_request', 'version must look like 1.2.3');
+      const s = await state();
+      busy(s);
+      const entry = s.versions.find((v) => v.version === version);
+      if (!entry) throw new HttpError(400, 'bad_request', `${version} is not a version to update to`);
+      if (entry.disabled) throw new HttpError(400, 'bad_request', entry.disabled);
+      return request({ action: 'plan', version }, who);
+    },
+
+    async apply(planBuild, who) {
+      if (!PLAN_BUILD.test(planBuild)) throw new HttpError(400, 'bad_request', 'planBuild is not a plan build');
+      const s = await state();
+      busy(s);
+      if (!s.plan || s.plan.build !== planBuild) throw new HttpError(400, 'bad_request', 'that plan is not the latest one, or is no longer current');
+      return request({ action: 'apply', version: s.plan.version, planBuild }, who);
+    },
+  };
 }
