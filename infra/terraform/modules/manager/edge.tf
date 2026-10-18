@@ -76,6 +76,7 @@ resource "aws_s3_object" "config" {
     authority  = "https://${aws_cognito_user_pool.main.endpoint}"
     clientId   = aws_cognito_user_pool_client.dashboard.id
     authDomain = local.auth_host
+    passkeys   = local.passkeys
   })
 
   depends_on = [terraform_data.artifacts]

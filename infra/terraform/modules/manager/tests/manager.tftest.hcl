@@ -337,6 +337,105 @@ run "mfa_required" {
   }
 }
 
+# Passkeys (design 2026-10-18): choice-based sign-in with WebAuthn on the pool and the client in the optional and operators
+# modes; required leaves the pool, the client and the dashboard as they were. Both pool blocks update in place (checked in
+# the provider 6.67 source: no ForceNew).
+run "passkeys_by_default" {
+  command = plan
+
+  assert {
+    condition     = aws_cognito_user_pool.main.sign_in_policy[0].allowed_first_auth_factors == toset(["PASSWORD", "WEB_AUTHN"])
+    error_message = "Passkeys: the pool allows a password or a passkey as the first factor."
+  }
+  assert {
+    condition     = aws_cognito_user_pool.main.web_authn_configuration[0].user_verification == "required" && aws_cognito_user_pool.main.web_authn_configuration[0].relying_party_id == null
+    error_message = "Passkeys: user verification is required; without a custom domain the relying party is Cognito's default."
+  }
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.dashboard.explicit_auth_flows) == toset(["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_USER_AUTH"])
+    error_message = "Passkeys: the dashboard client allows choice-based sign-in."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.PASSKEYS == "true"
+    error_message = "Passkeys: the API is told."
+  }
+}
+
+run "passkeys_on_a_domain" {
+  command = plan
+  # The configuration holds the user pool's endpoint and the client's id.
+  override_resource {
+    target          = aws_cognito_user_pool.main
+    override_during = plan
+    values = {
+      id       = "eu-west-1_test"
+      endpoint = "cognito-idp.eu-west-1.amazonaws.com/eu-west-1_test"
+    }
+  }
+  override_resource {
+    target          = aws_cognito_user_pool_client.dashboard
+    override_during = plan
+    values          = { id = "clientid" }
+  }
+  variables {
+    local_dev = true
+    domain = {
+      dashboard       = "app.example.com"
+      auth            = "auth.app.example.com"
+      certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/test"
+    }
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool.main.web_authn_configuration[0].relying_party_id == "auth.app.example.com"
+    error_message = "With a custom domain, the relying party is the auth domain."
+  }
+  assert {
+    condition     = contains(aws_cognito_user_pool_client.dashboard.callback_urls, "https://app.example.com/account") && contains(aws_cognito_user_pool_client.dashboard.callback_urls, "http://localhost:5173/account") && contains(aws_cognito_user_pool_client.dashboard.callback_urls, "http://localhost:5173/callback")
+    error_message = "Passkeys: the registration page returns to /account (and the local development equivalent)."
+  }
+  assert {
+    condition     = jsondecode(aws_s3_object.config.content).passkeys == true && jsondecode(aws_s3_object.config.content).authDomain == "auth.app.example.com"
+    error_message = "Passkeys: the dashboard is told, with the auth domain."
+  }
+}
+
+run "passkeys_off_in_required_mode" {
+  command = plan
+  variables {
+    mfa = "required"
+  }
+
+  assert {
+    condition     = length(aws_cognito_user_pool.main.sign_in_policy) == 0 && length(aws_cognito_user_pool.main.web_authn_configuration) == 0
+    error_message = "required: the pool is as before."
+  }
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.dashboard.explicit_auth_flows) == toset(["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"])
+    error_message = "required: the client is as before."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.PASSKEYS == "false"
+    error_message = "required: no passkeys offered."
+  }
+}
+
+run "passkeys_can_be_turned_off" {
+  command = plan
+  variables {
+    passkeys = false
+  }
+
+  assert {
+    condition     = length(aws_cognito_user_pool.main.sign_in_policy) == 0 && length(aws_cognito_user_pool.main.web_authn_configuration) == 0 && length(aws_cognito_user_pool_client.dashboard.explicit_auth_flows) == 2
+    error_message = "passkeys = false: the pool and the client are as before."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.PASSKEYS == "false"
+    error_message = "passkeys = false: the API is told."
+  }
+}
+
 run "mfa_is_validated" {
   command = plan
 

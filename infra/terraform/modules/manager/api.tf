@@ -223,6 +223,7 @@ resource "aws_lambda_function" "api" {
       ALERTS_TOPIC            = aws_sns_topic.alerts.arn
       LISTS_BUCKET            = aws_s3_bucket.lists.id
       MFA_MODE                = var.mfa
+      PASSKEYS                = tostring(local.passkeys)
       SAVINGS_BASELINE        = var.savings_baseline
       SAVINGS_TIMEZONE        = var.savings_timezone
       STATES_CACHE_MINUTES    = tostring(var.states_cache_minutes)

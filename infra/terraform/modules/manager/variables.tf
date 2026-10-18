@@ -126,6 +126,12 @@ variable "mfa" {
   }
 }
 
+variable "passkeys" {
+  description = "Passkeys (sign-in with a fingerprint, a face, a PIN or a security key): the user pool allows a password or a passkey as the first factor, and users register passkeys from the dashboard's Account page. Applies to the optional and operators MFA modes; with mfa = required, Cognito enforces the authenticator app and passkeys are not offered."
+  type        = bool
+  default     = true
+}
+
 variable "domain" {
   description = "A custom domain: the dashboard host, the sign-in host under it (auth.<dashboard>), their certificate in us-east-1 (both names), and optionally the Route 53 zone where the records are created. Null: CloudFront's and Cognito's own domains."
   type = object({
@@ -252,6 +258,7 @@ locals {
   routers = jsonencode([for r in var.routers : merge({ for k, v in r : k => v if v != null }, { account = local.account_id })])
 
   # Hosts: the custom domain, or CloudFront's and Cognito's own.
+  passkeys       = var.passkeys && var.mfa != "required"
   custom_domain  = var.domain != null
   zone_id        = try(var.domain.zone_id, null)
   cognito_prefix = "${local.name}-${local.account_id}"

@@ -37,6 +37,24 @@ resource "aws_cognito_user_pool" "main" {
     enabled = true
   }
 
+  # Passkeys: choice-based sign-in. A passkey with user verification is multi-factor by itself (the API reads the ID
+  # token's amr). Both blocks update in place. The relying party is the custom auth domain (managed login requires it),
+  # else Cognito's default, the prefix domain.
+  dynamic "sign_in_policy" {
+    for_each = local.passkeys ? [1] : []
+    content {
+      allowed_first_auth_factors = ["PASSWORD", "WEB_AUTHN"]
+    }
+  }
+
+  dynamic "web_authn_configuration" {
+    for_each = local.passkeys ? [1] : []
+    content {
+      relying_party_id  = local.custom_domain ? var.domain.auth : null
+      user_verification = "required"
+    }
+  }
+
   # An email changed (by an administrator: no client may write it) is kept until the new address is verified.
   user_attribute_update_settings {
     attributes_require_verification_before_update = ["email"]
@@ -84,8 +102,10 @@ resource "aws_cognito_user_group" "role" {
 }
 
 locals {
-  local_callbacks = var.local_dev ? ["http://localhost:5173/callback"] : []
-  local_logouts   = var.local_dev ? ["http://localhost:5173/"] : []
+  # /account: where managed login's passkey registration page returns.
+  local_callbacks   = var.local_dev ? ["http://localhost:5173/callback"] : []
+  passkey_callbacks = local.passkeys ? concat(["https://${local.dashboard_host}/account"], var.local_dev ? ["http://localhost:5173/account"] : []) : []
+  local_logouts     = var.local_dev ? ["http://localhost:5173/"] : []
 }
 
 resource "aws_cognito_user_pool_client" "dashboard" {
@@ -100,9 +120,9 @@ resource "aws_cognito_user_pool_client" "dashboard" {
   allowed_oauth_scopes          = ["openid", "email", "profile", "aws.cognito.signin.user.admin"]
   write_attributes              = ["name"]
   supported_identity_providers  = ["COGNITO"]
-  callback_urls                 = concat(["https://${local.dashboard_host}/callback"], local.local_callbacks)
+  callback_urls                 = concat(["https://${local.dashboard_host}/callback"], local.local_callbacks, local.passkey_callbacks)
   logout_urls                   = concat(["https://${local.dashboard_host}/"], local.local_logouts)
-  explicit_auth_flows           = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+  explicit_auth_flows           = concat(["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"], local.passkeys ? ["ALLOW_USER_AUTH"] : [])
   prevent_user_existence_errors = "ENABLED"
   enable_token_revocation       = true
   access_token_validity         = 1
