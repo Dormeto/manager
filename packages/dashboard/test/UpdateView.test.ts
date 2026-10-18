@@ -30,7 +30,7 @@ const state = (over: Partial<UpdateState> = {}): UpdateState => ({
     { version: '0.13.0', router: '0.30.0', minCli: '0.2.0', published: '2026-10-15T10:00:00Z' },
     { version: '0.12.0', router: '0.29.0', minCli: '0.9.0', published: '2026-10-10T10:00:00Z', disabled: REASON },
   ],
-  build: null, pending: null, plan: null, ...over,
+  env: 'dev', region: 'eu-west-1', build: null, pending: null, plan: null, ...over,
 });
 const sections: Section[] = [
   { version: '0.13.0', notes: '## 0.13.0 — 2026-10-15\n\n- Adds the Update page.', access: 'a new permission is needed', accessNeeded: true },
@@ -373,20 +373,106 @@ describe('Update', () => {
 
   // The API answers so whenever the module's install input is unset: an install made without the CLI, with a CLI older
   // than 0.2.0, or with --build-role.
-  it('explains why updates are not set up, and how to update either install, with no picker and no button', async () => {
-    h.answer = () => ({ installedWithCli: false, version: '0.11.0' });
+  it('explains why updates are not set up, and how to update either install, with no picker, and only the check button', async () => {
+    h.answer = () => ({ installedWithCli: false, version: '0.11.0', env: 'dev', region: 'eu-west-1' });
     await mountView();
     const text = wrapper.text();
     expect(text).toContain('0.11.0');
     expect(text).toContain('Updates from this page are not set up for this manager.');
     expect(text).toContain('It was installed without dormeto install, or with a CLI older than 0.2.0, or with --build-role.');
-    expect(text).toContain('Installed with the CLI: run dormeto install again with the CLI 0.2.0 or later (without --build-role) to set up updates from this page, or dormeto install --version <version> from a laptop.');
+    expect(text).toContain('Installed with the CLI: run dormeto install again with the CLI 0.2.0 or later (without --build-role) to set up updates from this page, or dormeto install --profile <your profile> --region eu-west-1 --env dev --version <version> from a laptop.');
     expect(text).toContain('Installed with the Terraform module: raise the module\'s version in the configuration that installed it, and apply.');
     expect(text).not.toContain('was not installed with');
     expect(text).not.toContain('new install');
     const hrefs = wrapper.findAll('a').map((a) => a.attributes('href'));
-    expect(hrefs).toEqual(['https://dormeto.com/get-started.html#update', 'https://dormeto.com/get-started.html#upgrade']);
-    expect(wrapper.findAll('button')).toHaveLength(0);
+    expect(hrefs).toEqual([
+      'https://dormeto.com/get-started.html#update', 'https://dormeto.com/get-started.html#upgrade',
+      'https://github.com/Dormeto/cli', 'https://github.com/Dormeto/cli#install-the-manager',
+    ]);
+    expect(wrapper.findAll('a').slice(2).every((a) => a.attributes('target') === '_blank' && a.attributes('rel') === 'noopener')).toBe(true);
+    expect(wrapper.findAll('button').map((b) => b.text())).toEqual(['Check for updates']);
     expect(wrapper.findComponent({ name: 'VSelect' }).exists()).toBe(false);
+  });
+
+  describe('the CLI card', () => {
+    const commands = () => wrapper.findAll('.dm-command code').map((c) => c.text());
+
+    it('shows the three commands with the env, region and the newest offered version', async () => {
+      await mountView();
+      const text = wrapper.text();
+      expect(text).toContain('Install the CLI');
+      expect(commands()).toEqual([
+        'brew install dormeto/tap/dormeto',
+        'curl -fsSL https://dormeto.com/install.sh | sh',
+        'dormeto install --profile <your profile> --region eu-west-1 --env dev --version 0.13.0',
+        'dormeto install status --profile <your profile> --region eu-west-1 --env dev',
+      ]);
+      expect(text).toContain('administrator rights in this account');
+      expect(text).toContain('plans first and asks before applying');
+    });
+
+    it('uses the selected target, and no --version when nothing is on offer', async () => {
+      await mountView();
+      await select('0.12.0');
+      expect(commands()[2]).toBe('dormeto install --profile <your profile> --region eu-west-1 --env dev --version 0.12.0');
+      wrapper.unmount();
+      h.answer = () => state({ versions: [] });
+      await mountView();
+      expect(commands()[2]).toBe('dormeto install --profile <your profile> --region eu-west-1 --env dev');
+    });
+
+    it('copies a command with its button', async () => {
+      const writeText = vi.fn(async () => {});
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+      await mountView();
+      await wrapper.find('.dm-command button').trigger('click');
+      await flushPromises();
+      expect(writeText).toHaveBeenCalledWith('brew install dormeto/tap/dormeto');
+      expect(wrapper.find('.dm-command').text()).toContain('Copied');
+    });
+
+    it('links the CLI, its documentation, the manager and its changelog', async () => {
+      await mountView();
+      const links = wrapper.findAll('.dm-links a');
+      expect(links.map((a) => [a.text(), a.attributes('href')])).toEqual([
+        ['Dormeto CLI on GitHub', 'https://github.com/Dormeto/cli'],
+        ['Documentation', 'https://github.com/Dormeto/cli#updating-from-the-dashboard'],
+        ['Manager on GitHub', 'https://github.com/Dormeto/manager'],
+        ['Changelog', 'https://github.com/Dormeto/manager/blob/main/CHANGELOG.md'],
+      ]);
+      expect(links.every((a) => a.attributes('target') === '_blank' && a.attributes('rel') === 'noopener')).toBe(true);
+    });
+  });
+
+  describe('Check for updates', () => {
+    it('reloads the state and the badge at once, and says when it checked', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-18T10:00:00Z'));
+      await mountView();
+      expect(wrapper.text()).toContain('Checked 0 s ago');
+      vi.setSystemTime(new Date('2026-10-18T10:10:00Z'));
+      await wrapper.vm.$nextTick();
+      h.calls.length = 0;
+      await button('Check for updates').trigger('click');
+      await flushPromises();
+      expect(h.calls.map((c) => c[1])).toEqual(expect.arrayContaining(['/update', '/update/available']));
+      expect(wrapper.text()).toContain('Checked 0 s ago');
+    });
+
+    it('is disabled while it runs, and a failure shows the notice and keeps the previous time', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-18T10:00:00Z'));
+      await mountView();
+      let fail!: (e: Error) => void;
+      h.answer = (path) => (path === '/update' ? new Promise((_, reject) => { fail = reject; }) : { count: 1 });
+      await button('Check for updates').trigger('click');
+      expect(button('Check for updates').attributes('disabled')).toBeDefined();
+      vi.setSystemTime(new Date('2026-10-18T10:10:00Z'));
+      fail(new Error('boom'));
+      await flushPromises();
+      expect(wrapper.text()).toContain('boom');
+      expect(wrapper.text()).toContain('Checked 10 min ago');
+      expect(button('Check for updates').attributes('disabled')).toBeUndefined();
+    });
   });
 });

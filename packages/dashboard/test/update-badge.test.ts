@@ -12,7 +12,7 @@ vi.mock('../src/api', () => ({
 }));
 
 const state = (versions: string[]): UpdateState => ({
-  installedWithCli: true, version: '0.11.0', applied: null, cli: '0.12.0', build: null, pending: null, plan: null,
+  installedWithCli: true, version: '0.11.0', env: 'dev', region: 'eu-west-1', applied: null, cli: '0.12.0', build: null, pending: null, plan: null,
   versions: versions.map((version) => ({ version, router: null, minCli: null, published: null })),
 });
 
@@ -49,7 +49,7 @@ describe('the Update badge', () => {
     badge.fromState(state([]));
     expect(badge.count).toBe(0);
     badge.count = 2;
-    badge.fromState({ installedWithCli: false, version: '0.11.0' });
+    badge.fromState({ installedWithCli: false, version: '0.11.0', env: 'dev', region: 'eu-west-1' });
     expect(badge.count).toBe(0);
   });
 });

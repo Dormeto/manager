@@ -14,6 +14,8 @@ export type BuildView = {
 export type UpdateState = {
   installedWithCli: true;
   version: string;
+  env: string;
+  region: string;
   applied: { version: string; build: string; at: string | null } | null;
   cli: string | null;
   versions: Array<VersionEntry & { disabled?: string }>;
@@ -22,7 +24,7 @@ export type UpdateState = {
   plan: { build: string; version: string; summary: PlanSummary } | null;
   releasesUnreachable?: true;
 };
-export type NotInstalled = { installedWithCli: false; version: string };
+export type NotInstalled = { installedWithCli: false; version: string; env: string; region: string };
 
 export const FAST_MS = 5_000;
 export const SLOW_MS = 60_000;

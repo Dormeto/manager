@@ -259,6 +259,7 @@ export const handler = createApi({
   routers, invoke, audit, version: process.env.VERSION ?? '0.0.0',
   accessRoles: { discoveryRole: process.env.DISCOVERY_ROLE ?? 'DmtDiscoveryRole', commandRole: process.env.COMMAND_ROLE ?? 'DmtCommandRole' },
   users,
+  install: { env: process.env.ENV ?? '', region: process.env.AWS_REGION ?? '' },
   update,
   // Under required, an authenticator set up at sign-in (managed login) is turned on in the user's settings.
   mfa: { mode: mfaMode satisfies MfaMode, enabled: (username) => users.mfaEnabled(username, { activate: mfaMode === 'required' }) },

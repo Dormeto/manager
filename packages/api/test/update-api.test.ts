@@ -108,6 +108,11 @@ const json = (res: { body?: string }) => JSON.parse(res.body ?? 'null');
 const get = async (s: ReturnType<typeof setup>) => json(await s.api(event('GET', '/api/update', 'dmt-admin')));
 
 describe('the update routes', () => {
+  it('say the install\'s env and region', async () => {
+    const s = setup();
+    expect(await get(s)).toMatchObject({ installedWithCli: true, env: 'prod', region: REGION });
+  });
+
   it('are for administrators only', async () => {
     const s = setup();
     for (const group of ['dmt-viewer', 'dmt-operator']) {
@@ -119,10 +124,10 @@ describe('the update routes', () => {
   });
 
   it('without the service: not installed with the CLI, and nothing else', async () => {
-    const api = createApi({ routers: [], invoke: async () => ({}), audit: { write: async () => {}, list: async () => [] }, version: '0.1.0' });
+    const api = createApi({ routers: [], invoke: async () => ({}), audit: { write: async () => {}, list: async () => [] }, version: '0.1.0', install: { env: 'dev', region: 'eu-west-1' } });
     const res = await api(event('GET', '/api/update', 'dmt-admin'));
     expect(res.statusCode).toBe(200);
-    expect(json(res)).toEqual({ installedWithCli: false, version: '0.1.0' });
+    expect(json(res)).toEqual({ installedWithCli: false, version: '0.1.0', env: 'dev', region: 'eu-west-1' });
     expect((await api(event('GET', '/api/update/changes?to=0.2.0', 'dmt-admin'))).statusCode).toBe(404);
     expect((await api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.2.0' }))).statusCode).toBe(404);
     expect((await api(event('POST', '/api/update/apply', 'dmt-admin', { planBuild: 'x' }))).statusCode).toBe(404);

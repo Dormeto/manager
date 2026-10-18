@@ -9,6 +9,8 @@ const RUNNING = '0.11.0';
 export const updateState = (now: number): UpdateState => ({
   installedWithCli: true,
   version: RUNNING,
+  env: 'dev',
+  region: 'eu-west-1',
   applied: { version: RUNNING, build: 'dmt-demo-install:3f1c2a40-6b1d-4c1e-9a52-0d7e5f6a8b91', at: new Date(now - 9 * 86_400_000).toISOString() },
   cli: '0.12.0',
   versions: [

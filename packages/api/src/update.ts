@@ -133,6 +133,9 @@ export type BuildView = {
 export type UpdateState = {
   installedWithCli: true;
   version: string;
+  // The install's environment and region: the CLI's `--env` and `--region`.
+  env: string;
+  region: string;
   applied: { version: string; build: string; at: string | null } | null;
   cli: string | null;
   versions: Array<VersionEntry & { disabled?: string }>;
@@ -337,6 +340,8 @@ export function createUpdate(port: UpdatePort, o: {
     return {
       installedWithCli: true,
       version: o.version,
+      env: o.env,
+      region: o.region,
       applied: typeof applied?.version === 'string' && typeof applied.build === 'string'
         ? { version: applied.version, build: applied.build, at: builds.find((b) => b.id === applied.build)?.endedAt ?? null }
         : null,

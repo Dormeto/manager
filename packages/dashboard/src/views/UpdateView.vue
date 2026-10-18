@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { mdiAlertOutline, mdiCheckCircleOutline, mdiOpenInNew, mdiProgressClock } from '@mdi/js';
 import { api } from '../api';
+import { relative } from '../format';
+import CommandBlock from '../components/CommandBlock.vue';
 import { PROCEDURE_URL } from '../access';
 import DmLoader from '../components/DmLoader.vue';
 import NoticeAlert from '../components/NoticeAlert.vue';
@@ -12,6 +14,11 @@ import { busy, codeParts, consoleLink, pollDelay, SILENT_MS, withoutOwnHeading, 
 // Get started's "Updating the manager" (the CLI's ways) and "Upgrade" (the Terraform module's).
 const UPDATING = 'https://dormeto.com/get-started.html#update';
 const MODULE_UPGRADE = 'https://dormeto.com/get-started.html#upgrade';
+const CLI_REPO = 'https://github.com/Dormeto/cli';
+const CLI_DOC = `${CLI_REPO}#updating-from-the-dashboard`;
+const CLI_INSTALL_DOC = `${CLI_REPO}#install-the-manager`;
+const MANAGER_REPO = 'https://github.com/Dormeto/manager';
+const MANAGER_CHANGELOG = `${MANAGER_REPO}/blob/main/CHANGELOG.md`;
 
 const current = ref<UpdateState | NotInstalled | null>(null);
 // The menu's badge follows the versions on offer (an update applied leaves fewer).
@@ -27,6 +34,10 @@ const target = ref<string | null>(null);
 const sections = ref<Section[] | null>(null);
 const changesLoading = ref(false);
 const sending = ref(false);
+// The last successful load of the state, and the clock "Checked …" is told from.
+const checkedAt = ref<string | null>(null);
+const now = ref(Date.now());
+const checking = ref(false);
 
 const state = computed(() => (current.value && current.value.installedWithCli ? current.value : null));
 const isBusy = computed(() => (state.value ? busy(state.value) : false));
@@ -43,6 +54,13 @@ const plan = computed(() => state.value?.plan ?? null);
 const changesNothing = computed(() => plan.value !== null && !plan.value.summary.add && !plan.value.summary.change && !plan.value.summary.destroy);
 const items = computed(() => (state.value?.versions ?? []).map((v) => ({ ...v, value: v.version })));
 
+// The CLI's options for this install, and the update command: the selected target, else the newest on offer, else the latest.
+const where = computed(() => (current.value ? `--region ${current.value.region} --env ${current.value.env}` : ''));
+const version = computed(() => target.value ?? state.value?.versions[0]?.version ?? null);
+const updateCommand = computed(() => `dormeto install --profile <your profile> ${where.value}${version.value ? ` --version ${version.value}` : ''}`);
+const statusCommand = computed(() => `dormeto install status --profile <your profile> ${where.value}`);
+const notSetUpCommand = computed(() => `dormeto install --profile <your profile> ${where.value} --version <version>`);
+
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '');
 const subtitle = (v: { published: string | null; router: string | null; staged?: boolean }) =>
   [v.staged ? 'local' : '', day(v.published), v.router ? `router ${v.router}` : ''].filter(Boolean).join(' · ');
@@ -53,25 +71,31 @@ let stopped = false;
 // Overlapping reads (a poll, a refresh after a request): only the newest one counts.
 let loadSeq = 0;
 
-async function load() {
+// Resolves to the error's message when the read failed (the page keeps what it showed).
+async function load(): Promise<string | null> {
   const seq = ++loadSeq;
   try {
     const next = await api<UpdateState | NotInstalled>('/update');
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq) return null;
     current.value = next;
+    checkedAt.value = new Date().toISOString();
+    now.value = Date.now();
     badge.fromState(next);
     firstVersion.value ??= next.version;
     failingSince.value = null;
     notAnswering.value = false;
     error.value = '';
+    return null;
   } catch (err) {
-    if (seq !== loadSeq) return;
+    if (seq !== loadSeq) return null;
+    now.value = Date.now();
     // Kept as last shown; said only once it lasts (the API is being replaced).
     if (current.value === null) error.value = (err as Error).message;
     else {
       failingSince.value ??= Date.now();
       notAnswering.value = Date.now() - failingSince.value >= SILENT_MS;
     }
+    return (err as Error).message;
   }
 }
 
@@ -89,6 +113,18 @@ async function tick() {
 async function refresh() {
   await load();
   schedule();
+}
+
+// Reads the state and the badge now (the API reads the releases afresh each time).
+async function check() {
+  checking.value = true;
+  try {
+    const [failure] = await Promise.all([load(), badge.refresh()]);
+    notice.value = failure === null ? null : { type: 'error', text: failure };
+    schedule();
+  } finally {
+    checking.value = false;
+  }
 }
 
 async function loadChanges(version: string) {
@@ -137,9 +173,12 @@ const confirm = () => send('/update/apply', { planBuild: plan.value!.build }, `A
 const reload = () => location.reload();
 
 void refresh();
+// "Checked … ago" follows the clock.
+const clock = setInterval(() => (now.value = Date.now()), 30_000);
 onBeforeUnmount(() => {
   stopped = true;
   clearTimeout(timer);
+  clearInterval(clock);
 });
 </script>
 
@@ -170,6 +209,10 @@ onBeforeUnmount(() => {
         <div v-if="state?.applied" class="text-body-medium text-medium-emphasis">
           last applied {{ state.applied.version }}<template v-if="state.applied.at"> on {{ day(state.applied.at) }}</template>
         </div>
+        <div class="d-flex flex-wrap align-center ga-3 mt-3">
+          <v-btn variant="tonal" size="small" :disabled="checking" :loading="checking" @click="check">Check for updates</v-btn>
+          <span v-if="checkedAt" class="text-body-small text-medium-emphasis">Checked {{ relative(checkedAt, now) }}</span>
+        </div>
       </v-card-text>
     </v-card>
 
@@ -182,7 +225,7 @@ onBeforeUnmount(() => {
         <ul class="dm-ways">
           <li>
             Installed with the CLI: run <code>dormeto install</code> again with the CLI 0.2.0 or later (without <code>--build-role</code>) to set up updates
-            from this page, or <code>dormeto install --version &lt;version&gt;</code> from a laptop.
+            from this page, or <code>{{ notSetUpCommand }}</code> from a laptop.
             <a :href="UPDATING" rel="noopener" target="_blank">Updating the manager<v-icon :icon="mdiOpenInNew" size="14" /></a>
           </li>
           <li>
@@ -190,6 +233,10 @@ onBeforeUnmount(() => {
             <a :href="MODULE_UPGRADE" rel="noopener" target="_blank">Upgrade<v-icon :icon="mdiOpenInNew" size="14" /></a>
           </li>
         </ul>
+        <div class="dm-links d-flex flex-wrap ga-4">
+          <a :href="CLI_REPO" target="_blank" rel="noopener">Dormeto CLI on GitHub<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+          <a :href="CLI_INSTALL_DOC" target="_blank" rel="noopener">Documentation<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+        </div>
       </v-card-text>
     </v-card>
 
@@ -294,6 +341,25 @@ onBeforeUnmount(() => {
         <v-btn variant="tonal" color="primary" :disabled="!target || isBusy || sending" @click="prepare">Prepare</v-btn>
         <v-btn variant="flat" color="primary" :disabled="!plan || planMismatch || isBusy || sending" @click="confirm">Confirm{{ plan ? ` ${plan.version}` : '' }}</v-btn>
       </div>
+
+      <v-card class="mt-6" title="With the CLI">
+        <v-card-text>
+          <div class="text-body-small text-medium-emphasis mb-1">Install the CLI</div>
+          <CommandBlock command="brew install dormeto/tap/dormeto" class="mb-2" />
+          <CommandBlock command="curl -fsSL https://dormeto.com/install.sh | sh" class="mb-4" />
+          <div class="text-body-small text-medium-emphasis mb-1">Update from a laptop</div>
+          <CommandBlock :command="updateCommand" class="mb-4" />
+          <div class="text-body-small text-medium-emphasis mb-1">Follow the install</div>
+          <CommandBlock :command="statusCommand" class="mb-4" />
+          <p class="mb-4">The profile is an AWS profile with administrator rights in this account; the CLI plans first and asks before applying.</p>
+          <div class="dm-links d-flex flex-wrap ga-4">
+            <a :href="CLI_REPO" target="_blank" rel="noopener">Dormeto CLI on GitHub<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+            <a :href="CLI_DOC" target="_blank" rel="noopener">Documentation<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+            <a :href="MANAGER_REPO" target="_blank" rel="noopener">Manager on GitHub<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+            <a :href="MANAGER_CHANGELOG" target="_blank" rel="noopener">Changelog<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+          </div>
+        </v-card-text>
+      </v-card>
     </template>
   </div>
 </template>
@@ -301,6 +367,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .dm-narrow { max-width: 860px; margin-inline: auto; }
 .dm-version { font-variant-numeric: tabular-nums; }
+.dm-links { margin-top: 4px; }
 .dm-ways { padding-left: 20px; }
 .dm-ways li { margin-bottom: 8px; }
 .dm-steps { padding-left: 22px; }

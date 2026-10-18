@@ -144,6 +144,7 @@ export interface ApiOptions {
   newId?: () => string;
   version: string;
   users?: UsersService;
+  install?: { env: string; region: string }; // the answer of a manager not set up for updates: its env and region
   update?: UpdateService; // the manager's self-update: only when installed with the Dormeto CLI
   preferences?: PreferencesStore;
   discovery?: DiscoveryApi;
@@ -320,7 +321,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
   }
 }
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
   fleet, idleRequests, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -1042,7 +1043,7 @@ export function createApi({
 
     if (resource === 'update' && !b) {
       need(identity, 'admin');
-      if (method === 'GET' && !a) return reply(200, update ? await update.state() : { installedWithCli: false, version });
+      if (method === 'GET' && !a) return reply(200, update ? await update.state() : { installedWithCli: false, version, env: install?.env ?? '', region: install?.region ?? '' });
       if (method === 'GET' && a === 'available') return reply(200, { count: update ? await update.available() : 0 });
       if (update && method === 'GET' && a === 'changes') {
         const to = event.queryStringParameters?.to;
