@@ -42,8 +42,13 @@ async function load() {
   loading.value = true;
   try {
     users.value = (await api<{ users: User[] }>('/users')).users;
-    groups.value = (await api<{ groups: Group[] }>('/groups').catch(() => ({ groups: groups.value }))).groups;
     error.value = '';
+    // The users show without the groups when these cannot be read, and the page says so (the last groups stay).
+    try {
+      groups.value = (await api<{ groups: Group[] }>('/groups')).groups;
+    } catch (err) {
+      notice.value = { type: 'error', text: `The groups could not be read: ${(err as Error).message}` };
+    }
   } catch (err) {
     error.value = (err as Error).message;
   } finally {

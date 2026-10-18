@@ -8,10 +8,12 @@ import { useSession } from '../src/stores/session';
 
 const calls: [string, string][] = [];
 const bodies: Record<string, unknown> = {};
+const failing = { groups: false };
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
     calls.push([init?.method ?? 'GET', path]);
     if (init?.body) bodies[`${init.method} ${path}`] = JSON.parse(init.body as string);
+    if (path === '/groups' && !init?.method && failing.groups) throw new Error('groups table throttled');
     if (path === '/groups' && !init?.method) {
       return { groups: [
         { name: 'payments', description: 'The payments team', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake', 'nap'] }, { tags: {}, permissions: ['read'] }], updatedAt: '2026-10-18T10:00:00.000Z', updatedBy: 'admin@example.com' },
@@ -170,6 +172,15 @@ describe('Users', () => {
     await row.find('button').trigger('click');
     await flushPromises();
     expect([...document.querySelectorAll('.v-list-item')].map((i) => i.textContent?.trim())).toContain('Make member');
+    wrapper.unmount();
+  });
+
+  it('says so when the groups cannot be read, and still lists the users', async () => {
+    failing.groups = true;
+    const wrapper = await mountUsers();
+    failing.groups = false;
+    expect(wrapper.text()).toContain('The groups could not be read: groups table throttled');
+    expect(wrapper.text()).toContain('dev@example.com');
     wrapper.unmount();
   });
 });
