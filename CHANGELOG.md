@@ -21,6 +21,10 @@ CLI script, of the same release).
 - The dashboard's Update page, for administrators of a manager installed with `dormeto install` 0.2.0 or later: it
   shows the version running and the newer published versions with their release notes; an administrator prepares an
   update (the plan of what changes), confirms it, and follows its progress until the new version answers.
+- The menu's Update entry shows administrators how many versions the manager can be updated to
+  (`GET /api/update/available`). Each request of the Update page is an operation, "Manager update", in the Operations
+  list of administrators only, that ends with its build. The page's build and the operation link to the build in the
+  CodeBuild console.
 - The manager module's new optional `install` input (`bucket`, `project`, `log_group`), set by `dormeto install`: leave
   it unset otherwise. When set, the API gains rights on the install bucket (requests, results, plans and the release's
   files), on the install CodeBuild project and on its logs.
