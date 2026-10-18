@@ -3,7 +3,7 @@ import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { computed, ref } from 'vue';
 import {
-  mdiAccountCancelOutline, mdiAccountCheckOutline, mdiAccountEyeOutline, mdiAccountGroupOutline, mdiAccountPlus, mdiAccountWrenchOutline, mdiCancel, mdiCheckCircleOutline,
+  mdiAccountCancelOutline, mdiAccountCheckOutline, mdiAccountEyeOutline, mdiAccountOutline, mdiAccountGroupOutline, mdiAccountMultipleOutline, mdiAccountPlus, mdiAccountWrenchOutline, mdiCancel, mdiCheckCircleOutline,
   mdiDotsVertical, mdiEmailFastOutline, mdiEmailSyncOutline, mdiLockReset, mdiShieldAccountOutline, mdiShieldAlertOutline, mdiShieldCheckOutline,
   mdiShieldOffOutline, mdiShieldRefreshOutline,
 } from '@mdi/js';
@@ -11,11 +11,14 @@ import { api } from '../api';
 import { relative } from '../format';
 import { useSession } from '../stores/session';
 import DmLoader from '../components/DmLoader.vue';
+import GroupsCard from '../components/GroupsCard.vue';
+import type { Group } from '../groups';
 import NoticeAlert from '../components/NoticeAlert.vue';
 import { useCountUp } from '../count-up';
 
 // mfa: null when Cognito could not say.
-interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa?: boolean | null }
+// groups: the custom groups (R11).
+interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa?: boolean | null; groups?: string[] }
 
 const now = useNow();
 const { smAndDown } = useDisplay();
@@ -27,13 +30,19 @@ const notice = ref<{ type: 'success' | 'error' | 'info'; text: string } | null>(
 const inviting = ref(false);
 // The user whose two-step verification an administrator is about to reset (R6c).
 const resetting = ref<User | null>(null);
-const invite = ref({ email: '', role: 'viewer' });
-const roles = ['viewer', 'operator', 'admin'];
+const invite = ref<{ email: string; role: string; groups: string[] }>({ email: '', role: 'viewer', groups: [] });
+const roles = ['viewer', 'operator', 'admin', 'member'];
+const roleItems = [{ title: 'Viewer', value: 'viewer' }, { title: 'Operator', value: 'operator' }, { title: 'Administrator', value: 'admin' }, { title: 'Member', value: 'member' }];
+// R11: the custom groups, and the user whose groups are being set. Group changes travel in the user's token: next sign-in.
+const groups = ref<Group[]>([]);
+const groupNames = computed(() => groups.value.map((g) => g.name));
+const settingGroups = ref<{ user: User; groups: string[] } | null>(null);
 
 async function load() {
   loading.value = true;
   try {
     users.value = (await api<{ users: User[] }>('/users')).users;
+    groups.value = (await api<{ groups: Group[] }>('/groups').catch(() => ({ groups: groups.value }))).groups;
     error.value = '';
   } catch (err) {
     error.value = (err as Error).message;
@@ -58,14 +67,14 @@ function resetMfa(user: User) {
 }
 
 async function sendInvite() {
-  const { email, role } = invite.value;
+  const { email, role, groups: chosen } = invite.value;
   inviting.value = false;
   try {
-    const result = await api<{ invitation: string }>('/users', { method: 'POST', body: JSON.stringify({ email, role }) });
+    const result = await api<{ invitation: string }>('/users', { method: 'POST', body: JSON.stringify({ email, role, ...(chosen.length ? { groups: chosen } : {}) }) });
     notice.value = result.invitation === 'sent'
       ? { type: 'success', text: `Invitation sent to ${email}.` }
       : { type: 'info', text: `${email} must first click the verification link that AWS just sent (SES sandbox); then resend the invitation from the user's menu.` };
-    invite.value = { email: '', role: 'viewer' };
+    invite.value = { email: '', role: 'viewer', groups: [] };
     await load();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -73,9 +82,15 @@ async function sendInvite() {
 }
 
 const enc = encodeURIComponent;
+function saveGroups() {
+  const { user, groups: chosen } = settingGroups.value!;
+  settingGroups.value = null;
+  void run(`Groups of ${user.email} saved: they apply at their next sign-in, within an hour.`, () => api(`/users/${enc(user.email)}/groups`, { method: 'PUT', body: JSON.stringify({ groups: chosen }) }));
+}
 const headers = [
   { title: 'Email', key: 'email' },
   { title: 'Role', key: 'role' },
+  { title: 'Groups', key: 'groups', sortable: false },
   { title: 'Status', key: 'status' },
   { title: 'Two-step', key: 'mfa' },
   { title: 'Created', key: 'createdAt' },
@@ -86,7 +101,7 @@ const STATUS: Record<string, string> = { CONFIRMED: 'active', FORCE_CHANGE_PASSW
 // Presentation: the initials on the brand's blue (as the navigation's), each role's color and icon, each state's mark.
 const initials = (email: string) => (email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?';
 const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', operator: 'primary' };
-const ROLE_ICON: Record<string, string> = { admin: mdiShieldAccountOutline, operator: mdiAccountWrenchOutline, viewer: mdiAccountEyeOutline };
+const ROLE_ICON: Record<string, string> = { admin: mdiShieldAccountOutline, operator: mdiAccountWrenchOutline, viewer: mdiAccountEyeOutline, member: mdiAccountOutline };
 const invited = (u: User) => u.enabled && u.status === 'FORCE_CHANGE_PASSWORD';
 const statusMark = (u: User) => {
   if (!u.enabled) return { color: 'error', icon: mdiCancel };
@@ -138,6 +153,7 @@ load();
         </v-card-text>
       </v-card>
     </div>
+    <GroupsCard :groups="groups" :users="users" @notice="notice = $event" @changed="load" />
     <v-card class="dm-users">
       <v-data-table :mobile="smAndDown" :headers="headers" :items="users" :loading="loading" item-value="email" :items-per-page="50" :row-props="rowProps">
         <template v-if="!users.length" #loading><DmLoader label="Reading the users…" :size="48" /></template>
@@ -150,6 +166,9 @@ load();
         </template>
         <template #[`item.role`]="{ item }">
           <v-chip :color="ROLE_COLOR[item.role]" variant="tonal" label :prepend-icon="ROLE_ICON[item.role]" class="dm-role">{{ item.role }}</v-chip>
+        </template>
+        <template #[`item.groups`]="{ item }">
+          <span class="dm-groups"><v-chip v-for="g in item.groups ?? []" :key="g" data-test="user-group" size="small" label variant="tonal">{{ g }}</v-chip></span>
         </template>
         <template #[`item.status`]="{ item }">
           <v-chip :color="statusMark(item).color" variant="tonal" label :prepend-icon="statusMark(item).icon">{{ item.enabled ? STATUS[item.status] ?? item.status : 'disabled' }}</v-chip>
@@ -167,6 +186,7 @@ load();
               <v-list-subheader>Role</v-list-subheader>
               <v-list-item v-for="role in roles.filter((r) => r !== item.role)" :key="role" :title="`Make ${role}`" :prepend-icon="ROLE_ICON[role]"
                 @click="run(`${item.email} is now ${role}.`, () => api(`/users/${enc(item.email)}/role`, { method: 'PUT', body: JSON.stringify({ role }) }))" />
+              <v-list-item title="Groups…" :prepend-icon="mdiAccountMultipleOutline" @click="settingGroups = { user: item, groups: [...(item.groups ?? [])] }" />
               <v-divider class="my-1" />
               <v-list-item v-if="item.status === 'FORCE_CHANGE_PASSWORD'" title="Resend the invitation" :prepend-icon="mdiEmailSyncOutline"
                 @click="run(`Invitation sent again to ${item.email}.`, () => api(`/users/${enc(item.email)}/resend`, { method: 'POST' }))" />
@@ -193,12 +213,27 @@ load();
         </v-card-actions>
       </v-card>
     </v-dialog>
+    <v-dialog :model-value="settingGroups !== null" max-width="460" @update:model-value="settingGroups = null">
+      <v-card v-if="settingGroups" :title="`Groups of ${settingGroups.user.email}`" :prepend-icon="mdiAccountMultipleOutline" class="dm-dialog">
+        <v-card-text>
+          <v-select v-model="settingGroups.groups" :items="groupNames" label="Groups" multiple chips closable-chips />
+          <p class="text-body-small text-medium-emphasis">The groups travel in the user's sign-in token: a change applies at their next sign-in, within an hour.</p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="settingGroups = null">Cancel</v-btn>
+          <v-btn color="primary" variant="flat" @click="saveGroups">Save</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <v-dialog v-model="inviting" max-width="460">
       <v-card title="Invite a user" :prepend-icon="mdiAccountPlus" class="dm-dialog">
         <v-card-text>
           <v-text-field v-model="invite.email" label="Email" type="email" autocomplete="off" autofocus />
-          <v-select v-model="invite.role" :items="roles" label="Role" />
-          <p class="text-body-small text-medium-emphasis">Viewers read, operators also nap and wake workloads, administrators also manage users.</p>
+          <v-select v-model="invite.role" :items="roleItems" label="Role" />
+          <v-select v-model="invite.groups" :items="groupNames" label="Groups" multiple chips closable-chips :hint="groupNames.length ? undefined : 'No group yet: create one above.'" :persistent-hint="!groupNames.length" />
+          <p class="text-body-small text-medium-emphasis">Viewers read, operators also nap and wake workloads, administrators also manage users. A member sees only the workloads their groups
+            grant: no built-in role, no group, nothing to see.</p>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -232,6 +267,7 @@ load();
 .dm-mfa { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; line-height: 1; font-size: 0.875rem; font-weight: 500; }
 .dm-mfa--off { color: rgba(var(--v-theme-on-surface), 0.6); }
 .dm-num { font-variant-numeric: tabular-nums; }
+.dm-groups { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .dm-users :deep(.v-data-table-rows-loading > td) { height: auto !important; }
 .dm-users :deep(.v-data-table-footer) { padding-inline: 12px; border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
 /* One column on a phone: the labels narrow, the values wide. */
