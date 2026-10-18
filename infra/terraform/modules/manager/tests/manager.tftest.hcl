@@ -516,6 +516,10 @@ run "history_days_set" {
     condition     = aws_lambda_function.fleet.environment[0].variables.HISTORY_DAYS == "90"
     error_message = "history_days reaches the fleet function."
   }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.HISTORY_DAYS == "90"
+    error_message = "history_days reaches the API function, which prices and reads the history."
+  }
 }
 
 run "history_days_is_validated" {
