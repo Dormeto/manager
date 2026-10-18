@@ -196,6 +196,12 @@ locals {
       # A run a day: the state holds until the next one.
       comparison = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "ignore"
     }
+    update-check-errors = {
+      description = "The daily update check failed: a new version may not be recorded or sent (see its logs; the next day tries again)."
+      namespace   = "AWS/Lambda", metric = "Errors", statistic = "Sum", dimensions = { FunctionName = aws_lambda_function.update_check.function_name }
+      # A run a day: the state holds until the next one.
+      comparison = "GreaterThanThreshold", threshold = 0, periods = 1, datapoints = 1, missing = "ignore"
+    }
     savings-failed = {
       description = "Runs of the savings job the scheduler could not deliver are in the savings-failures queue: run them again by hand."
       namespace   = "AWS/SQS", metric = "ApproximateNumberOfMessagesVisible", statistic = "Maximum", dimensions = { QueueName = aws_sqs_queue.savings_failures.name }

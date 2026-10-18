@@ -212,8 +212,8 @@ run "health_alarms" {
     error_message = "One email subscription per address of alert_emails."
   }
   assert {
-    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed", "ip-lists-errors", "savings-errors", "savings-failed"])
-    error_message = "Alarms on the watchdog's errors and silence, on the router events not stored, and on the list function's errors."
+    condition     = toset(keys(aws_cloudwatch_metric_alarm.manager)) == toset(["watchdog-errors", "watchdog-silent", "router-events-failed", "ip-lists-errors", "savings-errors", "savings-failed", "update-check-errors"])
+    error_message = "Alarms on the watchdog's errors and silence, on the router events not stored, and on the list and update check functions' errors."
   }
   assert {
     condition     = aws_cloudwatch_metric_alarm.manager["watchdog-silent"].treat_missing_data == "breaching" && aws_cloudwatch_metric_alarm.manager["watchdog-silent"].comparison_operator == "LessThanThreshold"
