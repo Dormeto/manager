@@ -8,6 +8,7 @@ import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import IdleWindowCard from '../src/components/IdleWindowCard.vue';
 import { useSession } from '../src/stores/session';
+import { api } from '../src/api';
 import StateBar from '../src/components/StateBar.vue';
 import { barSavings } from '../src/costs';
 
@@ -28,7 +29,7 @@ Object.defineProperty(window, 'visualViewport', {
   value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
 });
 
-async function mountView(role: 'admin' | 'operator' | 'viewer' = 'viewer') {
+async function mountView(role: 'admin' | 'operator' | 'viewer' | 'member' = 'viewer') {
   setActivePinia(createPinia());
   useSession().role = role;
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads/:router/:id', component: WorkloadView }] });
@@ -227,5 +228,109 @@ describe('Workload view', () => {
     expect(rows['Awake since']).toBe('35 min ago');
     expect(rows['Last state change']).toBeUndefined();
     wrapper.unmount();
+  });
+
+  // R11: tags, and the actions the caller's grants allow.
+  const openActions = async (wrapper: Awaited<ReturnType<typeof mountView>>) => {
+    await wrapper.find('[data-test="actions"]').trigger('click');
+    await flushPromises();
+    return [...document.querySelectorAll('[data-test="action"]')].map((i) => i.textContent?.trim());
+  };
+
+  it('offers a member only what `can` allows: a wake grant gives Wake, no Nap, Pause or Resume (R11)', async () => {
+    current = { ...status, state: 'ASLEEP', tags: { team: 'payments' }, can: { wake: true, nap: false } };
+    const member = await mountView('member');
+    expect(await openActions(member)).toEqual(['Wake']);
+    member.unmount();
+    current = { ...status, tags: { team: 'payments' }, can: { wake: false, nap: true } };
+    const napper = await mountView('member');
+    expect(await openActions(napper)).toEqual(['Nap', 'Pause']);
+    napper.unmount();
+    current = { ...status, tags: { team: 'payments' }, can: { wake: false, nap: false } };
+    const reader = await mountView('member');
+    expect(reader.find('[data-test="actions"]').exists()).toBe(false);
+    reader.unmount();
+    current = status;
+  });
+
+  it('hides Wake from an operator whose payload says they cannot, and keeps the built-in menu without `can` (older API)', async () => {
+    current = { ...status, state: 'ASLEEP', source: 'terraform', can: { wake: false, nap: true } };
+    const wrapper = await mountView('operator');
+    expect(await openActions(wrapper)).toEqual(['Nap', 'Pause']);
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('pauses without waking where the caller cannot wake: "leave it asleep" is forced', async () => {
+    current = { ...status, tags: {}, can: { wake: false, nap: true } };
+    const wrapper = await mountView('member');
+    await openActions(wrapper);
+    ([...document.querySelectorAll('[data-test="action"]')].find((i) => i.textContent?.trim() === 'Pause') as HTMLElement).click();
+    await flushPromises();
+    const box = document.querySelector<HTMLInputElement>('.v-dialog input[type="checkbox"]')!;
+    expect([box.checked, box.disabled]).toEqual([true, true]);
+    expect(document.body.textContent).toContain('needs the wake permission');
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('shows its tags as chips', async () => {
+    current = { ...status, source: 'manager', tags: { team: 'payments', env: 'staging' } };
+    const wrapper = await mountView('viewer');
+    expect(wrapper.findAll('[data-test="tag"]').map((t) => t.text())).toEqual(['env=staging', 'team=payments']);
+    expect(wrapper.find('[data-test="edit-tags"]').exists()).toBe(false);
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('lets an administrator edit the tags of a manager workload, sending the rows as an object', async () => {
+    current = { ...status, source: 'manager', tags: { team: 'payments' } };
+    const calls: [string, RequestInit | undefined][] = [];
+    vi.mocked(api).mockImplementation((async (path: string, init?: RequestInit) => { calls.push([path, init]); return structuredClone(current); }) as never);
+    const wrapper = await mountView('admin');
+    await wrapper.find('[data-test="edit-tags"]').trigger('click');
+    await flushPromises();
+    const dialog = () => document.querySelector('.v-dialog')!;
+    expect([...dialog().querySelectorAll<HTMLInputElement>('input')].map((i) => i.value)).toEqual(['team', 'payments']);
+    (dialog().querySelector('[data-test="add-tag"]') as HTMLElement).click();
+    await flushPromises();
+    const inputs = [...dialog().querySelectorAll<HTMLInputElement>('input')];
+    inputs[2]!.value = 'env';
+    inputs[2]!.dispatchEvent(new Event('input'));
+    await flushPromises();
+    inputs[3]!.value = 'staging';
+    inputs[3]!.dispatchEvent(new Event('input'));
+    await flushPromises();
+    ([...dialog().querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save') as HTMLElement).click();
+    await flushPromises();
+    const put = calls.find(([, init]) => init?.method === 'PUT')!;
+    expect(put[0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/tags');
+    expect(JSON.parse(put[1]!.body as string)).toEqual({ tags: { team: 'payments', env: 'staging' } });
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('refuses tags the rules refuse before sending them, with the router\'s words', async () => {
+    current = { ...status, source: 'manager', tags: { team: 'payments' } };
+    const wrapper = await mountView('admin');
+    await wrapper.find('[data-test="edit-tags"]').trigger('click');
+    await flushPromises();
+    const key = document.querySelector<HTMLInputElement>('.v-dialog input')!;
+    key.value = 'Dormeto:x';
+    key.dispatchEvent(new Event('input'));
+    await flushPromises();
+    expect(document.querySelector('.v-dialog')!.textContent).toContain('the dormeto: prefix is reserved');
+    expect(([...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === 'Save') as HTMLButtonElement).disabled).toBe(true);
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('says a Terraform workload\'s tags are set in Terraform, with no edit button, even for an administrator', async () => {
+    current = { ...status, source: 'terraform', tags: { team: 'payments' } };
+    const wrapper = await mountView('admin');
+    expect(wrapper.find('[data-test="edit-tags"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="tags-terraform"]').text()).toContain('set in Terraform');
+    wrapper.unmount();
+    current = status;
   });
 });

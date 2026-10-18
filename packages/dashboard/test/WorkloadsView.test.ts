@@ -134,4 +134,50 @@ describe('Workloads view', () => {
     wrapper.unmount();
     vi.mocked(api).mockImplementation(original);
   });
+
+  // R11: tags, and the filter by tags.
+  const mountList = async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers/:name', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { attachTo: document.body, global: { plugins: [createVuetify({ components }), pinia, router] } });
+    await flushPromises();
+    return wrapper;
+  };
+
+  it('shows each workload\'s tags as chips in a Tags column, none for a router before 0.30.0', async () => {
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [{ ...SHOP, tags: { team: 'payments', env: 'staging' } }, { ...SHOP, workloadId: 'b1', name: 'Old' }], total: 2, errors: [] }; }) as never);
+    const wrapper = await mountList();
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    const cells = wrapper.findAll('tbody tr').map((r) => r.findAll('td')[headers.indexOf('Tags')]!);
+    expect(cells[0]!.findAll('[data-test="tag"]').map((t) => t.text())).toEqual(['env=staging', 'team=payments']);
+    expect(cells[1]!.findAll('[data-test="tag"]')).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('asks for the workloads with all the tags chosen: one tag=key=value each, from the chips or the filter', async () => {
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [{ ...SHOP, tags: { team: 'payments', env: 'staging' } }], total: 1, errors: [] }; }) as never);
+    paths.length = 0;
+    const wrapper = await mountList();
+    // A chip of a row filters by it.
+    await wrapper.find('[data-test="tag"]').trigger('click');
+    await flushPromises();
+    const asked = () => new URLSearchParams(paths.filter((p) => p.startsWith('/workloads?')).at(-1)!.split('?')[1]).getAll('tag');
+    expect(asked()).toEqual(['env=staging']);
+    // The filter offers the tags seen, and several narrow the list down.
+    const filter = wrapper.findComponent({ name: 'VCombobox' });
+    expect(filter.props('items')).toEqual(['env=staging', 'team=payments']);
+    filter.vm.$emit('update:modelValue', ['env=staging', 'team=payments']);
+    await flushPromises();
+    expect(asked()).toEqual(['env=staging', 'team=payments']);
+    expect(wrapper.text()).not.toContain('No workload yet');
+    // Taking the filters off asks for all of them again.
+    filter.vm.$emit('update:modelValue', []);
+    await flushPromises();
+    expect(asked()).toEqual([]);
+    wrapper.unmount();
+  });
 });

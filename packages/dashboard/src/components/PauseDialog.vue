@@ -4,7 +4,8 @@ import { ref, watch } from 'vue';
 import { mdiPauseCircleOutline } from '@mdi/js';
 import { UNTIL_CHOICES, untilFrom, type UntilChoice } from '../pause';
 
-const props = defineProps<{ modelValue: boolean; subject: string; router?: boolean }>();
+// canWake false (R11): a pause that wakes the workload needs the wake permission, so the caller can only leave it asleep.
+const props = withDefaults(defineProps<{ modelValue: boolean; subject: string; router?: boolean; canWake?: boolean }>(), { canWake: true });
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ reason: string; until?: string; keepAsleep: boolean }] }>();
 const reason = ref('');
 const choice = ref<UntilChoice>('4h');
@@ -15,7 +16,7 @@ watch(() => props.modelValue, (open) => {
   reason.value = '';
   choice.value = '4h';
   date.value = '';
-  keepAsleep.value = false;
+  keepAsleep.value = !props.canWake;
 });
 
 function submit() {
@@ -33,7 +34,7 @@ function submit() {
         <v-text-field v-model="reason" label="Reason" placeholder="Incident, migration, change freeze, load test…" maxlength="256" counter autofocus />
         <v-select v-model="choice" :items="UNTIL_CHOICES" label="Resume automatically" />
         <v-text-field v-if="choice === 'date'" v-model="date" type="datetime-local" label="Resume at (local time)" />
-        <v-checkbox v-model="keepAsleep" hide-details :label="router ? 'Leave asleep workloads asleep (else they are woken now)' : 'Leave it asleep if it sleeps (else it is woken now)'" />
+        <v-checkbox v-model="keepAsleep" :hide-details="canWake" :disabled="!canWake" :messages="canWake ? undefined : 'Waking it needs the wake permission, which your groups do not give.'" :label="router ? 'Leave asleep workloads asleep (else they are woken now)' : 'Leave it asleep if it sleeps (else it is woken now)'" />
       </v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />

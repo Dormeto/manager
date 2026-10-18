@@ -3,7 +3,7 @@ import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { mdiMagnify, mdiOpenInNew } from '@mdi/js';
+import { mdiMagnify, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative, usd } from '../format';
@@ -18,6 +18,7 @@ import RefreshIndicator from '../components/RefreshIndicator.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
+import { tagsList } from '../tags';
 
 const now = useNow();
 const { smAndDown } = useDisplay();
@@ -45,6 +46,15 @@ const attentionOnly = ref(route.query.attention === '1');
 // The workloads of one router in one state (a chip of the Routers view).
 const routerFilter = ref(typeof route.query.router === 'string' ? route.query.router : '');
 const stateFilter = ref(typeof route.query.state === 'string' ? route.query.state : '');
+// R11: the tags chosen (key=value, all of them match) and the tags seen so far, to choose among.
+const tagFilter = ref<string[]>([]);
+const tagsSeen = ref<string[]>([]);
+const tagChoices = computed(() => [...new Set([...tagsSeen.value, ...tagFilter.value])].sort());
+function filterByTags(next: string[]) {
+  tagFilter.value = next;
+  page.value = 1;
+  void run();
+}
 // Pages from the API (scale design §4): the page, its size and the search are the server's.
 const page = ref(1);
 const perPage = ref(25);
@@ -58,8 +68,10 @@ const { error, loading, nextAt, refreshedAt, run } = usePoll(async () => {
     ...(attentionOnly.value ? { attention: '1' } : {}), ...(withRouters ? { routers: '1' } : {}),
     ...(routerFilter.value ? { router: routerFilter.value } : {}), ...(stateFilter.value ? { state: stateFilter.value } : {}),
   });
+  for (const tag of tagFilter.value) query.append('tag', tag);
   const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] }>(`/workloads?${query}`);
   workloads.value = result.workloads;
+  tagsSeen.value = [...new Set([...tagsSeen.value, ...result.workloads.flatMap((w) => tagsList(w.tags).map((t) => t.text))])];
   total.value = result.total ?? result.workloads.length;
   errors.value = result.errors;
   if (withRouters && result.routers) {
@@ -71,6 +83,7 @@ function allWorkloads() {
   attentionOnly.value = false;
   routerFilter.value = '';
   stateFilter.value = '';
+  tagFilter.value = [];
   page.value = 1;
   void router.replace({ query: {} });
   void run();
@@ -81,6 +94,7 @@ const headers = [
   { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId, sortable: false },
   { title: 'Backend', key: 'backends', sortable: false },
   { title: 'Router', key: 'router', sortable: false },
+  { title: 'Tags', key: 'tags', sortable: false },
   { title: 'State', key: 'state', sortable: false },
   { title: 'Since', key: 'since', sortable: false },
   { title: 'Last 7 days', key: 'states7d', align: 'end' as const, sortable: false },
@@ -110,7 +124,7 @@ const fleetSaved = useCountUp(() => fleet.value?.costs?.saved.usd ?? 0);
 const fleetMonthly = useCountUp(() => fleet.value?.costs?.monthly ?? 0);
 // The table's empty row: the loader until the first answer, then why it is empty.
 const settled = computed(() => refreshedAt.value !== null || Boolean(error.value));
-const filtered = computed(() => Boolean(search.value.trim() || attentionOnly.value || routerFilter.value || stateFilter.value));
+const filtered = computed(() => Boolean(search.value.trim() || attentionOnly.value || routerFilter.value || stateFilter.value || tagFilter.value.length));
 const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 </script>
 
@@ -162,6 +176,8 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         <v-chip v-if="attentionOnly" closable label color="secondary" variant="tonal" @click:close="allWorkloads">Needing attention</v-chip>
         <v-chip v-if="routerFilter || stateFilter" closable label color="primary" variant="tonal" @click:close="allWorkloads">{{ [routerFilter, stateFilter.toLowerCase()].filter(Boolean).join(' · ') }}</v-chip>
       </div>
+      <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" hide-details
+        class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
       <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line class="dm-toolbar__search" />
     </div>
     <v-data-table-server :mobile="smAndDown" :headers="headers" :items="workloads" :items-length="total" :loading="loading && !workloads.length"
@@ -183,6 +199,11 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       </template>
       <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" /></template>
       <template #[`item.router`]="{ item }"><router-link :to="`/routers/${encodeURIComponent(item.router)}`" class="dm-link dm-router">{{ item.router }}</router-link></template>
+      <template #[`item.tags`]="{ item }">
+        <span class="dm-tags">
+          <v-chip v-for="t in tagsList(item.tags)" :key="t.key" data-test="tag" size="small" label variant="tonal" :title="`Show only ${t.text}`" @click="!tagFilter.includes(t.text) && filterByTags([...tagFilter, t.text])">{{ t.text }}</v-chip>
+        </span>
+      </template>
       <template #[`item.state`]="{ item }"><span class="dm-state"><StateChip :state="item.state" :failure="item.failure" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.states7d`]="{ item }">
         <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :savings="barSavings(item.costs)" />
@@ -219,6 +240,8 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-toolbar__count { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); margin-right: 4px; }
 .dm-toolbar__count .dm-num { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
 .dm-toolbar__search { flex: 0 1 280px; min-width: 200px; }
+.dm-toolbar__tags { flex: 0 1 320px; min-width: 200px; }
+.dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 
 /* The table: cells a little tighter, aligned on their middle; numbers in columns. */
 .dm-workloads :deep(.v-table__wrapper > table > thead > tr > th) { padding: 8px !important; }
@@ -263,7 +286,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 }
 @media (max-width: 600px) {
   .dm-toolbar { padding: 12px 14px; }
-  .dm-toolbar__search { flex: 1 1 100%; min-width: 0; }
+  .dm-toolbar__search, .dm-toolbar__tags { flex: 1 1 100%; min-width: 0; }
   .dm-url { max-width: 11rem; }
   .dm-strip__body { padding: 16px; }
 }

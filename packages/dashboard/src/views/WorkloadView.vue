@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { backendIcon } from '../icons';
 import { api } from '../api';
@@ -15,6 +15,8 @@ import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import ResourceTooltip from '../components/ResourceTooltip.vue';
 import RenameDialog from '../components/RenameDialog.vue';
+import TagsDialog from '../components/TagsDialog.vue';
+import { tagsList, type Tags } from '../tags';
 import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
@@ -41,6 +43,11 @@ const notice = ref<Notice | null>(null);
 const pauseOpen = ref(false);
 const excludeOpen = ref(false);
 const renameOpen = ref(false);
+const tagsOpen = ref(false);
+// R11: what the caller's grants allow on this workload; an API before the tags (no `can`) leaves it to the role.
+const canWake = computed(() => status.value?.can?.wake ?? session.canOperate);
+const canNap = computed(() => status.value?.can?.nap ?? session.canOperate);
+const tags = computed(() => tagsList(status.value?.tags));
 // The name people gave the workload (routers 0.20.0 and later), else its id.
 const title = computed(() => status.value?.name ?? props.id);
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
@@ -55,6 +62,17 @@ async function rename(name: string) {
   try {
     await api(`${path.value}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
     notice.value = { type: 'success', text: `Renamed ${name}.` };
+    await run();
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
+async function setTags(next: Tags) {
+  tagsOpen.value = false;
+  try {
+    await api(`${path.value}/tags`, { method: 'PUT', body: JSON.stringify({ tags: next }) });
+    notice.value = { type: 'success', text: 'Tags saved.' };
     await run();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -246,6 +264,14 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="since" class="dm-hero__since">{{ since.label }} <strong>{{ since.when }}</strong></span>
           <a v-if="url" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
         </div>
+        <!-- R11: its tags (Dormeto's own labels); administrators edit a manager workload's, a Terraform one's are set there. -->
+        <div v-if="status && (tags.length || status.tags || session.isAdmin)" class="dm-hero__tags" data-test="tags">
+          <v-icon :icon="mdiTagOutline" size="16" class="text-medium-emphasis" aria-hidden="true" />
+          <v-chip v-for="t in tags" :key="t.key" data-test="tag" size="small" label variant="tonal">{{ t.text }}</v-chip>
+          <span v-if="!tags.length" class="text-body-small text-medium-emphasis">{{ status.tags ? 'No tags' : 'Tags unknown (router before 0.30.0)' }}</span>
+          <span v-if="status.source === 'terraform'" data-test="tags-terraform" class="text-body-small text-medium-emphasis">set in Terraform</span>
+          <v-btn v-else-if="session.isAdmin" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
+        </div>
         <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" />
         </div>
       </div>
@@ -253,18 +279,20 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
         <!-- Its actions in one menu (user request): wake and nap when its state allows, pause or resume, rename and offboard what
              the manager onboarded (offboard also a workload of a router it did not install), exclude its target group. -->
-        <v-menu v-if="session.canOperate && status" location="bottom end">
+        <v-menu v-if="status && (session.canOperate || canWake || canNap)" location="bottom end">
           <template #activator="{ props: menu }">
             <v-btn v-bind="menu" data-test="actions" color="primary" variant="flat" :append-icon="mdiChevronDown" :disabled="acting" class="dm-hero__actions">Actions</v-btn>
           </template>
           <v-list density="compact" min-width="220">
-            <v-list-item data-test="action" :prepend-icon="mdiWeatherSunny" title="Wake" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state)" @click="confirm = 'wake'" />
-            <v-list-item data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="status.state !== 'AWAKE' || pauses.length > 0" @click="confirm = 'nap'" />
-            <v-list-item v-if="ownPause" data-test="action" :prepend-icon="mdiPlay" title="Resume" @click="change('resume')" />
-            <v-list-item v-else data-test="action" :prepend-icon="mdiPause" title="Pause" @click="pauseOpen = true" />
-            <v-list-item v-if="status.source === 'manager'" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
-            <v-list-item v-if="!excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
-            <template v-if="status.source !== 'terraform'">
+            <v-list-item v-if="canWake" data-test="action" :prepend-icon="mdiWeatherSunny" title="Wake" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state)" @click="confirm = 'wake'" />
+            <v-list-item v-if="canNap" data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="status.state !== 'AWAKE' || pauses.length > 0" @click="confirm = 'nap'" />
+            <template v-if="canNap">
+              <v-list-item v-if="ownPause" data-test="action" :prepend-icon="mdiPlay" title="Resume" @click="change('resume')" />
+              <v-list-item v-else data-test="action" :prepend-icon="mdiPause" title="Pause" @click="pauseOpen = true" />
+            </template>
+            <v-list-item v-if="session.canOperate && status.source === 'manager'" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
+            <v-list-item v-if="session.canOperate && !excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
+            <template v-if="session.canOperate && status.source !== 'terraform'">
               <v-divider class="my-1" />
               <v-list-item data-test="action" :prepend-icon="mdiLogoutVariant" title="Offboard" base-color="error" @click="confirm = 'offboard'" />
             </template>
@@ -449,7 +477,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </div>
   </div>
 
-  <PauseDialog v-model="pauseOpen" :subject="title" @submit="change('pause', $event)" />
+  <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
     <v-card :title="confirm === 'nap' ? `Nap ${title}?` : confirm === 'offboard' ? `Offboard ${title}?` : `Wake ${title}?`">
@@ -471,10 +499,12 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </v-card>
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
+  <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" @submit="setTags" />
 </template>
 
 <style scoped>
 .dm-num { font-variant-numeric: tabular-nums; }
+.dm-hero__tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .dm-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .dm-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .dm-layout__wide { grid-column: 1 / -1; }

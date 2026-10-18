@@ -26,6 +26,9 @@ export interface WorkloadSummary {
   workloadId: string;
   account?: string; // the router's account (from its summary)
   name?: string; // routers 0.20.0 and later: for people, the id otherwise
+  // R11: Dormeto's own tags (absent for routers before 0.30.0) and what the caller's grants allow.
+  tags?: Record<string, string>;
+  can?: { wake: boolean; nap: boolean };
   state: string;
   url: string | null;
   wakeMode: string;
@@ -123,6 +126,8 @@ export interface Rule {
 export interface WorkloadStatus {
   workloadId: string;
   name?: string; // routers 0.20.0 and later
+  tags?: Record<string, string>; // R11: absent for routers before 0.30.0
+  can?: { wake: boolean; nap: boolean }; // R11: what the caller's grants allow
   url?: string | null; // from its summary (manager 0.2 and later)
   router: { version: string; build: string };
   state: string;
