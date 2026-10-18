@@ -23,7 +23,7 @@ import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
 import { readJson } from './s3-json.js';
-import { createUpdate, type Build, type Pending } from './update.js';
+import { absent, createUpdate, missingStream, type Build, type Pending } from './update.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
 const routers: Router[] = JSON.parse(process.env.ROUTERS ?? '[]');
@@ -190,7 +190,7 @@ const update = installBucket ? (() => {
       try {
         return await (await s3.send(new GetObjectCommand({ Bucket: installBucket, Key: key }))).Body!.transformToString();
       } catch (err) {
-        if ((err as Error).name === 'NoSuchKey' || (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
+        if (absent(err)) return null;
         throw err;
       }
     },
@@ -214,7 +214,11 @@ const update = installBucket ? (() => {
       const lines: string[] = [];
       let token: string | undefined;
       for (let page = 0; page < 10; page++) {
-        const out = await logs.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, startFromHead: true, nextToken: token }));
+        const out = await logs.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, startFromHead: true, nextToken: token })).catch((err) => {
+          if (missingStream(err)) return null;
+          throw err;
+        });
+        if (!out) break;
         lines.push(...(out.events ?? []).map((e) => (e.message ?? '').replace(/\r?\n$/, '')));
         if (!out.nextForwardToken || out.nextForwardToken === token) break;
         token = out.nextForwardToken;

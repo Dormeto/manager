@@ -153,6 +153,16 @@ function parse<T>(text: string | null): T | null {
   }
 }
 
+// S3 answers AccessDenied (403), not NoSuchKey, for a missing key when the caller may not list the bucket, as the API may
+// not: the module grants exactly the keys the service reads, so a 403 on them means absent.
+export function absent(err: unknown): boolean {
+  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return ['NoSuchKey', 'NotFound', 'AccessDenied'].includes(e.name ?? '') || e.$metadata?.httpStatusCode === 404 || e.$metadata?.httpStatusCode === 403;
+}
+
+// A build's log stream may not exist yet when its name is already known.
+export const missingStream = (err: unknown) => (err as { name?: string }).name === 'ResourceNotFoundException';
+
 const textOrNull = (v: unknown) => (typeof v === 'string' ? v : null);
 
 // A version's own section of a CHANGELOG.md: from its `## <version>` heading to the next `## `.
@@ -204,14 +214,18 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
     return { by: 'dashboard', action: result?.action || mine?.action || null, version: result?.version || mine?.version || null };
   }
 
-  async function pendingNow(pending: Pending | null): Promise<UpdateState['pending']> {
+  // A request is done with a final result, or a running one whose build ended without writing its final result (timed
+  // out, stopped, faulted). It is not started after 2 minutes without a result, unless a build took it (it may still queue).
+  async function pendingNow(pending: Pending | null, builds: Build[]): Promise<UpdateState['pending']> {
     if (!pending) return null;
     const result = await resultOf(pending.id);
-    if (result?.status === 'succeeded' || result?.status === 'failed') {
+    const ended = result?.status === 'running' && builds.some((b) => b.id === result.build && b.status !== 'IN_PROGRESS');
+    if (result?.status === 'succeeded' || result?.status === 'failed' || ended) {
       await port.pending.put(null);
       return null;
     }
-    if (!result && o.now().getTime() - Date.parse(pending.at) > NOT_STARTED_MS) return { ...pending, notStarted: true };
+    const taken = builds.some((b) => b.env.ACTION === 'request' && (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '') === pending.id);
+    if (!result && !taken && o.now().getTime() - Date.parse(pending.at) > NOT_STARTED_MS) return { ...pending, notStarted: true };
     return pending;
   }
 
@@ -254,7 +268,7 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
       cli,
       versions,
       build: builds[0] ? await view(builds[0], storedPending) : null,
-      pending: await pendingNow(storedPending),
+      pending: await pendingNow(storedPending, builds),
       plan: await confirmable(builds, storedPending),
     };
   }

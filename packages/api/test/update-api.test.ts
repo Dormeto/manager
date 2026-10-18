@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createApi, type ApiEvent, type AuditEntry } from '../src/api.js';
-import { createUpdate, type Build, type Pending, type UpdatePort } from '../src/update.js';
+import { absent, missingStream, createUpdate, type Build, type Pending, type UpdatePort } from '../src/update.js';
 
 const RELEASES = 'https://releases.test/manager';
 const START = Date.parse('2026-10-20T10:00:00Z');
@@ -281,5 +281,62 @@ describe('the changes', () => {
     const sections = json(await s.api(event('GET', '/api/update/changes?to=0.13.0', 'dmt-admin')));
     expect(sections.map((x: { version: string }) => x.version)).toEqual(['0.13.0', '0.12.0', '0.11.0']);
     expect(sections[0].notes).toBe('## 0.13.0 — 2026-10-21\n\nStaged.');
+  });
+});
+
+describe('a pending request whose build ended or is queueing', () => {
+  const runningResult = (b: Build) => JSON.stringify({ build: b.id, status: 'running', message: '', action: 'plan', version: '0.12.0' });
+  const ID_ = '20261020T100000Z-a1b2c3d4';
+  const mine = (n: number, status: string) => build(n, status, { ACTION: 'request', REQUEST_KEY: `prod/requests/${ID_}.json` });
+
+  it('stops blocking once its build ended without a final result', async () => {
+    const s = setup();
+    await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
+    const b = mine(5, 'TIMED_OUT');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${ID_}.json`, runningResult(b));
+    s.state.now += 10 * 60_000;
+    const body = await get(s);
+    expect(body.pending).toBeNull();
+    expect(body.build.status).toBe('TIMED_OUT');
+    expect(s.state.pending).toBeNull();
+    expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(202);
+  });
+
+  it('keeps blocking while its build is in progress', async () => {
+    const s = setup();
+    await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
+    const b = mine(5, 'IN_PROGRESS');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${ID_}.json`, runningResult(b));
+    s.state.now += 10 * 60_000;
+    expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(409);
+  });
+
+  it('is not marked not started while a build holds its request', async () => {
+    const s = setup();
+    await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
+    s.state.builds = [mine(5, 'IN_PROGRESS')];
+    s.state.now += 3 * 60_000;
+    const body = await get(s);
+    expect(body.pending).toMatchObject({ id: ID_ });
+    expect(body.pending.notStarted).toBeUndefined();
+  });
+});
+
+describe('the port decisions', () => {
+  it('reads an absent object, also as AccessDenied (no ListBucket), but not a throttle or a 500', () => {
+    expect(absent({ name: 'NoSuchKey' })).toBe(true);
+    expect(absent({ name: 'NotFound', $metadata: { httpStatusCode: 404 } })).toBe(true);
+    expect(absent({ name: 'AccessDenied', $metadata: { httpStatusCode: 403 } })).toBe(true);
+    expect(absent({ name: 'Whatever', $metadata: { httpStatusCode: 403 } })).toBe(true);
+    expect(absent({ name: 'SlowDown', $metadata: { httpStatusCode: 503 } })).toBe(false);
+    expect(absent({ name: 'InternalError', $metadata: { httpStatusCode: 500 } })).toBe(false);
+    expect(absent(new Error('boom'))).toBe(false);
+  });
+
+  it('reads a log stream not created yet as empty', () => {
+    expect(missingStream({ name: 'ResourceNotFoundException' })).toBe(true);
+    expect(missingStream({ name: 'ThrottlingException' })).toBe(false);
   });
 });
