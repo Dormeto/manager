@@ -26,6 +26,10 @@ describe('operations', () => {
     // Event-driven refresh (packaging design §5): an account's forwarder.
     expect(operationTitle(op({ type: 'connect-account', target: { account: '121014831971' }, input: { regions: ['eu-west-1', 'eu-west-3'] } }))).toBe('Connect 121014831971 to event-driven refresh (eu-west-1, eu-west-3)');
     expect(operationTitle(op({ type: 'disconnect-account', target: { account: '121014831971' }, input: { regions: [] } }))).toBe('Disconnect 121014831971 from event-driven refresh');
+    // The manager's update, by the request of the Update page.
+    const target = { account: '121014831971', region: 'eu-west-1', version: '0.13.0' };
+    expect(operationTitle(op({ type: 'update-manager', target, input: { action: 'plan', version: '0.13.0', request: 'r' } }))).toBe('Prepare the update of the manager to 0.13.0');
+    expect(operationTitle(op({ type: 'update-manager', target, input: { action: 'apply', version: '0.13.0', request: 'r', planBuild: 'p' } }))).toBe('Update the manager to 0.13.0');
   });
 
   it('shows the progress over the steps that ran', () => {

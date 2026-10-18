@@ -100,11 +100,12 @@ export interface DemoUser { email: string; role: string; status: string; enabled
 export interface AuditEntry { id: string; at: string; who: string; role: string; action: string; target: string; result: string }
 type StoredExclusion = Omit<Exclusion, 'expired' | 'lifting'>;
 
-// The steps of each operation (packages/operations engine PLANS).
+// The steps of each operation the workflow runs (packages/operations engine PLANS): not the manager's updates.
+export type WorkflowType = Exclude<OperationType, 'update-manager'>;
 const INSTALL = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'].map((s) => `install ${s}`);
 const UNINSTALL = ['event rule', 'schedule', 'event source mappings', 'functions', 'queues', 'log groups', 'table', 'roles'].map((s) => `uninstall ${s}`);
 const CLUSTER = ['access entries', 'check clusters'];
-const PLANS: Record<OperationType, string[]> = {
+const PLANS: Record<WorkflowType, string[]> = {
   'install-router': ['find router', 'lock router', ...INSTALL, 'register router', ...CLUSTER, 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...INSTALL, 'register router', ...CLUSTER, 'verify router'],
   'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', ...UNINSTALL, 'unregister router'],
@@ -614,7 +615,7 @@ export function operationStatus(op: DemoOperation, now: number): 'running' | 'su
 
 // The steps of an operation from its start: each takes a second or two, the skipped ones none; one may wait longer
 // (slow) or fail (it ends the operation, undone).
-export function plan(type: OperationType, start: number, options: {
+export function plan(type: WorkflowType, start: number, options: {
   skip?: (step: string) => boolean; details?: Record<string, string>; slow?: { step: string; ms: number; every: number };
   fail?: { step: string; detail: string }; seed?: string;
 } = {}): PlannedStep[] {

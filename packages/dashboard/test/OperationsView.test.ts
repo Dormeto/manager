@@ -87,4 +87,38 @@ describe('Operations view', () => {
     operations = saved;
     wrapper.unmount();
   });
+
+  it('shows a manager update as such: its kind, "manager <version>", and the link to its build in CodeBuild', async () => {
+    const saved = operations;
+    const url = 'https://eu-west-1.console.aws.amazon.com/codesuite/codebuild/121014831971/projects/dmt-dev-install/build/dmt-dev-install%3Ab2/?region=eu-west-1';
+    const update = (id: string, context: Record<string, unknown>) => ({
+      id, type: 'update-manager', target: { account: '121014831971', region: 'eu-west-1', version: '0.13.0' }, input: { action: 'apply', version: '0.13.0', request: 'r', planBuild: 'p' },
+      status: 'succeeded', cursor: 0, by: 'admin@example.com', createdAt: '2026-10-18T10:00:00.000Z', updatedAt: '2026-10-18T10:09:00.000Z', finishedAt: '2026-10-18T10:09:00.000Z',
+      steps: [{ name: 'Apply manager 0.13.0', status: 'done' }], context,
+    });
+    operations = [update('op-u', { build: 'dmt-dev-install:b2', consoleUrl: url })];
+    const wrapper = await mountView();
+    expect(wrapper.find('.dm-op__kind').text()).toBe('Manager update');
+    expect(wrapper.find('.dm-op__title').text()).toBe('Update the manager to 0.13.0');
+    expect(wrapper.find('.dm-op__target').text()).toContain('manager 0.13.0');
+    const link = wrapper.findAll('a').find((a) => a.text() === 'View the build in CodeBuild')!;
+    expect(link.attributes()).toMatchObject({ href: url, target: '_blank', rel: 'noopener' });
+    wrapper.unmount();
+    // None before its build is known, nor for a link that is not https.
+    operations = [update('op-a', {}), update('op-b', { build: 'b', consoleUrl: 'javascript:alert(1)' })];
+    const without = await mountView();
+    expect(without.text()).not.toContain('View the build in CodeBuild');
+    without.unmount();
+    operations = saved;
+  });
+
+  it('links no other operation to CodeBuild', async () => {
+    const saved = operations;
+    operations = [{ ...operation('op-1', 'x'), context: { consoleUrl: 'https://eu-west-1.console.aws.amazon.com/x' } }];
+    const wrapper = await mountView();
+    expect(wrapper.text()).not.toContain('View the build in CodeBuild');
+    expect(wrapper.find('.dm-op__kind').text()).toBe('upgrade router');
+    wrapper.unmount();
+    operations = saved;
+  });
 });

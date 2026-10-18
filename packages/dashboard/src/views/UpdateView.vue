@@ -6,13 +6,16 @@ import { PROCEDURE_URL } from '../access';
 import DmLoader from '../components/DmLoader.vue';
 import NoticeAlert from '../components/NoticeAlert.vue';
 import ReleaseNotes from '../components/ReleaseNotes.vue';
-import { busy, codeParts, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateState } from '../update';
+import { useUpdateBadge } from '../stores/update';
+import { busy, codeParts, consoleLink, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateState } from '../update';
 
 // Get started's "Updating the manager" (the CLI's ways) and "Upgrade" (the Terraform module's).
 const UPDATING = 'https://dormeto.com/get-started.html#update';
 const MODULE_UPGRADE = 'https://dormeto.com/get-started.html#upgrade';
 
 const current = ref<UpdateState | NotInstalled | null>(null);
+// The menu's badge follows the versions on offer (an update applied leaves fewer).
+const badge = useUpdateBadge();
 const error = ref('');
 const notice = ref<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 // The version the first load saw: another one later means the API was replaced, and the dashboard is the old one.
@@ -29,6 +32,7 @@ const state = computed(() => (current.value && current.value.installedWithCli ? 
 const isBusy = computed(() => (state.value ? busy(state.value) : false));
 const reloadOffer = computed(() => current.value !== null && firstVersion.value !== null && current.value.version !== firstVersion.value);
 const build = computed(() => state.value?.build ?? null);
+const buildLink = computed(() => consoleLink(build.value?.consoleUrl));
 const finished = computed(() => (build.value?.by === 'dashboard' && build.value.action === 'apply' && build.value.status !== 'IN_PROGRESS' ? build.value : null));
 const succeeded = computed(() => finished.value?.status === 'SUCCEEDED');
 const failed = computed(() => (build.value && build.value.status !== 'IN_PROGRESS' && build.value.status !== 'SUCCEEDED' ? build.value : null));
@@ -55,6 +59,7 @@ async function load() {
     const next = await api<UpdateState | NotInstalled>('/update');
     if (seq !== loadSeq) return;
     current.value = next;
+    badge.fromState(next);
     firstVersion.value ??= next.version;
     failingSince.value = null;
     notAnswering.value = false;
@@ -202,6 +207,10 @@ onBeforeUnmount(() => {
               <v-chip v-if="build.phase" label size="small" variant="tonal">{{ build.phase }}</v-chip>
               <span v-if="build.by === 'cli'" class="text-body-medium text-medium-emphasis">started from the CLI</span>
               <span v-else-if="build.action" class="text-body-medium text-medium-emphasis">{{ build.action }}{{ build.version ? ` ${build.version}` : '' }}</span>
+              <template v-if="buildLink">
+                <v-spacer />
+                <a :href="buildLink" target="_blank" rel="noopener" class="text-body-medium">View the build in CodeBuild<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
+              </template>
             </div>
             <ol v-if="build.steps.length" class="dm-steps">
               <li v-for="(step, i) in build.steps" :key="i" :class="{ 'dm-steps--failed': failed && i === build.steps.length - 1 }">{{ step }}</li>

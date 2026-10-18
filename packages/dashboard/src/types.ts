@@ -291,8 +291,9 @@ export interface Exclusion {
 }
 
 // Operations (onboarding, R4b): run by the workflow, step by step.
+// update-manager: a request of the Update page, run by the install build (its context gives the build and its console page).
 export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion'
-  | 'connect-account' | 'disconnect-account';
+  | 'connect-account' | 'disconnect-account' | 'update-manager';
 export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Operation {
@@ -300,7 +301,7 @@ export interface Operation {
   type: OperationType;
   target: Record<string, string>;
   input: Record<string, unknown>;
-  context?: Record<string, unknown>; // learnt during the run: the workload id and name of an onboarding
+  context?: Record<string, unknown>; // learnt during the run: the workload id and name of an onboarding, a manager update's build
   status: 'running' | 'succeeded' | 'failed';
   steps: { name: string; status: StepStatus; startedAt?: string; finishedAt?: string; detail?: string; attempts?: number }[];
   cursor: number;

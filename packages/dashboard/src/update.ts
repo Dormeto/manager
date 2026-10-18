@@ -4,10 +4,12 @@
 export type VersionEntry = { version: string; router: string | null; minCli: string | null; published: string | null; staged?: boolean };
 export type PlanSummary = { add: number; change: number; destroy: number; replaced: string[]; destroyed: string[] };
 export type Section = { version: string; notes: string | null; access: string | null; accessNeeded: boolean };
-export type Pending = { key: string; id: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string };
+// operation: the request's manager update operation.
+export type Pending = { key: string; id: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string; operation?: string };
+// consoleUrl: the build's page in the CodeBuild console.
 export type BuildView = {
   id: string; by: 'dashboard' | 'cli'; action: string | null; version: string | null; status: string; phase: string | null;
-  startedAt: string | null; endedAt: string | null; steps: string[]; tail: string[];
+  startedAt: string | null; endedAt: string | null; steps: string[]; tail: string[]; consoleUrl: string | null;
 };
 export type UpdateState = {
   installedWithCli: true;
@@ -44,3 +46,6 @@ export function withoutOwnHeading(notes: string, version: string): string {
   if (first >= 0 && /^##\s/.test(lines[first]!) && lines[first]!.includes(version)) lines.splice(0, first + 1);
   return lines.join('\n').trim();
 }
+
+// A link to the CodeBuild console as the API gives it, only when it is an https: one.
+export const consoleLink = (url: unknown): string | null => (typeof url === 'string' && url.startsWith('https://') ? url : null);

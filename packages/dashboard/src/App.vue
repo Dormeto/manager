@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { useRoute } from 'vue-router';
 import { mdiAccountCogOutline, mdiLogout, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
@@ -7,12 +7,14 @@ import { signOut } from './auth';
 import { getConfig } from './config';
 import { useDiscoveryBadge } from './stores/discovery';
 import { useSession } from './stores/session';
+import { useUpdateBadge } from './stores/update';
 import MfaBanner from './components/MfaBanner.vue';
 import DmLogo from './components/DmLogo.vue';
 import NavIcon from './components/NavIcon.vue';
 
 const session = useSession();
 const badge = useDiscoveryBadge();
+const updates = useUpdateBadge();
 const theme = useTheme();
 const route = useRoute();
 const { mobile } = useDisplay();
@@ -21,13 +23,17 @@ const env = computed(() => getConfig().env);
 const signedIn = computed(() => !route.meta.public);
 const dark = computed(() => theme.global.current.value.dark);
 
-type NavItem = { title: string; to: string; icon: InstanceType<typeof NavIcon>['$props']['name']; badge?: number };
-const item = (title: string, to: string, icon: NavItem['icon'], badge?: number): NavItem => ({ title, to, icon, ...(badge ? { badge } : {}) });
+type NavItem = { title: string; to: string; icon: InstanceType<typeof NavIcon>['$props']['name']; badge?: { count: number; label: string } };
+// A badge, when its count is not 0, says what it counts to assistive technologies.
+const item = (title: string, to: string, icon: NavItem['icon'], count?: number, label?: (n: number) => string): NavItem =>
+  ({ title, to, icon, ...(count && label ? { badge: { count, label: label(count) } } : {}) });
+const pendingLabel = (n: number) => `${n} pending onboardings or offboardings`;
+const updatesLabel = (n: number) => (n === 1 ? '1 update available' : `${n} updates available`);
 // The fleet, the organization, the people: the views in three groups.
 const groups = computed<{ title: string; items: NavItem[] }[]>(() => [
   { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), item('Routers', '/routers', 'routers')] },
-  { title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending), item('Operations', '/operations', 'operations')] },
-  ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update')] }] : []),
+  { title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending, pendingLabel), item('Operations', '/operations', 'operations')] },
+  ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update', updates.count, updatesLabel)] }] : []),
 ]);
 const initials = computed(() => (session.email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?');
 // The role, and the one the user acts with when MFA lowers it (nothing at all under "required"): in the account menu and
@@ -38,6 +44,19 @@ const roleText = computed(() => `Role: ${session.role}${session.loaded && sessio
 onMounted(() => {
   if (signedIn.value) void badge.refresh();
 });
+
+// The versions to update to, next to Update: read when the user is known as an administrator, then every 30 minutes (the
+// Update page also gives each state it loads).
+const UPDATES_MS = 30 * 60_000;
+let updatesTimer: ReturnType<typeof setInterval> | undefined;
+watch(() => signedIn.value && session.isAdmin, (admin) => {
+  clearInterval(updatesTimer);
+  updatesTimer = undefined;
+  if (!admin) return;
+  void updates.refresh();
+  updatesTimer = setInterval(() => void updates.refresh(), UPDATES_MS);
+}, { immediate: true });
+onBeforeUnmount(() => clearInterval(updatesTimer));
 
 function toggleTheme() {
   const next = dark.value ? 'light' : 'dark';
@@ -63,7 +82,7 @@ function toggleTheme() {
           <v-list-item v-for="entry in group.items" :key="entry.to" :to="entry.to" :title="entry.title" :exact="entry.to === '/'" class="dm-nav-item">
             <template #prepend><span class="dm-nav-well"><NavIcon :name="entry.icon" /></span></template>
             <template v-if="entry.badge" #append>
-              <v-badge :content="entry.badge" color="secondary" inline :aria-label="`${entry.badge} pending onboardings or offboardings`" />
+              <v-badge :content="entry.badge.count" color="secondary" inline :aria-label="entry.badge.label" />
             </template>
           </v-list-item>
         </template>

@@ -64,6 +64,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
   if (method === 'GET' && resource === 'audit' && !a) return { entries: d.audit };
   if (resource === 'update') {
     if (method === 'GET' && !a) return updateState(now);
+    if (method === 'GET' && a === 'available') return { count: updateState(now).versions.length };
     if (method === 'GET' && a === 'changes') return updateChanges(q.get('to'));
     if (method === 'POST' && a === 'plan') return updateRequest('plan', String(body.version ?? ''), now);
     if (method === 'POST' && a === 'apply') return updateRequest('apply', updateState(now).versions[0]!.version, now, String(body.planBuild ?? ''));

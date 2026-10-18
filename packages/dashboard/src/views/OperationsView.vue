@@ -4,12 +4,12 @@ import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   mdiAlertCircleOutline, mdiArrowDown, mdiArrowUp, mdiArrowUpBoldCircleOutline, mdiCancel, mdiCheck, mdiChevronDown, mdiClose, mdiDeleteOutline, mdiLinkVariant, mdiLinkVariantOff,
-  mdiMinus, mdiMinusCircleOutline, mdiPlayCircleOutline, mdiPlusCircleOutline, mdiRouterNetwork,
+  mdiMinus, mdiMinusCircleOutline, mdiOpenInNew, mdiPlayCircleOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUpdate,
 } from '@mdi/js';
 import { api } from '../api';
 import { relative } from '../format';
 import { useNow } from '../now';
-import { operationProgress, operationTitle } from '../operations';
+import { operationBuildLink, operationKind, operationProgress, operationTitle } from '../operations';
 import { usePoll } from '../poll';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
@@ -46,9 +46,9 @@ const statusColor = (s: Operation['status']) => ({ running: 'primary', succeeded
 const KIND_ICONS: Record<OperationType, string> = {
   onboard: mdiPlusCircleOutline, offboard: mdiMinusCircleOutline, 'install-router': mdiRouterNetwork, 'upgrade-router': mdiArrowUpBoldCircleOutline,
   'uninstall-router': mdiDeleteOutline, exclude: mdiCancel, 'lift-exclusion': mdiPlayCircleOutline, 'connect-account': mdiLinkVariant, 'disconnect-account': mdiLinkVariantOff,
+  'update-manager': mdiUpdate,
 };
 const STATUS_ICONS: Partial<Record<Operation['status'], string>> = { succeeded: mdiCheck, failed: mdiAlertCircleOutline };
-const kind = (op: Operation) => op.type.replace(/-/g, ' ');
 // An operation's steps, shown or hidden (the ids in expanded).
 const isOpen = (id: string) => expanded.value.includes(id);
 const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.filter((x) => x !== id) : [...expanded.value, id]; };
@@ -98,7 +98,7 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
               <div class="dm-op__head">
                 <v-avatar :color="statusColor(op.raw.status)" variant="tonal" rounded="lg" size="40" class="dm-op__icon"><v-icon :icon="KIND_ICONS[op.raw.type]" size="21" /></v-avatar>
                 <div class="dm-op__titles">
-                  <div class="dm-op__kind">{{ kind(op.raw) }}</div>
+                  <div class="dm-op__kind">{{ operationKind(op.raw) }}</div>
                   <div class="dm-op__title">{{ operationTitle(op.raw) }}</div>
                 </div>
                 <v-chip :color="statusColor(op.raw.status)" variant="tonal" label class="dm-op__status" :prepend-icon="STATUS_ICONS[op.raw.status]">
@@ -110,6 +110,7 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
                   <span v-if="op.raw.target.account" class="mono">{{ op.raw.target.account }}</span>
                   <span v-if="op.raw.target.region" class="dm-op__region"><RegionLabel :region="op.raw.target.region" /><span class="mono">{{ op.raw.target.region }}</span></span>
                   <span v-if="op.raw.target.router" class="dm-op__router">{{ op.raw.target.router }}</span>
+                  <span v-if="op.raw.type === 'update-manager'" class="dm-op__router">manager {{ op.raw.target.version }}</span>
                   <span class="mono dm-op__id">{{ op.raw.id }}</span>
                 </div>
                 <div class="dm-op__progress">
@@ -119,6 +120,7 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
                 </div>
                 <div v-if="operationProgress(op.raw).current" class="dm-op__current text-body-small text-medium-emphasis">{{ operationProgress(op.raw).current }}</div>
                 <div v-if="op.raw.error" class="dm-op__error text-body-small text-error">{{ op.raw.error }}</div>
+                <a v-if="operationBuildLink(op.raw)" :href="operationBuildLink(op.raw)!" target="_blank" rel="noopener" class="dm-op__link text-body-small">View the build in CodeBuild<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
                 <div class="dm-op__foot">
                   <span><span class="dm-op__label">By</span> {{ op.raw.by }}</span>
                   <span><span class="dm-op__label">Started</span> <span class="nowrap">{{ relative(op.raw.createdAt, now) }}</span></span>
@@ -200,6 +202,7 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
 .dm-op__count { font: 500 0.78rem/1 var(--dm-mono); font-variant-numeric: tabular-nums; }
 .dm-op__current { margin-top: 6px; overflow-wrap: anywhere; }
 .dm-op__error { margin-top: 6px; overflow-wrap: anywhere; }
+.dm-op__link { display: inline-flex; align-items: center; margin-top: 6px; }
 .dm-op__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; margin-top: 8px; font-size: 0.82rem; }
 .dm-op__label { margin-inline-end: 4px; font: 500 0.64rem/1 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 .dm-op__toggle { margin-inline-end: -8px; }

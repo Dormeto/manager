@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import UpdateView from '../src/views/UpdateView.vue';
+import { useUpdateBadge } from '../src/stores/update';
 import type { Section, UpdateState } from '../src/update';
 
 const h = vi.hoisted(() => ({
@@ -35,12 +37,14 @@ const sections: Section[] = [
   { version: '0.12.0', notes: null, access: null, accessNeeded: false },
 ];
 const running = (over = {}) => state({
-  build: { id: 'b2', by: 'dashboard', action: 'apply', version: '0.13.0', status: 'IN_PROGRESS', phase: 'BUILD', startedAt: null, endedAt: null, steps: ['download', 'apply'], tail: [], ...over },
+  build: { id: 'b2', by: 'dashboard', action: 'apply', version: '0.13.0', status: 'IN_PROGRESS', phase: 'BUILD', startedAt: null, endedAt: null, steps: ['download', 'apply'], tail: [], consoleUrl: null, ...over },
 });
 
 let wrapper: VueWrapper;
 const mountView = async () => {
-  wrapper = mount(UpdateView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  wrapper = mount(UpdateView, { attachTo: document.body, global: { plugins: [createVuetify({ components }), pinia] } });
   await flushPromises();
 };
 const button = (label: string) => wrapper.findAll('button').find((b) => b.text().trim() === label || b.text().trim().startsWith(`${label} `))!;
@@ -205,6 +209,44 @@ describe('Update', () => {
     expect(wrapper.text()).toContain('download');
     expect(wrapper.text()).toContain('apply');
     expect(wrapper.text()).toContain('BUILD');
+  });
+
+  it('links the build to its page in the CodeBuild console, for a dashboard build as for a CLI build', async () => {
+    const url = 'https://eu-west-1.console.aws.amazon.com/codesuite/codebuild/121014831971/projects/dmt-dev-install/build/dmt-dev-install%3Ab2/?region=eu-west-1';
+    for (const by of ['dashboard', 'cli'] as const) {
+      h.answer = () => running({ by, consoleUrl: url });
+      await mountView();
+      const link = wrapper.findAll('a').find((a) => a.text() === 'View the build in CodeBuild')!;
+      expect(link.attributes()).toMatchObject({ href: url, target: '_blank', rel: 'noopener' });
+      wrapper.unmount();
+    }
+    h.answer = () => running({ status: 'FAILED', consoleUrl: url, tail: ['Error: boom'] });
+    await mountView();
+    expect(wrapper.findAll('a').map((a) => a.text())).toContain('View the build in CodeBuild');
+    wrapper.unmount();
+    // None without its page, nor for a link that is not https.
+    for (const consoleUrl of [null, 'javascript:alert(1)']) {
+      h.answer = () => running({ consoleUrl });
+      await mountView();
+      expect(wrapper.text()).not.toContain('View the build in CodeBuild');
+      wrapper.unmount();
+    }
+    wrapper = mount({ render: () => null });
+  });
+
+  it('gives the menu\'s badge the versions on offer of each state it loads', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    await mountView();
+    const badge = useUpdateBadge();
+    expect(badge.count).toBe(2);
+    h.answer = () => state({ versions: [], applied: { version: '0.13.0', build: 'b3', at: null } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(badge.count).toBe(0);
+    // A failed read changes nothing.
+    badge.count = 1;
+    h.answer = () => { throw new Error('Failed to fetch'); };
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(badge.count).toBe(1);
   });
 
   it('labels a build started from the CLI', async () => {

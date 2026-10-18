@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -9,7 +9,18 @@ import { useSession } from '../src/stores/session';
 
 vi.mock('../src/config', () => ({ getConfig: () => ({ env: 'dev' }) }));
 vi.mock('../src/auth', () => ({ signOut: vi.fn() }));
-vi.mock('../src/api', () => ({ api: vi.fn(async () => ({})) }));
+const h = vi.hoisted(() => ({ calls: [] as string[], answers: {} as Record<string, unknown> }));
+vi.mock('../src/api', () => ({
+  api: vi.fn(async (path: string) => {
+    h.calls.push(path);
+    return h.answers[path] ?? {};
+  }),
+}));
+afterEach(() => {
+  h.calls.length = 0;
+  h.answers = {};
+  vi.useRealTimers();
+});
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
 // Signed in, on a desktop's width (the drawer beside the views).
@@ -67,5 +78,59 @@ describe('App', () => {
     const operator = await mountSignedIn({ email: 'ops@example.com', role: 'operator', effectiveRole: 'operator' });
     expect(operator.findAll('.dm-nav-item').map((i) => i.text())).not.toContain('Update');
     operator.unmount();
+  });
+
+  it('shows the versions available next to Update, to administrators, as Discovery shows its pending ones', async () => {
+    h.answers['/update/available'] = { count: 2 };
+    const admin = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    const item = admin.findAll('.dm-nav-item').find((i) => i.text().startsWith('Update'))!;
+    expect(item.find('.v-badge').text()).toBe('2');
+    expect(item.find('[aria-label="2 updates available"]').exists()).toBe(true);
+    admin.unmount();
+    h.answers['/update/available'] = { count: 1 };
+    const one = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    expect(one.find('[aria-label="1 update available"]').exists()).toBe(true);
+    one.unmount();
+    h.answers['/update/available'] = { count: 0 };
+    const none = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    expect(none.findAll('.dm-nav-item').find((i) => i.text().startsWith('Update'))!.find('.v-badge').exists()).toBe(false);
+    none.unmount();
+  });
+
+  it('keeps Discovery\'s badge label its own', async () => {
+    h.answers['/discovery'] = { lastRun: { counts: { 'pending-onboarding': 3 } } };
+    const wrapper = await mountSignedIn({ email: 'ops@example.com', role: 'operator', effectiveRole: 'operator' });
+    expect(wrapper.find('[aria-label="3 pending onboardings or offboardings"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('reads the versions available at sign-in and every 30 minutes, for administrators only', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const reads = () => h.calls.filter((p) => p === '/update/available').length;
+    const operator = await mountSignedIn({ email: 'ops@example.com', role: 'operator', effectiveRole: 'operator' });
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(reads()).toBe(0);
+    operator.unmount();
+    h.answers['/update/available'] = { count: 1 };
+    const admin = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(29 * 60_000);
+    expect(reads()).toBe(1);
+    h.answers['/update/available'] = { count: 3 };
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()).toBe(2);
+    expect(admin.find('[aria-label="3 updates available"]').exists()).toBe(true);
+    admin.unmount();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(reads()).toBe(2);
+  });
+
+  it('reads them once the role says administrator, when it arrives after the sign-in', async () => {
+    const wrapper = await mountSignedIn({ email: 'ops@example.com', role: 'viewer', effectiveRole: 'viewer' });
+    expect(h.calls).not.toContain('/update/available');
+    useSession().applyMe({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    await flushPromises();
+    expect(h.calls.filter((p) => p === '/update/available')).toHaveLength(1);
+    wrapper.unmount();
   });
 });

@@ -1,11 +1,11 @@
 // What the dashboard's actions change in the demo (npm run dev:mock), validated and audited as the API does.
 import type { Candidate, DiscoveryConfig } from '@dormeto/discovery/types';
-import type { OperationType, Pause } from '../types';
+import type { Pause } from '../types';
 import { AVAILABLE } from './fixtures';
 import { ACCOUNTS, ME, accountName } from './org';
 import {
   addOperation, audited, change, fail, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
-  type Demo, type DemoOperation, type DemoRouter, type DemoWorkload,
+  type Demo, type DemoOperation, type DemoRouter, type DemoWorkload, type WorkflowType,
 } from './state';
 import { operationView } from './views';
 import { MINUTE, SECOND, iso } from './util';
@@ -140,7 +140,7 @@ const newRouter = (account: string, region: string, at: number): DemoRouter => (
 });
 
 export function startOperation(d: Demo, body: Body, now: number) {
-  const type = String(body.type ?? '') as OperationType;
+  const type = String(body.type ?? '') as WorkflowType;
   if (!['onboard', 'offboard', 'install-router', 'upgrade-router', 'uninstall-router'].includes(type)) {
     fail(400, 'bad_request', 'type must be onboard, offboard, install-router, upgrade-router or uninstall-router');
   }
