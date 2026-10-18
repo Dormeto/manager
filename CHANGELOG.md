@@ -5,6 +5,15 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- The dashboard's sidebar shows the manager's version at its bottom, and the brand mark and favicon are the website's
+  logo. The Operations icon is two meshing cogs, each turning on its own axis.
+- The Update page shows the CLI's commands for this install (installing the CLI, updating from a laptop with this
+  install's region and environment, following the install), with copy buttons, links to the CLI and the manager on
+  GitHub and to the CLI's documentation, and a "Check for updates" action with the time of the last check. `GET
+  /api/update` gains the install's `env` and `region`.
+
 ## 0.12.0 — 2026-10-18
 
 Router 0.29.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
