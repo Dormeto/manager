@@ -184,7 +184,8 @@ load();
     <v-dialog :model-value="resetting !== null" max-width="460" @update:model-value="resetting = null">
       <v-card :title="`Reset the two-step verification of ${resetting?.email}?`" :prepend-icon="mdiShieldRefreshOutline" class="dm-dialog">
         <v-card-text>Their authenticator app is removed: {{ resetting?.email }} sets up an authenticator app again at their next sign-in. Do it
-          only once you know it is them (a lost phone, for example).</v-card-text>
+          only once you know it is them (a lost phone, for example). Passkeys cannot be removed by an administrator: if the user's device with a
+          passkey is lost, disable the user.</v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn variant="text" @click="resetting = null">Cancel</v-btn>

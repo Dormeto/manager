@@ -34,6 +34,13 @@ time per target group, router or workload, one per load balancer (lock), three p
   token; Users resets another user's. The smoke user is enrolled by `scripts/smoke.mjs` at its first run (secret in SSM
   `/dmt-<env>/manager/smoke-totp`). No client may write a user's email (with the scope the Account page needs, a stolen
   access token could otherwise move the account to another address).
+- **Passkeys:** `passkeys` (true by default, not offered with `mfa = required`) lets users register passkeys from the
+  Account page (managed login's `/passkeys/add`, listing and removal with the user's access token) and sign in with them.
+  A passkey with user verification is multi-factor by itself: the dashboard asks for `acr_values=urn:cognito:loa:1`, the ID
+  token's `amr` (`swk`, `hwk` or `mfa`) decides the session's rights, and a token without `amr` is judged by the
+  authenticator check as before. With an authenticator app on, Cognito does not allow passkey sign-in (turn the app off from
+  the Account page). The relying party is the auth domain with a custom domain, else Cognito's default. An administrator
+  cannot list or remove another user's passkeys: a lost device is answered by disabling the user.
 - **Lost authenticator:** another administrator resets it from Users (keep at least two administrators with one). The
   last administrator, with AWS credentials of the manager's account:
   `aws cognito-idp admin-set-user-mfa-preference --user-pool-id <user_pool_id> --username <email>

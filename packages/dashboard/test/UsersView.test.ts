@@ -44,6 +44,9 @@ describe('Users', () => {
     reset.click();
     await flushPromises();
     expect(document.body.textContent).toContain('ops@example.com sets up an authenticator app again at their next sign-in');
+    // Passkeys: no administrator call removes another user's.
+    expect(document.body.textContent).toContain('Passkeys cannot be removed by an administrator');
+    expect(document.body.textContent).toContain('disable the user');
     const confirm = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset') as HTMLElement;
     confirm.click();
     await flushPromises();

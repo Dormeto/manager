@@ -7,6 +7,18 @@ CLI script, of the same release).
 
 ## Unreleased
 
+- Passkeys, in the `optional` and `operators` MFA modes. The module's new `passkeys` variable (true by default; not
+  offered with `mfa = required`, where Cognito enforces the authenticator app) turns on choice-based sign-in: the user
+  pool's `sign_in_policy` allows `PASSWORD` and `WEB_AUTHN`, its `web_authn_configuration` requires user verification (the
+  relying party is the auth domain when the module has a custom domain), and the dashboard client gains `ALLOW_USER_AUTH`
+  and the `/account` callback. Both pool blocks update in place; the user pool is not replaced. The dashboard asks for
+  `acr_values=urn:cognito:loa:1`, so that the ID token carries `amr`; the API counts a session as multi-factor when `amr`
+  holds `mfa`, `swk` or `hwk` (a password-only session of an enrolled operator is a viewer's), and falls back to the
+  authenticator check for a token without `amr`. `GET /api/me`'s `mfa` gains `method` (`passkey`, `app`, `password` or
+  `null`) and `passkeys`. The Account page has a Passkeys card (list, add through managed login, remove) and the sign-in
+  method of the session; the MFA banner offers a passkey. With an authenticator app on, Cognito does not allow passkey
+  sign-in: turn the app off once a passkey is registered. An administrator cannot remove a passkey (Users says so).
+  Access: nothing to apply again.
 - A daily check for new manager versions, off until an administrator turns it on in the Update page's "Daily check" card.
   A function (`<name>-update-check`, with its role and an EventBridge schedule at 07:00 UTC) reads the setting, then the
   release index, and records the newest version above the running one. Administrators see a notice on the Overview

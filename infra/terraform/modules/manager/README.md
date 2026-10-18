@@ -26,7 +26,8 @@ roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRol
 (false for a second environment in an account whose roles another one creates), `deletion_protection` (true: the users and the table are protected; set
 it to false and apply before `terraform destroy`), `log_retention_days`, `mfa` (two-step verification with an
 authenticator app: `optional`, `operators` by default — administrators and operators keep viewer rights until they set it
-up from the Account page — or `required`), `alert_emails` (the addresses of the health alerts, each confirming the email
+up from the Account page — or `required`), `passkeys` (true by default: users register passkeys from the Account page and sign in with them, in the
+`optional` and `operators` modes; false, or `mfa = required`, leaves the user pool and the client as without), `alert_emails` (the addresses of the health alerts, each confirming the email
 AWS sends; other channels subscribe to the `alerts_topic_arn` output), `ip_lists` (IP reputation lists the manager
 downloads once for every router: `name`, `url`, `action` defer or ignore, `refresh_hours`; no secret in a URL, readable by
 the organization).
