@@ -283,8 +283,11 @@ export function createUpdate(port: UpdatePort, o: {
     };
   }
 
-  async function follow(op: Operation, out: Outcome, builds: Build[]): Promise<Operation> {
-    const next = advanced(op, out, builds);
+  // The record as stored (a consistent read: the operations index may lag behind it) advanced to the outcome and written,
+  // unless it is no longer running; the record as it now is, null when there is none.
+  async function follow(id: string, out: Outcome, builds: Build[]): Promise<Operation | null> {
+    const op = await port.operations.get(id);
+    const next = op && advanced(op, out, builds);
     if (!next) return op;
     await port.operations.update(next);
     return next;
@@ -294,8 +297,7 @@ export function createUpdate(port: UpdatePort, o: {
     if (!pending) return null;
     const out = outcome(pending, await resultOf(pending.id), builds);
     // Its operation first: an operation not written keeps the request pending, and the next read tries again.
-    const op = pending.operation && (out.status !== 'running' || out.build) ? await port.operations.get(pending.operation) : null;
-    if (op) await follow(op, out, builds);
+    if (pending.operation && (out.status !== 'running' || out.build)) await follow(pending.operation, out, builds);
     if (out.status === 'running') return pending;
     if (out.notStarted) return { ...pending, notStarted: true };
     await port.pending.put(null);
@@ -352,8 +354,9 @@ export function createUpdate(port: UpdatePort, o: {
     if (s.pending && !s.pending.notStarted) throw new HttpError(409, 'busy', 'a request is waiting for its build');
   }
 
-  // The operation first, recorded running (never started: the request's build runs the update): a request whose write
-  // fails leaves it to the 2 minutes without a build ("the update did not start").
+  // The operation first, recorded running (never started: the request's build runs the update). A request that cannot be
+  // written fails it at once. A written one gives it the request's ETag, as it does the pending request: either lets a
+  // queued build be matched to it.
   async function request(body: { action: 'plan' | 'apply'; version: string; planBuild?: string }, who: string): Promise<Pending> {
     const id = requestId(o.now(), o.random());
     const at = o.now().toISOString();
@@ -365,9 +368,17 @@ export function createUpdate(port: UpdatePort, o: {
     };
     await port.operations.create(op);
     const requestKey = key(`requests/${id}.json`);
-    const etag = await port.put(requestKey, JSON.stringify({ ...body, requestedBy: who, requestedAt: at }));
+    let etag: string;
+    try {
+      etag = await port.put(requestKey, JSON.stringify({ ...body, requestedBy: who, requestedAt: at }));
+    } catch (err) {
+      // No build can take a request never written. A record not marked failed now is by the 2 minutes without a build.
+      await port.operations.update(advanced(op, { status: 'failed', build: null, message: 'the request could not be written' }, [])!).catch(() => {});
+      throw err;
+    }
     const pending: Pending = { key: requestKey, id, etag, ...body, at, who, operation: op.id };
-    await port.pending.put(pending);
+    // Both written whatever becomes of the other: each carries the ETag.
+    await Promise.all([port.operations.update({ ...op, input: { ...op.input, etag }, updatedAt: o.now().toISOString() }), port.pending.put(pending)]);
     return pending;
   }
 
@@ -378,17 +389,18 @@ export function createUpdate(port: UpdatePort, o: {
       return (await offers()).versions.length;
     },
 
-    // At most one result read for each running manager update; the builds and the pending request read once, when any.
+    // At most one result read for each running manager update; the builds read once, when any, and the pending request
+    // only for a record without its request's ETag. A listed copy that would change is read again before it is written.
     async refreshOperations(operations) {
       const running = operations.filter((op) => op.type === 'update-manager' && op.status === 'running');
       if (!running.length) return operations;
-      const [builds, pending] = await Promise.all([port.builds(), port.pending.get()]);
+      const etagOf = (op: Operation) => (typeof op.input.etag === 'string' && op.input.etag ? op.input.etag : undefined);
+      const [builds, pending] = await Promise.all([port.builds(), running.every(etagOf) ? null : port.pending.get()]);
       const fresh = new Map(await Promise.all(running.map(async (op) => {
-        // The pending request knows its ETag; an operation no request names any longer is followed by its result alone.
-        const request = pending?.operation === op.id ? pending : { at: op.createdAt };
+        const etag = etagOf(op) ?? (pending?.operation === op.id ? pending.etag : undefined);
         const id = op.input.request;
-        const out = outcome(request, typeof id === 'string' && id ? await resultOf(id) : null, builds);
-        return [op.id, await follow(op, out, builds)] as const;
+        const out = outcome({ etag, at: op.createdAt }, typeof id === 'string' && id ? await resultOf(id) : null, builds);
+        return [op.id, advanced(op, out, builds) ? (await follow(op.id, out, builds)) ?? op : op] as const;
       })));
       return operations.map((op) => fresh.get(op.id) ?? op);
     },

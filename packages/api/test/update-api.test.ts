@@ -43,13 +43,22 @@ function setup(opts: { running?: string; files?: Record<string, string>; urls?: 
     workflow: [] as string[],
     // CodeBuild refuses to list the builds.
     throttled: false,
+    // S3 refuses the request; the records refuse the next n updates; the records written after the creation.
+    putFails: false, updateFails: 0, updates: 0,
+    // What the operations index lists, when it lags behind the records.
+    listed: null as Operation[] | null,
   };
   // The operation records (the records module's items), by id.
   const ops = new Map<string, Operation>((opts.operations ?? []).map((op) => [op.id, op]));
   let opIds = 0;
   const port: UpdatePort = {
     get: async (key) => { state.gets.push(key); return files.get(key) ?? null; },
-    put: async (key, body) => { files.set(key, body); state.puts.push([key, body]); return ETAG; },
+    put: async (key, body) => {
+      if (state.putFails) throw Object.assign(new Error('Service Unavailable'), { name: 'ServiceUnavailable' });
+      files.set(key, body);
+      state.puts.push([key, body]);
+      return ETAG;
+    },
     builds: async () => {
       state.calls.builds++;
       if (state.throttled) throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' });
@@ -61,7 +70,14 @@ function setup(opts: { running?: string; files?: Record<string, string>; urls?: 
     operations: {
       create: async (op) => { ops.set(op.id, structuredClone(op)); },
       get: async (id) => structuredClone(ops.get(id) ?? null),
-      update: async (op) => { ops.set(op.id, structuredClone(op)); },
+      update: async (op) => {
+        if (state.updateFails > 0) {
+          state.updateFails--;
+          throw Object.assign(new Error('Throughput exceeds the current capacity'), { name: 'ProvisionedThroughputExceededException' });
+        }
+        state.updates++;
+        ops.set(op.id, structuredClone(op));
+      },
     },
   };
   const update = createUpdate(port, {
@@ -74,7 +90,7 @@ function setup(opts: { running?: string; files?: Record<string, string>; urls?: 
     now: () => state.now, newId: () => 'id', version: opts.running ?? '0.10.0', update,
     operations: {
       create: async (type) => { state.workflow.push(type); throw new Error('not in these tests'); },
-      list: async () => [...ops.values()].reverse().map((op) => structuredClone(op)),
+      list: async () => structuredClone(state.listed ?? [...ops.values()].reverse()),
       get: async (id) => structuredClone(ops.get(id) ?? null),
       installedRouters: async () => [],
     },
@@ -436,7 +452,7 @@ describe('an operation per dashboard request', () => {
     const s = setup();
     await plan(s);
     expect([...s.ops.values()]).toEqual([{
-      id: 'op-1', type: 'update-manager', target: { account: ACCOUNT, region: REGION, version: '0.12.0' }, input: { action: 'plan', version: '0.12.0', request: REQ },
+      id: 'op-1', type: 'update-manager', target: { account: ACCOUNT, region: REGION, version: '0.12.0' }, input: { action: 'plan', version: '0.12.0', request: REQ, etag: ETAG },
       status: 'running', steps: [{ name: 'Plan manager 0.12.0', status: 'running', startedAt: AT }], cursor: 0, holds: { locks: [], slots: [] }, activeKey: '',
       context: {}, by: 'admin@example.com', createdAt: AT, updatedAt: AT,
     }]);
@@ -452,9 +468,23 @@ describe('an operation per dashboard request', () => {
     } });
     expect((await s.api(event('POST', '/api/update/apply', 'dmt-admin', { planBuild: p.id }))).statusCode).toBe(202);
     expect(s.ops.get('op-1')).toMatchObject({
-      type: 'update-manager', target: { account: ACCOUNT, region: REGION, version: '0.12.0' }, input: { action: 'apply', version: '0.12.0', request: REQ, planBuild: p.id },
+      type: 'update-manager', target: { account: ACCOUNT, region: REGION, version: '0.12.0' }, input: { action: 'apply', version: '0.12.0', request: REQ, planBuild: p.id, etag: ETAG },
       status: 'running', steps: [{ name: 'Apply manager 0.12.0', status: 'running' }], by: 'admin@example.com',
     });
+  });
+
+  it('fails at once when the request cannot be written, and answers the error', async () => {
+    const s = setup();
+    s.state.putFails = true;
+    const res = await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
+    expect(res.statusCode).toBe(500);
+    expect(s.ops.get('op-1')).toMatchObject({
+      status: 'failed', finishedAt: AT, error: 'the request could not be written', steps: [{ name: 'Plan manager 0.12.0', status: 'failed', finishedAt: AT }],
+      input: { action: 'plan', version: '0.12.0', request: REQ },
+    });
+    expect(s.ops.get('op-1')!.input).not.toHaveProperty('etag');
+    expect(s.state.pending).toBeNull();
+    expect(s.audit[0]).toMatchObject({ action: 'update-plan', result: 'error: Service Unavailable' });
   });
 
   it('records nothing for a refused request', async () => {
@@ -569,6 +599,48 @@ describe('an operation per dashboard request', () => {
     later(s, 3 * 60_000);
     const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
     expect(listed[0]).toMatchObject({ id: 'op-1', status: 'failed', error: 'the update did not start' });
+  });
+
+  it('keeps a listed update running while a queued build carries the ETag on its record, though no pending request names it', async () => {
+    const s = setup();
+    await plan(s);
+    s.state.pending = null;
+    const queued = build(5, 'IN_PROGRESS', { ACTION: 'request', REQUEST_ETAG: ETAG }, { phase: 'QUEUED', startedAt: null });
+    s.state.builds = [queued];
+    later(s, 5 * 60_000);
+    const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
+    expect(listed[0]).toMatchObject({ id: 'op-1', status: 'running', context: { build: queued.id, consoleUrl: consoleOf(5) } });
+    expect(s.ops.get('op-1')).toMatchObject({ status: 'running' });
+  });
+
+  it('follows the pending request\'s ETag when its record could not take it', async () => {
+    const s = setup();
+    s.state.updateFails = 1;
+    expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(500);
+    expect(s.ops.get('op-1')!.input).not.toHaveProperty('etag');
+    expect(s.state.pending).toMatchObject({ etag: ETAG, operation: 'op-1' });
+    s.state.builds = [build(5, 'IN_PROGRESS', { ACTION: 'request', REQUEST_ETAG: ETAG }, { phase: 'QUEUED', startedAt: null })];
+    later(s, 5 * 60_000);
+    const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
+    expect(listed[0]).toMatchObject({ id: 'op-1', status: 'running' });
+  });
+
+  it('never writes a lagging listed copy over its record: the record is read again, and left unless still running', async () => {
+    const s = setup();
+    await plan(s);
+    const stale = structuredClone(s.ops.get('op-1')!);
+    const b = mine(5, 'IN_PROGRESS');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${REQ}.json`, result(b, 'running'));
+    const stored: Operation = { ...stale, status: 'succeeded', finishedAt: AT, steps: [{ ...stale.steps[0]!, status: 'done', finishedAt: AT }], context: { build: b.id, consoleUrl: consoleOf(5) } };
+    s.ops.set('op-1', structuredClone(stored));
+    s.state.listed = [stale];
+    s.state.updates = 0;
+    later(s, 60_000);
+    const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
+    expect(s.state.updates).toBe(0);
+    expect(s.ops.get('op-1')).toEqual(stored);
+    expect(listed[0]).toEqual(stored);
   });
 
   it('lists the operations as they are when they cannot be brought up to date', async () => {
