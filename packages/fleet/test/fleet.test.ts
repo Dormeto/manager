@@ -1,7 +1,7 @@
 // Routers and their workloads as they report (scale design §4): summaries written from the router events.
 import { describe, expect, it } from 'vitest';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
-import { createFleetStore, reporting, type RouterEvent } from '../src/index.js';
+import { createFleetStore, reporting, type Group, type RouterEvent } from '../src/index.js';
 import { createIngest } from '../src/ingest.js';
 
 const ACCOUNT = '121014831971';
@@ -519,6 +519,24 @@ describe('state history (R8)', () => {
     const result = { checkedAt: new Date(NOW).toISOString(), running: '0.13.0', latest: '0.14.0', notified: '0.14.0' };
     await store.putUpdateResult(result);
     expect(await store.getUpdateResult()).toEqual(result);
+  });
+
+  it('keeps the groups\' grants: a round trip with who set them and when, a list in name order, a delete (tags design §4)', async () => {
+    const store = createFleetStore({ dynamo: fakeDynamo(), table: 'dmt-dev-manager', now: () => NOW });
+    expect(await store.listGroups()).toEqual([]);
+    expect(await store.getGroup('payments')).toBeNull();
+    const grants: Group['grants'] = [{ tags: { team: 'payments' }, permissions: ['read', 'wake'] }, { tags: {}, permissions: ['read'] }];
+    await store.putGroup({ name: 'payments', description: 'The payments team', grants, updatedBy: 'admin@example.com' });
+    await store.putGroup({ name: 'data', description: '', grants: [], updatedBy: 'admin@example.com' });
+    const stored = { name: 'payments', description: 'The payments team', grants, updatedAt: new Date(NOW).toISOString(), updatedBy: 'admin@example.com' };
+    expect(await store.getGroup('payments')).toEqual(stored);
+    expect((await store.listGroups()).map((g) => g.name)).toEqual(['data', 'payments']);
+    await store.putGroup({ name: 'payments', description: 'Payments', grants: [], updatedBy: 'other@example.com' });
+    expect(await store.getGroup('payments')).toMatchObject({ description: 'Payments', grants: [], updatedBy: 'other@example.com' });
+    await store.deleteGroup('payments');
+    expect(await store.getGroup('payments')).toBeNull();
+    expect((await store.listGroups()).map((g) => g.name)).toEqual(['data']);
+    await store.deleteGroup('payments');
   });
 
   it('reads the discounts consistently: a change is seen at once after it is saved (final review 5)', async () => {

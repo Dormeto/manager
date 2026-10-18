@@ -102,6 +102,15 @@ export interface UpdateCheck { enabled: boolean; alert: boolean; updatedAt?: str
 // last version sent to the alert topic.
 export interface UpdateResult { checkedAt: string; running: string; latest: string | null; error?: string; notified?: string }
 
+// A custom group's grants (tags design §4), set by administrators (GROUP#<name>): the same shape as the API's grants.
+export interface Group {
+  name: string;
+  description: string;
+  grants: { tags: Record<string, string>; permissions: ('read' | 'wake' | 'nap')[] }[];
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
 // A workload whose last wake failed (R7b): its failure until a successful wake.
 export interface FailureEntry {
   account: string;
@@ -132,6 +141,10 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
   const routerKey = (account: string, region: string) => `RS#${account}#${region}`;
   const workloadKey = (account: string, region: string, id: string) => `WS#${account}#${region}#${id}`;
   const data = <T>(item: Item | undefined): T | null => (item?.data?.S ? (JSON.parse(item.data.S) as T) : null);
+  const groupOf = (item: Item): Group => {
+    const d = data<{ description?: string; grants?: Group['grants'] }>(item);
+    return { name: item.sk!.S!.slice('GROUP#'.length), description: d?.description ?? '', grants: d?.grants ?? [], updatedAt: item.updatedAt?.S ?? null, updatedBy: item.updatedBy?.S ?? null };
+  };
   async function query(prefix: string): Promise<Item[]> {
     const items: Item[] = [];
     let start: Item | undefined;
@@ -306,6 +319,23 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
     },
     async putUpdateResult(result: UpdateResult): Promise<void> {
       await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key('UPDATE#RESULT'), data: { S: JSON.stringify(result) } } }));
+    },
+
+    // The custom groups' grants (the API caches them 60 s).
+    async listGroups(): Promise<Group[]> {
+      return (await query('GROUP#')).map(groupOf).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    },
+    async getGroup(name: string): Promise<Group | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(`GROUP#${name}`), ConsistentRead: true }));
+      return Item ? groupOf(Item) : null;
+    },
+    async putGroup(group: Pick<Group, 'name' | 'description' | 'grants'> & { updatedBy: string }): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key(`GROUP#${group.name}`), data: { S: JSON.stringify({ description: group.description, grants: group.grants }) }, updatedAt: { S: new Date(now()).toISOString() }, updatedBy: { S: group.updatedBy } },
+      }));
+    },
+    async deleteGroup(name: string): Promise<void> {
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(`GROUP#${name}`) }));
     },
 
     // AWS list prices (R9), per region and item: 30 days (a Spot price a day, R9.5); the absence of one a day (a new
