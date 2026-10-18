@@ -11,6 +11,10 @@ mock_provider "aws" {
     values = { account_id = "111122223333" }
   }
   override_data {
+    target = data.aws_partition.current
+    values = { partition = "aws" }
+  }
+  override_data {
     target = data.aws_region.current
     values = { region = "eu-west-1" }
   }
@@ -557,4 +561,73 @@ run "discovery_mode_is_validated" {
     discovery_mode = "other"
   }
   expect_failures = [var.discovery_mode]
+}
+
+run "self_update_is_absent_without_install" {
+  command = plan
+
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.api.statement : s if contains(["SelfUpdateRequests", "SelfUpdateRead", "SelfUpdateBuilds", "SelfUpdateLogs"], s.sid == null ? "" : s.sid)]) == 0
+    error_message = "Without install, the API has no self-update statement."
+  }
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.INSTALL_BUCKET == "" && aws_lambda_function.api.environment[0].variables.INSTALL_PROJECT == "" && aws_lambda_function.api.environment[0].variables.INSTALL_LOG_GROUP == ""
+    error_message = "Without install, the three INSTALL_* variables are empty."
+  }
+}
+
+run "self_update_rights_with_install" {
+  command = plan
+
+  variables {
+    install = {
+      bucket    = "dmt-install-111122223333-eu-west-1"
+      project   = "dmt-test-install"
+      log_group = "/aws/codebuild/dmt-test-install"
+    }
+  }
+
+  assert {
+    condition     = aws_lambda_function.api.environment[0].variables.INSTALL_BUCKET == "dmt-install-111122223333-eu-west-1" && aws_lambda_function.api.environment[0].variables.INSTALL_PROJECT == "dmt-test-install" && aws_lambda_function.api.environment[0].variables.INSTALL_LOG_GROUP == "/aws/codebuild/dmt-test-install"
+    error_message = "The three INSTALL_* variables are set."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRequests"]) == 1 && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRequests"][0].actions == toset(["s3:PutObject"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRequests"][0].resources == toset(["arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/requests/*"])
+    error_message = "Requests: s3:PutObject on <env>/requests/* only."
+  }
+  assert {
+    condition = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRead"][0].actions == toset(["s3:GetObject"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRead"][0].resources == toset([
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/results/*",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/plans/*",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/applied.json",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/cli.json",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/release/SHA256SUMS",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/release/CHANGELOG.md",
+    ])
+    error_message = "Read: s3:GetObject on the six objects."
+  }
+  assert {
+    condition     = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateBuilds"][0].actions == toset(["codebuild:ListBuildsForProject", "codebuild:BatchGetBuilds"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateBuilds"][0].resources == toset(["arn:aws:codebuild:eu-west-1:111122223333:project/dmt-test-install"])
+    error_message = "Builds: the project only."
+  }
+  assert {
+    condition = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateLogs"][0].actions == toset(["logs:GetLogEvents", "logs:FilterLogEvents"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateLogs"][0].resources == toset([
+      "arn:aws:logs:eu-west-1:111122223333:log-group:/aws/codebuild/dmt-test-install",
+      "arn:aws:logs:eu-west-1:111122223333:log-group:/aws/codebuild/dmt-test-install:*",
+    ])
+    error_message = "Logs: the group and its streams only."
+  }
+}
+
+run "install_is_validated" {
+  command = plan
+
+  variables {
+    install = {
+      bucket    = "other-bucket"
+      project   = "dmt-test-install"
+      log_group = "/aws/codebuild/dmt-test-install"
+    }
+  }
+  expect_failures = [var.install]
 }

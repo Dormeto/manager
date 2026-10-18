@@ -134,6 +134,45 @@ data "aws_iam_policy_document" "api" {
       resources = ["*"]
     }
   }
+  # Installed with the CLI: the manager updates itself from its dashboard. The API writes requests into the install
+  # bucket, reads what the install build leaves there, follows its builds and reads their logs; nothing more.
+  dynamic "statement" {
+    for_each = var.install == null ? [] : [1]
+    content {
+      sid       = "SelfUpdateRequests"
+      actions   = ["s3:PutObject"]
+      resources = ["arn:${local.partition}:s3:::${var.install.bucket}/${var.env}/requests/*"]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.install == null ? [] : [1]
+    content {
+      sid     = "SelfUpdateRead"
+      actions = ["s3:GetObject"]
+      resources = [for k in [
+        "results/*", "plans/*", "applied.json", "cli.json", "release/SHA256SUMS", "release/CHANGELOG.md",
+      ] : "arn:${local.partition}:s3:::${var.install.bucket}/${var.env}/${k}"]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.install == null ? [] : [1]
+    content {
+      sid       = "SelfUpdateBuilds"
+      actions   = ["codebuild:ListBuildsForProject", "codebuild:BatchGetBuilds"]
+      resources = ["arn:${local.partition}:codebuild:${local.region}:${local.account_id}:project/${var.install.project}"]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.install == null ? [] : [1]
+    content {
+      sid     = "SelfUpdateLogs"
+      actions = ["logs:GetLogEvents", "logs:FilterLogEvents"]
+      resources = [
+        "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:${var.install.log_group}",
+        "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:${var.install.log_group}:*",
+      ]
+    }
+  }
   statement {
     # Discovery: run on demand (the discovery state machine).
     sid       = "Discovery"
@@ -189,6 +228,10 @@ resource "aws_lambda_function" "api" {
       # The organization roles, shown in the dashboard (packaging design §3).
       DISCOVERY_ROLE = var.discovery_role_name
       COMMAND_ROLE   = var.command_role_name
+      # The install the manager updates itself through (empty: not installed with the CLI).
+      INSTALL_BUCKET    = var.install == null ? "" : var.install.bucket
+      INSTALL_PROJECT   = var.install == null ? "" : var.install.project
+      INSTALL_LOG_GROUP = var.install == null ? "" : var.install.log_group
     }
   }
 

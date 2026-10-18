@@ -143,6 +143,24 @@ variable "ses_identity" {
   default     = null
 }
 
+variable "install" {
+  description = "Set by `dormeto install`; leave unset. The CLI's install bucket, build project and its log group: the API then updates the manager from its dashboard (requests, results, builds, logs)."
+  type = object({
+    bucket    = string
+    project   = string
+    log_group = string
+  })
+  default = null
+  validation {
+    condition = var.install == null ? true : (
+      can(regex("^dmt-install-[0-9]{12}-[a-z0-9-]+$", var.install.bucket)) &&
+      can(regex("^dmt-[a-z0-9-]+-install$", var.install.project)) &&
+      var.install.log_group == "/aws/codebuild/${var.install.project}"
+    )
+    error_message = "install.bucket must be dmt-install-<account>-<region>, install.project dmt-<env>-install and install.log_group /aws/codebuild/<project>."
+  }
+}
+
 variable "email_from" {
   description = "Sender of the invitations with ses_identity, for example \"Dormeto <no-reply@example.com>\" (required with a domain identity)."
   type        = string
@@ -219,10 +237,12 @@ variable "discovery_synthetic_accounts" {
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.region
+  partition  = data.aws_partition.current.partition
   name       = "dmt-${var.env}-manager"
   # The environments trusted by the organization roles created here: this one first.
   organization_role_envs = distinct(concat([var.env], var.organization_role_envs))

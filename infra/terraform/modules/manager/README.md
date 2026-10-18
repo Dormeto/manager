@@ -21,7 +21,7 @@ assumes roles and accepts router events within its own account only (`dormeto in
 inputs: `discovery_mode` (the mode of the discovery perimeter's default configuration, the one an administrator has not
 saved yet: `organization` by default, or `account`; `account` is required without `organization_id`), `domain` (a custom domain with its
 certificate in us-east-1 and the Route 53 zone), `ses_identity` and `email_from` (Cognito sends the invitations through
-your SES identity; without, it sends them itself, about 50 a day), `discovery_role_name` and `command_role_name` (the
+your SES identity; without, it sends them itself, about 50 a day), `install` (`{ bucket, project, log_group }`: set by `dormeto install`; leave unset), `discovery_role_name` and `command_role_name` (the
 roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRole` by default), `create_organization_roles`
 (false for a second environment in an account whose roles another one creates), `deletion_protection` (true: the users and the table are protected; set
 it to false and apply before `terraform destroy`), `log_retention_days`, `mfa` (two-step verification with an
