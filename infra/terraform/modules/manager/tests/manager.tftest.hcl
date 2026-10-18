@@ -632,3 +632,38 @@ run "install_is_validated" {
   }
   expect_failures = [var.install]
 }
+
+run "update_check_daily_through_its_own_function" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.update_check.function_name == "dmt-test-manager-update-check" && aws_lambda_function.update_check.handler == "update-check.handler"
+    error_message = "The daily update check is a function of its own, with its own handler."
+  }
+  assert {
+    condition = alltrue([
+      for k in ["TABLE", "ENV", "VERSION", "ALERTS_TOPIC", "DASHBOARD_URL"] : contains(keys(aws_lambda_function.update_check.environment[0].variables), k)
+    ])
+    error_message = "The check reads the table, the alert topic and the dashboard URL, and knows the version running and the environment."
+  }
+  assert {
+    condition     = aws_cloudwatch_log_group.update_check.name == "/aws/lambda/dmt-test-manager-update-check"
+    error_message = "The check's logs are in its own group."
+  }
+  assert {
+    condition     = aws_scheduler_schedule.update_check.name == "dmt-test-manager-update-check" && aws_scheduler_schedule.update_check.schedule_expression == "cron(0 7 * * ? *)"
+    error_message = "The check runs once a day, at 07:00 UTC."
+  }
+  assert {
+    condition     = aws_scheduler_schedule.update_check.target[0].retry_policy[0].maximum_retry_attempts == 0
+    error_message = "A failed run is not retried: the next day tries again."
+  }
+  assert {
+    condition     = sort(flatten([for s in data.aws_iam_policy_document.update_check.statement : s.actions])) == sort(["dynamodb:GetItem", "dynamodb:PutItem", "sns:Publish", "logs:CreateLogStream", "logs:PutLogEvents"])
+    error_message = "The check reads and writes two table items, publishes to the alert topic and writes its logs, nothing else."
+  }
+  assert {
+    condition     = join(",", flatten([for s in data.aws_iam_policy_document.update_check_scheduler.statement : tolist(s.actions)])) == "lambda:InvokeFunction"
+    error_message = "The scheduler only invokes the function."
+  }
+}

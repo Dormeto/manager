@@ -11,6 +11,7 @@ export function fakeRepos({ without = [], with: extra = {}, routerVersion = '0.2
     'manager/packages/api/dist/index.mjs': 'api',
     'manager/packages/api/dist/watchdog.mjs': 'watchdog',
     'manager/packages/api/dist/savings.mjs': 'savings',
+    'manager/packages/api/dist/update-check.mjs': 'update-check',
     'manager/packages/discovery/dist/index.mjs': 'discovery',
     'manager/packages/operations/dist/index.mjs': 'operations',
     'manager/packages/operations/dist/check.mjs': 'check',

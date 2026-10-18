@@ -272,6 +272,7 @@ locals {
     fleet        = "${local.artifacts_dir}/lambda/fleet.zip"
     watchdog     = "${local.artifacts_dir}/lambda/watchdog.zip"
     savings      = "${local.artifacts_dir}/lambda/savings.zip"
+    update_check = "${local.artifacts_dir}/lambda/update-check.zip"
     dashboard    = "${local.artifacts_dir}/dashboard/index.html"
     router       = "${local.artifacts_dir}/router/router.zip"
     blueprint    = "${local.artifacts_dir}/router/blueprint.json"

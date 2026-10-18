@@ -5,8 +5,8 @@
 // platform from it; the release archive carries it.
 //   manifest.json                       { version, router } (the release's version, else the manager's package.json)
 //   lambda/<api|discovery|operations|fleet>.zip (index.mjs), lambda/access-check.zip (check.mjs), lambda/watchdog.zip
-//                                       (watchdog.mjs), lambda/savings.zip (savings.mjs): ready to upload, so
-//                                       that nothing is written at plan time (a plan applied elsewhere works)
+//                                       (watchdog.mjs), lambda/savings.zip (savings.mjs), lambda/update-check.zip
+//                                       (update-check.mjs): ready to upload, so that nothing is written at plan time (a plan applied elsewhere works)
 //   dashboard/…                         the built dashboard
 //   router/{router.zip, blueprint.json, router-boundary.json}
 // Usage: node scripts/release/artifacts.mjs [--router <router repository>] [--out <directory>]
@@ -55,6 +55,7 @@ export function assembleArtifacts({ manager, router, out, version: releaseVersio
     'lambda/fleet.zip': join(manager, 'packages/fleet/dist/index.mjs'),
     'lambda/watchdog.zip': join(manager, 'packages/api/dist/watchdog.mjs'),
     'lambda/savings.zip': join(manager, 'packages/api/dist/savings.mjs'),
+    'lambda/update-check.zip': join(manager, 'packages/api/dist/update-check.mjs'),
   };
   const sources = {
     'dashboard': join(manager, 'packages/dashboard/dist'),
