@@ -128,12 +128,12 @@ describe('MFA policy with passkeys (amr)', () => {
 
   it('operators: a passkey session (swk or hwk) or a two-factor one (mfa) keeps the rights, without being enrolled', async () => {
     for (const amr of ['[swk]', '[hwk]', '[pwd otp mfa]', 'swk', '[pwd hwk]']) {
-      expect([amr, await rights(setup('operators'), amr)]).toEqual([amr, 'operator']);
+      expect([amr, await rights(setup('operators', new Set(), false, true), amr)]).toEqual([amr, 'operator']);
     }
   });
 
   it('operators: a password-only session is a viewer even with the authenticator app enrolled; the session decides', async () => {
-    const s = setup('operators', new Set(['u-1']));
+    const s = setup('operators', new Set(['u-1']), false, true);
     expect(await rights(s, '[pwd]')).toBe('viewer');
     expect((await s.api(event('GET', '/api/routers', 'dmt-operator', undefined, '[pwd]'))).statusCode).toBe(200);
     const me = json(await s.api(event('GET', '/api/me', 'dmt-operator', undefined, '[pwd]')));
@@ -141,13 +141,14 @@ describe('MFA policy with passkeys (amr)', () => {
   });
 
   it('a token with an empty amr is a password session; one without amr behaves as before', async () => {
-    expect(await rights(setup('operators', new Set(['u-1'])), '[]')).toBe('viewer');
-    expect(await rights(setup('operators', new Set(['u-1'])))).toBe('operator');
-    expect(await rights(setup('operators'))).toBe('viewer');
+    expect(await rights(setup('operators', new Set(['u-1']), false, true), '[]')).toBe('viewer');
+    expect(await rights(setup('operators', new Set(), false, true), '')).toBe('viewer');
+    expect(await rights(setup('operators', new Set(['u-1']), false, true))).toBe('operator');
+    expect(await rights(setup('operators', new Set(), false, true))).toBe('viewer');
   });
 
   it('a request with amr does not read the authenticator, unless it is /api/me', async () => {
-    const s = setup('operators');
+    const s = setup('operators', new Set(), false, true);
     expect((await s.api(event('GET', '/api/routers', 'dmt-operator', undefined, '[swk]'))).statusCode).toBe(200);
     expect(s.reads).toEqual([]);
     await rights(s, '[swk]');
@@ -155,12 +156,12 @@ describe('MFA policy with passkeys (amr)', () => {
   });
 
   it('a passkey session passes required mode; a password one is refused', async () => {
-    expect((await setup('required').api(event('GET', '/api/routers', 'dmt-viewer', undefined, '[swk]'))).statusCode).toBe(200);
-    expect((await setup('required', new Set(['u-1'])).api(event('GET', '/api/routers', 'dmt-viewer', undefined, '[pwd]'))).statusCode).toBe(403);
+    expect((await setup('required', new Set(), false, true).api(event('GET', '/api/routers', 'dmt-viewer', undefined, '[swk]'))).statusCode).toBe(200);
+    expect((await setup('required', new Set(['u-1']), false, true).api(event('GET', '/api/routers', 'dmt-viewer', undefined, '[pwd]'))).statusCode).toBe(403);
   });
 
   it('optional: the role as given for every session', async () => {
-    expect(await rights(setup('optional'), '[pwd]', 'dmt-admin')).toBe('admin');
+    expect(await rights(setup('optional', new Set(), false, true), '[pwd]', 'dmt-admin')).toBe('admin');
   });
 
   it('me tells how the session signed in, and whether passkeys are offered', async () => {
@@ -168,8 +169,16 @@ describe('MFA policy with passkeys (amr)', () => {
     expect(await method('[swk]')).toMatchObject({ method: 'passkey', passkeys: true });
     expect(await method('[hwk]')).toMatchObject({ method: 'passkey' });
     expect(await method('[pwd otp mfa]')).toMatchObject({ method: 'app' });
+    expect(await method('[pwd otp]')).toMatchObject({ method: 'password' });
+    expect(await method('')).toMatchObject({ method: null });
     expect(await method('[pwd]')).toMatchObject({ method: 'password' });
     expect(await method()).toMatchObject({ method: null, passkeys: true });
   });
-});
 
+  it('without passkeys (PASSKEYS false) amr is ignored: the enrollment decides, as before', async () => {
+    const off = (enrolled: string[]) => setup('operators', new Set(enrolled));
+    expect(await rights(off(['u-1']), '[pwd]')).toBe('operator');
+    expect(await rights(off([]), '[swk]')).toBe('viewer');
+    expect(json(await off(['u-1']).api(event('GET', '/api/me', 'dmt-operator', undefined, '[pwd]'))).mfa).toMatchObject({ method: null, passkeys: false });
+  });
+});

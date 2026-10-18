@@ -20,7 +20,11 @@ const busy = ref(false);
 const error = ref('');
 const issuer = computed(() => `Dormeto ${getConfig().env}`);
 const grouped = computed(() => secret.value.replace(/(.{4})/g, '$1 ').trim());
+const byPasskey = computed(() => session.mfa?.method === 'passkey');
 const status = computed(() => {
+  if (byPasskey.value) return 'Signed in with a passkey: two-step verification is built in.';
+  // The app is on, but this session (a password one) has fewer rights: the sign-in asks for the code.
+  if (session.mfa?.enabled && session.mfa.required && session.effectiveRole !== session.role) return 'Two-step verification is on, but this session signed in without it: sign out and sign in again to use your rights.';
   if (session.mfa?.enabled) return 'Two-step verification is on: sign-in asks for a code from your authenticator app.';
   if (session.mfa?.required && session.effectiveRole === null) return 'Two-step verification is off: nothing is shown until you set it up.';
   if (session.mfa?.required) return `Two-step verification is off: your ${session.role} rights wait for it (viewer until then).`;
@@ -138,8 +142,8 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
     </v-card>
     <v-card title="Two-step verification" class="dm-mfa">
       <v-card-text>
-        <div class="dm-mfa__status" :class="session.mfa?.enabled ? 'is-on' : 'is-off'">
-          <DmLogo v-if="session.mfa?.enabled" state="wake" :size="48" :zzz="false" class="dm-mfa__logo" />
+        <div class="dm-mfa__status" :class="session.mfa?.enabled || byPasskey ? 'is-on' : 'is-off'">
+          <DmLogo v-if="session.mfa?.enabled || byPasskey" state="wake" :size="48" :zzz="false" class="dm-mfa__logo" />
           <v-avatar v-else color="warning" variant="tonal" rounded="lg" size="48"><v-icon :icon="mdiShieldOffOutline" size="22" /></v-avatar>
           <span>{{ status }}</span>
         </div>
@@ -172,7 +176,7 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
         <v-alert v-if="error" type="error" variant="tonal" density="compact" :text="error" class="mt-4" />
       </v-card-text>
       <v-card-actions class="dm-mfa__actions">
-        <v-btn v-if="!session.mfa?.enabled && !secret" color="primary" variant="flat" :loading="busy" @click="start">Set up an authenticator app</v-btn>
+        <v-btn v-if="!session.mfa?.enabled && !byPasskey && !secret" color="primary" variant="flat" :loading="busy" @click="start">Set up an authenticator app</v-btn>
         <v-btn v-if="secret" color="primary" variant="flat" :loading="busy" :disabled="!/^\d{6}$/.test(code.trim())" @click="verify">Verify</v-btn>
         <v-btn v-if="secret" variant="text" @click="secret = ''">Cancel</v-btn>
         <v-btn v-if="session.mfa?.enabled && session.mfa.mode === 'optional'" variant="text" :loading="busy" @click="turnOff">Turn off</v-btn>
@@ -188,8 +192,8 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
         </v-list>
         <p v-else class="text-medium-emphasis">No passkey yet.</p>
         <v-alert v-if="session.mfa.enabled" type="warning" variant="tonal" density="compact" class="mt-4">
-          <div>With an authenticator app on, you cannot sign in with a passkey. Turn the app off to use your passkeys.</div>
-          <v-btn v-if="passkeys.length" variant="text" class="mt-2" :loading="busy" @click="turnOff">Turn off the app</v-btn>
+          <div v-if="session.mfa.mode === 'optional'">With an authenticator app on, you cannot sign in with a passkey. To switch to passkeys, turn the app off above, then add a passkey right away.</div>
+          <div v-else>With an authenticator app on, you cannot sign in with a passkey. To switch to passkeys, ask an administrator to reset your two-step verification, then add a passkey right away.</div>
         </v-alert>
         <p v-if="session.mfa.method" class="dm-passkeys__session text-medium-emphasis mt-4">This session: signed in {{ SIGNED_IN[session.mfa.method] }}.</p>
       </v-card-text>

@@ -402,8 +402,26 @@ run "passkeys_on_a_domain" {
 
 run "passkeys_off_in_required_mode" {
   command = plan
+  override_resource {
+    target          = aws_cognito_user_pool.main
+    override_during = plan
+    values = {
+      id       = "eu-west-1_test"
+      endpoint = "cognito-idp.eu-west-1.amazonaws.com/eu-west-1_test"
+    }
+  }
+  override_resource {
+    target          = aws_cognito_user_pool_client.dashboard
+    override_during = plan
+    values          = { id = "clientid" }
+  }
   variables {
     mfa = "required"
+    domain = {
+      dashboard       = "app.example.com"
+      auth            = "auth.app.example.com"
+      certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/test"
+    }
   }
 
   assert {
@@ -418,12 +436,38 @@ run "passkeys_off_in_required_mode" {
     condition     = aws_lambda_function.api.environment[0].variables.PASSKEYS == "false"
     error_message = "required: no passkeys offered."
   }
+  assert {
+    condition     = !anytrue([for u in aws_cognito_user_pool_client.dashboard.callback_urls : endswith(u, "/account")])
+    error_message = "required: no /account callback."
+  }
+  assert {
+    condition     = jsondecode(aws_s3_object.config.content).passkeys == false
+    error_message = "required: the dashboard is told no passkeys."
+  }
 }
 
 run "passkeys_can_be_turned_off" {
   command = plan
+  override_resource {
+    target          = aws_cognito_user_pool.main
+    override_during = plan
+    values = {
+      id       = "eu-west-1_test"
+      endpoint = "cognito-idp.eu-west-1.amazonaws.com/eu-west-1_test"
+    }
+  }
+  override_resource {
+    target          = aws_cognito_user_pool_client.dashboard
+    override_during = plan
+    values          = { id = "clientid" }
+  }
   variables {
     passkeys = false
+    domain = {
+      dashboard       = "app.example.com"
+      auth            = "auth.app.example.com"
+      certificate_arn = "arn:aws:acm:us-east-1:111122223333:certificate/test"
+    }
   }
 
   assert {
@@ -433,6 +477,14 @@ run "passkeys_can_be_turned_off" {
   assert {
     condition     = aws_lambda_function.api.environment[0].variables.PASSKEYS == "false"
     error_message = "passkeys = false: the API is told."
+  }
+  assert {
+    condition     = !anytrue([for u in aws_cognito_user_pool_client.dashboard.callback_urls : endswith(u, "/account")])
+    error_message = "passkeys = false: no /account callback."
+  }
+  assert {
+    condition     = jsondecode(aws_s3_object.config.content).passkeys == false
+    error_message = "passkeys = false: the dashboard is told no passkeys."
   }
 }
 

@@ -138,8 +138,9 @@ export function identityOf(event: ApiEvent): Identity | null {
   return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role, amr };
 }
 
+// 'app' only for two factors (otp and mfa): a session that stopped at the password is 'password'.
 const signInMethod = (identity: Identity): 'passkey' | 'app' | 'password' | null =>
-  !identity.amr ? null : identity.amr.some((m) => m === 'swk' || m === 'hwk') ? 'passkey' : identity.amr.some((m) => m === 'otp' || m === 'mfa') ? 'app' : 'password';
+  !identity.amr ? null : identity.amr.some((m) => m === 'swk' || m === 'hwk') ? 'passkey' : identity.amr.includes('otp') && identity.amr.includes('mfa') ? 'app' : 'password';
 
 const reply = (statusCode: number, body?: unknown): ApiResponse => ({
   statusCode,
@@ -381,19 +382,21 @@ export function createApi({
   // The role a user's groups give, the role they act with, and their MFA, per request.
   const claimed = new WeakMap<Identity, { role: Role; enabled: boolean | null; effective: Role | null }>();
   const mfaRequired = (role: Role) => !!mfa && (mfa.mode === 'required' || (mfa.mode === 'operators' && role !== 'viewer'));
+  // amr counts only where the pool offers passkeys: otherwise the enrollment decides, as before.
+  const session = (identity: Identity): boolean | null => (mfa?.passkeys ? mfaSession(identity) : null);
   async function applyMfa(identity: Identity, isMe: boolean, fresh: boolean) {
     const role = identity.role;
     const required = mfaRequired(role);
     // Cognito unable to say (throttled, the user gone): the MFA is unknown, so the rights it gives are not given.
     // A session that says how it signed in (amr) decides by itself; the authenticator is read for /api/me only.
-    const enabled = mfa && ((required && mfaSession(identity) === null) || isMe)
+    const enabled = mfa && ((required && session(identity) === null) || isMe)
       ? await mfaOf(identity, fresh).catch((err: Error) => {
         console.error(JSON.stringify({ level: 'error', event: 'MfaUnknown', user: identity.username, error: err.message }));
         return null;
       })
       : null;
     let effective: Role | null = role;
-    if (required && !(mfaSession(identity) ?? enabled)) effective = mfa!.mode === 'required' ? null : 'viewer';
+    if (required && !(session(identity) ?? enabled)) effective = mfa!.mode === 'required' ? null : 'viewer';
     claimed.set(identity, { role, enabled: enabled ?? null, effective });
     if (effective === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
     identity.role = effective ?? 'viewer';
@@ -404,7 +407,7 @@ export function createApi({
       email: identity.email, groups: identity.groups, role: c.role, effectiveRole: c.effective,
       // enabled: null when Cognito could not say.
       // method: how this session signed in; null for a token without amr.
-      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: mfaRequired(c.role), method: signInMethod(identity), passkeys: mfa.passkeys ?? false } } : {}),
+      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: mfaRequired(c.role), method: mfa.passkeys ? signInMethod(identity) : null, passkeys: mfa.passkeys ?? false } } : {}),
     };
   }
 

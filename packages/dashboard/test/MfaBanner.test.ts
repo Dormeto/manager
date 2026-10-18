@@ -28,6 +28,11 @@ describe('MfaBanner', () => {
     expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true } }).text()).not.toContain('passkey');
   });
 
+  it('follows the session, not the enrollment: a passkey session has its rights and no banner; a password session of an enrolled user is told', () => {
+    expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'admin', mfa: { mode: 'operators', enabled: false, required: true, method: 'passkey', passkeys: true } }).text()).toBe('');
+    expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: true, required: true, method: 'password', passkeys: true } }).text()).toContain('Set up two-step verification');
+  });
+
   it('says nothing once MFA is on, or where the policy does not require it', () => {
     expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'admin', mfa: { mode: 'operators', enabled: true, required: true } }).text()).toBe('');
     expect(mountBanner({ email: 'a@example.com', role: 'viewer', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: false } }).text()).toBe('');

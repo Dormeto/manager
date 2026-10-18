@@ -142,13 +142,11 @@ describe('Account, passkeys', () => {
     expect(wrapper.text()).toContain('YubiKey 5');
   });
 
-  it('warns that the authenticator app prevents signing in with a passkey, and offers to turn it off', async () => {
+  it('warns that the authenticator app prevents signing in with a passkey; only a reset by an administrator (operators mode) switches to passkeys', async () => {
     credentials.value = [laptop];
     const wrapper = await mountView('operators', true, 'admin', { passkeys: true });
-    expect(wrapper.text()).toContain('With an authenticator app on, you cannot sign in with a passkey. Turn the app off to use your passkeys');
-    await button(wrapper, 'Turn off the app').trigger('click');
-    await flushPromises();
-    expect(calls).toContainEqual(['SetUserMFAPreference', { AccessToken: 'access-token', SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } }]);
+    expect(wrapper.text()).toContain('With an authenticator app on, you cannot sign in with a passkey. To switch to passkeys, ask an administrator to reset your two-step verification, then add a passkey right away.');
+    expect(button(wrapper, 'Turn off')).toBeUndefined();
     const without = await mountView('operators', false, 'admin', { passkeys: true });
     expect(without.text()).not.toContain('you cannot sign in with a passkey');
   });
@@ -159,5 +157,27 @@ describe('Account, passkeys', () => {
     }
     expect((await mountView('operators', false, 'admin', { passkeys: true, method: null })).text()).not.toContain('This session');
   });
-});
 
+  it('offers to turn the app off in the optional mode only', async () => {
+    credentials.value = [laptop];
+    expect(button(await mountView('optional', true, 'admin', { passkeys: true }), 'Turn off')).toBeDefined();
+    expect(button(await mountView('operators', true, 'admin', { passkeys: true }), 'Turn off')).toBeUndefined();
+    expect(button(await mountView('required', true, 'admin', { passkeys: true }), 'Turn off')).toBeUndefined();
+  });
+
+  it('a passkey session needs no prompt to set up two-step verification, nor the app offer', async () => {
+    const wrapper = await mountView('operators', false, 'admin', { passkeys: true, method: 'passkey' });
+    useSession().applyMe({ ...me.value, effectiveRole: 'admin' } as never);
+    await flushPromises();
+    expect(wrapper.text()).toContain('Signed in with a passkey: two-step verification is built in.');
+    expect(wrapper.text()).not.toContain('your admin rights wait for it');
+    expect(button(wrapper, 'Set up an authenticator app')).toBeUndefined();
+  });
+
+  it('an enrolled user whose session is password only is told to sign in again', async () => {
+    const wrapper = await mountView('operators', true, 'admin', { passkeys: true, method: 'password' });
+    useSession().applyMe({ ...me.value, effectiveRole: 'viewer' } as never);
+    await flushPromises();
+    expect(wrapper.text()).toContain('sign out and sign in again to use your rights');
+  });
+});

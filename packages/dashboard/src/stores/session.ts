@@ -21,8 +21,9 @@ export const useSession = defineStore('session', {
     acting: (s): Role => (s.loaded ? s.effectiveRole ?? 'viewer' : s.role),
     canOperate(): boolean { return this.acting === 'operator' || this.acting === 'admin'; },
     isAdmin(): boolean { return this.acting === 'admin'; },
-    // Rights the user has but cannot use until they set up MFA.
-    waitingForMfa: (s) => !!s.mfa?.required && !s.mfa.enabled,
+    // Rights the user has but this session cannot use: the session decides (a passkey session has them, a password one of an
+    // enrolled user does not).
+    waitingForMfa: (s) => s.loaded && !!s.mfa?.required && s.effectiveRole !== s.role,
   },
   actions: {
     set(user: User | null) {

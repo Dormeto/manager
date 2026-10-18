@@ -18,7 +18,7 @@ CLI script, of the same release).
   `null`) and `passkeys`. The Account page has a Passkeys card (list, add through managed login, remove) and the sign-in
   method of the session; the MFA banner offers a passkey. With an authenticator app on, Cognito does not allow passkey
   sign-in: turn the app off once a passkey is registered. An administrator cannot remove a passkey (Users says so).
-  Access: nothing to apply again.
+  The dashboard asks for `acr_values` and the API reads `amr` only with passkeys on. The authenticator app's Turn off stays in the `optional` mode; in `operators` an administrator's reset moves a user to passkeys. Access: nothing to apply again.
 - A daily check for new manager versions, off until an administrator turns it on in the Update page's "Daily check" card.
   A function (`<name>-update-check`, with its role and an EventBridge schedule at 07:00 UTC) reads the setting, then the
   release index, and records the newest version above the running one. Administrators see a notice on the Overview

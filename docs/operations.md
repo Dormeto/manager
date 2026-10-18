@@ -38,9 +38,13 @@ time per target group, router or workload, one per load balancer (lock), three p
   Account page (managed login's `/passkeys/add`, listing and removal with the user's access token) and sign in with them.
   A passkey with user verification is multi-factor by itself: the dashboard asks for `acr_values=urn:cognito:loa:1`, the ID
   token's `amr` (`swk`, `hwk` or `mfa`) decides the session's rights, and a token without `amr` is judged by the
-  authenticator check as before. With an authenticator app on, Cognito does not allow passkey sign-in (turn the app off from
-  the Account page). The relying party is the auth domain with a custom domain, else Cognito's default. An administrator
-  cannot list or remove another user's passkeys: a lost device is answered by disabling the user.
+  authenticator check as before. With an authenticator app on, Cognito does not allow passkey sign-in. The relying party is the auth domain with a custom domain, else Cognito's default. An administrator
+  cannot list or remove another user's passkeys: a lost device is answered by disabling the user. Only with passkeys on does
+  the dashboard ask for `acr_values` and the API read `amr`; otherwise the enrollment decides, as before. Turning the second
+  factor off (the Account page's Turn off, `optional` mode only, or an administrator's reset) leaves the account as strong as
+  its password until a passkey or the app is set up again, since managed login's passkey registration needs only a sign-in:
+  a user who moves from the app to passkeys asks for the reset and adds a passkey right away, and a user who never set up
+  a second factor should do it at the first sign-in (anyone with the password can enrol an app today).
 - **Lost authenticator:** another administrator resets it from Users (keep at least two administrators with one). The
   last administrator, with AWS credentials of the manager's account:
   `aws cognito-idp admin-set-user-mfa-preference --user-pool-id <user_pool_id> --username <email>

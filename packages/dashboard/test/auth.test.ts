@@ -13,4 +13,10 @@ describe('sign-in', () => {
     initAuth({ env: 'test', authority: 'https://cognito-idp.eu-west-1.amazonaws.com/p', clientId: 'c', authDomain: 'auth.example.com', passkeys: true });
     expect(settings[0]).toMatchObject({ client_id: 'c', extraQueryParams: { acr_values: 'urn:cognito:loa:1' } });
   });
+
+  it('asks for nothing more where the pool offers no passkeys', () => {
+    initAuth({ env: 'test', authority: 'https://cognito-idp.eu-west-1.amazonaws.com/p', clientId: 'c2', authDomain: 'auth.example.com', passkeys: false });
+    expect(settings[1]).toMatchObject({ client_id: 'c2' });
+    expect(settings[1]).not.toHaveProperty('extraQueryParams');
+  });
 });
