@@ -25,6 +25,7 @@ const status = computed(() => {
   if (byPasskey.value) return 'Signed in with a passkey: two-step verification is built in.';
   // The app is on, but this session (a password one) has fewer rights: the sign-in asks for the code.
   if (session.mfa?.enabled && session.mfa.required && session.effectiveRole !== session.role) return 'Two-step verification is on, but this session signed in without it: sign out and sign in again to use your rights.';
+  if (session.mfa && session.mfa.enabled === null) return 'Two-step verification status unavailable.';
   if (session.mfa?.enabled) return 'Two-step verification is on: sign-in asks for a code from your authenticator app.';
   if (session.mfa?.required && session.effectiveRole === null) return 'Two-step verification is off: nothing is shown until you set it up.';
   if (session.mfa?.required) return `Two-step verification is off: your ${session.role} rights wait for it (viewer until then).`;

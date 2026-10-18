@@ -10,8 +10,9 @@ const session = useSession();
 <template>
   <v-alert v-if="session.waitingForMfa" type="warning" variant="tonal" class="mb-4 dm-notice">
     <template #prepend><span class="dm-notice__icon"><v-icon :icon="mdiShieldKeyOutline" size="20" /></span></template>
-    Set up two-step verification to use your {{ session.role }} rights<template v-if="session.effectiveRole === null"> (nothing is shown until then)</template>:
-    <template v-if="session.mfa?.passkeys">set up an authenticator app or add a passkey on </template><router-link to="/account">your Account page</router-link>.
+    <template v-if="session.mfa?.enabled">Sign out and sign in again with your authenticator app<template v-if="session.mfa.passkeys"> or a passkey</template> to use your rights.</template>
+    <template v-else>Set up two-step verification to use your {{ session.role }} rights<template v-if="session.effectiveRole === null"> (nothing is shown until then)</template>:
+    <template v-if="session.mfa?.passkeys">set up an authenticator app or add a passkey on </template><router-link to="/account">your Account page</router-link>.</template>
   </v-alert>
 </template>
 

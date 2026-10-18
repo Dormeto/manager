@@ -30,7 +30,16 @@ describe('MfaBanner', () => {
 
   it('follows the session, not the enrollment: a passkey session has its rights and no banner; a password session of an enrolled user is told', () => {
     expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'admin', mfa: { mode: 'operators', enabled: false, required: true, method: 'passkey', passkeys: true } }).text()).toBe('');
-    expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: true, required: true, method: 'password', passkeys: true } }).text()).toContain('Set up two-step verification');
+    expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: true, required: true, method: 'password', passkeys: true } }).text()).toContain('Sign out and sign in again');
+  });
+
+  it('tells an enrolled user on a session with fewer rights to sign in again; others to set it up', () => {
+    const enrolled = mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: true, required: true, method: 'password', passkeys: true } });
+    expect(enrolled.text()).toContain('Sign out and sign in again with your authenticator app or a passkey to use your rights');
+    expect(enrolled.text()).not.toContain('set up an authenticator app');
+    const notEnrolled = mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true, passkeys: true } });
+    expect(notEnrolled.text()).toContain('set up an authenticator app or add a passkey');
+    expect(notEnrolled.text()).not.toContain('sign in again');
   });
 
   it('says nothing once MFA is on, or where the policy does not require it', () => {

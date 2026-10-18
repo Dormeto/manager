@@ -66,6 +66,14 @@ describe('Account', () => {
     expect(wrapper.text()).toContain('Two-step verification is on');
   });
 
+  it('says the status is unavailable when Cognito could not answer', async () => {
+    const wrapper = await mountView('operators', false);
+    useSession().applyMe({ ...me.value, mfa: { mode: 'operators', enabled: null, required: true } } as never);
+    await flushPromises();
+    expect(wrapper.text()).toContain('Two-step verification status unavailable');
+    expect(wrapper.text()).not.toContain('Two-step verification is off');
+  });
+
   it('says a wrong code, and lets the user try again', async () => {
     const wrapper = await mountView('operators', false);
     await button(wrapper, 'Set up an authenticator app').trigger('click');
