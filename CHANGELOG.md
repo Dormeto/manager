@@ -18,6 +18,14 @@ CLI script, of the same release).
   `energy`: the kWh and kg CO2e its naps did not use over the last 30 days, an estimate from what each last nap stopped
   over the hours asleep within the savings baseline, with Cloud Carbon Footprint's coefficients for AWS and each
   region's grid intensity (docs/savings.md). With prices only; the Overview's energy card reads it.
+- The dashboard's Update page, for administrators of a manager installed with `dormeto install` 0.2.0 or later: it
+  shows the version running and the newer published versions with their release notes; an administrator prepares an
+  update (the plan of what changes), confirms it, and follows its progress until the new version answers.
+- The manager module's new optional `install` input (`bucket`, `project`, `log_group`), set by `dormeto install`: leave
+  it unset otherwise. When set, the API gains rights on the install bucket (requests, results, plans and the release's
+  files), on the install CodeBuild project and on its logs.
+- Each publication writes `manager/versions.json` beside `latest.json`: the published versions, newest first, with their
+  router, the oldest CLI whose install they can update, and their date. The Update page reads it.
 
 ## 0.11.0 — 2026-10-17
 
