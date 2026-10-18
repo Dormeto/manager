@@ -9,10 +9,11 @@ function setup(mode: MfaMode, enrolled: Set<string> = new Set(), failing = false
   const audit: AuditEntry[] = [];
   const resets: string[] = [];
   const users = {
-    async list() { return [{ email: 'a@example.com', role: 'admin', status: 'CONFIRMED', enabled: true, createdAt: null, mfa: true }]; },
+    async list() { return [{ email: 'a@example.com', role: 'admin', groups: [] as string[], status: 'CONFIRMED', enabled: true, createdAt: null, mfa: true }]; },
     async invite() { return { invitation: 'sent' as const }; },
     async resend() { return { invitation: 'sent' as const }; },
     async setRole() {},
+    async setGroups() {}, async createGroup() {}, async updateGroup() {}, async deleteGroup() {}, async groupNames() { return [] as string[]; },
     async setEnabled() {},
     async resetMfa(email: string) { resets.push(email); return { tokenDeleted: true }; },
   } satisfies UsersService;

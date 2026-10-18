@@ -98,11 +98,13 @@ data "aws_iam_policy_document" "api" {
   statement {
     sid = "Users"
     actions = [
-      "cognito-idp:ListUsers", "cognito-idp:ListUsersInGroup", "cognito-idp:AdminCreateUser",
+      "cognito-idp:ListUsers", "cognito-idp:AdminCreateUser",
       "cognito-idp:AdminAddUserToGroup", "cognito-idp:AdminRemoveUserFromGroup", "cognito-idp:AdminDisableUser",
       "cognito-idp:AdminEnableUser", "cognito-idp:AdminGetUser",
       # The MFA policy (R6c): a user's reset by an administrator.
       "cognito-idp:AdminSetUserMFAPreference", "cognito-idp:AdminDeleteSoftwareToken",
+      # The custom groups (R11): their lifecycle, and the groups of a user.
+      "cognito-idp:CreateGroup", "cognito-idp:UpdateGroup", "cognito-idp:DeleteGroup", "cognito-idp:ListGroups", "cognito-idp:AdminListGroupsForUser",
     ]
     resources = [aws_cognito_user_pool.main.arn]
   }

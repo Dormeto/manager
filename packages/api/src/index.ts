@@ -1,8 +1,8 @@
 // Lambda entry point: AWS SDK v3 clients provided by the nodejs24.x runtime (not bundled).
 import * as cognitoSdk from '@aws-sdk/client-cognito-identity-provider';
 import {
-  AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminDisableUserCommand, AdminEnableUserCommand, AdminGetUserCommand, AdminRemoveUserFromGroupCommand,
-  AdminSetUserMFAPreferenceCommand, CognitoIdentityProviderClient, ListUsersCommand, ListUsersInGroupCommand,
+  AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminDisableUserCommand, AdminEnableUserCommand, AdminGetUserCommand, AdminListGroupsForUserCommand, AdminRemoveUserFromGroupCommand,
+  AdminSetUserMFAPreferenceCommand, CognitoIdentityProviderClient, CreateGroupCommand, DeleteGroupCommand, ListGroupsCommand, ListUsersCommand, UpdateGroupCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
@@ -93,7 +93,11 @@ const preferences: PreferencesStore = {
 const idp = new CognitoIdentityProviderClient({});
 const cognito: CognitoPort = {
   listUsers: (input) => idp.send(new ListUsersCommand(input)),
-  listUsersInGroup: (input) => idp.send(new ListUsersInGroupCommand(input)),
+  adminListGroupsForUser: (input) => idp.send(new AdminListGroupsForUserCommand(input)),
+  listGroups: (input) => idp.send(new ListGroupsCommand(input)),
+  createGroup: (input) => idp.send(new CreateGroupCommand(input)),
+  updateGroup: (input) => idp.send(new UpdateGroupCommand(input)),
+  deleteGroup: (input) => idp.send(new DeleteGroupCommand(input)),
   adminCreateUser: (input) => idp.send(new AdminCreateUserCommand(input as never)),
   adminAddUserToGroup: (input) => idp.send(new AdminAddUserToGroupCommand(input)),
   adminRemoveUserFromGroup: (input) => idp.send(new AdminRemoveUserFromGroupCommand(input)),

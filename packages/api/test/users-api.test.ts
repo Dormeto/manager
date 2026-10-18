@@ -5,10 +5,11 @@ function setup() {
   const calls: unknown[] = [];
   const audit: AuditEntry[] = [];
   const users: UsersService = {
-    async list() { calls.push(['list']); return [{ email: 'a@example.com', role: 'viewer', status: 'CONFIRMED', enabled: true, createdAt: null }]; },
-    async invite(email, role) { calls.push(['invite', email, role]); return { invitation: email.endsWith('@new.example') ? 'pending-verification' : 'sent' }; },
+    async list() { calls.push(['list']); return [{ email: 'a@example.com', role: 'viewer', groups: [], status: 'CONFIRMED', enabled: true, createdAt: null }]; },
+    async invite(email, role, groups) { calls.push(['invite', email, role, groups]); return { invitation: email.endsWith('@new.example') ? 'pending-verification' : 'sent' }; },
     async resend(email) { calls.push(['resend', email]); if (email === 'unverified@example.com') throw new HttpError(409, 'conflict', 'address not verified yet'); return { invitation: 'sent' }; },
     async setRole(email, role) { calls.push(['role', email, role]); },
+    async setGroups() {}, async createGroup() {}, async updateGroup() {}, async deleteGroup() {}, async groupNames() { return []; },
     async setEnabled(email, enabled) { calls.push([enabled ? 'enable' : 'disable', email]); },
     async resetMfa(email) { calls.push(['mfa-reset', email]); return { tokenDeleted: true }; },
   };
@@ -45,7 +46,7 @@ describe('users', () => {
     const res = await api(event('POST', '/api/users', 'dmt-admin', { email: 'Bob@New.Example', role: 'operator' }));
     expect(res.statusCode).toBe(201);
     expect(json(res)).toEqual({ email: 'bob@new.example', role: 'operator', invitation: 'pending-verification' });
-    expect(calls).toEqual([['invite', 'bob@new.example', 'operator']]);
+    expect(calls).toEqual([['invite', 'bob@new.example', 'operator', []]]);
     expect(audit[0]).toMatchObject({ action: 'invite', target: 'bob@new.example', result: 'operator, pending-verification' });
   });
 

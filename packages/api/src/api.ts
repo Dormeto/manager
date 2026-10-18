@@ -7,7 +7,7 @@ import {
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
-import { builtInGrants, can, effective, tagsProblem, type Grant, type Permission } from './access.js';
+import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
@@ -75,6 +75,7 @@ const DEFAULT_PREFERENCES: Preferences = { refreshSeconds: 10 };
 export interface UserView {
   email: string;
   role: Role;
+  groups: string[]; // the custom groups
   status: string;
   enabled: boolean;
   createdAt: string | null;
@@ -84,9 +85,15 @@ export interface UserView {
 // User management (Cognito, SES identities in the sandbox), behind the routes, roles and audit of this API.
 export interface UsersService {
   list(): Promise<UserView[]>;
-  invite(email: string, role: Role): Promise<{ invitation: 'sent' | 'pending-verification' }>;
+  invite(email: string, role: Role, groups?: string[]): Promise<{ invitation: 'sent' | 'pending-verification' }>;
   resend(email: string): Promise<{ invitation: 'sent' }>;
   setRole(email: string, role: Role): Promise<void>;
+  // Custom groups (R11): their membership, and their Cognito groups' lifecycle (the grants are the fleet store's).
+  setGroups(email: string, groups: string[]): Promise<void>;
+  createGroup(name: string, description: string): Promise<void>;
+  updateGroup(name: string, description: string): Promise<void>;
+  deleteGroup(name: string): Promise<void>;
+  groupNames(): Promise<string[]>;
   setEnabled(email: string, enabled: boolean): Promise<void>;
   // The user's authenticator app turned off and, when the API can, deleted: they set one up again at their next sign-in
   // (R6c). tokenDeleted: false when there was none, or the delete is not available (then, under required, the pool still
@@ -176,6 +183,8 @@ export interface ApiOptions {
     listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null>;
     // The custom groups' grants (R11).
     listGroups?(): Promise<Group[]>;
+    putGroup?(group: Pick<Group, 'name' | 'description' | 'grants'> & { updatedBy: string }): Promise<void>;
+    deleteGroup?(name: string): Promise<void>;
     // The state history (R8).
     listHistory?(account: string, region: string, id: string, from: string, to: string): Promise<{ entries: HistoryEntry[]; truncated: boolean }>;
     historyBefore?(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null>;
@@ -288,7 +297,9 @@ const ARNS: Record<Exclude<ExclusionKind, 'account'>, RegExp> = {
 // An exclusion pauses its workloads with the reason "excluded: <reason>", which the router caps at REASON_MAX.
 const EXCLUDED = 'excluded: ';
 const KIND_TEXT: Record<ExclusionKind, string> = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' };
-const ROLES = new Set<Role>(['viewer', 'operator', 'admin']);
+const GROUPS_MAX = 100;
+const GROUP_DESCRIPTION_MAX = 200;
+const ROLES = new Set<Role>(['member', 'viewer', 'operator', 'admin']);
 
 function bodyOf(event: ApiEvent): Record<string, unknown> {
   try {
@@ -317,7 +328,7 @@ function aheadIn(body: Record<string, unknown>, name: string, now: number): stri
 
 function roleIn(body: Record<string, unknown>): Role {
   const role = body.role as Role;
-  if (!ROLES.has(role)) throw new HttpError(400, 'bad_request', 'role must be viewer, operator or admin');
+  if (!ROLES.has(role)) throw new HttpError(400, 'bad_request', 'role must be member, viewer, operator or admin');
   return role;
 }
 
@@ -1379,6 +1390,11 @@ export function createApi({
       }
     }
 
+    if (resource === 'groups' && users && fleet?.listGroups && fleet.putGroup && fleet.deleteGroup) {
+      const response = await groupsRoute(method, a, !b, identity, event, users, fleet as GroupsFleet);
+      if (response) return response;
+    }
+
     if (resource === 'users' && users) {
       need(identity, 'admin');
       if (method === 'GET' && !a) return reply(200, { users: await users.list() });
@@ -1387,9 +1403,10 @@ export function createApi({
         const email = String(body.email ?? '').trim().toLowerCase();
         if (!EMAIL.test(email)) throw new HttpError(400, 'bad_request', 'valid email required');
         const role = roleIn(body);
+        const groups = body.groups === undefined ? [] : await knownGroups(body.groups);
         return audited(identity, 'invite', email, async () => {
-          const { invitation } = await users.invite(email, role);
-          return { result: `${role}, ${invitation}`, response: reply(201, { email, role, invitation }) };
+          const { invitation } = await users.invite(email, role, groups);
+          return { result: `${role}, ${invitation}${groups.length ? `, groups ${groups.join(', ')}` : ''}`, response: reply(201, { email, role, ...(groups.length ? { groups } : {}), invitation }) };
         });
       }
       const email = decodeURIComponent(a ?? '').toLowerCase();
@@ -1407,6 +1424,13 @@ export function createApi({
       }
       if (method === 'POST' && b === 'resend' && !action) {
         return audited(identity, 'resend', email, async () => ({ result: 'sent', response: reply(200, await users.resend(email)) }));
+      }
+      if (method === 'PUT' && b === 'groups' && !action) {
+        const groups = await knownGroups(bodyOf(event).groups);
+        return audited(identity, 'user-groups', email, async () => {
+          await users.setGroups(email, groups);
+          return { result: groups.length ? groups.join(', ') : 'no groups', response: reply(200, { email, groups }) };
+        });
       }
       if (method === 'PUT' && b === 'role' && !action) {
         notSelf();
@@ -1426,6 +1450,85 @@ export function createApi({
     }
 
     throw new HttpError(404, 'not_found', `no route for ${method} /api/${parts.join('/')}`);
+  }
+
+  // The custom groups named in a request: an array of existing groups, once each.
+  async function knownGroups(raw: unknown): Promise<string[]> {
+    if (!Array.isArray(raw) || !raw.every((g) => typeof g === 'string')) throw new HttpError(400, 'bad_request', 'groups must be a list of group names');
+    const names = [...new Set(raw as string[])];
+    if (names.length === 0) return names;
+    const known = new Set((await fleet?.listGroups?.() ?? []).map((g) => g.name));
+    const unknown = names.find((g) => !known.has(g));
+    if (unknown !== undefined) throw new HttpError(400, 'bad_request', `unknown group: ${unknown}`);
+    return names;
+  }
+
+  // The custom groups (R11): grants in the fleet store, the group itself in Cognito (members come in the token). Every
+  // write makes this instance read the grants again at once.
+  type GroupsFleet = Required<Pick<NonNullable<typeof fleet>, 'listGroups' | 'putGroup' | 'deleteGroup'>>;
+  async function groupsRoute(method: string, name: string | undefined, plain: boolean, identity: Identity, event: ApiEvent, svc: UsersService, store: GroupsFleet): Promise<ApiResponse | null> {
+    if (!plain) return null;
+    if (!(method === 'GET' || method === 'POST' || method === 'PUT' || method === 'DELETE') || (method === 'GET' || method === 'POST') !== !name) return null;
+    need(identity, 'admin');
+    if (method === 'GET') return reply(200, { groups: await store.listGroups() });
+    const body = method === 'DELETE' ? {} : bodyOf(event);
+    const checked = (current: { description: string; grants: Group['grants'] }) => {
+      if (body.description !== undefined && (typeof body.description !== 'string' || [...body.description].length > GROUP_DESCRIPTION_MAX)) throw new HttpError(400, 'bad_request', `description: at most ${GROUP_DESCRIPTION_MAX} characters`);
+      if (body.grants !== undefined) {
+        const problem = grantsProblem(body.grants);
+        if (problem) throw new HttpError(400, 'bad_request', problem);
+      }
+      return { description: (body.description as string | undefined)?.trim() ?? current.description, grants: (body.grants as Group['grants'] | undefined) ?? current.grants };
+    };
+    const written = (group: Pick<Group, 'name' | 'description' | 'grants'>): Group => ({ ...group, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email });
+
+    if (method === 'POST') {
+      const groupName = body.name;
+      const problem = groupNameProblem(groupName);
+      if (problem) throw new HttpError(400, 'bad_request', problem);
+      const next = checked({ description: '', grants: [] });
+      const stored = await store.listGroups();
+      if (stored.some((g) => g.name === groupName)) throw new HttpError(409, 'conflict', `group ${groupName} already exists`);
+      // The pool's groups count too, the ones made by hand included.
+      if (new Set([...stored.map((g) => g.name), ...await svc.groupNames()]).size >= GROUPS_MAX) throw new HttpError(400, 'bad_request', `at most ${GROUPS_MAX} groups`);
+      const group = written({ name: groupName as string, ...next });
+      return audited(identity, 'group-create', group.name, async () => {
+        try {
+          await svc.createGroup(group.name, group.description);
+          await store.putGroup({ ...group, updatedBy: identity.email });
+        } finally {
+          groupGrants.changed();
+        }
+        return { result: plural(group.grants.length, 'grant'), response: reply(201, { group }) };
+      });
+    }
+
+    const current = (await store.listGroups()).find((g) => g.name === name);
+    if (!current) throw new HttpError(404, 'not_found', `unknown group: ${name}`);
+    if (method === 'DELETE') {
+      return audited(identity, 'group-delete', current.name, async () => {
+        try {
+          // The Cognito group first: when it fails nothing changed, and a retry finds the grants still there.
+          await svc.deleteGroup(current.name);
+          await store.deleteGroup(current.name);
+        } finally {
+          groupGrants.changed();
+        }
+        return { result: 'deleted', response: reply(200, { name: current.name }) };
+      });
+    }
+    if (body.description === undefined && body.grants === undefined) throw new HttpError(400, 'bad_request', 'description or grants required');
+    const next = checked(current);
+    const group = written({ name: current.name, ...next });
+    return audited(identity, 'group-update', current.name, async () => {
+      try {
+        if (group.description !== current.description) await svc.updateGroup(group.name, group.description);
+        await store.putGroup({ ...group, updatedBy: identity.email });
+      } finally {
+        groupGrants.changed();
+      }
+      return { result: plural(group.grants.length, 'grant'), response: reply(200, { group }) };
+    });
   }
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;

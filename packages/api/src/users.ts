@@ -8,7 +8,12 @@ type Input = Record<string, unknown>;
 // The Cognito and SES calls used here (SDK command inputs and outputs, as plain objects).
 export interface CognitoPort {
   listUsers(input: { UserPoolId: string; PaginationToken?: string }): Promise<{ Users?: CognitoUser[]; PaginationToken?: string }>;
-  listUsersInGroup(input: { UserPoolId: string; GroupName: string; NextToken?: string }): Promise<{ Users?: CognitoUser[]; NextToken?: string }>;
+  // Groups (R11): a user's, the pool's, and the custom groups' own lifecycle.
+  adminListGroupsForUser(input: { UserPoolId: string; Username: string; NextToken?: string }): Promise<{ Groups?: { GroupName?: string }[]; NextToken?: string }>;
+  listGroups(input: { UserPoolId: string; NextToken?: string }): Promise<{ Groups?: { GroupName?: string }[]; NextToken?: string }>;
+  createGroup(input: { UserPoolId: string; GroupName: string; Description?: string }): Promise<unknown>;
+  updateGroup(input: { UserPoolId: string; GroupName: string; Description?: string }): Promise<unknown>;
+  deleteGroup(input: { UserPoolId: string; GroupName: string }): Promise<unknown>;
   adminCreateUser(input: Input & { Username: string; MessageAction?: string }): Promise<unknown>;
   adminAddUserToGroup(input: { UserPoolId: string; Username: string; GroupName: string }): Promise<unknown>;
   adminRemoveUserFromGroup(input: { UserPoolId: string; Username: string; GroupName: string }): Promise<unknown>;
@@ -34,8 +39,10 @@ interface CognitoUser {
   UserCreateDate?: Date;
 }
 
+// The built-in roles' groups, highest first; a member (a role without one) is in none of them.
 const ORDER: Role[] = ['admin', 'operator', 'viewer'];
 const group = (role: Role) => `dmt-${role}`;
+const BUILT_IN = new Set(ORDER.map(group));
 
 // Cognito errors that are the caller's problem, not ours.
 async function mapped<T>(call: () => Promise<T>): Promise<T> {
@@ -72,12 +79,13 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
     return (await status(email.split('@')[1] ?? '')) === 'verified' ? 'verified' : own;
   }
 
-  async function members(groupName: string) {
-    const names = new Set<string>();
+  // Every group of a user (the built-in role's and the custom ones).
+  async function groupsOf(username: string) {
+    const names: string[] = [];
     let NextToken: string | undefined;
     do {
-      const page = await cognito.listUsersInGroup({ UserPoolId: userPoolId, GroupName: groupName, NextToken });
-      for (const u of page.Users ?? []) if (u.Username) names.add(u.Username);
+      const page = await mapped(() => cognito.adminListGroupsForUser({ UserPoolId: userPoolId, Username: username, ...(NextToken ? { NextToken } : {}) }));
+      for (const g of page.Groups ?? []) if (g.GroupName) names.push(g.GroupName);
       NextToken = page.NextToken;
     } while (NextToken);
     return names;
@@ -115,12 +123,13 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
         all.push(...(page.Users ?? []));
         PaginationToken = page.PaginationToken;
       } while (PaginationToken);
-      const groups = await Promise.all(ORDER.map(async (role) => [role, await members(group(role))] as const));
+      const groups = await inFives(all, (u) => groupsOf(u.Username ?? ''));
       // null: Cognito could not say (the Users view shows unknown, not off).
       const mfa = await inFives(all, (u) => mfaEnabled(u.Username ?? '').catch(() => null));
       return all.map((u, i): UserView => ({
         email: u.Attributes?.find((a) => a.Name === 'email')?.Value ?? u.Username ?? '',
-        role: groups.find(([, names]) => names.has(u.Username ?? ''))?.[0] ?? 'viewer',
+        role: ORDER.find((r) => groups[i]!.includes(group(r))) ?? 'member',
+        groups: groups[i]!.filter((g) => !BUILT_IN.has(g)),
         status: u.UserStatus ?? 'UNKNOWN',
         enabled: u.Enabled !== false,
         createdAt: u.UserCreateDate ? new Date(u.UserCreateDate).toISOString() : null,
@@ -128,7 +137,7 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
       }));
     },
 
-    async invite(email, role) {
+    async invite(email, role, groups = []) {
       let ready = await inProduction();
       if (!ready) {
         const status = await identity(email);
@@ -142,7 +151,9 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
         DesiredDeliveryMediums: ['EMAIL'],
         ...(ready ? {} : { MessageAction: 'SUPPRESS' }),
       }));
-      await cognito.adminAddUserToGroup({ UserPoolId: userPoolId, Username: email, GroupName: group(role) });
+      // A member is in no built-in group.
+      if (role !== 'member') await cognito.adminAddUserToGroup({ UserPoolId: userPoolId, Username: email, GroupName: group(role) });
+      for (const name of groups) await cognito.adminAddUserToGroup({ UserPoolId: userPoolId, Username: email, GroupName: name });
       return { invitation: ready ? 'sent' : 'pending-verification' };
     },
 
@@ -158,7 +169,46 @@ export function createUsers({ cognito, ses, userPoolId, sender = 'ses' }: { cogn
       for (const other of ORDER.filter((r) => r !== role)) {
         await mapped(() => cognito.adminRemoveUserFromGroup({ UserPoolId: userPoolId, Username: email, GroupName: group(other) }));
       }
-      await mapped(() => cognito.adminAddUserToGroup({ UserPoolId: userPoolId, Username: email, GroupName: group(role) }));
+      if (role !== 'member') await mapped(() => cognito.adminAddUserToGroup({ UserPoolId: userPoolId, Username: email, GroupName: group(role) }));
+    },
+
+    // The custom groups of a user become exactly these (the built-in groups are left alone).
+    async setGroups(email, wanted) {
+      const have = (await groupsOf(email)).filter((g) => !BUILT_IN.has(g));
+      for (const name of wanted.filter((g) => !have.includes(g))) await mapped(() => cognito.adminAddUserToGroup({ UserPoolId: userPoolId, Username: email, GroupName: name }));
+      for (const name of have.filter((g) => !wanted.includes(g))) await mapped(() => cognito.adminRemoveUserFromGroup({ UserPoolId: userPoolId, Username: email, GroupName: name }));
+    },
+
+    // A group that exists in the pool already is taken over (a creation that stopped half way is made good).
+    async createGroup(name, description) {
+      try {
+        await cognito.createGroup({ UserPoolId: userPoolId, GroupName: name, ...(description ? { Description: description } : {}) });
+      } catch (err) {
+        if ((err as Error).name !== 'GroupExistsException') throw err;
+        if (description) await cognito.updateGroup({ UserPoolId: userPoolId, GroupName: name, Description: description });
+      }
+    },
+    async updateGroup(name, description) {
+      await cognito.updateGroup({ UserPoolId: userPoolId, GroupName: name, Description: description });
+    },
+    // Already gone is as good as deleted.
+    async deleteGroup(name) {
+      try {
+        await cognito.deleteGroup({ UserPoolId: userPoolId, GroupName: name });
+      } catch (err) {
+        if ((err as Error).name !== 'ResourceNotFoundException') throw err;
+      }
+    },
+    // The pool's custom groups.
+    async groupNames() {
+      const names: string[] = [];
+      let NextToken: string | undefined;
+      do {
+        const page = await cognito.listGroups({ UserPoolId: userPoolId, ...(NextToken ? { NextToken } : {}) });
+        for (const g of page.Groups ?? []) if (g.GroupName && !BUILT_IN.has(g.GroupName)) names.push(g.GroupName);
+        NextToken = page.NextToken;
+      } while (NextToken);
+      return names;
     },
 
     async setEnabled(email, enabled) {

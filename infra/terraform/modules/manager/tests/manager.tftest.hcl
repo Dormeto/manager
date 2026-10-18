@@ -323,6 +323,17 @@ run "mfa_operators_by_default" {
     condition     = length(setsubtract(["cognito-idp:AdminSetUserMFAPreference", "cognito-idp:AdminDeleteSoftwareToken"], flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "Users"]))) == 0
     error_message = "An administrator resets another user's MFA through the API."
   }
+  assert {
+    condition = length(setsubtract(
+      ["cognito-idp:CreateGroup", "cognito-idp:UpdateGroup", "cognito-idp:DeleteGroup", "cognito-idp:ListGroups", "cognito-idp:AdminListGroupsForUser", "cognito-idp:AdminAddUserToGroup", "cognito-idp:AdminRemoveUserFromGroup"],
+      flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "Users"])
+    )) == 0
+    error_message = "Administrators manage the custom groups and their members through the API (R11)."
+  }
+  assert {
+    condition     = !contains(flatten([for s in data.aws_iam_policy_document.api.statement : s.actions if s.sid == "Users"]), "cognito-idp:ListUsersInGroup")
+    error_message = "The API reads a user's groups, no longer a group's users."
+  }
 }
 
 run "mfa_required" {
