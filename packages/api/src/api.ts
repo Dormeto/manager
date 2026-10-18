@@ -52,7 +52,7 @@ export interface Audit {
 
 export type Invoke = (router: Router, payload: Record<string, unknown>, options?: { async?: boolean }) => Promise<unknown>;
 
-export type Role = 'viewer' | 'operator' | 'admin';
+export type Role = 'member' | 'viewer' | 'operator' | 'admin';
 
 // Per-user dashboard preferences.
 export interface Preferences {
@@ -110,7 +110,7 @@ export class HttpError extends Error {
   }
 }
 
-const RANK: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
+const RANK: Record<Role, number> = { member: -1, viewer: 0, operator: 1, admin: 2 };
 const GROUPS: Record<string, Role> = { 'dmt-admin': 'admin', 'dmt-operator': 'operator', 'dmt-viewer': 'viewer' };
 const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
