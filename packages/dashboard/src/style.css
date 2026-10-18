@@ -110,8 +110,10 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
 .dm-stars circle { fill: #ffffff; }
 .dm-zzz { opacity: 0; transition: opacity 0.4s ease; }
 .dm-z { fill: none; stroke: #f6e5b8; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transform-box: fill-box; transform-origin: center; }
-.dm--small .dm-ray { stroke-width: 3.2; }
-.dm--small .dm-eye-closed { stroke-width: 3.8; }
+.dm--small:not(.dm--still) .dm-ray { stroke-width: 3.2; }
+.dm--small:not(.dm--still) .dm-eye-closed { stroke-width: 3.8; }
+/* The brand mark is the website's header logo: its closed eyes bolder, the rays at the base weight. */
+.dm--still .dm-eye-closed { stroke-width: 4; }
 
 .is-sleep .dm-tile { fill: #0e2446; }
 .is-sleep .dm-moon { fill: #f6e5b8; animation: dm-rock 7s ease-in-out infinite; }
@@ -192,10 +194,14 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
 .dm-nav-item:hover .ni-needle { transform: rotate(200deg); }
 .dm-nav-item.v-list-item--active .ni-needle { animation: ni-seek 4s ease-in-out infinite; }
 @keyframes ni-seek { 0%, 100% { transform: rotate(-14deg); } 50% { transform: rotate(16deg); } }
-.ni-gear { transform-origin: 12px 12px; }
-.dm-nav-item:hover .ni-gear, .dm-nav-item.v-list-item--active .ni-gear { animation: ni-turn 6s linear infinite; }
-.dm-nav-item:hover .ni-gear { animation-duration: 2.4s; }
+/* Operations: two meshing cogs (8 and 6 teeth), each around its own center, in opposite directions; the small one 8/6 as fast. */
+.ni-cog { transform-box: fill-box; transform-origin: center; }
+.dm-nav-item:hover .ni-cog-big, .dm-nav-item.v-list-item--active .ni-cog-big { animation: ni-turn 8s linear infinite; }
+.dm-nav-item:hover .ni-cog-small, .dm-nav-item.v-list-item--active .ni-cog-small { animation: ni-turn-back 6s linear infinite; }
+.dm-nav-item:hover .ni-cog-big { animation-duration: 3.2s; }
+.dm-nav-item:hover .ni-cog-small { animation-duration: 2.4s; }
 @keyframes ni-turn { to { transform: rotate(360deg); } }
+@keyframes ni-turn-back { to { transform: rotate(-360deg); } }
 .ni-second { transition: transform 0.45s var(--dm-spring); }
 .dm-nav-item:hover .ni-second { transform: translateX(1.5px) translateY(-1px); }
 .ni-check { stroke-dasharray: 10; stroke-dashoffset: 0; }

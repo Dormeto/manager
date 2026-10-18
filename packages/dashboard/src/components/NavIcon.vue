@@ -35,10 +35,12 @@ defineProps<{ name: 'overview' | 'workloads' | 'routers' | 'discovery' | 'operat
       </g>
     </template>
     <template v-else-if="name === 'operations'">
-      <g class="ni-gear">
-        <path class="ni-line" d="M12 2.8l1.6 2.4 2.8-.8.5 2.9 2.7 1.1-1.2 2.6 1.2 2.6-2.7 1.1-.5 2.9-2.8-.8L12 21.2l-1.6-2.4-2.8.8-.5-2.9-2.7-1.1L5.6 13 4.4 10.4l2.7-1.1.5-2.9 2.8.8z" />
+      <!-- Two cogs that mesh (8 and 6 teeth): each turns around its own center, the small one faster by the ratio. -->
+      <g class="ni-cog ni-cog-big">
+        <path class="ni-line" d="M12.27 9.64L13.79 8.97L15.03 10.21L14.36 11.73L14.90 13.02L16.44 13.62L16.44 15.38L14.90 15.98L14.36 17.27L15.03 18.79L13.79 20.03L12.27 19.36L10.98 19.90L10.38 21.44L8.62 21.44L8.02 19.90L6.73 19.36L5.21 20.03L3.97 18.79L4.64 17.27L4.10 15.98L2.56 15.38L2.56 13.62L4.10 13.02L4.64 11.73L3.97 10.21L5.21 8.97L6.73 9.64L8.02 9.10L8.62 7.56L10.38 7.56L10.98 9.10Z" />
+        <circle class="ni-line" cx="9.5" cy="14.5" r="2" />
       </g>
-      <circle class="ni-accent" cx="12" cy="12" r="2.8" />
+      <path class="ni-accent ni-cog ni-cog-small" d="M20.64 8.26L21.27 9.56L20.12 10.71L18.82 10.08L17.63 10.40L16.82 11.60L15.24 11.18L15.14 9.74L14.26 8.86L12.82 8.76L12.40 7.18L13.60 6.37L13.92 5.18L13.29 3.88L14.44 2.73L15.74 3.36L16.93 3.04L17.74 1.84L19.32 2.26L19.42 3.70L20.30 4.58L21.74 4.68L22.16 6.26L20.96 7.07Z" />
     </template>
     <template v-else-if="name === 'users'">
       <circle class="ni-line" cx="9" cy="8.5" r="3.5" />
