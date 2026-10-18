@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.12.0 — 2026-10-18
+
+Router 0.29.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 - The dashboard's redesign, in the website's design: night and light themes (the system's until the user chooses one in
   the top bar), the Dormeto fonts and animated icon (loaders, the navigation's own icons), every view restyled. The
