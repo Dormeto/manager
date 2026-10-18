@@ -539,6 +539,17 @@ describe('state history (R8)', () => {
     await store.deleteGroup('payments');
   });
 
+  it('skips a group item whose data cannot be read, among good ones', async () => {
+    const dynamo = fakeDynamo();
+    const store = createFleetStore({ dynamo, table: 'dmt-dev-manager', now: () => NOW });
+    await store.putGroup({ name: 'a', description: '', grants: [], updatedBy: 'admin@example.com' });
+    await store.putGroup({ name: 'bad', description: '', grants: [], updatedBy: 'admin@example.com' });
+    await store.putGroup({ name: 'c', description: '', grants: [], updatedBy: 'admin@example.com' });
+    [...dynamo.items.values()].find((i) => i.sk?.S === 'GROUP#bad')!.data = { S: '{not json' };
+    expect((await store.listGroups()).map((g) => g.name)).toEqual(['a', 'c']);
+    expect(await store.getGroup('bad')).toBeNull();
+  });
+
   it('reads the discounts consistently: a change is seen at once after it is saved (final review 5)', async () => {
     const dynamo = fakeDynamo();
     const sent: Record<string, unknown>[] = [];

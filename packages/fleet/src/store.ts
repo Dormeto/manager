@@ -141,9 +141,14 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
   const routerKey = (account: string, region: string) => `RS#${account}#${region}`;
   const workloadKey = (account: string, region: string, id: string) => `WS#${account}#${region}#${id}`;
   const data = <T>(item: Item | undefined): T | null => (item?.data?.S ? (JSON.parse(item.data.S) as T) : null);
-  const groupOf = (item: Item): Group => {
-    const d = data<{ description?: string; grants?: Group['grants'] }>(item);
-    return { name: item.sk!.S!.slice('GROUP#'.length), description: d?.description ?? '', grants: d?.grants ?? [], updatedAt: item.updatedAt?.S ?? null, updatedBy: item.updatedBy?.S ?? null };
+  // An item whose data cannot be read is skipped (null): one corrupt group does not take the others' grants down.
+  const groupOf = (item: Item): Group | null => {
+    try {
+      const d = data<{ description?: string; grants?: Group['grants'] }>(item);
+      return { name: item.sk!.S!.slice('GROUP#'.length), description: d?.description ?? '', grants: d?.grants ?? [], updatedAt: item.updatedAt?.S ?? null, updatedBy: item.updatedBy?.S ?? null };
+    } catch {
+      return null;
+    }
   };
   async function query(prefix: string): Promise<Item[]> {
     const items: Item[] = [];
@@ -323,7 +328,7 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
 
     // The custom groups' grants (the API caches them 60 s).
     async listGroups(): Promise<Group[]> {
-      return (await query('GROUP#')).map(groupOf).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      return (await query('GROUP#')).map(groupOf).filter((g): g is Group => g !== null).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     },
     async getGroup(name: string): Promise<Group | null> {
       const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(`GROUP#${name}`), ConsistentRead: true }));
