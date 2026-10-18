@@ -49,3 +49,16 @@ export function groupNameProblem(name: string): string | null {
   if (name.startsWith('dmt-')) return 'group name: the dmt- prefix is reserved for the built-in roles';
   return null;
 }
+
+// A target group's AWS tags as a starting point (R11): the first value of each key (the scan merges the values of the load
+// balancer, the target group and the rule, without saying which is which), what the tag rules refuse left out and counted.
+export function copiedTags(aws: Record<string, string[]> | undefined): { tags: Tags; left: number } {
+  const tags: Tags = {};
+  let left = 0;
+  for (const [key, values] of Object.entries(aws ?? {})) {
+    const value = values[0] ?? '';
+    if (tagsProblem({ [key]: value })) left += 1;
+    else tags[key] = value;
+  }
+  return { tags, left };
+}

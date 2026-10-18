@@ -90,4 +90,46 @@ describe('OnboardDialog', () => {
     expect(dialogText()).toContain('The router checks its access to cluster eks-demo before onboarding.');
     unknown.unmount();
   });
+
+  // R11: the workload's tags, chosen at onboarding; nothing is copied unless asked.
+  const fill = async (el: HTMLInputElement, value: string) => { el.value = value; el.dispatchEvent(new Event('input')); await flushPromises(); };
+  const button = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement | undefined;
+  const tagInputs = () => [...document.querySelectorAll<HTMLInputElement>('.v-dialog [data-test="tags-editor"] input')];
+
+  it('sends the tags written in its Tags section, and none when there are none', async () => {
+    const wrapper = await openDialog();
+    onboardButton().click();
+    expect(wrapper.emitted('submit')![0]![0]).not.toHaveProperty('tags');
+    button('Add a tag')!.click();
+    await flushPromises();
+    await fill(tagInputs()[0]!, 'team');
+    await fill(tagInputs()[1]!, 'payments');
+    onboardButton().click();
+    expect((wrapper.emitted('submit')![1]![0] as { tags: unknown }).tags).toEqual({ team: 'payments' });
+    wrapper.unmount();
+  });
+
+  it('copies nothing from the target group\'s AWS tags by default, and the first value of each key on request, for the administrator to edit', async () => {
+    const wrapper = await openDialog({ awsTags: { team: ['payments', 'platform'], env: ['staging'], 'dormeto:workload': ['x'], 'bad*key': ['v'] } });
+    expect(tagInputs()).toHaveLength(0);
+    button("Copy the target group's AWS tags")!.click();
+    await flushPromises();
+    expect(tagInputs().map((i) => i.value)).toEqual(['env', 'staging', 'team', 'payments']);
+    // What the rules refuse is left out, and said.
+    expect(document.querySelector('.v-dialog')!.textContent).toContain('2 AWS tags left out');
+    await fill(tagInputs()[3]!, 'billing');
+    onboardButton().click();
+    expect((wrapper.emitted('submit')![0]![0] as { tags: unknown }).tags).toEqual({ env: 'staging', team: 'billing' });
+    wrapper.unmount();
+  });
+
+  it('offers the copy only when the candidate has AWS tags, and refuses tags the rules refuse', async () => {
+    const wrapper = await openDialog();
+    expect(button("Copy the target group's AWS tags")).toBeUndefined();
+    button('Add a tag')!.click();
+    await flushPromises();
+    await fill(tagInputs()[0]!, 'dormeto:x');
+    expect(onboardButton().disabled).toBe(true);
+    wrapper.unmount();
+  });
 });

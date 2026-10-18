@@ -12,7 +12,7 @@ const add = () => emit('update:modelValue', [...props.modelValue, { key: '', val
 </script>
 
 <template>
-  <div class="dm-tags-editor">
+  <div class="dm-tags-editor" data-test="tags-editor">
     <p v-if="!modelValue.length && empty" class="text-body-small text-medium-emphasis mb-2">{{ empty }}</p>
     <div v-for="(row, i) in modelValue" :key="i" class="dm-tags-editor__row">
       <v-text-field :model-value="row.key" label="Key" density="compact" hide-details :disabled="disabled" @update:model-value="set(i, 'key', $event)" />

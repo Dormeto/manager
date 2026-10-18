@@ -5,18 +5,31 @@
 import { computed, ref, watch } from 'vue';
 import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
 import { nameRule } from '../format';
+import { copiedTags, rowsOf, rowsProblem, tagsOf, type TagRow, type Tags } from '../tags';
+import TagsEditor from './TagsEditor.vue';
 import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
 
-const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null }>();
+const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]> }>();
 const access = computed(() => (props.kubernetes ? accessText(props.kubernetes.cluster, props.access) : null));
 const snippet = computed(() => (props.kubernetes ? gitopsSnippet(props.kubernetes) : null));
-const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }] }>();
+const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Tags }] }>();
 const name = ref('');
 const idleMinutes = ref(15);
 const wakeMode = ref('any');
 const databases = ref('');
 // EC2 instances may start on another type when AWS has none of theirs (router 0.25.0); their own type back at the next nap.
 const fallbacks = ref('');
+// R11: the workload's own tags (never AWS tags, nothing copied unless asked) that the groups' grants pick workloads by.
+const tagRows = ref<TagRow[]>([]);
+const copyNote = ref('');
+const hasAwsTags = computed(() => Object.keys(props.awsTags ?? {}).length > 0);
+const tagsError = computed(() => rowsProblem(tagRows.value));
+function copyAws() {
+  const { tags, left } = copiedTags(props.awsTags);
+  // What the administrator already wrote stays.
+  tagRows.value = rowsOf({ ...tags, ...tagsOf(tagRows.value) });
+  copyNote.value = left ? `${left} AWS tag${left === 1 ? '' : 's'} left out: reserved or with characters the tags do not allow.` : '';
+}
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
 const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.trim()).filter(Boolean));
 const fallbackRule = () => (fallbackTypes.value.length <= 5 && fallbackTypes.value.every((t) => INSTANCE_TYPE.test(t))) || 'At most 5 EC2 instance types, for example t3a.medium, m6i.large';
@@ -27,6 +40,8 @@ watch(() => props.modelValue, (open) => {
   wakeMode.value = 'any';
   databases.value = '';
   fallbacks.value = '';
+  tagRows.value = [];
+  copyNote.value = '';
 });
 
 // Presentation: an icon per change, in onboardingTexts' order (what the switch adds or patches, the HPA kept, KEDA paused).
@@ -43,7 +58,7 @@ const changes = computed(() => {
 
 function submit() {
   const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
-  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}) }, databases: list });
+  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}) }, databases: list, ...(Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
 }
 </script>
 
@@ -103,11 +118,17 @@ function submit() {
         <v-text-field v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
+        <div class="dm-eyebrow mt-6 mb-1">Tags</div>
+        <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not AWS tags: the groups' grants pick workloads by them. Administrators can change them later.</p>
+        <TagsEditor v-model="tagRows" />
+        <v-btn v-if="hasAwsTags" variant="tonal" size="small" class="mb-2" @click="copyAws">Copy the target group's AWS tags</v-btn>
+        <p v-if="copyNote" class="text-body-small text-medium-emphasis">{{ copyNote }}</p>
+        <v-alert v-if="tagsError" type="error" variant="tonal" density="compact" class="mt-2" :text="tagsError" />
       </v-card-text>
       <v-card-actions class="dm-dialog__actions">
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" :disabled="nameRule(name) !== true || fallbackRule() !== true" @click="submit">Onboard</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="nameRule(name) !== true || fallbackRule() !== true || Boolean(tagsError)" @click="submit">Onboard</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

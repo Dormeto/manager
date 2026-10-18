@@ -256,7 +256,7 @@ async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<st
   }
 }
 
-async function onboard(form: { name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[] }) {
+async function onboard(form: { name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Record<string, string> }) {
   onboardOpen.value = false;
   const c = single.value!;
   await startOperation({ type: 'onboard', candidateId: c.id, ...form }, c, form.name ?? subjectOf(c));
@@ -505,7 +505,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">
