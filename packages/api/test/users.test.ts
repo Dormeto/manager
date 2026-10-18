@@ -113,7 +113,12 @@ describe('users service', () => {
     const crowd = Array.from({ length: 30 }, (_, i) => ({ Username: `u${i}`, Attributes: [{ Name: 'email', Value: `u${i}@example.com` }], UserStatus: 'CONFIRMED', Enabled: true }));
     const port = (failing?: string) => ({
       async listUsers() { return { Users: crowd }; },
-      adminListGroupsForUser: ({ Username }: { Username: string }) => tracked(Username === failing ? Promise.reject(new Error('throttled')) : { Groups: [{ GroupName: 'payments' }] }).then((x) => x),
+      // The failure comes after the delay: a rejected promise made up front would sit unobserved meanwhile.
+      adminListGroupsForUser: async ({ Username }: { Username: string }) => {
+        const groups = await tracked({ Groups: [{ GroupName: 'payments' }] });
+        if (Username === failing) throw new Error('throttled');
+        return groups;
+      },
       adminGetUser: () => tracked({ UserMFASettingList: [] as string[] }),
       ...groupsUnused,
       async adminCreateUser() { return {}; }, async adminAddUserToGroup() { return {}; }, async adminRemoveUserFromGroup() { return {}; },
