@@ -195,7 +195,8 @@ const update = installBucket ? (() => {
       }
     },
     async put(key, body) {
-      await s3.send(new PutObjectCommand({ Bucket: installBucket, Key: key, Body: body, ContentType: 'application/json' }));
+      const out = await s3.send(new PutObjectCommand({ Bucket: installBucket, Key: key, Body: body, ContentType: 'application/json' }));
+      return (out.ETag ?? '').replace(/"/g, '');
     },
     async builds() {
       const { ids = [] } = await codebuild.send(new ListBuildsForProjectCommand({ projectName: project, sortOrder: 'DESCENDING' }));

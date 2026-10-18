@@ -5,6 +5,7 @@ import { absent, missingStream, createUpdate, type Build, type Pending, type Upd
 const RELEASES = 'https://releases.test/manager';
 const START = Date.parse('2026-10-20T10:00:00Z');
 const ID = 'dmt-prod-install';
+const ETAG = 'abcdef0123456789abcdef0123456789';
 const PLAN_JSON = JSON.stringify({ format_version: '1.2', resource_changes: [{ address: 'aws_x.a', change: { actions: ['create'] } }, { address: 'aws_x.b', change: { actions: ['update'] } }] });
 
 const build = (n: number, status: string, env: Record<string, string> = {}, extra: Partial<Build> = {}): Build => ({
@@ -32,7 +33,7 @@ function setup(opts: { running?: string; files?: Record<string, string>; urls?: 
   const state = { builds: opts.builds ?? [], pending: opts.pending ?? null, puts: [] as Array<[string, string]>, now: START };
   const port: UpdatePort = {
     get: async (key) => files.get(key) ?? null,
-    put: async (key, body) => { files.set(key, body); state.puts.push([key, body]); },
+    put: async (key, body) => { files.set(key, body); state.puts.push([key, body]); return ETAG; },
     builds: async () => state.builds,
     logLines: async (_group, stream) => opts.logs?.[stream] ?? [],
     fetchText: async (url) => urls.get(url) ?? null,
@@ -138,8 +139,8 @@ describe('the state', () => {
   });
 
   it('knows a dashboard build by its request: the action and the version come from its result', async () => {
-    const b = build(5, 'SUCCEEDED', { ACTION: 'request', REQUEST_KEY: 'prod/requests/20261020T095000Z-aaaaaaaa.json' });
-    const s = setup({ builds: [b], files: { 'prod/results/20261020T095000Z-aaaaaaaa.json': JSON.stringify({ build: b.id, status: 'succeeded', message: '', action: 'plan', version: '0.12.0' }) } });
+    const b = build(5, 'SUCCEEDED', { ACTION: 'request', REQUEST_ETAG: '0123' });
+    const s = setup({ builds: [b], files: { [`prod/results/${b.id}.json`]: JSON.stringify({ build: b.id, status: 'succeeded', message: '', action: 'plan', version: '0.12.0' }) } });
     expect((await get(s)).build).toMatchObject({ by: 'dashboard', action: 'plan', version: '0.12.0' });
   });
 });
@@ -153,7 +154,7 @@ describe('a plan request', () => {
     const [key, body] = s.state.puts[0]!;
     expect(key).toBe('prod/requests/20261020T100000Z-a1b2c3d4.json');
     expect(body).toBe('{"action":"plan","version":"0.12.0","requestedBy":"admin@example.com","requestedAt":"2026-10-20T10:00:00.000Z"}');
-    expect(s.state.pending).toEqual({ key, id: '20261020T100000Z-a1b2c3d4', action: 'plan', version: '0.12.0', at: '2026-10-20T10:00:00.000Z', who: 'admin@example.com' });
+    expect(s.state.pending).toEqual({ key, id: '20261020T100000Z-a1b2c3d4', etag: ETAG, action: 'plan', version: '0.12.0', at: '2026-10-20T10:00:00.000Z', who: 'admin@example.com' });
     expect(json(res)).toEqual(s.state.pending);
     expect(s.audit).toHaveLength(1);
     expect(s.audit[0]).toMatchObject({ action: 'update-plan', target: '0.12.0', who: 'admin@example.com' });
@@ -197,9 +198,8 @@ describe('a plan request', () => {
 });
 
 describe('the confirmable plan and the apply request', () => {
-  const requestKey = (n: number) => `prod/requests/20261020T09${String(n).padStart(2, '0')}00Z-aaaaaaa${n}.json`;
-  const reqBuild = (n: number, status = 'SUCCEEDED') => build(n, status, { ACTION: 'request', REQUEST_KEY: requestKey(n) });
-  const result = (n: number, b: Build, action: string, status = 'succeeded') => [`prod/results/${requestKey(n).split('/')[2]!.replace('.json', '')}.json`, JSON.stringify({ build: b.id, status, message: '', action, version: '0.12.0' })] as const;
+  const reqBuild = (n: number, status = 'SUCCEEDED') => build(n, status, { ACTION: 'request', REQUEST_ETAG: `e${n}` });
+  const result = (n: number, b: Build, action: string, status = 'succeeded') => [`prod/results/${b.id}.json`, JSON.stringify({ build: b.id, status, message: '', action, version: '0.12.0' })] as const;
   const withPlan = (b: Build, version = '0.12.0') => ({ [`prod/plans/${b.id}/release.json`]: JSON.stringify({ version, base: 'x', request: 'y', appliedBuild: '' }), [`prod/plans/${b.id}/plan.json`]: PLAN_JSON });
 
   it('offers the newest succeeded dashboard plan, summarized', async () => {
@@ -287,7 +287,7 @@ describe('the changes', () => {
 describe('a pending request whose build ended or is queueing', () => {
   const runningResult = (b: Build) => JSON.stringify({ build: b.id, status: 'running', message: '', action: 'plan', version: '0.12.0' });
   const ID_ = '20261020T100000Z-a1b2c3d4';
-  const mine = (n: number, status: string) => build(n, status, { ACTION: 'request', REQUEST_KEY: `prod/requests/${ID_}.json` });
+  const mine = (n: number, status: string) => build(n, status, { ACTION: 'request', REQUEST_ETAG: ETAG });
 
   it('stops blocking once its build ended without a final result', async () => {
     const s = setup();
@@ -310,6 +310,15 @@ describe('a pending request whose build ended or is queueing', () => {
     expect((await get(s)).pending).toBeNull();
     expect(s.state.pending).toBeNull();
     expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(202);
+  });
+
+  it('matches its build by the request ETag only', async () => {
+    const s = setup();
+    await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
+    expect(s.state.pending).toMatchObject({ etag: ETAG });
+    s.state.builds = [build(5, 'FAILED', { ACTION: 'request', REQUEST_ETAG: 'ffff' })];
+    s.state.now += 3 * 60_000;
+    expect((await get(s)).pending).toMatchObject({ notStarted: true });
   });
 
   it('keeps blocking while its build is in progress', async () => {

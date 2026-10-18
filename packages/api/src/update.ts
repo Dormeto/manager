@@ -95,12 +95,13 @@ export function requestId(now: Date, random: string): string {
 // ---- The service ----
 
 export type Build = { id: string; status: string; phase: string | null; startedAt: string | null; endedAt: string | null; env: Record<string, string>; logStream: string | null };
-export type Pending = { key: string; id: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string };
+export type Pending = { key: string; id: string; etag: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string };
 
 export type UpdatePort = {
   // The install bucket, by key (`<env>/…`): null when the object is absent, an error for any other failure.
   get(key: string): Promise<string | null>;
-  put(key: string, body: string): Promise<void>;
+  // Returns the object's ETag, without its quotes.
+  put(key: string, body: string): Promise<string>;
   // The install project's newest builds, newest first.
   builds(): Promise<Build[]>;
   logLines(group: string, stream: string): Promise<string[]>;
@@ -204,14 +205,12 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
 
   const resultOf = async (id: string) => parse<Result>(await port.get(key(`results/${id}.json`)));
 
-  // What a build is: a request build's action and version come from its result (else from the pending item); a CLI
-  // build's from its environment.
-  async function describe(b: Build, pending: Pending | null): Promise<{ by: 'dashboard' | 'cli'; action: string | null; version: string | null }> {
+  // What a build is: a request build's action and version come from its result (`results/<build id>.json`); a CLI build's
+  // from its environment.
+  async function describe(b: Build): Promise<{ by: 'dashboard' | 'cli'; action: string | null; version: string | null }> {
     if (b.env.ACTION !== 'request') return { by: 'cli', action: b.env.ACTION || null, version: b.env.RELEASE_VERSION || null };
-    const id = (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '');
-    const result = id ? await resultOf(id) : null;
-    const mine = pending && pending.id === id ? pending : null;
-    return { by: 'dashboard', action: result?.action || mine?.action || null, version: result?.version || mine?.version || null };
+    const result = await resultOf(b.id);
+    return { by: 'dashboard', action: result?.action || null, version: result?.version || null };
   }
 
   // A request is done with a final result, or a running one whose build ended without writing its final result (timed
@@ -219,8 +218,8 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
   async function pendingNow(pending: Pending | null, builds: Build[]): Promise<UpdateState['pending']> {
     if (!pending) return null;
     const result = await resultOf(pending.id);
-    // Its build: the result's, else a listed request build carrying its id.
-    const mine = builds.find((b) => (result?.build ? b.id === result.build : b.env.ACTION === 'request' && (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '') === pending.id));
+    // Its build: the one its result names, else a listed request build carrying its request's ETag.
+    const mine = builds.find((b) => (result?.build ? b.id === result.build : b.env.ACTION === 'request' && b.env.REQUEST_ETAG === pending.etag));
     const ended = !!mine && mine.status !== 'IN_PROGRESS';
     if (result?.status === 'succeeded' || result?.status === 'failed' || ended) {
       await port.pending.put(null);
@@ -232,14 +231,13 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
 
   // The newest plan build is the confirmable plan when a dashboard plan succeeded, with its release.json, and no plan
   // build started nor apply succeeded after it.
-  async function confirmable(builds: Build[], pending: Pending | null): Promise<UpdateState['plan']> {
+  async function confirmable(builds: Build[]): Promise<UpdateState['plan']> {
     for (const b of builds) {
-      const { by, action } = await describe(b, pending);
+      const { by, action } = await describe(b);
       if (isApply(action) && b.status === 'SUCCEEDED') return null;
       if (!isPlan(action)) continue;
       if (by !== 'dashboard' || action !== 'plan') return null;
-      const id = (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '');
-      if ((await resultOf(id))?.status !== 'succeeded') return null;
+      if ((await resultOf(b.id))?.status !== 'succeeded') return null;
       const release = parse<{ version?: unknown }>(await port.get(key(`plans/${b.id}/release.json`)));
       const planJson = await port.get(key(`plans/${b.id}/plan.json`));
       if (typeof release?.version !== 'string' || planJson === null) return null;
@@ -248,10 +246,10 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
     return null;
   }
 
-  async function view(b: Build, pending: Pending | null): Promise<BuildView> {
+  async function view(b: Build): Promise<BuildView> {
     const lines = b.logStream ? await port.logLines(o.logGroup, b.logStream) : [];
     return {
-      id: b.id, ...(await describe(b, pending)), status: b.status, phase: b.phase, startedAt: b.startedAt, endedAt: b.endedAt,
+      id: b.id, ...(await describe(b)), status: b.status, phase: b.phase, startedAt: b.startedAt, endedAt: b.endedAt,
       steps: lines.filter((l) => l.startsWith('dormeto: ')).map((l) => l.slice('dormeto: '.length)),
       tail: FAILED.has(b.status) ? lines.slice(-TAIL) : [],
     };
@@ -268,9 +266,9 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
         : null,
       cli,
       versions,
-      build: builds[0] ? await view(builds[0], storedPending) : null,
+      build: builds[0] ? await view(builds[0]) : null,
       pending: await pendingNow(storedPending, builds),
-      plan: await confirmable(builds, storedPending),
+      plan: await confirmable(builds),
     };
   }
 
@@ -283,8 +281,8 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
     const id = requestId(o.now(), o.random());
     const at = o.now().toISOString();
     const requestKey = key(`requests/${id}.json`);
-    await port.put(requestKey, JSON.stringify({ ...body, requestedBy: who, requestedAt: at }));
-    const pending: Pending = { key: requestKey, id, ...body, at, who };
+    const etag = await port.put(requestKey, JSON.stringify({ ...body, requestedBy: who, requestedAt: at }));
+    const pending: Pending = { key: requestKey, id, etag, ...body, at, who };
     await port.pending.put(pending);
     return pending;
   }
