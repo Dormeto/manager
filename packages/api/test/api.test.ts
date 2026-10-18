@@ -63,7 +63,7 @@ describe('workloads', () => {
     const res = await api(event('GET', '/api/workloads'));
     expect(res.statusCode).toBe(200);
     expect(json(res)).toEqual({
-      workloads: [{ router: 'dmt-dev', region: 'eu-west-1', workloadId: 'demo', state: 'AWAKE', tags: {}, can: { wake: false, nap: false } }], total: 1, byState: { AWAKE: 1 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 }, cursor: null,
+      workloads: [{ router: 'dmt-dev', region: 'eu-west-1', workloadId: 'demo', state: 'AWAKE', can: { wake: false, nap: false } }], total: 1, byState: { AWAKE: 1 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 }, cursor: null,
       errors: [{ router: 'dmt-test', message: 'router unreachable' }],
     });
   });
@@ -86,7 +86,7 @@ describe('workloads', () => {
     const calls: unknown[] = [];
     const { api } = setup(async (router, payload) => { calls.push([router.name, payload]); return { workloadId: 'demo', state: 'ASLEEP' }; });
     const res = await api(event('GET', '/api/workloads/dmt-dev/demo'));
-    expect(json(res)).toEqual({ workloadId: 'demo', state: 'ASLEEP', url: null, region: 'eu-west-1', tags: {}, can: { wake: false, nap: false } });
+    expect(json(res)).toEqual({ workloadId: 'demo', state: 'ASLEEP', url: null, region: 'eu-west-1', can: { wake: false, nap: false } });
     expect(calls).toEqual([['dmt-dev', { action: 'status', workloadId: 'demo' }]]);
   });
 

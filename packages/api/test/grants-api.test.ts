@@ -148,7 +148,7 @@ describe('workload lists', () => {
   it('carries the tags and what the caller can do on each row', async () => {
     const s = setup();
     const rows = (await Promise.all((['viewer', 'operator', 'pay', 'payWake'] as const).map(async (u) => json(await s.api(event(u, 'GET', '/api/workloads'))).workloads))).map((w) => w.map((x: { workloadId: string; tags: unknown; can: unknown }) => [x.workloadId, x.tags, x.can]));
-    expect(rows[0]).toEqual([['pay', { team: 'payments', env: 'prod' }, { wake: false, nap: false }], ['plain', {}, { wake: false, nap: false }], ['search', { team: 'search' }, { wake: false, nap: false }]]);
+    expect(rows[0]).toEqual([['pay', { team: 'payments', env: 'prod' }, { wake: false, nap: false }], ['plain', undefined, { wake: false, nap: false }], ['search', { team: 'search' }, { wake: false, nap: false }]]);
     expect(rows[1]!.map((r: unknown[]) => r[2])).toEqual([{ wake: true, nap: true }, { wake: true, nap: true }, { wake: true, nap: true }]);
     expect(rows[2]).toEqual([['pay', { team: 'payments', env: 'prod' }, { wake: false, nap: false }]]);
     expect(rows[3]).toEqual([['pay', { team: 'payments', env: 'prod' }, { wake: true, nap: false }]]);
@@ -158,7 +158,7 @@ describe('workload lists', () => {
     const s = setup({ tagged: false });
     expect(ids(json(await s.api(event('viewer', 'GET', '/api/workloads'))).workloads)).toEqual(['pay', 'plain', 'search']);
     expect(ids(json(await s.api(event('pay', 'GET', '/api/workloads'))).workloads)).toEqual([]);
-    expect(json(await s.api(event('viewer', 'GET', '/api/workloads'))).workloads[0].tags).toEqual({});
+    expect(json(await s.api(event('viewer', 'GET', '/api/workloads'))).workloads[0]).not.toHaveProperty('tags');
   });
 
   it('keeps the routers\' rows and errors to the built-in roles', async () => {
