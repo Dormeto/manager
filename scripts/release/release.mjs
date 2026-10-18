@@ -5,6 +5,8 @@
 // once per version under releases.dormeto.com/manager/<version>/.
 // Usage: node scripts/release/release.mjs [--no-build] [--router <router checkout at the pinned version>]
 //          [--version <version>] [--out <directory>] [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
+//        node scripts/release/release.mjs --versions --bucket <bucket> [--region <region>]
+//          writes only manager/versions.json for package.json's version, already published (finishes a stopped publication)
 // --version and --out build a release locally, before it is published (dormeto install --release <out>/<version>): the
 // files are named with that version, the release lands in <out>/<version>/ (dist/release by default), and the changelog's
 // Unreleased section stands for a version without its own. --publish only publishes package.json's version.
@@ -108,7 +110,48 @@ const newer = (a, b) => {
   return false;
 };
 
-export async function publishRelease({ s3, bucket, version, router, dir, now = () => new Date().toISOString() }) {
+// Versions here are x.y.z: newest first, by the numbers.
+const byNewest = (a, b) => (newer(a.version, b.version) ? -1 : newer(b.version, a.version) ? 1 : 0);
+
+// manager/versions.json: the published versions, newest first, with their router, the oldest CLI whose install they can
+// update (minCli) and their date. Missing or malformed, it is rebuilt from the versions in the bucket (their router and
+// minCli unknown); this version's entry is then written in full.
+export async function publishVersions({ s3, bucket, version, router, minCli, now = () => new Date().toISOString() }) {
+  const { ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = await import('@aws-sdk/client-s3');
+  let versions = null;
+  try {
+    const existing = JSON.parse(await (await s3.send(new GetObjectCommand({ Bucket: bucket, Key: 'manager/versions.json' }))).Body.transformToString());
+    if (Array.isArray(existing?.versions)) versions = existing.versions;
+  } catch (err) {
+    if (err.name !== 'NoSuchKey' && !(err instanceof SyntaxError)) throw err;
+  }
+  if (!versions) {
+    versions = [];
+    let token;
+    do {
+      const page = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: 'manager/', ContinuationToken: token }));
+      for (const { Key, LastModified } of page.Contents ?? []) {
+        const found = /^manager\/(\d+\.\d+\.\d+)\/SHA256SUMS$/.exec(Key);
+        if (found) versions.push({ version: found[1], router: null, minCli: null, published: new Date(LastModified).toISOString() });
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+  }
+  versions = [...versions.filter((v) => v.version !== version), { version, router, minCli: minCli ?? null, published: now() }].sort(byNewest);
+  await s3.send(new PutObjectCommand({
+    Bucket: bucket, Key: 'manager/versions.json', Body: JSON.stringify({ versions }), ContentType: 'application/json', CacheControl: 'no-cache',
+  }));
+}
+
+// --versions: only versions.json, for a version whose SHA256SUMS (put last) is in the bucket; nothing is written otherwise.
+export async function resumeVersions({ s3, bucket, version, ...rest }) {
+  const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');
+  const listed = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `manager/${version}/SHA256SUMS`, MaxKeys: 1 }));
+  if (!listed.KeyCount) throw new Error(`${version} is not published (no s3://${bucket}/manager/${version}/SHA256SUMS)`);
+  await publishVersions({ s3, bucket, version, ...rest });
+}
+
+export async function publishRelease({ s3, bucket, version, router, minCli, dir, now = () => new Date().toISOString() }) {
   const { ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = await import('@aws-sdk/client-s3');
   const prefix = `manager/${version}/`;
   // A published version is never overwritten: refused before anything is written, and each put is conditional.
@@ -132,6 +175,7 @@ export async function publishRelease({ s3, bucket, version, router, dir, now = (
       Bucket: bucket, Key: 'manager/latest.json', Body: JSON.stringify({ version, router, published: now() }), ContentType: 'application/json', CacheControl: 'no-cache',
     }));
   }
+  await publishVersions({ s3, bucket, version, router, minCli, now });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -139,6 +183,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const option = (name) => { const at = args.indexOf(`--${name}`); return at < 0 ? undefined : args[at + 1]; };
   const manager = fileURLToPath(new URL('../..', import.meta.url));
   const pkg = JSON.parse(readFileSync(join(manager, 'package.json'), 'utf8'));
+  if (args.includes('--versions')) {
+    const bucket = option('bucket');
+    if (!bucket) throw new Error('--versions needs --bucket');
+    const { S3Client } = await import('@aws-sdk/client-s3');
+    await resumeVersions({ s3: new S3Client({ region: option('region') ?? 'eu-west-1' }), bucket, version: pkg.version, router: pkg.dormeto.router, minCli: pkg.dormeto.minCli });
+    console.log(`wrote s3://${bucket}/manager/versions.json for ${pkg.version}`);
+    process.exit(0);
+  }
   const git = (...a) => execFileSync('git', a, { cwd: manager, encoding: 'utf8' }).trim();
   if (git('status', '--porcelain')) throw new Error('the working tree has changes: a release is built from a commit');
   const { version, out, publish } = releaseOptions(args, pkg, manager);
@@ -150,7 +202,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const bucket = option('bucket');
     if (!bucket) throw new Error('--publish needs --bucket');
     const { S3Client } = await import('@aws-sdk/client-s3');
-    await publishRelease({ s3: new S3Client({ region: option('region') ?? 'eu-west-1' }), bucket, version: pkg.version, router: pkg.dormeto.router, dir: release.dir });
+    await publishRelease({ s3: new S3Client({ region: option('region') ?? 'eu-west-1' }), bucket, version: pkg.version, router: pkg.dormeto.router, minCli: pkg.dormeto.minCli, dir: release.dir });
     git('tag', '-a', `v${pkg.version}`, '-m', `Dormeto manager ${pkg.version}`);
     console.log(`published ${pkg.version} to s3://${bucket}/manager/${pkg.version}/, tagged v${pkg.version}`);
   }

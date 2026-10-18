@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildRelease, publishRelease, releaseOptions } from './release.mjs';
+import { buildRelease, publishRelease, publishVersions, releaseOptions, resumeVersions } from './release.mjs';
 import { fakeRepos } from './fake-repos.mjs';
 
 const MODULES = new URL('../../infra/terraform/modules/', import.meta.url).pathname;
@@ -94,7 +94,7 @@ test('the options: --version and --out, the package version and dist/release by 
 });
 
 // A fake S3: objects in a map; conditional puts as S3's (If-None-Match: *).
-function fakeS3(objects = {}) {
+function fakeS3(objects = {}, dates = {}) {
   const puts = [];
   return {
     objects, puts,
@@ -102,8 +102,14 @@ function fakeS3(objects = {}) {
       const name = command.constructor.name;
       const input = command.input;
       if (name === 'ListObjectsV2Command') {
-        const keys = Object.keys(objects).filter((k) => k.startsWith(input.Prefix));
-        return { KeyCount: keys.length, Contents: keys.map((Key) => ({ Key })) };
+        const all = Object.keys(objects).sort().filter((k) => k.startsWith(input.Prefix));
+        const from = input.ContinuationToken ? Number(input.ContinuationToken) : 0;
+        const page = all.slice(from, from + (input.MaxKeys ?? 1000));
+        const more = from + page.length < all.length;
+        return {
+          KeyCount: page.length, IsTruncated: more, NextContinuationToken: more ? String(from + page.length) : undefined,
+          Contents: page.map((Key) => ({ Key, LastModified: new Date(dates[Key] ?? '2026-01-01T00:00:00.000Z') })),
+        };
       }
       if (name === 'GetObjectCommand') {
         if (!(input.Key in objects)) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
@@ -123,12 +129,14 @@ test('publishes every file under its version, then moves latest.json forward', a
   const { release } = build();
   const s3 = fakeS3({ 'manager/latest.json': JSON.stringify({ version: '0.1.0' }) });
   await publishRelease({ s3, bucket: 'releases', version: '0.2.0', router: '0.22.6', dir: release.dir, now: () => '2026-10-06T20:00:00.000Z' });
-  assert.deepEqual(s3.puts.map((p) => p.Key), [...readdirSync(release.dir).filter((f) => f !== 'SHA256SUMS').sort().map((f) => `manager/0.2.0/${f}`), 'manager/0.2.0/SHA256SUMS', 'manager/latest.json']);
-  assert.ok(s3.puts.slice(0, -1).every((p) => p.IfNoneMatch === '*' && p.CacheControl.includes('immutable')));
+  assert.deepEqual(s3.puts.map((p) => p.Key), [...readdirSync(release.dir).filter((f) => f !== 'SHA256SUMS').sort().map((f) => `manager/0.2.0/${f}`), 'manager/0.2.0/SHA256SUMS', 'manager/latest.json', 'manager/versions.json']);
+  assert.ok(s3.puts.slice(0, -2).every((p) => p.IfNoneMatch === '*' && p.CacheControl.includes('immutable')));
   assert.equal(s3.puts.find((p) => p.Key.endsWith('.zip')).ContentType, 'application/zip');
   assert.equal(s3.puts.find((p) => p.Key.endsWith('.yaml')).ContentType, 'application/yaml; charset=utf-8');
   assert.deepEqual(JSON.parse(s3.objects['manager/latest.json']), { version: '0.2.0', router: '0.22.6', published: '2026-10-06T20:00:00.000Z' });
+  assert.equal(s3.puts.at(-2).CacheControl, 'no-cache');
   assert.equal(s3.puts.at(-1).CacheControl, 'no-cache');
+  assert.equal(s3.puts.at(-1).ContentType, 'application/json');
 });
 
 test('a version present in the bucket is refused before anything is written; an older one never moves latest.json', async () => {
@@ -139,4 +147,74 @@ test('a version present in the bucket is refused before anything is written; an 
   const newer = fakeS3({ 'manager/latest.json': JSON.stringify({ version: '0.10.0' }) });
   await publishRelease({ s3: newer, bucket: 'releases', version: '0.2.0', router: '0.22.6', dir: release.dir });
   assert.equal(JSON.parse(newer.objects['manager/latest.json']).version, '0.10.0');
+});
+
+const NOW = '2026-10-18T10:00:00.000Z';
+const versionsOf = (s3) => JSON.parse(s3.objects['manager/versions.json']).versions;
+
+test('a first publication rebuilds versions.json from the listed versions, newest first, then adds its own', async () => {
+  const { release } = build();
+  const s3 = fakeS3({
+    'manager/0.10.0/SHA256SUMS': 'x', 'manager/0.10.0/CHANGELOG.md': 'x', 'manager/0.9.0/SHA256SUMS': 'x', 'manager/0.11.0/SHA256SUMS': 'x', 'manager/latest.json': '{"version":"0.11.0"}',
+  }, { 'manager/0.10.0/SHA256SUMS': '2026-09-01T00:00:00.000Z', 'manager/0.11.0/SHA256SUMS': '2026-10-01T00:00:00.000Z', 'manager/0.9.0/SHA256SUMS': '2026-08-01T00:00:00.000Z' });
+  await publishRelease({ s3, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: '0.2.0', dir: release.dir, now: () => NOW });
+  assert.deepEqual(versionsOf(s3), [
+    { version: '0.12.0', router: '0.29.0', minCli: '0.2.0', published: NOW },
+    { version: '0.11.0', router: null, minCli: null, published: '2026-10-01T00:00:00.000Z' },
+    { version: '0.10.0', router: null, minCli: null, published: '2026-09-01T00:00:00.000Z' },
+    { version: '0.9.0', router: null, minCli: null, published: '2026-08-01T00:00:00.000Z' },
+  ]);
+  const put = s3.puts.find((p) => p.Key === 'manager/versions.json');
+  assert.equal(put.CacheControl, 'no-cache');
+  assert.equal(put.ContentType, 'application/json');
+});
+
+test('the rebuild follows the listing across pages', async () => {
+  const s3 = fakeS3(Object.fromEntries(['0.1.0', '0.2.0', '0.3.0', '0.4.0', '0.5.0'].map((v) => [`manager/${v}/SHA256SUMS`, 'x'])));
+  const real = s3.send.bind(s3);
+  let pages = 0;
+  s3.send = (command) => { const input = { ...command.input }; if (command.constructor.name === 'ListObjectsV2Command') { input.MaxKeys = 2; pages++; command.input = input; } return real(command); };
+  await publishVersions({ s3, bucket: 'releases', version: '0.6.0', router: '0.29.0', minCli: null, now: () => NOW });
+  assert.deepEqual(versionsOf(s3).map((v) => v.version), ['0.6.0', '0.5.0', '0.4.0', '0.3.0', '0.2.0', '0.1.0']);
+  assert.equal(pages, 3);
+});
+
+test('an existing versions.json gains the version once and keeps the others; sorted by numbers, not text', async () => {
+  const { release } = build();
+  const existing = { versions: [{ version: '0.9.0', router: '0.28.0', minCli: '0.1.0', published: 'a' }, { version: '0.12.0', router: 'old', minCli: null, published: 'b' }] };
+  const s3 = fakeS3({ 'manager/versions.json': JSON.stringify(existing) });
+  await publishRelease({ s3, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: '0.2.0', dir: release.dir, now: () => NOW });
+  assert.deepEqual(versionsOf(s3), [
+    { version: '0.12.0', router: '0.29.0', minCli: '0.2.0', published: NOW },
+    { version: '0.9.0', router: '0.28.0', minCli: '0.1.0', published: 'a' },
+  ]);
+});
+
+test('a missing minCli is written as null', async () => {
+  const s3 = fakeS3({ 'manager/versions.json': '{"versions":[]}' });
+  await publishVersions({ s3, bucket: 'releases', version: '0.12.0', router: '0.29.0', now: () => NOW });
+  assert.equal(versionsOf(s3)[0].minCli, null);
+});
+
+test('a malformed versions.json is rebuilt from the listing, and another read error throws', async () => {
+  for (const bad of ['not json', '{"versions":"no"}', '{}']) {
+    const s3 = fakeS3({ 'manager/versions.json': bad, 'manager/0.11.0/SHA256SUMS': 'x' });
+    await publishVersions({ s3, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: '0.2.0', now: () => NOW });
+    assert.deepEqual(versionsOf(s3).map((v) => v.version), ['0.12.0', '0.11.0']);
+  }
+  const broken = fakeS3();
+  const real = broken.send.bind(broken);
+  broken.send = (c) => (c.constructor.name === 'GetObjectCommand' ? Promise.reject(Object.assign(new Error('denied'), { name: 'AccessDenied' })) : real(c));
+  await assert.rejects(publishVersions({ s3: broken, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: null, now: () => NOW }), /denied/);
+  assert.equal(broken.puts.length, 0);
+});
+
+test('--versions writes only versions.json for a published version, and refuses an unpublished one writing nothing', async () => {
+  const s3 = fakeS3({ 'manager/0.12.0/SHA256SUMS': 'x', 'manager/latest.json': '{"version":"0.12.0"}' });
+  await resumeVersions({ s3, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: '0.2.0', now: () => NOW });
+  assert.deepEqual(s3.puts.map((p) => p.Key), ['manager/versions.json']);
+  assert.deepEqual(versionsOf(s3), [{ version: '0.12.0', router: '0.29.0', minCli: '0.2.0', published: NOW }]);
+  const none = fakeS3({ 'manager/0.11.0/SHA256SUMS': 'x' });
+  await assert.rejects(resumeVersions({ s3: none, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: '0.2.0', now: () => NOW }), /0\.12\.0 is not published/);
+  assert.equal(none.puts.length, 0);
 });
