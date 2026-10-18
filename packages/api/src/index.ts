@@ -267,6 +267,7 @@ export const handler = createApi({
   discovery,
   operations: process.env.OPERATIONS ? operations : undefined,
   managerAccount: process.env.MANAGER_ACCOUNT,
+  historyDays: Number(process.env.HISTORY_DAYS) || 400,
   discoveryMode: process.env.DISCOVERY_MODE,
   // Routers and workloads as the routers report them (scale design §4).
   fleet,

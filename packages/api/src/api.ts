@@ -205,6 +205,7 @@ export interface ApiOptions {
   statesCacheMs?: number;
   // The organization roles the manager assumes, set in its Terraform (packaging design §3).
   accessRoles?: { discoveryRole: string; commandRole: string };
+  historyDays?: number; // how long the savings job's day items are kept (HISTORY_DAYS, 400)
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
   callConcurrency?: number; // at most this many such calls at once (10)
   callDeadlineMs?: number; // and all of them within (20 s: API Gateway answers within 29 s); the others are not called
@@ -350,7 +351,7 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
 }
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
-  fleet, idleRequests, visible = () => true, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
+  fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -401,21 +402,37 @@ export function createApi({
   }
   const readsIn = (identity: Identity, index: Map<string, Record<string, string>>, account: string | undefined, region: string | undefined, id: string | undefined) =>
     everyWorkload(identity, 'read') || (id !== undefined && can(identity.grants, index.get(workloadKey(account ?? '', region ?? '', id)), 'read'));
-  // A refused workload action is audited, with its reason, before the 403.
+  // A refused workload action is audited, with its reason, before the 403: once a minute per user, action and target on
+  // this instance (a loop of refused calls must not fill the audit); the others are logged.
+  const refusals = new Map<string, number>();
+  const REFUSAL_AUDIT_MS = 60_000;
   async function refuse(identity: Identity, action: string, target: string, reason: string): Promise<never> {
-    await audit.write({ id: newId(), at: new Date(now()).toISOString(), who: identity.email, role: identity.role, action, target, result: 'refused', groups: identity.groups, reason });
+    const t = now();
+    const key = `${identity.email}\n${action}\n${target}`;
+    const last = refusals.get(key);
+    if (last !== undefined && t - last < REFUSAL_AUDIT_MS) {
+      console.warn(JSON.stringify({ level: 'warn', event: 'RefusedActionNotAudited', who: identity.email, action, target, reason }));
+    } else {
+      if (refusals.size >= 1000) refusals.clear();
+      refusals.set(key, t);
+      await audit.write({ id: newId(), at: new Date(t).toISOString(), who: identity.email, role: identity.role, action, target, result: 'refused', groups: identity.groups, reason });
+    }
     throw new HttpError(403, 'forbidden', reason);
   }
   async function permit(identity: Identity, action: string, target: string, tags: Record<string, string> | undefined, permission: Permission) {
     if (can(identity.grants, tags, permission)) return;
     let reason = `${permission} permission required on this workload`;
-    // A built-in role says as before what it lacks (also the two-step verification its rights wait for).
-    if (claimed.get(identity)?.role !== 'member') {
+    const own = claimed.get(identity);
+    if (own?.role !== 'member') {
+      // A built-in role says as before what it lacks (also the two-step verification its rights wait for).
       try {
         need(identity, 'operator');
       } catch (err) {
         reason = (err as Error).message;
       }
+    } else if (own.full && can(own.full, tags, permission)) {
+      // A grant that fell to read for lack of the multi-factor session: say so.
+      reason = `two-step verification required to use your ${permission} rights: set it up from your Account page`;
     }
     await refuse(identity, action, target, reason);
   }
@@ -433,7 +450,7 @@ export function createApi({
     return enabled;
   }
   // The role a user's groups give, the role they act with, and their MFA, per request.
-  const claimed = new WeakMap<Identity, { role: Role; enabled: boolean | null; effective: Role | null; required: boolean }>();
+  const claimed = new WeakMap<Identity, { role: Role; enabled: boolean | null; effective: Role | null; required: boolean; full?: Grant[] }>();
   // In operators mode: operators and administrators, and anyone a group lets wake or nap.
   const mfaRequired = (role: Role, groupGrants: Grant[][]) => !!mfa && (mfa.mode === 'required'
     || (mfa.mode === 'operators' && (role === 'operator' || role === 'admin' || groupGrants.some((grants) => grants.some((g) => g.permissions.some((p) => p !== 'read'))))));
@@ -456,7 +473,7 @@ export function createApi({
     const mfaOk = !required || !!(session(identity) ?? enabled);
     // A member has no rights to lose: they keep the role, and their grants fall to read.
     const acting: Role | null = mfaOk ? role : mfa!.mode === 'required' ? null : role === 'member' ? 'member' : 'viewer';
-    claimed.set(identity, { role, enabled: enabled ?? null, effective: acting, required });
+    claimed.set(identity, { role, enabled: enabled ?? null, effective: acting, required, full: effective(role, own, true) });
     if (acting === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
     identity.role = acting ?? (role === 'member' ? 'member' : 'viewer');
     identity.grants = effective(role, own, mfaOk);
@@ -696,43 +713,71 @@ export function createApi({
     };
   }
 
-  // The savings summary of the workloads a member reads (R11), from the day items the daily job wrote (kept history_days):
-  // its totals over the same 31 days, the top workloads and the unpriced hours of the latest day. What belongs to the
-  // fleet alone (Dormeto's own cost, the failed count) is left out.
+  // A member's savings (R11) are summed from the day items the daily job wrote (kept historyDays): read once per
+  // computation of the summary, shared by the requests that come meanwhile (the same promise), kept per workload and day;
+  // each request then sums the workloads its caller reads, without reading the store again.
+  type SavingsDays = { days: Map<string, Map<string, SavingsDay>>; stored: string[] };
+  let savingsKept: { computedAt: string; built: Promise<SavingsDays> } | null = null;
+  function savingsDays(summary: SavingsSummary): Promise<SavingsDays> {
+    if (savingsKept?.computedAt === summary.computedAt) return savingsKept.built;
+    const latest = Date.parse(`${summary.day}T00:00:00.000Z`);
+    const oldest = latest - historyDays * DAY_MS;
+    const last = Array.from({ length: 31 }, (_, i) => new Date(latest - (30 - i) * DAY_MS).toISOString().slice(0, 10));
+    // The counted days past the history have no items any more: not read.
+    const dates = [...new Set([...Object.keys(summary.counted).filter((d) => Date.parse(`${d}T00:00:00.000Z`) >= oldest), ...last])].sort();
+    const built = (async () => {
+      const days = new Map<string, Map<string, SavingsDay>>();
+      const stored = new Set<string>();
+      const queue = [...dates];
+      await Promise.all(Array.from({ length: 10 }, async () => {
+        for (let d = queue.shift(); d; d = queue.shift()) {
+          const items = (await fleet?.listSavingsDay?.(d)) ?? [];
+          if (items.length) stored.add(d);
+          for (const w of items) {
+            const key = workloadKey(w.account, w.region, w.workloadId);
+            if (!days.has(key)) days.set(key, new Map());
+            days.get(key)!.set(d, w);
+          }
+        }
+      }));
+      return { days, stored: [...stored].sort() };
+    })();
+    const entry = { computedAt: summary.computedAt, built };
+    savingsKept = entry;
+    // A failed build is not kept: the next request reads again.
+    built.catch(() => { if (savingsKept === entry) savingsKept = null; });
+    return built;
+  }
+  // The savings summary of the workloads a member reads: its totals over the same days, the top workloads and the unpriced
+  // hours of the latest day. What belongs to the fleet alone (Dormeto's own cost, the failed count) is left out; the
+  // cumulative runs from the first day stored.
   async function readableSavings(identity: Identity, summary: SavingsSummary) {
-    const index = await tagIndex(identity);
+    const [{ days, stored }, index] = await Promise.all([savingsDays(summary), tagIndex(identity)]);
+    const mine = [...days].filter(([key]) => can(identity.grants, index.get(key), 'read')).map(([, byDate]) => byDate);
     const latest = Date.parse(`${summary.day}T00:00:00.000Z`);
     const last = Array.from({ length: 31 }, (_, i) => new Date(latest - (30 - i) * DAY_MS).toISOString().slice(0, 10));
-    const dates = [...new Set([...Object.keys(summary.counted), ...last])].sort();
-    const read = new Map<string, SavingsDay[]>();
-    const queue = [...dates];
-    await Promise.all(Array.from({ length: 10 }, async () => {
-      for (let d = queue.shift(); d; d = queue.shift()) {
-        const items = (await fleet?.listSavingsDay?.(d)) ?? [];
-        read.set(d, items.filter((w) => readsIn(identity, index, w.account, w.region, w.workloadId)));
-      }
-    }));
-    const sum = (list: SavingsDay[]) => list.reduce((n, d) => n + d.usd, 0);
-    const days = (d: string) => read.get(d) ?? [];
+    const on = (d: string) => mine.flatMap((byDate) => byDate.get(d) ?? []);
+    const sum = (d: string) => on(d).reduce((n, w) => n + w.usd, 0);
     const last30 = last.slice(1);
     const byWorkload = new Map<string, SavingsSummary['top'][number]>();
     for (const d of last30) {
-      for (const w of days(d)) {
+      for (const w of on(d)) {
         const key = workloadKey(w.account, w.region, w.workloadId);
         const known = byWorkload.get(key) ?? { account: w.account, region: w.region, router: w.router, workloadId: w.workloadId, ...(w.name ? { name: w.name } : {}), usd: 0 };
         known.usd += w.usd;
         byWorkload.set(key, known);
       }
     }
-    const counted = Object.fromEntries(Object.keys(summary.counted).sort().map((d) => [d, sum(days(d))]));
-    const latestDay = days(summary.day);
+    const counted = Object.fromEntries(stored.filter((d) => d in summary.counted).map((d) => [d, sum(d)]));
+    const latestDay = on(summary.day);
     const unpriced = latestDay.filter((d) => d.unpriced.length);
     const month = summary.day.slice(0, 7);
     return {
       computedAt: summary.computedAt, day: summary.day, baseline: summary.baseline,
-      last30: { usd: last30.reduce((n, d) => n + sum(days(d)), 0), asleepHours: last30.reduce((n, d) => n + days(d).reduce((m, w) => m + w.asleepHours, 0), 0), days: last30.map((d) => ({ date: d, usd: sum(days(d)) })) },
-      month: { month, usd: last.filter((d) => d.startsWith(month)).reduce((n, d) => n + sum(days(d)), 0) },
-      cumulative: { usd: Object.values(counted).reduce((n, v) => n + v, 0), since: Object.keys(counted).sort()[0] ?? summary.cumulative.since, lastDay: summary.cumulative.lastDay },
+      last30: { usd: last30.reduce((n, d) => n + sum(d), 0), asleepHours: last30.reduce((n, d) => n + on(d).reduce((m, w) => m + w.asleepHours, 0), 0), days: last30.map((d) => ({ date: d, usd: sum(d) })) },
+      month: { month, usd: last.filter((d) => d.startsWith(month)).reduce((n, d) => n + sum(d), 0) },
+      // Over the days stored: those older than the history are gone.
+      cumulative: { usd: stored.reduce((n, d) => n + sum(d), 0), since: stored[0] ?? summary.day, lastDay: summary.cumulative.lastDay },
       counted,
       top: [...byWorkload.values()].filter((w) => w.usd > 0).sort((a, b) => b.usd - a.usd).slice(0, 10),
       unpriced: { workloads: unpriced.length, hours: unpriced.reduce((n, d) => n + d.unpriced.reduce((m, u) => m + u.hours, 0), 0) },
@@ -863,18 +908,23 @@ export function createApi({
     return { payload, text };
   }
 
-  async function pauseRoute(identity: Identity, event: ApiEvent, router: Router, action: string, workloadId?: string, allow?: () => Promise<void>) {
-    if (allow) await allow();
-    else need(identity, 'operator');
+  async function pauseRoute(identity: Identity, event: ApiEvent, router: Router, action: string, workloadId?: string, allow?: (permission: Permission) => Promise<void>) {
+    if (!allow) need(identity, 'operator');
     const target = workloadId ? `${router.name}/${workloadId}` : router.name;
     const prefix = workloadId ? '' : 'router-';
     if (action === 'pause') {
       const { payload, text } = pauseRequest(event, identity, workloadId);
+      // A pause that wakes the workload (without keep asleep) also needs wake.
+      if (allow) {
+        await allow('nap');
+        if (!payload.keepAsleep) await allow('wake');
+      }
       return audited(identity, `${prefix}pause`, target, async () => {
         const result = await invokeNew(router, payload, 'pause') as { woken?: string[] };
         return { result: text(result?.woken ?? []), response: reply(200, result) };
       });
     }
+    if (allow) await allow('nap');
     return audited(identity, `${prefix}resume`, target, async () => {
       const result = await invokeNew(router, { action: 'resume', ...(workloadId ? { workloadId } : {}), by: identity.email }, 'resume') as { resumed?: boolean };
       return { result: result?.resumed ? 'resumed' : 'not paused', response: reply(200, result) };
@@ -1001,8 +1051,8 @@ export function createApi({
       // A failed read of the discounts never fails the summary (final review 2).
       const settings = fleet?.getSavingsSettings ? await fleet.getSavingsSettings().catch(() => null) : null;
       const summary = (await fleet?.getSavingsSummary?.()) ?? null;
-      // A caller whose grants do not cover every workload: the sums of what they read, from the job's per-workload days.
-      if (!everyWorkload(identity, 'read')) {
+      // A member: the sums of the workloads they read, from the job's per-workload days (whatever their grants cover).
+      if (identity.role === 'member') {
         return reply(200, { summary: summary ? await readableSavings(identity, summary) : null, settings: settings ? { compute: settings.compute, databases: settings.databases } : null });
       }
       return reply(200, { summary, settings });
@@ -1077,18 +1127,38 @@ export function createApi({
     }
 
     if (resource === 'workloads' && a && b) {
-      const router = routerOf(a, identity);
+      // A member cannot tell an unknown router from a workload they do not read.
+      let router: Router;
+      try {
+        router = routerOf(a, identity);
+      } catch (err) {
+        if (identity.role === 'member' && err instanceof HttpError && err.statusCode === 404) throw new HttpError(404, 'not_found', `unknown workload: ${b}`);
+        throw err;
+      }
       const id = workloadId(b);
-      // Its summary (tags included) when the caller's grants do not cover every workload: read once.
+      // Where its tags are read, when the caller's grants do not cover every workload: a router that reports, from its
+      // summary in the fleet; one that does not, live from the router (its status), never from a stale fleet item.
       let summaryKept: WorkloadSummary | null | undefined;
       const summaryNow = async () => {
         if (summaryKept === undefined) summaryKept = fleet ? await fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null;
         return summaryKept;
       };
+      let statusKept: Promise<object | null> | undefined;
+      const statusNow = () => (statusKept ??= invoke(router, { action: 'status', workloadId: id }) as Promise<object | null>);
+      let reportingKept: boolean | undefined;
+      const reportsNow = async () => {
+        if (reportingKept === undefined) {
+          const own = fleet ? (await fleet.listRouters().catch(() => [] as RouterSummary[])).find((x) => x.account === accountOfRouter(router) && x.region === router.region) : undefined;
+          reportingKept = !!own && reporting(own, now());
+        }
+        return reportingKept;
+      };
+      let tagsKept: Record<string, string> | undefined;
+      const tagsNow = async () => (tagsKept ??= tagsOf(await reportsNow() ? await summaryNow() : await statusNow()));
       // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
       const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? ''));
-      if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, tagsOf(await summaryNow()), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
-      const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : tagsOf(await summaryNow()), permission);
+      if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, await tagsNow(), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
+      const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : await tagsNow(), permission);
       // Its state history over the last days (R8), from the manager's store: never the router.
       if (method === 'GET' && action === 'history' && !parts[4]) {
         const days = Number(event.queryStringParameters?.days ?? 7);
@@ -1146,7 +1216,7 @@ export function createApi({
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.
         const [status, summary] = await Promise.all([
-          invoke(router, { action: 'status', workloadId: id }),
+          statusNow(),
           fleet ? fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null,
         ]);
         // The bar of its header, as on a Workloads row: its time in each state, and its idle hours from discovery.
@@ -1154,7 +1224,7 @@ export function createApi({
           statesOf(accountOfRouter(router), router.region, id, summary),
           discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
         ]);
-        const access = withAccess(identity, { tags: summary?.tags ?? (status as { tags?: unknown } | null)?.tags });
+        const access = withAccess(identity, { tags: tagsOf((await reportsNow()) ? summary : status) });
         return reply(200, {
           // Its account and region: the ARNs of its backends and targets.
           ...(status as object), tags: access.tags, can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
@@ -1177,7 +1247,7 @@ export function createApi({
           return { result: 'requested', response: reply(202, { accepted: true }) };
         });
       }
-      if (method === 'POST' && (action === 'pause' || action === 'resume') && !parts[4]) return pauseRoute(identity, event, router, action, id, () => allow(action, 'nap'));
+      if (method === 'POST' && (action === 'pause' || action === 'resume') && !parts[4]) return pauseRoute(identity, event, router, action, id, (permission) => allow(action, permission));
       if (method === 'POST' && action === 'rename' && !parts[4]) {
         need(identity, 'operator');
         const name = nameOf(bodyOf(event).name, { required: true })!;
@@ -1580,6 +1650,15 @@ export function createApi({
     const id = op.type === 'offboard' ? op.target.workloadId : op.type === 'onboard' ? op.context.workloadId : undefined;
     return typeof id === 'string' ? { account: op.target.account, region: op.target.region, id } : null;
   };
+  // What a member is shown of an operation: who and what, its steps and their errors; not its input, context or holds.
+  const memberView = (op: Operation) => {
+    const w = workloadOf(op);
+    const router = op.type === 'offboard' ? op.target.router : routers.find((r) => accountOfRouter(r) === op.target.account && r.region === op.target.region)?.name;
+    return {
+      id: op.id, type: op.type, status: op.status, target: { ...(router ? { router } : {}), ...(w ? { workloadId: w.id } : {}) }, by: op.by, createdAt: op.createdAt, updatedAt: op.updatedAt,
+      steps: op.steps.map((st) => ({ name: st.name, status: st.status, ...(st.status === 'failed' && st.detail ? { error: st.detail } : {}) })),
+    };
+  };
   // A member reads the operations on the workloads they read; the others are the built-in roles'.
   const readsOperation = (identity: Identity, index: Map<string, Record<string, string>>, op: Operation) => {
     if (RANK[identity.role] >= RANK.viewer) return seesOperation(identity, op);
@@ -1596,13 +1675,13 @@ export function createApi({
         console.error(JSON.stringify({ level: 'error', event: 'UpdateOperationsNotRefreshed', error: err.message }));
         return shown;
       }) : shown;
-      return reply(200, { operations });
+      return reply(200, { operations: RANK[identity.role] >= RANK.viewer ? operations : operations.map(memberView) });
     }
     if (method === 'GET' && id) {
       const op = await ops.get(decodeURIComponent(id));
       const index = op && RANK[identity.role] < RANK.viewer ? await tagIndex(identity) : new Map<string, Record<string, string>>();
       if (!op || !readsOperation(identity, index, op)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
-      return reply(200, op);
+      return reply(200, RANK[identity.role] >= RANK.viewer ? op : memberView(op));
     }
     if (method !== 'POST' || id) return null;
     const body = bodyOf(event);

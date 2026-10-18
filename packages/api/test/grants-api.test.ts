@@ -1,6 +1,6 @@
 // Tag-driven access control on the routes (tags design §5): rows filtered before the counts, an unreadable workload
 // answers 404, a readable one without the permission 403 (audited), and the aggregates of what the caller reads.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApi, type ApiEvent, type AuditEntry, type Router } from '../src/api.js';
 import type { Operation } from '@dormeto/operations';
 
@@ -27,6 +27,9 @@ const WORKLOADS = [
 const GROUPS = [
   { name: 'payments', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read'] }], updatedAt: null, updatedBy: null },
   { name: 'payers', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake'] }], updatedAt: null, updatedBy: null },
+  { name: 'nappers', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'nap'] }], updatedAt: null, updatedBy: null },
+  { name: 'pausers', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake', 'nap'] }], updatedAt: null, updatedBy: null },
+  { name: 'everything', description: '', grants: [{ tags: {}, permissions: ['read'] }], updatedAt: null, updatedBy: null },
 ];
 
 const day = (date: string, id: string, usd: number) => ({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: id, usd, asleepHours: 2, hours: 2, unpriced: [] });
@@ -51,7 +54,8 @@ const ALARMS = [
   alarm('router#1', 'router', { account: ACCOUNT, region: 'eu-west-1' }),
   alarm('list#ipsum', 'list'),
 ];
-const op = (id: string, type: string, target: Record<string, string>, context: Record<string, unknown> = {}) => ({ id, type, target, input: {}, status: 'succeeded', steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: id, context, by: 'a', createdAt: at, updatedAt: at }) as unknown as Operation;
+const STEPS = [{ name: 'preview', status: 'done', detail: 'secret detail' }, { name: 'create', status: 'failed', detail: 'boom', attempts: 3 }];
+const op = (id: string, type: string, target: Record<string, string>, context: Record<string, unknown> = {}) => ({ id, type, target, input: { settings: { x: 1 } }, status: 'succeeded', steps: STEPS, cursor: 0, holds: { locks: [], slots: [] }, activeKey: id, context: { install: true, ...context }, by: 'a', createdAt: at, updatedAt: at }) as unknown as Operation;
 const OPERATIONS = [
   op('o1', 'offboard', { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'pay' }),
   op('o2', 'offboard', { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'search' }),
@@ -60,39 +64,56 @@ const OPERATIONS = [
   op('o5', 'onboard', { account: ACCOUNT, region: 'eu-west-1', targetGroupArn: 'arn:tg/x' }),
 ];
 
-function setup({ tagged = true }: { tagged?: boolean } = {}) {
+interface Options {
+  tagged?: boolean;
+  silent?: boolean; // the router stopped reporting: its workloads come live (list, status)
+  live?: Record<string, Record<string, string>>; // the tags the router itself answers, by workload
+  fleetTags?: Record<string, Record<string, string>>; // the tags of the fleet items, by workload
+  clock?: { now: number };
+  summary?: typeof SAVINGS;
+  historyDays?: number;
+  mfa?: boolean;
+}
+function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: NOW }, summary: savingsSummary = SAVINGS, historyDays, mfa }: Options = {}) {
   const audit: AuditEntry[] = [];
   const calls: [string, string][] = [];
-  const workloads = tagged ? WORKLOADS : WORKLOADS.map(({ tags: _t, ...w }) => w);
+  const reads: string[] = [];
+  const box = { current: savingsSummary };
+  const workloads = (tagged ? WORKLOADS : WORKLOADS.map(({ tags: _t, ...w }) => w)).map((w) => (fleetTags?.[w.workloadId] ? { ...w, tags: fleetTags[w.workloadId] } : w));
+  const rs = silent ? { ...routerSummary, checkedAt: iso(NOW - 3_600_000), check: { ...routerSummary.check, checkedAt: iso(NOW - 3_600_000) } } : routerSummary;
+  const tagsLive = (id: string) => live?.[id] ?? (workloads.find((w) => w.workloadId === id) as { tags?: unknown } | undefined)?.tags ?? {};
   const api = createApi({
-    routers: ROUTERS, now: () => NOW, version: '0.14.0', managerAccount: ACCOUNT, newId: () => 'id',
+    routers: ROUTERS, now: () => clock.now, version: '0.14.0', managerAccount: ACCOUNT, newId: () => 'id', ...(historyDays ? { historyDays } : {}),
     audit: { write: async (e) => { audit.push(e); }, list: async () => [] },
     async invoke(router, payload) {
       calls.push([payload.action as string, String(payload.workloadId ?? '')]);
       if (payload.action === 'request-nap') return { requested: true };
       if (payload.action === 'force-wake') return { state: 'WAKING' };
-      if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE' };
+      if (payload.action === 'pause') return { woken: [] };
+      if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', tags: tagsLive(String(payload.workloadId)) };
+      if (payload.action === 'list') return { router: { name: 'dmt-dev' }, workloads: workloads.map((w) => ({ workloadId: w.workloadId, state: w.state, tags: tagsLive(w.workloadId) })) };
       return { ok: true };
     },
     fleet: {
-      listRouters: async () => [routerSummary] as never,
+      listRouters: async () => [rs] as never,
       listWorkloads: async () => workloads as never,
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
       listGroups: async () => GROUPS as never,
-      getSavingsSummary: async () => SAVINGS as never,
-      getSavingsSettings: async () => ({ compute: 0, databases: 0, updatedAt: null, updatedBy: null }),
-      listSavingsDay: async (date: string) => (DAYS[date] ?? []) as never,
+      getSavingsSummary: async () => box.current as never,
+      getSavingsSettings: async () => ({ compute: 0, databases: 0, updatedAt: null, updatedBy: 'admin@example.com' }),
+      listSavingsDay: async (date: string) => { reads.push(date); return (DAYS[date] ?? []) as never; },
       listHistory: async () => ({ entries: [], truncated: false }),
       historyBefore: async () => null,
     },
     alerts: { open: async () => ALARMS as never, subscriptions: async () => ({ topicArn: 'arn:topic', subscriptions: [] }) },
     operations: { list: async () => OPERATIONS, get: async (id: string) => OPERATIONS.find((o) => o.id === id) ?? null, create: async () => OPERATIONS[0]!, installedRouters: async () => [] } as never,
+    ...(mfa ? { mfa: { mode: 'operators' as const, passkeys: false, enabled: async () => false } } : {}),
   });
-  return { api, audit, calls };
+  return { api, audit, calls, reads, box };
 }
 
 const USERS = {
-  viewer: '[dmt-viewer]', operator: '[dmt-operator]', pay: '[payments]', payWake: '[payers]', none: '',
+  viewer: '[dmt-viewer]', operator: '[dmt-operator]', pay: '[payments]', payWake: '[payers]', napper: '[nappers]', pauser: '[pausers]', all: '[everything]', none: '',
 };
 const event = (user: keyof typeof USERS, method: string, path: string, query: Record<string, string> = {}, body?: unknown): ApiEvent => ({
   rawPath: path, queryStringParameters: query, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -231,5 +252,126 @@ describe('aggregates', () => {
     expect(await list('none')).toEqual([]);
     expect((await s.api(event('pay', 'GET', '/api/operations/o1'))).statusCode).toBe(200);
     for (const id of ['o2', 'o3', 'o5']) expect((await s.api(event('pay', 'GET', `/api/operations/${id}`))).statusCode, id).toBe(404);
+  });
+});
+
+describe('review fixes', () => {
+  const asked = (s: ReturnType<typeof setup>) => s.calls.map(([a]) => a);
+
+  it('tags of a silent router come from the router, not from a stale fleet item', async () => {
+    // Stale fleet: payments; live: search. A payments member no longer reads it, and nothing is woken.
+    const s = setup({ silent: true, fleetTags: { search: { team: 'payments' } }, live: { search: { team: 'search' } } });
+    expect((await s.api(event('payWake', 'GET', '/api/workloads/dmt-dev/search'))).statusCode).toBe(404);
+    expect((await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/search/wake'))).statusCode).toBe(404);
+    expect(asked(s)).not.toContain('force-wake');
+    // The reverse: stale fleet says search, live says payments.
+    const r = setup({ silent: true, fleetTags: { search: { team: 'search' } }, live: { search: { team: 'payments' } } });
+    const res = await r.api(event('payWake', 'GET', '/api/workloads/dmt-dev/search'));
+    expect([res.statusCode, json(res).tags, json(res).can]).toEqual([200, { team: 'payments' }, { wake: true, nap: false }]);
+    expect((await r.api(event('payWake', 'POST', '/api/workloads/dmt-dev/search/wake'))).statusCode).toBe(200);
+  });
+
+  it('a reporting router\'s tags come from the fleet item, whatever its status says', async () => {
+    const s = setup({ live: { pay: { team: 'search' } } });
+    const res = await s.api(event('payWake', 'GET', '/api/workloads/dmt-dev/pay'));
+    expect([res.statusCode, json(res).tags]).toEqual([200, { team: 'payments', env: 'prod' }]);
+    s.calls.length = 0;
+    expect((await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/pay/wake'))).statusCode).toBe(200);
+    expect(asked(s)).toEqual(['force-wake']);
+  });
+
+  it('a pause that wakes needs wake as well as nap; keep asleep needs nap only; 404 comes before 403', async () => {
+    const s = setup();
+    const pause = (user: keyof typeof USERS, id: string, body: unknown) => s.api(event(user, 'POST', `/api/workloads/dmt-dev/${id}/pause`, {}, body));
+    const refused = await pause('napper', 'pay', { reason: 'r' });
+    expect(refused.statusCode).toBe(403);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'pause', result: 'refused' });
+    expect(s.audit.at(-1)!.reason).toMatch(/wake/);
+    expect((await pause('napper', 'pay', { reason: 'r', keepAsleep: true })).statusCode).toBe(200);
+    expect((await pause('napper', 'search', { reason: 'r' })).statusCode).toBe(404);
+    expect((await pause('pauser', 'pay', { reason: 'r' })).statusCode).toBe(200);
+    expect((await pause('payWake', 'pay', { reason: 'r', keepAsleep: true })).statusCode).toBe(403);
+    expect((await s.api(event('napper', 'POST', '/api/workloads/dmt-dev/pay/resume'))).statusCode).toBe(200);
+  });
+
+  it('builds a member\'s savings once per computation, shared by concurrent requests, and rebuilds for a new one', async () => {
+    const s = setup();
+    const [a, b] = await Promise.all([s.api(event('pay', 'GET', '/api/savings')), s.api(event('payWake', 'GET', '/api/savings'))]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    const built = s.reads.length;
+    expect(built).toBeGreaterThan(0);
+    expect(new Set(s.reads).size).toBe(built);
+    expect(json(await s.api(event('pay', 'GET', '/api/savings'))).summary.last30.usd).toBe(2);
+    expect(s.reads.length).toBe(built);
+    // A new computation (same instance) builds again.
+    s.box.current = { ...SAVINGS, computedAt: iso(NOW) };
+    await s.api(event('pay', 'GET', '/api/savings'));
+    expect(s.reads.length).toBe(built * 2);
+  });
+
+  it('skips the counted dates older than the history, and says since when the sum runs', async () => {
+    const old = { ...SAVINGS, counted: { '2025-01-01': 5, ...SAVINGS.counted } };
+    const s = setup({ summary: old, historyDays: 400 });
+    const res = json(await s.api(event('pay', 'GET', '/api/savings'))).summary;
+    expect(s.reads).not.toContain('2025-01-01');
+    expect(s.reads).toContain('2026-10-16');
+    expect([res.cumulative.usd, res.cumulative.since]).toEqual([2, '2026-10-16']);
+    const short = setup({ summary: old, historyDays: 30 });
+    await short.api(event('pay', 'GET', '/api/savings'));
+    expect(Math.min(...short.reads.map((d) => Date.parse(d)))).toBeGreaterThanOrEqual(Date.parse('2026-09-17'));
+  });
+
+  it('audits a refusal once a minute per user, action and target; the others are logged', async () => {
+    const clock = { now: NOW };
+    const s = setup({ clock });
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let i = 0; i < 3; i++) expect((await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/pay/nap'))).statusCode).toBe(403);
+    expect(s.audit).toHaveLength(1);
+    expect(log).toHaveBeenCalledTimes(2);
+    await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/pay/pause', {}, { reason: 'x' }));
+    expect(s.audit).toHaveLength(2);
+    clock.now += 61_000;
+    await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/pay/nap'));
+    expect(s.audit).toHaveLength(3);
+    log.mockRestore();
+  });
+
+  it('gives a member the member view of savings whatever their grants cover', async () => {
+    const s = setup();
+    const res = json(await s.api(event('all', 'GET', '/api/savings')));
+    expect([res.summary.last30.usd, res.summary.dormeto, res.summary.failed, res.settings.updatedBy, res.settings.compute]).toEqual([14, undefined, undefined, undefined, 0]);
+    const viewer = json(await s.api(event('viewer', 'GET', '/api/savings')));
+    expect([viewer.summary.dormeto, viewer.settings.updatedBy]).toEqual([{ usdMonth: 30 }, 'admin@example.com']);
+  });
+
+  it('shows a member a reduced operation: no context, input or holds', async () => {
+    const s = setup();
+    const list = json(await s.api(event('pay', 'GET', '/api/operations'))).operations;
+    const reduced = { id: 'o1', type: 'offboard', status: 'succeeded', target: { router: 'dmt-dev', workloadId: 'pay' }, by: 'a', createdAt: at, updatedAt: at, steps: [{ name: 'preview', status: 'done' }, { name: 'create', status: 'failed', error: 'boom' }] };
+    expect(list[0]).toEqual(reduced);
+    expect(list[1]).toMatchObject({ id: 'o4', type: 'onboard', target: { router: 'dmt-dev', workloadId: 'pay' } });
+    expect(json(await s.api(event('pay', 'GET', '/api/operations/o1')))).toEqual(reduced);
+    expect(json(await s.api(event('viewer', 'GET', '/api/operations/o1'))).context).toEqual({ install: true });
+  });
+
+  it('says two-step verification is missing when a grant is reduced to read for lack of it', async () => {
+    const s = setup({ mfa: true });
+    const res = await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/pay/wake'));
+    expect(res.statusCode).toBe(403);
+    expect(json(res).message).toMatch(/two-step verification required/);
+    expect(s.audit.at(-1)!.reason).toMatch(/two-step verification required/);
+    expect(asked(s)).toEqual([]);
+    // A permission the grants never gave is still said as such.
+    const nap = await s.api(event('payWake', 'POST', '/api/workloads/dmt-dev/pay/nap'));
+    expect(json(nap).message).toBe('nap permission required on this workload');
+  });
+
+  it('answers a member the same 404 for an unknown router and an unreadable workload', async () => {
+    const s = setup();
+    const unreadable = json(await s.api(event('pay', 'GET', '/api/workloads/dmt-dev/search')));
+    const noRouter = await s.api(event('pay', 'GET', '/api/workloads/nope/search'));
+    expect([noRouter.statusCode, json(noRouter)]).toEqual([404, unreadable]);
+    // Built-in roles keep the router's own message.
+    expect(json(await s.api(event('viewer', 'GET', '/api/workloads/nope/search'))).message).toBe('unknown router: nope');
   });
 });
