@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.14.0 — 2026-10-19
+
+Router 0.30.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 Router 0.30.0. Access: nothing to apply again; upgrade the routers to 0.30.0 for their workloads' tags (a router before
 0.30.0 reports none: its workloads are seen only by the built-in roles and by grants on every workload).
