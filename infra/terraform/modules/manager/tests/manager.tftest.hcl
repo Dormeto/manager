@@ -598,24 +598,25 @@ run "self_update_rights_with_install" {
   assert {
     condition = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRead"][0].actions == toset(["s3:GetObject"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateRead"][0].resources == toset([
       "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/results/*",
-      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/plans/*",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/plans/*/release.json",
+      "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/plans/*/plan.json",
       "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/applied.json",
       "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/cli.json",
       "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/release/SHA256SUMS",
       "arn:aws:s3:::dmt-install-111122223333-eu-west-1/test/release/CHANGELOG.md",
     ])
-    error_message = "Read: s3:GetObject on the six objects."
+    error_message = "Read: s3:GetObject on the results, each plan's release.json and plan.json (never its tfplan), and the four objects."
   }
   assert {
     condition     = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateBuilds"][0].actions == toset(["codebuild:ListBuildsForProject", "codebuild:BatchGetBuilds"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateBuilds"][0].resources == toset(["arn:aws:codebuild:eu-west-1:111122223333:project/dmt-test-install"])
     error_message = "Builds: the project only."
   }
   assert {
-    condition = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateLogs"][0].actions == toset(["logs:GetLogEvents", "logs:FilterLogEvents"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateLogs"][0].resources == toset([
+    condition = [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateLogs"][0].actions == toset(["logs:GetLogEvents"]) && [for s in data.aws_iam_policy_document.api.statement : s if s.sid == "SelfUpdateLogs"][0].resources == toset([
       "arn:aws:logs:eu-west-1:111122223333:log-group:/aws/codebuild/dmt-test-install",
       "arn:aws:logs:eu-west-1:111122223333:log-group:/aws/codebuild/dmt-test-install:*",
     ])
-    error_message = "Logs: the group and its streams only."
+    error_message = "Logs: logs:GetLogEvents only, on the group and its streams only."
   }
 }
 

@@ -149,8 +149,9 @@ data "aws_iam_policy_document" "api" {
     content {
       sid     = "SelfUpdateRead"
       actions = ["s3:GetObject"]
+      # Of a plan, only what the page shows: never its tfplan, which may hold secrets.
       resources = [for k in [
-        "results/*", "plans/*", "applied.json", "cli.json", "release/SHA256SUMS", "release/CHANGELOG.md",
+        "results/*", "plans/*/release.json", "plans/*/plan.json", "applied.json", "cli.json", "release/SHA256SUMS", "release/CHANGELOG.md",
       ] : "arn:${local.partition}:s3:::${var.install.bucket}/${var.env}/${k}"]
     }
   }
@@ -166,7 +167,7 @@ data "aws_iam_policy_document" "api" {
     for_each = var.install == null ? [] : [1]
     content {
       sid     = "SelfUpdateLogs"
-      actions = ["logs:GetLogEvents", "logs:FilterLogEvents"]
+      actions = ["logs:GetLogEvents"]
       resources = [
         "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:${var.install.log_group}",
         "arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:${var.install.log_group}:*",
