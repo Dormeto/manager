@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.13.0 — 2026-10-18
+
+Router 0.29.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 - The dashboard's sidebar shows the manager's version at its bottom, and the brand mark and favicon are the website's
   logo. The Operations icon is two meshing cogs, each turning on its own axis.
