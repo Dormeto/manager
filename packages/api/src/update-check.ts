@@ -58,6 +58,7 @@ export async function runUpdateCheck({ store, fetchText, publish, now, running, 
       await store.putUpdateResult({ ...base, latest, error: `the alert could not be sent: ${(err as Error).message}`, ...kept });
       throw err;
     }
+    // A write of the result failing after the publish sends the version again the next day: at-least-once, accepted.
     const result: UpdateResult = { ...base, latest, notified: latest };
     await store.putUpdateResult(result);
     return result;
