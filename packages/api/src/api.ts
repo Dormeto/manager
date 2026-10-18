@@ -10,7 +10,7 @@ import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
-import type { UpdateService } from './update.js';
+import { VERSION, type UpdateService } from './update.js';
 
 export type Router = FleetRouter;
 
@@ -57,6 +57,8 @@ export type Role = 'viewer' | 'operator' | 'admin';
 // Per-user dashboard preferences.
 export interface Preferences {
   refreshSeconds: number;
+  // The newest version whose update notice the user dismissed (the daily check's banner).
+  dismissedUpdate?: string;
 }
 
 export interface PreferencesStore {
@@ -764,11 +766,21 @@ export function createApi({
     if (resource === 'preferences' && !a && preferences) {
       if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });
       if (method === 'PUT') {
-        const refresh = bodyOf(event).refreshSeconds;
-        if (!Number.isInteger(refresh) || (refresh !== 0 && ((refresh as number) < 5 || (refresh as number) > 600))) {
-          throw new HttpError(400, 'bad_request', 'refreshSeconds must be 0 (off) or an integer from 5 to 600');
+        const body = bodyOf(event);
+        const stored = { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) };
+        const saved = { ...stored };
+        // Each field is optional but one: what is not sent is kept.
+        if (body.dismissedUpdate !== undefined) {
+          if (typeof body.dismissedUpdate !== 'string' || !VERSION.test(body.dismissedUpdate)) throw new HttpError(400, 'bad_request', 'dismissedUpdate must be a version');
+          saved.dismissedUpdate = body.dismissedUpdate;
         }
-        const saved = { refreshSeconds: refresh as number };
+        if (body.refreshSeconds !== undefined || body.dismissedUpdate === undefined) {
+          const refresh = body.refreshSeconds;
+          if (!Number.isInteger(refresh) || (refresh !== 0 && ((refresh as number) < 5 || (refresh as number) > 600))) {
+            throw new HttpError(400, 'bad_request', 'refreshSeconds must be 0 (off) or an integer from 5 to 600');
+          }
+          saved.refreshSeconds = refresh as number;
+        }
         await preferences.put(identity.sub, saved);
         return reply(200, saved);
       }

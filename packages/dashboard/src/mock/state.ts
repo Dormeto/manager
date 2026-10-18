@@ -193,7 +193,8 @@ function idleOf(list: Burst[], now: number): { idleHours7d: number; requests7d: 
 export interface Demo {
   t0: number;
   me: Me;
-  preferences: { refreshSeconds: number };
+  preferences: { refreshSeconds: number; dismissedUpdate?: string };
+  updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
   routers: DemoRouter[];
   workloads: DemoWorkload[];
@@ -433,6 +434,7 @@ function build(now: number): Demo {
     t0: now,
     me: { email: ME, role: 'admin', effectiveRole: 'admin', mfa: { mode: 'optional', enabled: true, required: false } },
     preferences: { refreshSeconds: 10 },
+    updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
     routers,
     workloads,

@@ -51,3 +51,9 @@ export function withoutOwnHeading(notes: string, version: string): string {
 
 // A link to the CodeBuild console as the API gives it, only when it is an https: one.
 export const consoleLink = (url: unknown): string | null => (typeof url === 'string' && url.startsWith('https://') ? url : null);
+
+// The daily check (GET /update/check): its setting and the last result.
+export type UpdateCheck = {
+  enabled: boolean; alert: boolean; updatedAt?: string; updatedBy?: string;
+  result: { checkedAt: string; running: string; latest: string | null; error?: string; notified?: string } | null;
+};

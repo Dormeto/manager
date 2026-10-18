@@ -38,4 +38,13 @@ describe('preferences', () => {
       expect((await api(event('PUT', 'u-1', { refreshSeconds: bad }))).statusCode).toBe(400);
     }
   });
+
+  it('keep the update notice dismissed for a version, beside the refresh', async () => {
+    const { api } = setup();
+    await api(event('PUT', 'u-1', { refreshSeconds: 30 }));
+    expect(json(await api(event('PUT', 'u-1', { dismissedUpdate: '0.14.0' })))).toEqual({ refreshSeconds: 30, dismissedUpdate: '0.14.0' });
+    expect(json(await api(event('GET', 'u-1')))).toEqual({ refreshSeconds: 30, dismissedUpdate: '0.14.0' });
+    expect(json(await api(event('PUT', 'u-1', { refreshSeconds: 60 })))).toEqual({ refreshSeconds: 60, dismissedUpdate: '0.14.0' });
+    for (const bad of [14, 'latest', '']) expect((await api(event('PUT', 'u-1', { dismissedUpdate: bad }))).statusCode, String(bad)).toBe(400);
+  });
 });

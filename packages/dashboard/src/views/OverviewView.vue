@@ -12,6 +12,7 @@ import SavingsCard from '../components/SavingsCard.vue';
 import EnergyCard from '../components/EnergyCard.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import AlertsCard from '../components/AlertsCard.vue';
+import UpdateBanner from '../components/UpdateBanner.vue';
 import DmLogo from '../components/DmLogo.vue';
 import FleetMap from '../components/FleetMap.vue';
 import type { AlertsInfo, FleetStates, RouterInfo, WorkloadSummary } from '../types';
@@ -116,6 +117,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
+  <UpdateBanner />
   <AlertsCard v-if="alerts?.notifications" :alerts="alerts" :now="now" class="mb-4" />
 
   <v-card class="dm-fleet mb-4" :loading="loading && !loaded">

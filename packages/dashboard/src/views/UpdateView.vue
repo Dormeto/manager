@@ -9,7 +9,7 @@ import DmLoader from '../components/DmLoader.vue';
 import NoticeAlert from '../components/NoticeAlert.vue';
 import ReleaseNotes from '../components/ReleaseNotes.vue';
 import { useUpdateBadge } from '../stores/update';
-import { busy, codeParts, consoleLink, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateState } from '../update';
+import { busy, codeParts, consoleLink, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateCheck, type UpdateState } from '../update';
 
 // Get started's "Updating the manager" (the CLI's ways) and "Upgrade" (the Terraform module's).
 const UPDATING = 'https://dormeto.com/get-started.html#update';
@@ -34,6 +34,9 @@ const target = ref<string | null>(null);
 const sections = ref<Section[] | null>(null);
 const changesLoading = ref(false);
 const sending = ref(false);
+// The daily check's setting and last result; null until read (or when this manager has none).
+const daily = ref<UpdateCheck | null>(null);
+const dailySaving = ref(false);
 // The last successful load of the state, and the clock "Checked …" is told from.
 const checkedAt = ref<string | null>(null);
 const now = ref(Date.now());
@@ -60,6 +63,31 @@ const version = computed(() => target.value ?? state.value?.versions[0]?.version
 const updateCommand = computed(() => `dormeto install --profile <your profile> ${where.value}${version.value ? ` --version ${version.value}` : ''}`);
 const statusCommand = computed(() => `dormeto install status --profile <your profile> ${where.value}`);
 const notSetUpCommand = computed(() => `dormeto install --profile <your profile> ${where.value} --version <version>`);
+
+const lastCheck = computed(() => {
+  const r = daily.value?.result;
+  if (!r) return 'Not checked yet';
+  return `Checked ${day(r.checkedAt)}: ${r.error ?? (r.latest ? `${r.latest} available` : 'up to date')}`;
+});
+async function loadDaily() {
+  try {
+    const got = await api<UpdateCheck>('/update/check');
+    if (typeof got.enabled === 'boolean') daily.value = got;
+  } catch {
+    // The card is a hint beside the page; its change says its own errors.
+  }
+}
+// Turning the check off turns its alert off with it.
+async function setDaily(enabled: boolean, alert: boolean) {
+  dailySaving.value = true;
+  try {
+    daily.value = await api<UpdateCheck>('/update/check', { method: 'PUT', body: JSON.stringify({ enabled, alert: enabled && alert }) });
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  } finally {
+    dailySaving.value = false;
+  }
+}
 
 const day = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { dateStyle: 'medium' }) : '');
 const subtitle = (v: { published: string | null; router: string | null; staged?: boolean }) =>
@@ -173,6 +201,7 @@ const confirm = () => send('/update/apply', { planBuild: plan.value!.build }, `A
 const reload = () => location.reload();
 
 void refresh();
+void loadDaily();
 // "Checked … ago" follows the clock.
 const clock = setInterval(() => (now.value = Date.now()), 30_000);
 onBeforeUnmount(() => {
@@ -292,6 +321,14 @@ onBeforeUnmount(() => {
               </v-list-item>
             </template>
           </v-select>
+        </v-card-text>
+      </v-card>
+
+      <v-card v-if="daily" class="mb-4" title="Daily check">
+        <v-card-text>
+          <v-switch :model-value="daily.enabled" label="Check daily for new versions" color="primary" hide-details :disabled="dailySaving" @update:model-value="setDaily(!!$event, daily.alert)" />
+          <v-switch :model-value="daily.alert" label="Also send it to the alert topic" color="primary" hide-details :disabled="!daily.enabled || dailySaving" @update:model-value="setDaily(true, !!$event)" />
+          <p class="text-body-medium text-medium-emphasis mt-2 mb-0">{{ lastCheck }}</p>
         </v-card-text>
       </v-card>
 

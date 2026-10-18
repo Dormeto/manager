@@ -55,7 +55,7 @@ const select = async (version: string) => {
 
 beforeEach(() => {
   h.calls.length = 0;
-  h.answer = (path) => (path.startsWith('/update/changes') ? sections : state());
+  h.answer = (path) => (path.startsWith('/update/changes') ? sections : path === '/update/check' ? { enabled: false, alert: false, result: null } : state());
 });
 afterEach(() => {
   wrapper.unmount();
@@ -163,6 +163,7 @@ describe('Update', () => {
     h.answer = (path, init) => {
       if (init?.method === 'POST') throw new Error('an update is already running');
       if (path.startsWith('/update/changes')) return sections;
+      if (path === '/update/check') return {};
       calls += 1;
       return calls === 1 ? state() : running();
     };
@@ -316,7 +317,8 @@ describe('Update', () => {
     const reload = vi.fn();
     vi.stubGlobal('location', { ...window.location, reload });
     let polls = 0;
-    h.answer = () => {
+    h.answer = (path) => {
+      if (path === '/update/check') return {};
       polls += 1;
       if (polls === 1) return running();
       if (polls <= 4) throw new Error('Failed to fetch');
@@ -474,5 +476,65 @@ describe('Update', () => {
       expect(wrapper.text()).toContain('Checked 10 min ago');
       expect(button('Check for updates').attributes('disabled')).toBeUndefined();
     });
+  });
+});
+
+describe('the daily check', () => {
+  const switches = () => wrapper.findAllComponents({ name: 'VSwitch' });
+  const checked = (over = {}) => ({ enabled: true, alert: false, updatedAt: '2026-10-20T10:00:00Z', updatedBy: 'admin@example.com', result: null, ...over });
+
+  it('is off by default: two switches, the second disabled, nothing checked yet', async () => {
+    await mountView();
+    expect(h.calls).toContainEqual(['GET', '/update/check', undefined]);
+    expect(wrapper.text()).toContain('Daily check');
+    expect(switches().map((s) => s.props('label'))).toEqual(['Check daily for new versions', 'Also send it to the alert topic']);
+    expect(switches().map((s) => [s.props('modelValue'), s.props('disabled')])).toEqual([[false, false], [false, true]]);
+    expect(wrapper.text()).toContain('Not checked yet');
+  });
+
+  it('turns the check on with a PUT, which enables the alert switch', async () => {
+    await mountView();
+    h.answer = (path, init) => (path === '/update/check' ? (init?.method === 'PUT' ? checked() : { enabled: false, alert: false, result: null }) : state());
+    switches()[0]!.vm.$emit('update:modelValue', true);
+    await flushPromises();
+    expect(h.calls).toContainEqual(['PUT', '/update/check', JSON.stringify({ enabled: true, alert: false })]);
+    expect(switches().map((s) => [s.props('modelValue'), s.props('disabled')])).toEqual([[true, false], [false, false]]);
+  });
+
+  it('turns the alert on, and turns it off with the check', async () => {
+    h.answer = (path) => (path === '/update/check' ? checked() : state());
+    await mountView();
+    h.answer = (path, init) => (path === '/update/check' ? checked(JSON.parse(String(init?.body ?? '{"enabled":true,"alert":false}'))) : state());
+    switches()[1]!.vm.$emit('update:modelValue', true);
+    await flushPromises();
+    expect(h.calls).toContainEqual(['PUT', '/update/check', JSON.stringify({ enabled: true, alert: true })]);
+    switches()[0]!.vm.$emit('update:modelValue', false);
+    await flushPromises();
+    expect(h.calls).toContainEqual(['PUT', '/update/check', JSON.stringify({ enabled: false, alert: false })]);
+    expect(switches().map((s) => [s.props('modelValue'), s.props('disabled')])).toEqual([[false, false], [false, true]]);
+  });
+
+  it('says the last result: a version available, up to date, or the error', async () => {
+    const line = async (result: object) => {
+      h.answer = (path) => (path === '/update/check' ? checked({ result }) : state());
+      await mountView();
+      const text = wrapper.text();
+      wrapper.unmount();
+      return text;
+    };
+    const base = { checkedAt: '2026-10-20T12:00:00Z', running: '0.11.0' };
+    expect(await line({ ...base, latest: '0.13.0' })).toContain('Checked Oct 20, 2026: 0.13.0 available');
+    expect(await line({ ...base, latest: null })).toContain('Checked Oct 20, 2026: up to date');
+    expect(await line({ ...base, latest: null, error: 'the release index could not be read' })).toContain('Checked Oct 20, 2026: the release index could not be read');
+    await mountView();
+  });
+
+  it('says why a change failed and keeps the switches as they were', async () => {
+    await mountView();
+    h.answer = (path, init) => { if (init?.method === 'PUT') throw new Error('Forbidden'); return path === '/update/check' ? { enabled: false, alert: false, result: null } : state(); };
+    switches()[0]!.vm.$emit('update:modelValue', true);
+    await flushPromises();
+    expect(wrapper.text()).toContain('Forbidden');
+    expect(switches()[0]!.props('modelValue')).toBe(false);
   });
 });

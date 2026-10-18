@@ -7,7 +7,7 @@ import type { Status } from '@dormeto/discovery/types';
 import { ApiError } from '../api';
 import { STATUSES } from '../discovery';
 import {
-  changeDismissal, createExclusion, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, resumeRouter, runDiscovery, startOperation, userAction,
+  changeDismissal, createExclusion, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
   workloadAction,
 } from './actions';
 import { AVAILABLE } from './fixtures';
@@ -65,6 +65,8 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
   if (method === 'GET' && resource === 'audit' && !a) return { entries: d.audit };
   if (resource === 'update') {
     if (method === 'GET' && !a) return updateState(now);
+    if (method === 'GET' && a === 'check') return updateCheck(d, now);
+    if (method === 'PUT' && a === 'check') return putUpdateCheck(d, body, now);
     if (method === 'GET' && a === 'available') return { count: updateState(now).versions.length };
     if (method === 'GET' && a === 'changes') return updateChanges(q.get('to'));
     if (method === 'POST' && a === 'plan') return updateRequest('plan', String(body.version ?? ''), now);

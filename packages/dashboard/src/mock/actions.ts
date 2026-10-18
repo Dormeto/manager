@@ -394,10 +394,23 @@ export function userAction(d: Demo, method: string, email: string | undefined, b
 }
 
 export function putPreferences(d: Demo, body: Body) {
+  if (typeof body.dismissedUpdate === 'string') d.preferences = { ...d.preferences, dismissedUpdate: body.dismissedUpdate };
+  if (body.refreshSeconds === undefined && body.dismissedUpdate !== undefined) return d.preferences;
   const refresh = body.refreshSeconds;
   if (!Number.isInteger(refresh) || (refresh !== 0 && ((refresh as number) < 5 || (refresh as number) > 600))) fail(400, 'bad_request', 'refreshSeconds must be 0 (off) or an integer from 5 to 600');
-  d.preferences = { refreshSeconds: refresh as number };
+  d.preferences = { ...d.preferences, refreshSeconds: refresh as number };
   return d.preferences;
+}
+
+// The daily update check: the setting, with the demo's last result (a newer version than the one running).
+export function updateCheck(d: Demo, now: number) {
+  return { ...d.updateCheck, result: d.updateCheck.enabled ? { checkedAt: new Date(now - 3_600_000).toISOString(), running: '0.11.0', latest: '0.13.0' } : null };
+}
+export function putUpdateCheck(d: Demo, body: Body, now: number) {
+  if (typeof body.enabled !== 'boolean' || typeof body.alert !== 'boolean') fail(400, 'bad_request', 'enabled and alert must be true or false');
+  if (body.alert && !body.enabled) fail(400, 'bad_request', 'the alert needs the daily check turned on');
+  d.updateCheck = { enabled: body.enabled as boolean, alert: body.alert as boolean, updatedAt: new Date(now).toISOString(), updatedBy: ME };
+  return updateCheck(d, now);
 }
 
 export function putSavingsSettings(d: Demo, body: Body, now: number) {
