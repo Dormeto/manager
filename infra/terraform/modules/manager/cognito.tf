@@ -39,12 +39,10 @@ resource "aws_cognito_user_pool" "main" {
 
   # Passkeys: choice-based sign-in. A passkey with user verification is multi-factor by itself (the API reads the ID
   # token's amr). Both blocks update in place. The relying party is the custom auth domain (managed login requires it),
-  # else Cognito's default, the prefix domain.
-  dynamic "sign_in_policy" {
-    for_each = local.passkeys ? [1] : []
-    content {
-      allowed_first_auth_factors = ["PASSWORD", "WEB_AUTHN"]
-    }
+  # else Cognito's default, the prefix domain. The sign-in policy is always written (the provider keeps what the pool has
+  # when it is absent): turning passkeys off sets the password alone again on a pool that allowed passkeys.
+  sign_in_policy {
+    allowed_first_auth_factors = local.passkeys ? ["PASSWORD", "WEB_AUTHN"] : ["PASSWORD"]
   }
 
   dynamic "web_authn_configuration" {

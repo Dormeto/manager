@@ -27,7 +27,7 @@ roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRol
 it to false and apply before `terraform destroy`), `log_retention_days`, `mfa` (two-step verification with an
 authenticator app: `optional`, `operators` by default — administrators and operators keep viewer rights until they set it
 up from the Account page — or `required`), `passkeys` (true by default: users register passkeys from the Account page and sign in with them, in the
-`optional` and `operators` modes; false, or `mfa = required`, leaves the user pool and the client as without; the passkeys' relying party is the custom auth domain, so changing the domain later makes the
+`optional` and `operators` modes; false, or `mfa = required`, sets the user pool's first factor to the password alone (turning passkeys off reverts a pool that allowed them) and leaves the client as without; the passkeys' relying party is the custom auth domain, so changing the domain later makes the
 registered passkeys unusable and users register again), `alert_emails` (the addresses of the health alerts, each confirming the email
 AWS sends; other channels subscribe to the `alerts_topic_arn` output), `ip_lists` (IP reputation lists the manager
 downloads once for every router: `name`, `url`, `action` defer or ignore, `refresh_hours`; no secret in a URL, readable by

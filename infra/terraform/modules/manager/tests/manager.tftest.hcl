@@ -436,8 +436,8 @@ run "passkeys_off_in_required_mode" {
   }
 
   assert {
-    condition     = length(aws_cognito_user_pool.main.sign_in_policy) == 0 && length(aws_cognito_user_pool.main.web_authn_configuration) == 0
-    error_message = "required: the pool is as before."
+    condition     = aws_cognito_user_pool.main.sign_in_policy[0].allowed_first_auth_factors == toset(["PASSWORD"]) && length(aws_cognito_user_pool.main.web_authn_configuration) == 0
+    error_message = "required: the first factor is the password alone, with no passkey configuration."
   }
   assert {
     condition     = toset(aws_cognito_user_pool_client.dashboard.explicit_auth_flows) == toset(["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"])
@@ -482,8 +482,8 @@ run "passkeys_can_be_turned_off" {
   }
 
   assert {
-    condition     = length(aws_cognito_user_pool.main.sign_in_policy) == 0 && length(aws_cognito_user_pool.main.web_authn_configuration) == 0 && length(aws_cognito_user_pool_client.dashboard.explicit_auth_flows) == 2
-    error_message = "passkeys = false: the pool and the client are as before."
+    condition     = aws_cognito_user_pool.main.sign_in_policy[0].allowed_first_auth_factors == toset(["PASSWORD"]) && length(aws_cognito_user_pool.main.web_authn_configuration) == 0 && length(aws_cognito_user_pool_client.dashboard.explicit_auth_flows) == 2
+    error_message = "passkeys = false: the first factor is the password alone (an existing pool reverts), and the client is as before."
   }
   assert {
     condition     = aws_lambda_function.api.environment[0].variables.PASSKEYS == "false"
