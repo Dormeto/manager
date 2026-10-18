@@ -404,7 +404,7 @@ export function putPreferences(d: Demo, body: Body) {
 
 // The daily update check: the setting, with the demo's last result (a newer version than the one running).
 export function updateCheck(d: Demo, now: number) {
-  return { ...d.updateCheck, result: d.updateCheck.enabled ? { checkedAt: new Date(now - 3_600_000).toISOString(), running: '0.11.0', latest: '0.13.0' } : null };
+  return { ...d.updateCheck, newer: d.updateCheck.enabled, result: d.updateCheck.enabled ? { checkedAt: new Date(now - 3_600_000).toISOString(), running: '0.11.0', latest: '0.13.0' } : null };
 }
 export function putUpdateCheck(d: Demo, body: Body, now: number) {
   if (typeof body.enabled !== 'boolean' || typeof body.alert !== 'boolean') fail(400, 'bad_request', 'enabled and alert must be true or false');

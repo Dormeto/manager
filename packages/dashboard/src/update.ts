@@ -54,6 +54,6 @@ export const consoleLink = (url: unknown): string | null => (typeof url === 'str
 
 // The daily check (GET /update/check): its setting and the last result.
 export type UpdateCheck = {
-  enabled: boolean; alert: boolean; updatedAt?: string; updatedBy?: string;
+  enabled: boolean; alert: boolean; newer?: boolean; updatedAt?: string; updatedBy?: string;
   result: { checkedAt: string; running: string; latest: string | null; error?: string; notified?: string } | null;
 };

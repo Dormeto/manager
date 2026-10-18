@@ -10,7 +10,7 @@ import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
-import { VERSION, type UpdateService } from './update.js';
+import { compareVersions, VERSION, type UpdateService } from './update.js';
 
 export type Router = FleetRouter;
 
@@ -1062,7 +1062,12 @@ export function createApi({
       if (method === 'GET' && !a) return reply(200, update ? await update.state() : { installedWithCli: false, version, env: install?.env ?? '', region: install?.region ?? '' });
       if (a === 'check' && (method === 'GET' || method === 'PUT')) {
         if (!fleet?.getUpdateCheck || !fleet.putUpdateCheck || !fleet.getUpdateResult) throw new HttpError(404, 'not_found', 'no update check in this manager');
-        if (method === 'GET') return reply(200, { ...(await fleet.getUpdateCheck()), result: await fleet.getUpdateResult() });
+        // newer: the banner's condition, judged against the version running now (an update since the check, or the check
+        // turned off, leaves an old result stale).
+        const view = (check: UpdateCheck, result: UpdateResult | null) => ({
+          ...check, newer: check.enabled && !!result?.latest && VERSION.test(result.latest) && compareVersions(result.latest, version) > 0, result,
+        });
+        if (method === 'GET') return reply(200, view(await fleet.getUpdateCheck(), await fleet.getUpdateResult()));
         const body = bodyOf(event);
         if (typeof body.enabled !== 'boolean' || typeof body.alert !== 'boolean') throw new HttpError(400, 'bad_request', 'enabled and alert must be true or false');
         if (body.alert && !body.enabled) throw new HttpError(400, 'bad_request', 'the alert needs the daily check turned on');
@@ -1071,7 +1076,7 @@ export function createApi({
           await fleet.putUpdateCheck!({ ...check, updatedBy: identity.email });
           // Answered with what was written, as the discounts are.
           const saved = { ...check, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
-          return { result: [check.enabled ? 'enabled' : 'disabled', ...(check.alert ? ['alert'] : [])].join(', '), response: reply(200, { ...saved, result: await fleet.getUpdateResult!() }) };
+          return { result: [check.enabled ? 'enabled' : 'disabled', ...(check.alert ? ['alert'] : [])].join(', '), response: reply(200, view(saved, await fleet.getUpdateResult!())) };
         });
       }
       if (method === 'GET' && a === 'available') return reply(200, { count: update ? await update.available() : 0 });

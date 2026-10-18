@@ -734,16 +734,31 @@ describe('the daily update check', () => {
 
   it('is off by default, with no result', async () => {
     const res = await checking().api(event('GET', '/api/update/check', 'dmt-admin'));
-    expect([res.statusCode, json(res)]).toEqual([200, { enabled: false, alert: false, result: null }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { enabled: false, alert: false, newer: false, result: null }]);
   });
 
   it('is set, then read with who set it, the last result and an audit entry', async () => {
     const result = { checkedAt: '2026-10-20T07:00:00.000Z', running: '0.10.0', latest: '0.12.0' };
     const s = checking({ result });
     const put = await s.api(event('PUT', '/api/update/check', 'dmt-admin', { enabled: true, alert: true }));
-    expect([put.statusCode, json(put)]).toEqual([200, { enabled: true, alert: true, updatedAt: new Date(START).toISOString(), updatedBy: 'admin@example.com', result }]);
+    expect([put.statusCode, json(put)]).toEqual([200, { enabled: true, alert: true, updatedAt: new Date(START).toISOString(), updatedBy: 'admin@example.com', newer: true, result }]);
     expect(json(await s.api(event('GET', '/api/update/check', 'dmt-admin')))).toMatchObject({ enabled: true, alert: true, updatedBy: 'admin@example.com', result });
     expect(s.audit).toEqual([expect.objectContaining({ action: 'update-check', target: 'update', result: 'enabled, alert' })]);
+  });
+
+  it('says a version newer than the one running only while the check is on and the result is not stale', async () => {
+    const at = { checkedAt: '2026-10-20T07:00:00.000Z', running: '0.9.0' };
+    const newer = async (result: UpdateResult, enabled = true) => {
+      const s = checking({ result });
+      await s.api(event('PUT', '/api/update/check', 'dmt-admin', { enabled, alert: false }));
+      return json(await s.api(event('GET', '/api/update/check', 'dmt-admin'))).newer;
+    };
+    expect(await newer({ ...at, latest: '0.12.0' })).toBe(true);
+    // Updated since the check: the running version (0.10.0) is the one it found.
+    expect(await newer({ ...at, latest: '0.10.0' })).toBe(false);
+    expect(await newer({ ...at, latest: null })).toBe(false);
+    // Turned off with an old result.
+    expect(await newer({ ...at, latest: '0.12.0' }, false)).toBe(false);
   });
 
   it('refuses the alert without the check, and a body that is not two booleans', async () => {

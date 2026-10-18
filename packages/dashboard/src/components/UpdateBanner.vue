@@ -17,7 +17,8 @@ onMounted(async () => {
   if (!session.isAdmin) return;
   try {
     const check = await api<Partial<UpdateCheck>>('/update/check');
-    latest.value = typeof check.result?.latest === 'string' ? check.result.latest : null;
+    // The API judges it against the version running now.
+    latest.value = check.newer === true && typeof check.result?.latest === 'string' ? check.result.latest : null;
   } catch {
     // The notice is a hint; the Update page shows errors.
   }

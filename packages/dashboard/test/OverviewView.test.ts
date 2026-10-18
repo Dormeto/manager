@@ -13,6 +13,7 @@ const failing = { alerts: false };
 const paths: string[] = [];
 // The bar of all workloads (GET /workloads/states), with the energy the API estimates (PR #1).
 const ENERGY = { kwh: 1234.5, co2Kg: 345.6, workloads: 2, estimated: 5 };
+let updateNewer = true;
 let updateResult: Record<string, unknown> | null = null;
 let fleetStates: Record<string, unknown> = {
   workloads: 2, computedAt: late, cacheMinutes: 60, states7d: { from: late, to: late, totals: {} },
@@ -22,7 +23,7 @@ vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
     paths.push(init?.method ? `${init.method} ${path}` : path);
     if (path === '/workloads/states') return structuredClone(fleetStates);
-    if (path === '/update/check') return { enabled: true, alert: false, result: updateResult };
+    if (path === '/update/check') return { enabled: true, alert: false, newer: updateNewer, result: updateResult };
     if (path === '/alerts' && failing.alerts) throw new Error('SNS throttled');
     if (path === '/alerts') {
       return {
@@ -131,6 +132,12 @@ describe('Overview', () => {
     });
 
     it('is not shown when up to date, or to anyone but an administrator (who do not even ask)', async () => {
+      updateNewer = false;
+      updateResult = newer;
+      const stale = await mountOverview('admin');
+      expect(stale.text()).not.toContain('is available');
+      stale.unmount();
+      updateNewer = true;
       updateResult = { ...newer, latest: null };
       const upToDate = await mountOverview('admin');
       expect(upToDate.text()).not.toContain('is available');
