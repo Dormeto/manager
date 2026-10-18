@@ -203,6 +203,16 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
         ConditionExpression: VERSIONED, ExpressionAttributeValues: { ':version': { N: String(version) } },
       })));
     },
+    // Its tags replaced at once (a manager retag, before the router's next check says so): a few tries against a concurrent
+    // writer; false when the workload is not stored (nothing is created) or kept changing.
+    async putWorkloadTags(account: string, region: string, id: string, tags: Record<string, string>): Promise<boolean> {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const read = await this.readWorkload(account, region, id);
+        if (!read) return false;
+        if (await this.writeWorkload({ ...read.summary, tags }, read.version)) return true;
+      }
+      return false;
+    },
     async deleteWorkload(w: Pick<WorkloadSummary, 'account' | 'region' | 'workloadId'>, version: number): Promise<boolean> {
       return conditional(() => dynamo.send(new DeleteItemCommand({
         TableName: table, Key: key(workloadKey(w.account, w.region, w.workloadId)), ConditionExpression: VERSIONED, ExpressionAttributeValues: { ':version': { N: String(version) } },

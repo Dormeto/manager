@@ -74,8 +74,9 @@ interface Options {
   historyDays?: number;
   mfa?: boolean;
   failStatus?: Error; // the router's status fails
+  failTagWrite?: boolean; // the fleet item cannot be written
 }
-function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: NOW }, summary: savingsSummary = SAVINGS, historyDays, mfa, failStatus }: Options = {}) {
+function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: NOW }, summary: savingsSummary = SAVINGS, historyDays, mfa, failStatus, failTagWrite }: Options = {}) {
   const audit: AuditEntry[] = [];
   const calls: [string, string][] = [];
   const reads: string[] = [];
@@ -91,6 +92,7 @@ function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: 
       if (payload.action === 'request-nap') return { requested: true };
       if (payload.action === 'force-wake') return { state: 'WAKING' };
       if (payload.action === 'pause') return { woken: [] };
+      if (payload.action === 'tag') return { workloadId: payload.workloadId, tags: payload.tags };
       if (payload.action === 'status' && failStatus) throw failStatus;
       if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', tags: tagsLive(String(payload.workloadId)) };
       if (payload.action === 'list') return { router: { name: 'dmt-dev' }, workloads: workloads.map((w) => ({ workloadId: w.workloadId, state: w.state, tags: tagsLive(w.workloadId) })) };
@@ -101,6 +103,12 @@ function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: 
       listWorkloads: async () => workloads as never,
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
       listGroups: async () => GROUPS as never,
+      putWorkloadTags: async (account: string, region: string, id: string, tags: Record<string, string>) => {
+        if (failTagWrite) throw new Error('throttled');
+        const w = workloads.find((x) => x.account === account && x.region === region && x.workloadId === id) as { tags?: unknown } | undefined;
+        if (w) w.tags = tags;
+        return !!w;
+      },
       getSavingsSummary: async () => box.current as never,
       getSavingsSettings: async () => ({ compute: 0, databases: 0, updatedAt: null, updatedBy: 'admin@example.com' }),
       listSavingsDay: async (date: string) => { reads.push(date); return (DAYS[date] ?? []) as never; },
@@ -115,7 +123,7 @@ function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: 
 }
 
 const USERS = {
-  viewer: '[dmt-viewer]', operator: '[dmt-operator]', pay: '[payments]', payWake: '[payers]', napper: '[nappers]', pauser: '[pausers]', all: '[everything]', none: '',
+  admin: '[dmt-admin]', viewer: '[dmt-viewer]', operator: '[dmt-operator]', pay: '[payments]', payWake: '[payers]', napper: '[nappers]', pauser: '[pausers]', all: '[everything]', none: '',
 };
 const event = (user: keyof typeof USERS, method: string, path: string, query: Record<string, string> = {}, body?: unknown): ApiEvent => ({
   rawPath: path, queryStringParameters: query, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -396,5 +404,34 @@ describe('review fixes', () => {
         expect([res.statusCode, json(res)], path).toEqual([404, { error: 'not_found', message: 'unknown workload: search' }]);
       }
     }
+  });
+
+  it('a retag shows at once: a member whose grant matched the old tag loses the workload on the detail and the list', async () => {
+    const s = setup();
+    expect(ids(json(await s.api(event('pay', 'GET', '/api/workloads'))).workloads)).toEqual(['pay']);
+    const res = await s.api(event('admin', 'PUT', '/api/workloads/dmt-dev/pay/tags', {}, { tags: { team: 'search' } }));
+    expect(res.statusCode).toBe(200);
+    expect((await s.api(event('pay', 'GET', '/api/workloads/dmt-dev/pay'))).statusCode).toBe(404);
+    expect(ids(json(await s.api(event('pay', 'GET', '/api/workloads'))).workloads)).toEqual([]);
+    // The reverse: a member whose grant matches the new tag gets it.
+    await s.api(event('admin', 'PUT', '/api/workloads/dmt-dev/search/tags', {}, { tags: { team: 'payments' } }));
+    expect(ids(json(await s.api(event('pay', 'GET', '/api/workloads'))).workloads)).toEqual(['search']);
+  });
+
+  it('a retag succeeds even when the fleet item cannot be written; the failure is logged', async () => {
+    const s = setup({ failTagWrite: true });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await s.api(event('admin', 'PUT', '/api/workloads/dmt-dev/pay/tags', {}, { tags: { team: 'search' } }));
+    expect([res.statusCode, json(res).tags]).toEqual([200, { team: 'search' }]);
+    expect(String(log.mock.calls[0]?.[0])).toContain('TagsNotStored');
+    log.mockRestore();
+  });
+
+  it('cuts the audited tags at 300 characters without splitting a character', async () => {
+    const s = setup();
+    await s.api(event('admin', 'PUT', '/api/workloads/dmt-dev/pay/tags', {}, { tags: { a: '𝒜'.repeat(100), b: '𝒜'.repeat(100), c: '𝒜'.repeat(100) } }));
+    const result = s.audit.at(-1)!.result;
+    expect([...result]).toHaveLength(300);
+    expect(result).not.toMatch(/[\uD800-\uDBFF]$/);
   });
 });

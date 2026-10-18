@@ -36,13 +36,19 @@ export const timely = (v: unknown, now: number) => {
   return t !== null && Date.parse(t) <= now + SKEW_MS ? t : null;
 };
 
-// A workload's tags (routers 0.30.0): the pairs of strings within the tag limits, at most 50; none reported (a router
-// before 0.30.0, or not an object): undefined, which the API reads as no tags.
+// A workload's tags (routers 0.30.0), under the rules of the API's tagsProblem (access.ts): at most 50, a key of 1 to 128
+// characters and a value of at most 256 (code points), the AWS characters, no dormeto: prefix in any case. A map that
+// breaks one rule is kept as no tags at all (fail closed: untagged, never trimmed); none reported (a router before
+// 0.30.0, or not an object): undefined, which the API reads as no tags.
 const TAGS_MAX = 50;
+const TAG_CHARS = /^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$/u;
 const tagsOf = (v: unknown) => {
   if (!isObject(v)) return undefined;
-  const pairs = Object.entries(v).filter((e): e is [string, string] => e[0] !== '' && [...e[0]].length <= 128 && typeof e[1] === 'string' && [...e[1]].length <= 256);
-  return Object.fromEntries(pairs.slice(0, TAGS_MAX));
+  const entries = Object.entries(v);
+  const ok = entries.length <= TAGS_MAX && entries.every(([key, value]) => typeof value === 'string'
+    && [...key].length >= 1 && [...key].length <= 128 && [...value].length <= 256
+    && TAG_CHARS.test(key) && TAG_CHARS.test(value) && !key.toLowerCase().startsWith('dormeto:'));
+  return ok ? Object.fromEntries(entries) as Record<string, string> : {};
 };
 
 // A pause as shown: its known texts, each short.

@@ -183,6 +183,8 @@ export interface ApiOptions {
     listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null>;
     // The custom groups' grants (R11).
     listGroups?(): Promise<Group[]>;
+    // A workload's tags replaced at once, after a retag (false: not stored).
+    putWorkloadTags?(account: string, region: string, id: string, tags: Record<string, string>): Promise<boolean>;
     putGroup?(group: Pick<Group, 'name' | 'description' | 'grants'> & { updatedBy: string }): Promise<void>;
     deleteGroup?(name: string): Promise<void>;
     // The state history (R8).
@@ -1306,7 +1308,12 @@ export function createApi({
         return audited(identity, 'tag', `${router.name}/${id}`, async () => {
           try {
             const result = await invoke(router, { action: 'tag', workloadId: id, tags, by: identity.email }) as { workloadId: string; tags: Record<string, string> };
-            return { result: shown ? shown.slice(0, 300) : 'no tags', response: reply(200, result) };
+            // The fleet item follows at once (the router's next check would only say so in minutes): a member's grants
+            // judge the new tags straight away. The retag stands whatever this write does.
+            await fleet?.putWorkloadTags?.(accountOfRouter(router), router.region, id, result?.tags ?? tags as Record<string, string>).catch((err: Error) => {
+              console.error(JSON.stringify({ level: 'error', event: 'TagsNotStored', router: router.name, workloadId: id, error: err.message }));
+            });
+            return { result: shown ? [...shown].slice(0, 300).join('') : 'no tags', response: reply(200, result) };
           } catch (err) {
             if (unknownAction(err, 'tag')) throw new HttpError(409, 'conflict', `router ${router.name} too old to set tags, upgrade it to 0.30.0 or later`);
             if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);

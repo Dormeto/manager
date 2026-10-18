@@ -217,20 +217,37 @@ describe('fleet', () => {
     expect([a!.backends, b!.backends, c!.backends]).toEqual([['asg', 'rds-instance'], undefined, undefined]);
   });
 
-  it('keeps the tags a router reports (routers 0.30.0), the valid pairs of at most 50; a router before reports none', async () => {
+  it('keeps the tags a router reports (routers 0.30.0) when they follow the tag rules; none at all when one breaks them; a router before reports none', async () => {
     const s = setup();
-    const many = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`k${i}`, 'v']));
+    const many = Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`k${i}`, 'v']));
+    const fifty = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`k${i}`, 'v']));
     await s.ingest(checked(T1, [
-      workload('a', 'AWAKE', { tags: { team: 'payments', env: 'prod', n: 7, [`${'k'.repeat(129)}`]: 'x', '': 'y', long: 'v'.repeat(257) } }),
-      workload('b', 'AWAKE', { tags: {} }), workload('c', 'AWAKE', { tags: ['team=payments'] }), workload('d'), workload('e', 'AWAKE', { tags: many }),
+      workload('a', 'AWAKE', { tags: { team: 'payments', env: 'prod', 'Ünï cödé': 'ça va' } }),
+      workload('b', 'AWAKE', { tags: {} }), workload('c', 'AWAKE', { tags: ['team=payments'] }), workload('d'), workload('e', 'AWAKE', { tags: many }), workload('f', 'AWAKE', { tags: fifty }),
+      workload('g', 'AWAKE', { tags: { team: 'payments', n: 7 } }), workload('h', 'AWAKE', { tags: { team: 'payments', ['k'.repeat(129)]: 'x' } }),
+      workload('i', 'AWAKE', { tags: { team: 'payments', long: 'v'.repeat(257) } }), workload('j', 'AWAKE', { tags: { team: 'a,b' } }),
+      workload('k', 'AWAKE', { tags: { team: 'payments', 'Dormeto:x': '1' } }), workload('l', 'AWAKE', { tags: { team: 'payments', '': 'y' } }),
+      workload('m', 'AWAKE', { tags: { team: 'payments', script: '𝒜'.repeat(256) } }), workload('n', 'AWAKE', { tags: { team: 'payments', bad: 'tab\there' } }),
     ]));
     const get = async (id: string) => (await s.store.getWorkload(ACCOUNT, REGION, id))!.tags;
-    expect([await get('a'), await get('b'), await get('c'), await get('d')]).toEqual([{ team: 'payments', env: 'prod' }, {}, undefined, undefined]);
-    expect(Object.keys((await get('e')) as object)).toHaveLength(50);
+    expect([await get('a'), await get('b'), await get('c'), await get('d')]).toEqual([{ team: 'payments', env: 'prod', 'Ünï cödé': 'ça va' }, {}, undefined, undefined]);
+    expect(Object.keys((await get('f')) as object)).toHaveLength(50);
+    // Fail closed: a map that breaks a rule is kept as no tags, never trimmed.
+    for (const id of ['e', 'g', 'h', 'i', 'j', 'k', 'l', 'n']) expect(await get(id), id).toEqual({});
+    expect(await get('m'), 'a value of 256 code points is 512 UTF-16 units').toMatchObject({ team: 'payments' });
     // A later check replaces them; a state change keeps them.
     await s.ingest(checked(T2, [workload('a', 'AWAKE', { tags: { team: 'search' } })]));
     await s.ingest(stateChanged('a', 'AWAKE', 'NAPPING', at(T2, 30)));
     expect(await get('a')).toEqual({ team: 'search' });
+  });
+
+  it('replaces the tags of a stored workload at once; a workload not stored is not created', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { tags: { team: 'payments' } })]));
+    expect(await s.store.putWorkloadTags(ACCOUNT, REGION, 'a', { team: 'search' })).toBe(true);
+    expect(await s.store.getWorkload(ACCOUNT, REGION, 'a')).toMatchObject({ name: 'Name a', state: 'AWAKE', tags: { team: 'search' } });
+    expect(await s.store.putWorkloadTags(ACCOUNT, REGION, 'ghost', { team: 'x' })).toBe(false);
+    expect(await s.ids()).toEqual(['a']);
   });
 
   it('keeps a Kubernetes workload\'s backend kind and the failure kind cluster (routers 0.29.0, R10.5)', async () => {
