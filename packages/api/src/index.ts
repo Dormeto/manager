@@ -178,7 +178,8 @@ const ipLists = listsBucket ? {
 } : undefined;
 
 // The manager's self-update (only for an install made with the CLI, which gives the API its install bucket): requests go
-// to the install bucket, its builds and their logs are read, and the pending request is kept in the table.
+// to the install bucket, its builds and their logs are read, and the pending request and an operation per request are
+// kept in the table.
 const installBucket = process.env.INSTALL_BUCKET;
 const update = installBucket ? (() => {
   const codebuild = new CodeBuildClient({});
@@ -206,7 +207,7 @@ const update = installBucket ? (() => {
       return ids.slice(0, 20).flatMap((id) => {
         const b = byId.get(id);
         return b ? [{
-          id, status: b.buildStatus ?? 'UNKNOWN', phase: b.currentPhase ?? null, startedAt: b.startTime?.toISOString() ?? null, endedAt: b.endTime?.toISOString() ?? null,
+          id, arn: b.arn ?? null, status: b.buildStatus ?? 'UNKNOWN', phase: b.currentPhase ?? null, startedAt: b.startTime?.toISOString() ?? null, endedAt: b.endTime?.toISOString() ?? null,
           env: Object.fromEntries((b.environment?.environmentVariables ?? []).map((v) => [v.name ?? '', v.value ?? ''])), logStream: b.logs?.streamName ?? null,
         } satisfies Build] : [];
       });
@@ -236,9 +237,12 @@ const update = installBucket ? (() => {
         await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...pendingKey, pending: { S: JSON.stringify(p) } } }));
       },
     },
+    // Each request is recorded as an operation, never started: the install build runs it.
+    operations: { create: (op) => records.putOperation(op), get: (id) => records.getOperation(id), update: (op) => records.putOperation(op) },
   }, {
     env: process.env.ENV ?? '', logGroup: process.env.INSTALL_LOG_GROUP ?? '', version: process.env.VERSION ?? '0.0.0',
     releasesUrl: process.env.RELEASES_URL || 'https://releases.dormeto.com/manager', now: () => new Date(), random: () => randomBytes(4).toString('hex'),
+    account: process.env.MANAGER_ACCOUNT ?? '', region: process.env.AWS_REGION ?? '',
   });
 })() : undefined;
 

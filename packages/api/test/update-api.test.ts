@@ -1,20 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { Operation } from '@dormeto/operations';
 import { createApi, type ApiEvent, type AuditEntry } from '../src/api.js';
 import { absent, missingStream, createUpdate, fetchText, FETCH_MS, type Build, type Pending, type UpdatePort } from '../src/update.js';
 
 const RELEASES = 'https://releases.test/manager';
 const START = Date.parse('2026-10-20T10:00:00Z');
 const ID = 'dmt-prod-install';
+const ACCOUNT = '121014831971';
+const REGION = 'eu-west-1';
 const ETAG = 'abcdef0123456789abcdef0123456789';
 const PLAN_JSON = JSON.stringify({ format_version: '1.2', resource_changes: [{ address: 'aws_x.a', change: { actions: ['create'] } }, { address: 'aws_x.b', change: { actions: ['update'] } }] });
 
 const build = (n: number, status: string, env: Record<string, string> = {}, extra: Partial<Build> = {}): Build => ({
   id: `${ID}:00000000-0000-0000-0000-${String(n).padStart(12, '0')}`, status, phase: status === 'IN_PROGRESS' ? 'BUILD' : 'COMPLETED',
   startedAt: new Date(START - (100 - n) * 60_000).toISOString(), endedAt: status === 'IN_PROGRESS' ? null : new Date(START - (100 - n) * 60_000 + 30_000).toISOString(),
-  env, logStream: `stream-${n}`, ...extra,
+  env, logStream: `stream-${n}`, arn: `arn:aws:codebuild:${REGION}:${ACCOUNT}:build/${ID}:00000000-0000-0000-0000-${String(n).padStart(12, '0')}`, ...extra,
 });
+// The CodeBuild console page of build n.
+const consoleOf = (n: number) => `https://${REGION}.console.aws.amazon.com/codesuite/codebuild/${ACCOUNT}/projects/${ID}/build/${ID}%3A00000000-0000-0000-0000-${String(n).padStart(12, '0')}/?region=${REGION}`;
 
-function setup(opts: { running?: string; files?: Record<string, string>; urls?: Record<string, string>; builds?: Build[]; logs?: Record<string, string[]>; pending?: Pending | null } = {}) {
+function setup(opts: { running?: string; files?: Record<string, string>; urls?: Record<string, string>; builds?: Build[]; logs?: Record<string, string[]>; pending?: Pending | null; operations?: Operation[] } = {}) {
   const files = new Map<string, string>(Object.entries({
     'prod/cli.json': JSON.stringify({ version: '0.2.0' }),
     'prod/release/SHA256SUMS': '',
@@ -30,22 +35,51 @@ function setup(opts: { running?: string; files?: Record<string, string>; urls?: 
     [`${RELEASES}/0.11.0/CHANGELOG.md`]: '## 0.11.0 — 2026-10-17\n\nEleven.\n\nRouter 0.29.0. Access: nothing to apply again.\n',
     ...opts.urls,
   }));
-  const state = { builds: opts.builds ?? [], pending: opts.pending ?? null, puts: [] as Array<[string, string]>, now: START };
-  const port: UpdatePort = {
-    get: async (key) => files.get(key) ?? null,
-    put: async (key, body) => { files.set(key, body); state.puts.push([key, body]); return ETAG; },
-    builds: async () => state.builds,
-    logLines: async (_group, stream) => opts.logs?.[stream] ?? [],
-    fetchText: async (url) => urls.get(url) ?? null,
-    pending: { get: async () => state.pending, put: async (p) => { state.pending = p; } },
+  const state = {
+    builds: opts.builds ?? [], pending: opts.pending ?? null, puts: [] as Array<[string, string]>, now: START,
+    // What the service read: the bucket's keys, the builds and logs listed, the pending item.
+    gets: [] as string[], calls: { builds: 0, logLines: 0, pending: 0 },
+    // Operations the workflow was asked to start.
+    workflow: [] as string[],
+    // CodeBuild refuses to list the builds.
+    throttled: false,
   };
-  const update = createUpdate(port, { env: 'prod', logGroup: '/aws/codebuild/dmt-prod-install', version: opts.running ?? '0.10.0', releasesUrl: RELEASES, now: () => new Date(state.now), random: () => 'a1b2c3d4' });
+  // The operation records (the records module's items), by id.
+  const ops = new Map<string, Operation>((opts.operations ?? []).map((op) => [op.id, op]));
+  let opIds = 0;
+  const port: UpdatePort = {
+    get: async (key) => { state.gets.push(key); return files.get(key) ?? null; },
+    put: async (key, body) => { files.set(key, body); state.puts.push([key, body]); return ETAG; },
+    builds: async () => {
+      state.calls.builds++;
+      if (state.throttled) throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' });
+      return state.builds;
+    },
+    logLines: async (_group, stream) => { state.calls.logLines++; return opts.logs?.[stream] ?? []; },
+    fetchText: async (url) => urls.get(url) ?? null,
+    pending: { get: async () => { state.calls.pending++; return state.pending; }, put: async (p) => { state.pending = p; } },
+    operations: {
+      create: async (op) => { ops.set(op.id, structuredClone(op)); },
+      get: async (id) => structuredClone(ops.get(id) ?? null),
+      update: async (op) => { ops.set(op.id, structuredClone(op)); },
+    },
+  };
+  const update = createUpdate(port, {
+    env: 'prod', logGroup: '/aws/codebuild/dmt-prod-install', version: opts.running ?? '0.10.0', releasesUrl: RELEASES, now: () => new Date(state.now), random: () => 'a1b2c3d4',
+    account: ACCOUNT, region: REGION, newId: () => `op-${++opIds}`,
+  });
   const audit: AuditEntry[] = [];
   const api = createApi({
     routers: [], invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
     now: () => state.now, newId: () => 'id', version: opts.running ?? '0.10.0', update,
+    operations: {
+      create: async (type) => { state.workflow.push(type); throw new Error('not in these tests'); },
+      list: async () => [...ops.values()].reverse().map((op) => structuredClone(op)),
+      get: async (id) => structuredClone(ops.get(id) ?? null),
+      installedRouters: async () => [],
+    },
   });
-  return { api, audit, files, urls, state, update };
+  return { api, audit, files, urls, state, update, ops };
 }
 
 const event = (method: string, path: string, groups: string, body?: unknown): ApiEvent => ({
@@ -141,7 +175,7 @@ describe('the state', () => {
     const b = build(5, 'IN_PROGRESS', { ACTION: 'apply', RELEASE_VERSION: '0.11.0' });
     const s = setup({ builds: [b], logs: { 'stream-5': ['noise', 'dormeto: planning', 'more noise', 'dormeto: applying'] } });
     const body = await get(s);
-    expect(body.build).toEqual({ id: b.id, by: 'cli', action: 'apply', version: '0.11.0', status: 'IN_PROGRESS', phase: 'BUILD', startedAt: b.startedAt, endedAt: null, steps: ['planning', 'applying'], tail: [] });
+    expect(body.build).toEqual({ id: b.id, by: 'cli', action: 'apply', version: '0.11.0', status: 'IN_PROGRESS', phase: 'BUILD', startedAt: b.startedAt, endedAt: null, steps: ['planning', 'applying'], tail: [], consoleUrl: consoleOf(5) });
     const res = await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
     expect(res.statusCode).toBe(409);
     expect(json(res).error).toBe('busy');
@@ -171,7 +205,7 @@ describe('a plan request', () => {
     const [key, body] = s.state.puts[0]!;
     expect(key).toBe('prod/requests/20261020T100000Z-a1b2c3d4.json');
     expect(body).toBe('{"action":"plan","version":"0.12.0","requestedBy":"admin@example.com","requestedAt":"2026-10-20T10:00:00.000Z"}');
-    expect(s.state.pending).toEqual({ key, id: '20261020T100000Z-a1b2c3d4', etag: ETAG, action: 'plan', version: '0.12.0', at: '2026-10-20T10:00:00.000Z', who: 'admin@example.com' });
+    expect(s.state.pending).toEqual({ key, id: '20261020T100000Z-a1b2c3d4', etag: ETAG, action: 'plan', version: '0.12.0', at: '2026-10-20T10:00:00.000Z', who: 'admin@example.com', operation: 'op-1' });
     expect(json(res)).toEqual(s.state.pending);
     expect(s.audit).toHaveLength(1);
     expect(s.audit[0]).toMatchObject({ action: 'update-plan', target: '0.12.0', who: 'admin@example.com' });
@@ -356,6 +390,209 @@ describe('a pending request whose build ended or is queueing', () => {
     const body = await get(s);
     expect(body.pending).toMatchObject({ id: ID_ });
     expect(body.pending.notStarted).toBeUndefined();
+  });
+});
+
+describe('the versions available', () => {
+  it('counts the versions offered, disabled and staged included, from the versions, cli.json and the staged checksums only', async () => {
+    const s = setup({
+      files: { 'prod/release/SHA256SUMS': 'abc  terraform-aws-dormeto-0.13.0-dev.1.zip\n' },
+      builds: [build(5, 'FAILED', { ACTION: 'request', REQUEST_ETAG: ETAG })], logs: { 'stream-5': ['dormeto: x'] },
+    });
+    const res = await s.api(event('GET', '/api/update/available', 'dmt-admin'));
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toEqual({ count: 3 });
+    // Neither the builds, their logs, the pending request nor any other object.
+    expect(s.state.calls).toEqual({ builds: 0, logLines: 0, pending: 0 });
+    expect([...s.state.gets].sort()).toEqual(['prod/cli.json', 'prod/release/SHA256SUMS']);
+    s.files.delete('prod/cli.json');
+    expect(json(await s.api(event('GET', '/api/update/available', 'dmt-admin')))).toEqual({ count: 3 });
+  });
+
+  it('is 0 when nothing is newer, and without the service', async () => {
+    expect(json(await setup({ running: '0.12.0' }).api(event('GET', '/api/update/available', 'dmt-admin')))).toEqual({ count: 0 });
+    const api = createApi({ routers: [], invoke: async () => ({}), audit: { write: async () => {}, list: async () => [] }, version: '0.1.0' });
+    const res = await api(event('GET', '/api/update/available', 'dmt-admin'));
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toEqual({ count: 0 });
+    expect((await api(event('GET', '/api/update/available', 'dmt-operator'))).statusCode).toBe(403);
+  });
+
+  it('is for administrators only', async () => {
+    const s = setup();
+    for (const group of ['dmt-viewer', 'dmt-operator']) expect((await s.api(event('GET', '/api/update/available', group))).statusCode).toBe(403);
+  });
+});
+
+describe('an operation per dashboard request', () => {
+  const REQ = '20261020T100000Z-a1b2c3d4';
+  const AT = '2026-10-20T10:00:00.000Z';
+  const mine = (n: number, status: string) => build(n, status, { ACTION: 'request', REQUEST_ETAG: ETAG });
+  const result = (b: Build | null, status: string, message = '') => JSON.stringify({ build: b?.id ?? '', status, message, action: 'plan', version: '0.12.0' });
+  const plan = async (s: ReturnType<typeof setup>) => expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(202);
+  const later = (s: ReturnType<typeof setup>, ms: number) => { s.state.now += ms; return new Date(s.state.now).toISOString(); };
+
+  it('records a plan request as a running manager update, through the records only (never the workflow)', async () => {
+    const s = setup();
+    await plan(s);
+    expect([...s.ops.values()]).toEqual([{
+      id: 'op-1', type: 'update-manager', target: { account: ACCOUNT, region: REGION, version: '0.12.0' }, input: { action: 'plan', version: '0.12.0', request: REQ },
+      status: 'running', steps: [{ name: 'Plan manager 0.12.0', status: 'running', startedAt: AT }], cursor: 0, holds: { locks: [], slots: [] }, activeKey: '',
+      context: {}, by: 'admin@example.com', createdAt: AT, updatedAt: AT,
+    }]);
+    expect(s.state.pending).toMatchObject({ id: REQ, operation: 'op-1' });
+    expect(s.state.workflow).toEqual([]);
+  });
+
+  it('records an apply request with its plan build', async () => {
+    const p = build(7, 'SUCCEEDED', { ACTION: 'request', REQUEST_ETAG: 'e7' });
+    const s = setup({ builds: [p], files: {
+      [`prod/results/${p.id}.json`]: JSON.stringify({ build: p.id, status: 'succeeded', message: '', action: 'plan', version: '0.12.0' }),
+      [`prod/plans/${p.id}/release.json`]: JSON.stringify({ version: '0.12.0', base: 'x', request: 'y' }), [`prod/plans/${p.id}/plan.json`]: PLAN_JSON,
+    } });
+    expect((await s.api(event('POST', '/api/update/apply', 'dmt-admin', { planBuild: p.id }))).statusCode).toBe(202);
+    expect(s.ops.get('op-1')).toMatchObject({
+      type: 'update-manager', target: { account: ACCOUNT, region: REGION, version: '0.12.0' }, input: { action: 'apply', version: '0.12.0', request: REQ, planBuild: p.id },
+      status: 'running', steps: [{ name: 'Apply manager 0.12.0', status: 'running' }], by: 'admin@example.com',
+    });
+  });
+
+  it('records nothing for a refused request', async () => {
+    const s = setup({ builds: [build(9, 'IN_PROGRESS', { ACTION: 'plan' })] });
+    expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(409);
+    expect(s.ops.size).toBe(0);
+    const t = setup();
+    expect((await t.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.99.0' }))).statusCode).toBe(400);
+    expect((await t.api(event('POST', '/api/update/apply', 'dmt-admin', { planBuild: `${ID}:00000000-0000-0000-0000-000000000007` }))).statusCode).toBe(400);
+    expect(t.ops.size).toBe(0);
+  });
+
+  it('succeeds with its final result when the state is read, with its build and the build\'s console link', async () => {
+    const s = setup();
+    await plan(s);
+    const b = mine(5, 'SUCCEEDED');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${REQ}.json`, result(b, 'succeeded', 'planned'));
+    const end = later(s, 5 * 60_000);
+    await get(s);
+    const op = s.ops.get('op-1')!;
+    expect(op).toMatchObject({
+      status: 'succeeded', finishedAt: end, updatedAt: end, steps: [{ name: 'Plan manager 0.12.0', status: 'done', startedAt: AT, finishedAt: end }],
+      context: { build: b.id, consoleUrl: consoleOf(5) },
+    });
+    expect(op).not.toHaveProperty('error');
+    expect(s.state.pending).toBeNull();
+  });
+
+  it('fails with its result\'s message', async () => {
+    const s = setup();
+    await plan(s);
+    const b = mine(5, 'FAILED');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${REQ}.json`, result(b, 'failed', 'manager 0.12.0 is neither published nor staged'));
+    const end = later(s, 60_000);
+    await get(s);
+    expect(s.ops.get('op-1')).toMatchObject({
+      status: 'failed', finishedAt: end, error: 'manager 0.12.0 is neither published nor staged', steps: [{ status: 'failed', finishedAt: end }],
+      context: { build: b.id, consoleUrl: consoleOf(5) },
+    });
+  });
+
+  it('fails when its build ended without its final result', async () => {
+    const s = setup();
+    await plan(s);
+    const b = mine(5, 'TIMED_OUT');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${REQ}.json`, result(b, 'running'));
+    later(s, 60 * 60_000);
+    await get(s);
+    expect(s.ops.get('op-1')).toMatchObject({ status: 'failed', error: 'the build ended without its result', steps: [{ status: 'failed' }], context: { build: b.id, consoleUrl: consoleOf(5) } });
+    // A build that failed before writing any result, found by the request's ETag.
+    const t = setup();
+    await plan(t);
+    t.state.builds = [mine(6, 'FAILED')];
+    await get(t);
+    expect(t.ops.get('op-1')).toMatchObject({ status: 'failed', error: 'the build ended without its result', context: { build: mine(6, 'FAILED').id, consoleUrl: consoleOf(6) } });
+  });
+
+  it('fails when no build took it within 2 minutes', async () => {
+    const s = setup();
+    await plan(s);
+    later(s, 119_000);
+    await get(s);
+    expect(s.ops.get('op-1')).toMatchObject({ status: 'running', context: {} });
+    const end = later(s, 2_000);
+    expect((await get(s)).pending).toMatchObject({ notStarted: true });
+    expect(s.ops.get('op-1')).toMatchObject({ status: 'failed', finishedAt: end, error: 'the update did not start', steps: [{ status: 'failed' }], context: {} });
+  });
+
+  it('stays running while its build runs, and links that build as soon as it is known', async () => {
+    const s = setup();
+    await plan(s);
+    const b = mine(5, 'IN_PROGRESS');
+    s.state.builds = [b];
+    later(s, 3 * 60_000);
+    await get(s);
+    expect(s.ops.get('op-1')).toMatchObject({ status: 'running', steps: [{ status: 'running' }], context: { build: b.id, consoleUrl: consoleOf(5) } });
+    expect(s.ops.get('op-1')).not.toHaveProperty('finishedAt');
+  });
+
+  it('is brought up to date when the operations are listed: the running update operations only, one result read each', async () => {
+    const s = setup();
+    await plan(s);
+    const b = mine(5, 'SUCCEEDED');
+    s.state.builds = [b];
+    s.files.set(`prod/results/${REQ}.json`, result(b, 'succeeded'));
+    const done: Operation = { ...s.ops.get('op-1')!, id: 'op-0', input: { action: 'plan', version: '0.11.0', request: '20261019T100000Z-00000000' }, status: 'succeeded' };
+    const router: Operation = { ...s.ops.get('op-1')!, id: 'op-r', type: 'upgrade-router', input: {}, steps: [{ name: 'find router', status: 'running' }] };
+    s.ops.set('op-0', done);
+    s.ops.set('op-r', router);
+    s.state.gets.length = 0;
+    const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
+    expect(listed.find((o) => o.id === 'op-1')).toMatchObject({ status: 'succeeded', context: { build: b.id, consoleUrl: consoleOf(5) } });
+    expect(s.ops.get('op-1')!.status).toBe('succeeded');
+    expect(listed.find((o) => o.id === 'op-0')).toEqual(done);
+    expect(listed.find((o) => o.id === 'op-r')).toEqual(router);
+    expect(s.state.gets).toEqual([`prod/results/${REQ}.json`]);
+    // Nothing running: nothing read.
+    s.state.gets.length = 0;
+    s.state.calls.builds = 0;
+    await s.api(event('GET', '/api/operations', 'dmt-admin'));
+    expect(s.state.gets).toEqual([]);
+    expect(s.state.calls.builds).toBe(0);
+  });
+
+  it('fails a listed update whose request no build took within 2 minutes, though no pending request names it', async () => {
+    const s = setup();
+    await plan(s);
+    s.state.pending = null;
+    later(s, 3 * 60_000);
+    const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
+    expect(listed[0]).toMatchObject({ id: 'op-1', status: 'failed', error: 'the update did not start' });
+  });
+
+  it('lists the operations as they are when they cannot be brought up to date', async () => {
+    const s = setup();
+    await plan(s);
+    s.state.throttled = true;
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await s.api(event('GET', '/api/operations', 'dmt-admin'));
+    expect(res.statusCode).toBe(200);
+    expect(json(res).operations).toMatchObject([{ id: 'op-1', status: 'running' }]);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('UpdateOperationsNotRefreshed'));
+    logged.mockRestore();
+  });
+
+  it('is neither listed nor read, nor brought up to date, for operators and viewers', async () => {
+    const s = setup();
+    await plan(s);
+    s.state.gets.length = 0;
+    for (const group of ['dmt-viewer', 'dmt-operator']) {
+      expect(json(await s.api(event('GET', '/api/operations', group))).operations).toEqual([]);
+      expect((await s.api(event('GET', '/api/operations/op-1', group))).statusCode).toBe(404);
+    }
+    expect(s.state.gets).toEqual([]);
+    expect((await s.api(event('GET', '/api/operations/op-1', 'dmt-admin'))).statusCode).toBe(200);
   });
 });
 

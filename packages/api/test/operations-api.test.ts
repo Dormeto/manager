@@ -7,7 +7,7 @@ const NOW = Date.UTC(2026, 9, 5, 12, 0);
 const MANAGER = '121014831971';
 const TG = `arn:aws:elasticloadbalancing:eu-west-3:${MANAGER}:targetgroup/paris-app/73e2d6bc24d8a067`;
 
-function setup({ installed = [] as InstalledRouter[], conflict = null as string | null } = {}) {
+function setup({ installed = [] as InstalledRouter[], conflict = null as string | null, listed = null as Operation[] | null, visible = undefined as (() => boolean) | undefined } = {}) {
   const audit: AuditEntry[] = [];
   const created: [string, Record<string, unknown>, string][] = [];
   const calls: [string, Record<string, unknown>][] = [];
@@ -21,8 +21,8 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
       created.push([type, input, by]);
       return operation(type, input);
     },
-    list: async () => [operation('onboard', {})],
-    get: async (id) => (id === 'op1' ? operation('onboard', {}) : null),
+    list: async () => listed ?? [operation('onboard', {})],
+    get: async (id) => (listed ? listed.find((op) => op.id === id) ?? null : id === 'op1' ? operation('onboard', {}) : null),
     installedRouters: async () => installed,
   };
   const api = createApi({
@@ -37,8 +37,9 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
     now: () => NOW, newId: () => 'id-1', version: '0.2.0', routerVersion: '0.18.0',
     discovery: { store: memoryStore([candidate(TG, { targetGroupArn: TG, region: 'eu-west-3' })]), run: async () => {} },
     operations,
+    ...(visible ? { visible } : {}),
   });
-  return { api, audit, created, calls };
+  return { api, audit, created, calls, operation };
 }
 
 function event(method: string, path: string, groups = '', body?: unknown): ApiEvent {
@@ -129,6 +130,30 @@ describe('operations', () => {
     expect(json(await api(event('GET', '/api/operations'))).operations.map((o: Operation) => o.id)).toEqual(['op1']);
     expect(json(await api(event('GET', '/api/operations/op1'))).id).toBe('op1');
     expect((await api(event('GET', '/api/operations/nope'))).statusCode).toBe(404);
+  });
+
+  it('lists and reads the manager\'s update operations for administrators only, whatever the perimeter', async () => {
+    const op = setup().operation;
+    const onboard = { ...op('onboard', {}), target: { account: MANAGER, region: 'eu-west-3' } };
+    const update = { ...op('update-manager', { action: 'plan', version: '0.12.0', request: 'r' }), id: 'op-u', target: { account: MANAGER, region: 'eu-west-1', version: '0.12.0' } };
+    const all = setup({ listed: [update, onboard] });
+    for (const group of ['dmt-viewer', 'dmt-operator']) {
+      expect(json(await all.api(event('GET', '/api/operations', group))).operations.map((o: Operation) => o.id)).toEqual(['op1']);
+      expect((await all.api(event('GET', '/api/operations/op-u', group))).statusCode).toBe(404);
+    }
+    expect(json(await all.api(event('GET', '/api/operations', 'dmt-admin'))).operations.map((o: Operation) => o.id)).toEqual(['op-u', 'op1']);
+    expect(json(await all.api(event('GET', '/api/operations/op-u', 'dmt-admin'))).id).toBe('op-u');
+    // A perimeter that leaves out the manager's account and region: still the administrators' only.
+    const none = setup({ listed: [update, onboard], visible: () => false });
+    expect(json(await none.api(event('GET', '/api/operations', 'dmt-admin'))).operations.map((o: Operation) => o.id)).toEqual(['op-u']);
+    expect((await none.api(event('GET', '/api/operations/op-u', 'dmt-admin'))).statusCode).toBe(200);
+    expect(json(await none.api(event('GET', '/api/operations', 'dmt-operator'))).operations).toEqual([]);
+  });
+
+  it('starts no manager update from the operations route', async () => {
+    const { api, created } = setup();
+    expect((await api(event('POST', '/api/operations', 'dmt-admin', { type: 'update-manager', version: '0.12.0' }))).statusCode).toBe(400);
+    expect(created).toEqual([]);
   });
 
   it('lists installed routers with the Terraform ones, each under a unique name, and operates them', async () => {

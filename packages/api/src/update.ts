@@ -1,5 +1,6 @@
 // The manager's self-update. The pure part comes first: version order, the versions offered, the plan summary, a
-// changelog section's Access line and request ids (no I/O). The service follows, over a port.
+// changelog section's Access line, request ids and a build's console page (no I/O). The service follows, over a port.
+import type { Operation } from '@dormeto/operations';
 import { HttpError } from './api.js';
 
 export const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
@@ -92,10 +93,22 @@ export function requestId(now: Date, random: string): string {
   return `${now.toISOString().slice(0, 19).replace(/[-:]/g, '')}Z-${random}`;
 }
 
+// `arn:aws:codebuild:<region>:<account>:build/<project>:<uuid>`.
+const BUILD_ARN = /^arn:aws:codebuild:([a-z]{2}(?:-[a-z]+)+-[0-9]):([0-9]{12}):build\/([A-Za-z0-9][A-Za-z0-9_-]*):([0-9a-f-]+)$/;
+
+// A build's page in the CodeBuild console, its region and account from its ARN; null for an ARN that does not parse.
+export function consoleUrl(arn: string | null | undefined): string | null {
+  const m = BUILD_ARN.exec(arn ?? '');
+  if (!m) return null;
+  const [, region, account, project, uuid] = m;
+  return `https://${region}.console.aws.amazon.com/codesuite/codebuild/${account}/projects/${project}/build/${encodeURIComponent(`${project}:${uuid}`)}/?region=${region}`;
+}
+
 // ---- The service ----
 
-export type Build = { id: string; status: string; phase: string | null; startedAt: string | null; endedAt: string | null; env: Record<string, string>; logStream: string | null };
-export type Pending = { key: string; id: string; etag: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string };
+export type Build = { id: string; arn: string | null; status: string; phase: string | null; startedAt: string | null; endedAt: string | null; env: Record<string, string>; logStream: string | null };
+// operation: the id of the request's manager update operation.
+export type Pending = { key: string; id: string; etag: string; action: 'plan' | 'apply'; version: string; planBuild?: string; at: string; who: string; operation?: string };
 
 export type UpdatePort = {
   // The install bucket, by key (`<env>/…`): null when the object is absent, an error for any other failure.
@@ -108,11 +121,13 @@ export type UpdatePort = {
   // null on any failure, no answer in time included.
   fetchText(url: string): Promise<string | null>;
   pending: { get(): Promise<Pending | null>; put(p: Pending | null): Promise<void> };
+  // The operation records (the operations package's records): each request is recorded as a manager update.
+  operations: { create(op: Operation): Promise<void>; get(id: string): Promise<Operation | null>; update(op: Operation): Promise<void> };
 };
 
 export type BuildView = {
   id: string; by: 'dashboard' | 'cli'; action: string | null; version: string | null; status: string; phase: string | null;
-  startedAt: string | null; endedAt: string | null; steps: string[]; tail: string[];
+  startedAt: string | null; endedAt: string | null; steps: string[]; tail: string[]; consoleUrl: string | null;
 };
 
 export type UpdateState = {
@@ -130,12 +145,18 @@ export type UpdateState = {
 
 export type UpdateService = {
   state(): Promise<UpdateState>;
+  // How many versions the state offers (the menu's badge): without the builds, their logs or the pending request.
+  available(): Promise<number>;
   changes(to: string): Promise<Section[]>;
   plan(version: string, who: string): Promise<Pending>;
   apply(planBuild: string, who: string): Promise<Pending>;
+  // A list of operations, its running manager updates brought to their requests' outcomes.
+  refreshOperations(operations: Operation[]): Promise<Operation[]>;
 };
 
 type Result = { build: string; status: string; message: string; action: string; version: string };
+// What became of a request: running (its build once known), or finished; notStarted when no build took it in time.
+type Outcome = { status: 'running'; build: string | null } | { status: 'succeeded' | 'failed'; build: string | null; message: string; notStarted?: true };
 
 const NOT_STARTED_MS = 120_000;
 const TAIL = 40;
@@ -191,8 +212,12 @@ function sectionOf(changelog: string, version: string): string | null {
   return lines.slice(start, end).join('\n').trimEnd();
 }
 
-export function createUpdate(port: UpdatePort, o: { env: string; logGroup: string; version: string; releasesUrl: string; now: () => Date; random: () => string }): UpdateService {
+// account and region: the manager's own, the target of its update operations.
+export function createUpdate(port: UpdatePort, o: {
+  env: string; logGroup: string; version: string; releasesUrl: string; now: () => Date; random: () => string; account: string; region: string; newId?: () => string;
+}): UpdateService {
   const key = (path: string) => `${o.env}/${path}`;
+  const newId = o.newId ?? (() => crypto.randomUUID());
 
   // The published versions; null when neither list can be read.
   async function published(): Promise<VersionEntry[] | null> {
@@ -232,18 +257,49 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
 
   // A request is done with a final result, or a running one whose build ended without writing its final result (timed
   // out, stopped, faulted). It is not started after 2 minutes without a result, unless a build took it (it may still queue).
+  // The pending request and its operation alike follow it. etag: the request's, when known (the pending request's).
+  function outcome(request: { etag?: string; at: string }, result: Result | null, builds: Build[]): Outcome {
+    // Its build: the one its result names, else a listed request build carrying its request's ETag.
+    const mine = builds.find((b) => (result?.build ? b.id === result.build : !!request.etag && b.env.ACTION === 'request' && b.env.REQUEST_ETAG === request.etag));
+    const build = result?.build || mine?.id || null;
+    if (result?.status === 'succeeded' || result?.status === 'failed') return { status: result.status, build, message: result.message };
+    if (mine && mine.status !== 'IN_PROGRESS') return { status: 'failed', build, message: 'the build ended without its result' };
+    if (!result && !mine && o.now().getTime() - Date.parse(request.at) > NOT_STARTED_MS) return { status: 'failed', build: null, message: 'the update did not start', notStarted: true };
+    return { status: 'running', build };
+  }
+
+  // A running manager update operation at its request's outcome: finished with it, or given its build once known (and the
+  // build's console page); null when nothing changes.
+  function advanced(op: Operation, out: Outcome, builds: Build[]): Operation | null {
+    if (op.status !== 'running') return null;
+    const at = o.now().toISOString();
+    const listed = out.build ? builds.find((b) => b.id === out.build) : undefined;
+    const context = out.build ? { ...op.context, build: out.build, consoleUrl: consoleUrl(listed?.arn) ?? (op.context.consoleUrl as string | undefined) ?? null } : op.context;
+    if (out.status === 'running') return out.build && op.context.build !== out.build ? { ...op, context, updatedAt: at } : null;
+    return {
+      ...op, status: out.status, context, updatedAt: at, finishedAt: at,
+      steps: op.steps.map((s) => ({ ...s, status: out.status === 'succeeded' ? 'done' : 'failed', finishedAt: at })),
+      ...(out.status === 'failed' ? { error: out.message } : {}),
+    };
+  }
+
+  async function follow(op: Operation, out: Outcome, builds: Build[]): Promise<Operation> {
+    const next = advanced(op, out, builds);
+    if (!next) return op;
+    await port.operations.update(next);
+    return next;
+  }
+
   async function pendingNow(pending: Pending | null, builds: Build[]): Promise<UpdateState['pending']> {
     if (!pending) return null;
-    const result = await resultOf(pending.id);
-    // Its build: the one its result names, else a listed request build carrying its request's ETag.
-    const mine = builds.find((b) => (result?.build ? b.id === result.build : b.env.ACTION === 'request' && b.env.REQUEST_ETAG === pending.etag));
-    const ended = !!mine && mine.status !== 'IN_PROGRESS';
-    if (result?.status === 'succeeded' || result?.status === 'failed' || ended) {
-      await port.pending.put(null);
-      return null;
-    }
-    if (!result && !mine && o.now().getTime() - Date.parse(pending.at) > NOT_STARTED_MS) return { ...pending, notStarted: true };
-    return pending;
+    const out = outcome(pending, await resultOf(pending.id), builds);
+    // Its operation first: an operation not written keeps the request pending, and the next read tries again.
+    const op = pending.operation && (out.status !== 'running' || out.build) ? await port.operations.get(pending.operation) : null;
+    if (op) await follow(op, out, builds);
+    if (out.status === 'running') return pending;
+    if (out.notStarted) return { ...pending, notStarted: true };
+    await port.pending.put(null);
+    return null;
   }
 
   // The newest plan build is the confirmable plan when a dashboard plan succeeded, with its release.json, and no plan
@@ -269,6 +325,7 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
       id: b.id, ...(await describe(b)), status: b.status, phase: b.phase, startedAt: b.startedAt, endedAt: b.endedAt,
       steps: lines.filter((l) => l.startsWith('dormeto: ')).map((l) => l.slice('dormeto: '.length)),
       tail: FAILED.has(b.status) ? lines.slice(-TAIL) : [],
+      consoleUrl: consoleUrl(b.arn),
     };
   }
 
@@ -295,18 +352,46 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
     if (s.pending && !s.pending.notStarted) throw new HttpError(409, 'busy', 'a request is waiting for its build');
   }
 
+  // The operation first, recorded running (never started: the request's build runs the update): a request whose write
+  // fails leaves it to the 2 minutes without a build ("the update did not start").
   async function request(body: { action: 'plan' | 'apply'; version: string; planBuild?: string }, who: string): Promise<Pending> {
     const id = requestId(o.now(), o.random());
     const at = o.now().toISOString();
+    const op: Operation = {
+      id: newId(), type: 'update-manager', target: { account: o.account, region: o.region, version: body.version }, input: { ...body, request: id },
+      status: 'running', steps: [{ name: `${body.action === 'plan' ? 'Plan' : 'Apply'} manager ${body.version}`, status: 'running', startedAt: at }], cursor: 0,
+      // No claim: the install project runs one build at a time.
+      holds: { locks: [], slots: [] }, activeKey: '', context: {}, by: who, createdAt: at, updatedAt: at,
+    };
+    await port.operations.create(op);
     const requestKey = key(`requests/${id}.json`);
     const etag = await port.put(requestKey, JSON.stringify({ ...body, requestedBy: who, requestedAt: at }));
-    const pending: Pending = { key: requestKey, id, etag, ...body, at, who };
+    const pending: Pending = { key: requestKey, id, etag, ...body, at, who, operation: op.id };
     await port.pending.put(pending);
     return pending;
   }
 
   return {
     state,
+
+    async available() {
+      return (await offers()).versions.length;
+    },
+
+    // At most one result read for each running manager update; the builds and the pending request read once, when any.
+    async refreshOperations(operations) {
+      const running = operations.filter((op) => op.type === 'update-manager' && op.status === 'running');
+      if (!running.length) return operations;
+      const [builds, pending] = await Promise.all([port.builds(), port.pending.get()]);
+      const fresh = new Map(await Promise.all(running.map(async (op) => {
+        // The pending request knows its ETag; an operation no request names any longer is followed by its result alone.
+        const request = pending?.operation === op.id ? pending : { at: op.createdAt };
+        const id = op.input.request;
+        const out = outcome(request, typeof id === 'string' && id ? await resultOf(id) : null, builds);
+        return [op.id, await follow(op, out, builds)] as const;
+      })));
+      return operations.map((op) => fresh.get(op.id) ?? op);
+    },
 
     async changes(to) {
       const { versions } = await offers();

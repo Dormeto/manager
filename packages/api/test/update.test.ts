@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessOf, atLeastCore, compareVersions, offered, requestId, summarizePlan, type VersionEntry } from '../src/update.js';
+import { accessOf, atLeastCore, compareVersions, consoleUrl, offered, requestId, summarizePlan, type VersionEntry } from '../src/update.js';
 
 // The real sections of the repository's CHANGELOG.md.
 const V0_11 = `## 0.11.0 — 2026-10-17
@@ -173,5 +173,24 @@ describe('requestId', () => {
   it('refuses a random part that is not 8 lowercase hex', () => {
     expect(() => requestId(new Date(0), 'XYZ')).toThrow();
     expect(() => requestId(new Date(0), 'A1B2C3D4')).toThrow();
+  });
+});
+
+describe('consoleUrl', () => {
+  it('is the build\'s CodeBuild console page, its region and account from its ARN, its id encoded', () => {
+    expect(consoleUrl('arn:aws:codebuild:eu-west-1:121014831971:build/dmt-prod-install:6f1e2d3c-0000-4a5b-8c9d-0123456789ab')).toBe(
+      'https://eu-west-1.console.aws.amazon.com/codesuite/codebuild/121014831971/projects/dmt-prod-install/build/dmt-prod-install%3A6f1e2d3c-0000-4a5b-8c9d-0123456789ab/?region=eu-west-1',
+    );
+    expect(consoleUrl('arn:aws:codebuild:ap-southeast-2:038606077307:build/dmt-dev-install:00000000-0000-0000-0000-000000000001')).toBe(
+      'https://ap-southeast-2.console.aws.amazon.com/codesuite/codebuild/038606077307/projects/dmt-dev-install/build/dmt-dev-install%3A00000000-0000-0000-0000-000000000001/?region=ap-southeast-2',
+    );
+  });
+  it('is null for an ARN that does not parse', () => {
+    for (const arn of [
+      null, undefined, '', 'dmt-prod-install:6f1e2d3c', 'arn:aws:codebuild:eu-west-1:121014831971:project/dmt-prod-install',
+      'arn:aws:codebuild:eu-west-1:1210148319:build/dmt-prod-install:6f1e2d3c', 'arn:aws:s3:eu-west-1:121014831971:build/dmt-prod-install:6f1e2d3c',
+      'arn:aws:codebuild:eu-west-1:121014831971:build/dmt-prod-install', 'arn:aws:codebuild:eu-west-1:121014831971:build/a/b:6f1e2d3c',
+      'arn:aws:codebuild:evil.example/x:121014831971:build/dmt-prod-install:6f1e2d3c',
+    ]) expect(consoleUrl(arn)).toBeNull();
   });
 });

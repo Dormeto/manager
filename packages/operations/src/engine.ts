@@ -4,7 +4,7 @@
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
-import type { Operation, OperationType, Records } from './records.js';
+import type { Operation, Records, WorkflowType } from './records.js';
 import { ClusterAccessDenied, ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
 
 const MINUTE = 60_000;
@@ -90,7 +90,7 @@ const uninstallSteps = UNINSTALL_STEPS.map((s) => `uninstall ${s}`);
 const clusterSteps = ['access entries', 'check clusters'];
 // EKS honours a new access entry within seconds: until then the cluster does not know the router's role.
 const ENTRY_PROPAGATION_MS = 120_000;
-const PLANS: Record<OperationType, string[]> = {
+const PLANS: Record<WorkflowType, string[]> = {
   'install-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
   'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', ...uninstallSteps, 'unregister router'],
@@ -263,7 +263,7 @@ export function createEngine(deps: EngineDeps) {
   }
 
   // The target of an operation, and the key no second operation may claim at the same time.
-  async function targetOf(type: OperationType, input: Record<string, unknown>): Promise<{ target: Record<string, string>; activeKey: string }> {
+  async function targetOf(type: WorkflowType, input: Record<string, unknown>): Promise<{ target: Record<string, string>; activeKey: string }> {
     if (type === 'exclude' || type === 'lift-exclusion') {
       const e = await deps.discovery?.getExclusion(String(input.exclusionId));
       if (!e) throw new Error(`unknown exclusion: ${input.exclusionId}`);
@@ -287,7 +287,7 @@ export function createEngine(deps: EngineDeps) {
     return { target: { account, region }, activeKey: `ROUTER#${account}#${region}` };
   }
 
-  async function create(type: OperationType, input: Record<string, unknown>, by: string): Promise<Operation> {
+  async function create(type: WorkflowType, input: Record<string, unknown>, by: string): Promise<Operation> {
     const { target, activeKey } = await targetOf(type, input);
     const id = newId();
     const claim = await records.claimActive(activeKey, id, ACTIVE_TTL);
@@ -757,7 +757,7 @@ export function createEngine(deps: EngineDeps) {
   async function connections({ connect, disconnect }: { connect: { account: string; regions: string[] }[]; disconnect: string[] }, by: string) {
     const created: string[] = [];
     const skipped: { account: string; reason: string }[] = [];
-    const start = async (type: OperationType, input: { account: string; regions: string[] }) => {
+    const start = async (type: WorkflowType, input: { account: string; regions: string[] }) => {
       try {
         created.push((await create(type, input, by)).id);
       } catch (err) {

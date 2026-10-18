@@ -6,8 +6,12 @@ const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
 type Item = Record<string, AttributeValue>;
 
-export type OperationType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion'
+// The operations the workflow runs.
+export type WorkflowType = 'install-router' | 'upgrade-router' | 'uninstall-router' | 'onboard' | 'offboard' | 'exclude' | 'lift-exclusion'
   | 'connect-account' | 'disconnect-account' | 'cluster-access';
+// And the manager's own update, which the API records for each request of the Update page: the install project's build
+// runs it, never the workflow.
+export type OperationType = WorkflowType | 'update-manager';
 export type StepStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface Operation {

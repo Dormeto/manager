@@ -4,7 +4,7 @@ import {
   CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, lint, rescope, restatus, validateConfig, withExclusions,
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
-import type { InstalledRouter, Operation, OperationType } from '@dormeto/operations';
+import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import type { IdleRequests } from './idle-requests.js';
@@ -16,7 +16,7 @@ export type Router = FleetRouter;
 
 // Operations (onboarding, R4b): created by the API, run by the workflow.
 export interface OperationsApi {
-  create(type: OperationType, input: Record<string, unknown>, by: string): Promise<Operation>;
+  create(type: WorkflowType, input: Record<string, unknown>, by: string): Promise<Operation>;
   list(): Promise<Operation[]>;
   get(id: string): Promise<Operation | null>;
   installedRouters(): Promise<InstalledRouter[]>;
@@ -1043,6 +1043,7 @@ export function createApi({
     if (resource === 'update' && !b) {
       need(identity, 'admin');
       if (method === 'GET' && !a) return reply(200, update ? await update.state() : { installedWithCli: false, version });
+      if (method === 'GET' && a === 'available') return reply(200, { count: update ? await update.available() : 0 });
       if (update && method === 'GET' && a === 'changes') {
         const to = event.queryStringParameters?.to;
         if (!to) throw new HttpError(400, 'bad_request', 'to is required');
@@ -1371,16 +1372,27 @@ export function createApi({
   // --- Operations: onboard, offboard, install, upgrade and uninstall routers -------------------------------------------
 
   const ADMIN_TYPES = new Set(['install-router', 'upgrade-router', 'uninstall-router']);
+  // The manager's updates are the administrators' (the Update page's), whatever the perimeter.
+  const seesOperation = (identity: Identity, op: Operation) => (op.type === 'update-manager' ? RANK[identity.role] >= RANK.admin : sees(identity, op.target.account, op.target.region));
   async function operationsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, ops: OperationsApi): Promise<ApiResponse | null> {
-    if (method === 'GET' && !id) return reply(200, { operations: (await ops.list()).filter((op) => sees(identity, op.target.account, op.target.region)) });
+    if (method === 'GET' && !id) {
+      const shown = (await ops.list()).filter((op) => seesOperation(identity, op));
+      // The running manager updates follow their requests (the install build does not write the records); as they are when
+      // that fails (the next read tries again).
+      const operations = update ? await update.refreshOperations(shown).catch((err: Error) => {
+        console.error(JSON.stringify({ level: 'error', event: 'UpdateOperationsNotRefreshed', error: err.message }));
+        return shown;
+      }) : shown;
+      return reply(200, { operations });
+    }
     if (method === 'GET' && id) {
       const op = await ops.get(decodeURIComponent(id));
-      if (!op || !sees(identity, op.target.account, op.target.region)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
+      if (!op || !seesOperation(identity, op)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
       return reply(200, op);
     }
     if (method !== 'POST' || id) return null;
     const body = bodyOf(event);
-    const type = String(body.type ?? '') as OperationType;
+    const type = String(body.type ?? '') as WorkflowType;
     if (!['onboard', 'offboard', ...ADMIN_TYPES].includes(type)) throw new HttpError(400, 'bad_request', 'type must be onboard, offboard, install-router, upgrade-router or uninstall-router');
     need(identity, ADMIN_TYPES.has(type) ? 'admin' : 'operator');
     let input: Record<string, unknown>;
