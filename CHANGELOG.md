@@ -5,6 +5,20 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- The dashboard's redesign, in the website's design: night and light themes (the system's until the user chooses one in
+  the top bar), the Dormeto fonts and animated icon (loaders, the navigation's own icons), every view restyled. The
+  Overview shows the fleet live (the icons of its first 96 workloads by router, each router's count, "+N more" to its
+  workloads) and the energy the naps did not use, with its carbon (below).
+- A demo mode, for development only: `npm run dev:mock -w @dormeto/manager-dashboard` answers the API, the sign-in and
+  Cognito in the browser from a generated organization (`?demo=acme,workloads=60,routers=5`, see `src/mock/scenario.ts`).
+  A build refuses `VITE_MOCK`, and the release refuses a dashboard holding the demo.
+- `GET /api/workloads/states` and each workload's figures (a Workloads row with `states=1`, a workload's view) gain
+  `energy`: the kWh and kg CO2e its naps did not use over the last 30 days, an estimate from what each last nap stopped
+  over the hours asleep within the savings baseline, with Cloud Carbon Footprint's coefficients for AWS and each
+  region's grid intensity (docs/savings.md). With prices only; the Overview's energy card reads it.
+
 ## 0.11.0 — 2026-10-17
 
 Router 0.29.0. Access: nothing to apply again (the access and organization modules and the AWS CLI script are

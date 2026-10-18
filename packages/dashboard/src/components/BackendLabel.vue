@@ -29,5 +29,8 @@ const arn = computed(() => backendArn(props.backend, props));
 </template>
 
 <style scoped>
-.arn { word-break: break-all; }
+.backend-label { border-radius: 6px; outline: none; }
+.backend-label:focus-visible { box-shadow: 0 0 0 2px rgb(var(--v-theme-secondary)); }
+.backend-label .backend-icon { box-shadow: 0 0 0 1px rgba(var(--v-border-color), 0.12); }
+.arn { word-break: break-all; opacity: 0.85; }
 </style>

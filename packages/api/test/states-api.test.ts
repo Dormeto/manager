@@ -193,6 +193,33 @@ describe('all the workloads over 7 days (the Workloads view\'s bar)', () => {
     expect([hidden.workloads, hidden.states7d.totals]).toEqual([0, {}]);
     expect('costs' in (await fleet(setup({ priced: false })))).toBe(false);
   });
+
+  // a's hour asleep: two t3.medium (2 vCPU, 4 GB: 6.592 W each) and a db.t4g.micro (2 vCPU, 1 GB: 5.257 W), its service not
+  // described; in eu-west-1 (0.279 kg CO2e a kWh). b's 30 days asleep stopped nothing described: no estimate.
+  const KWH = ((2 * (2 * 2.12 + 4 * 0.392) + (2 * 2.12 + 0.392)) * 1.135) / 1000;
+  it('estimates the energy the naps did not use and its carbon, each workload in its own region (PR #1)', async () => {
+    const s = setup();
+    const body = await fleet(s);
+    expect(body.energy.kwh).toBeCloseTo(KWH, 9);
+    expect(body.energy.co2Kg).toBeCloseTo(KWH * 0.279, 9);
+    expect([body.energy.workloads, body.energy.estimated]).toEqual([1, 2]);
+    // Each workload's own estimate with its figures, on a Workloads page and its view.
+    const [a, b] = await page(s);
+    expect(a!.energy.kwh).toBeCloseTo(KWH, 9);
+    expect(a!.energy.estimated).toBe(2);
+    expect(b!.energy).toEqual({ kwh: 0, co2Kg: 0, estimated: 0 });
+    expect(json(await s.api(event('/api/workloads/dmt-dev/a'))).energy).toEqual(a!.energy);
+    // From each workload's figures, kept the hour with them: no history read again.
+    s.later(30 * 60_000);
+    expect((await fleet(s)).energy).toEqual(body.energy);
+    expect(s.read).toEqual(['a', 'b']);
+  });
+
+  it('says no estimate without the naps\' figures: no workload estimated, or no prices', async () => {
+    expect((await fleet(setup({ workloads: [workload('b')] }))).energy).toEqual({ kwh: 0, co2Kg: 0, workloads: 0, estimated: 0 });
+    expect('energy' in (await fleet(setup({ priced: false })))).toBe(false);
+    expect('energy' in json(await setup({ priced: false }).api(event('/api/workloads/dmt-dev/a')))).toBe(false);
+  });
 });
 
 describe('discounts for commitments (R9.5)', () => {

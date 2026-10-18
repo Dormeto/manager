@@ -3,7 +3,8 @@
 // at a time, paged on the server (scale design §5), starting with the statuses people act on.
 import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
 import { useDisplay } from 'vuetify';
-import { mdiCancel, mdiCogOutline, mdiEyeOffOutline, mdiEyeOutline, mdiLogoutVariant, mdiPlay, mdiPlusCircleOutline } from '@mdi/js';
+import { mdiAlertCircleOutline, mdiCancel, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
+  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { api } from '../api';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
@@ -18,10 +19,13 @@ import type { Exclusion } from '../types';
 import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
-import { cursorPages, visibleStatuses, firstStatus, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
+import { cursorPages, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative } from '../format';
+import { useCountUp } from '../count-up';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
+import DmLoader from '../components/DmLoader.vue';
+import DmLogo from '../components/DmLogo.vue';
 import IdleBar from '../components/IdleBar.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import StatusHelp from '../components/StatusHelp.vue';
@@ -287,9 +291,9 @@ const runColor = (status: RunRecord['status']) => ({ running: 'info', ok: 'succe
 // In account, region and id order (the index's): no other sort on the server.
 const headers = [
   { title: 'Status', key: 'status', sortable: false },
+  { title: 'Rule', key: 'conditions', sortable: false },
   { title: 'Account', key: 'account', sortable: false },
   { title: 'Region', key: 'region', sortable: false },
-  { title: 'Rule', key: 'conditions', sortable: false },
   { title: 'Backend', key: 'backend', sortable: false },
   { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end' as const, sortable: false },
   { title: 'Reason', key: 'statusReason', sortable: false },
@@ -297,74 +301,117 @@ const headers = [
 ];
 const first = computed(() => page.value * PAGE + (candidates.value.length ? 1 : 0));
 const last = computed(() => page.value * PAGE + candidates.value.length);
+// Presentation: the first answer not there yet (the status is set by it), the icon's mood while a run scans, the run's
+// figures as tiles, and an icon per kind of exclusion.
+const waiting = computed(() => loading.value && status.value === null);
+const scanning = computed(() => running.value || lastRun.value?.status === 'running');
+// The tiles' numbers count up when they arrive (the labels read the values themselves).
+const secondsUp = useCountUp(() => seconds.value ?? 0);
+const scannedUp = useCountUp(() => scanned.value);
+const skippedUp = useCountUp(() => skipped.value);
+const failedUp = useCountUp(() => failed.value.length);
+const runTiles = computed(() => [
+  { key: 'duration', icon: mdiTimerOutline, color: 'secondary', value: lastRun.value?.status === 'running' || seconds.value === null ? '—' : `${secondsUp.value} s`, label: 'duration' },
+  { key: 'scanned', icon: mdiEarth, color: 'success', value: scannedUp.value, label: `account-region${scanned.value === 1 ? '' : 's'} scanned` },
+  { key: 'skipped', icon: mdiSkipNextCircleOutline, color: 'info', value: skippedUp.value, label: 'skipped' },
+  { key: 'failed', icon: mdiAlertCircleOutline, color: 'error', value: failedUp.value, label: 'failed' },
+]);
+const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 'load-balancer': mdiLanConnect, 'target-group': mdiTarget };
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-center ga-2 mb-2">
-    <h1 class="text-headline-small">Discovery</h1>
+  <div class="d-flex flex-wrap align-end ga-4 mb-6">
+    <div>
+      <div class="dm-eyebrow mb-1">Organization</div>
+      <h1 class="text-headline-small">Discovery</h1>
+    </div>
     <v-spacer />
-    <v-btn v-if="session.isAdmin" :prepend-icon="mdiCogOutline" variant="text" to="/discovery/settings">Perimeter</v-btn>
-    <v-btn v-if="session.canOperate" :prepend-icon="mdiPlay" variant="tonal" :loading="running" :disabled="lastRun?.status === 'running'" @click="runNow">Run now</v-btn>
+    <div class="d-flex flex-wrap align-center ga-2">
+      <v-btn v-if="session.isAdmin" :prepend-icon="mdiCogOutline" variant="text" to="/discovery/settings">Perimeter</v-btn>
+      <v-btn v-if="session.canOperate" :prepend-icon="mdiPlay" color="primary" variant="flat" :loading="running" :disabled="lastRun?.status === 'running'" @click="runNow">Run now</v-btn>
+    </div>
   </div>
-  <p class="text-medium-emphasis mb-4">Load balancer rules of every account and region of the perimeter, read with the read-only
+  <p class="dm-lede text-medium-emphasis mb-6">Load balancer rules of every account and region of the perimeter, read with the read-only
     <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</p>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <NoticeToast :notice="notice" @close="notice = null" />
 
-  <v-card class="mb-4" :loading="loading">
-    <v-card-text v-if="!lastRun" class="text-medium-emphasis">No discovery run yet.</v-card-text>
-    <v-card-text v-else>
-      <div class="d-flex flex-wrap align-center ga-2">
-        <v-chip :color="runColor(lastRun.status)" variant="tonal" label>{{ lastRun.status }}</v-chip>
-        <span>Last run {{ relative(lastRun.startedAt, now) }} ({{ lastRun.trigger }}<template v-if="lastRun.by"> by {{ lastRun.by }}</template>)<template v-if="seconds !== null">, {{ seconds }} s</template>:
-          {{ scanned }} account-region{{ scanned === 1 ? '' : 's' }} scanned, {{ skipped }} skipped, {{ failed.length }} failed.</span>
+  <v-card class="dm-run mb-4" :loading="loading && !waiting">
+    <div class="dm-run__sky" :data-mood="scanning ? 'load' : 'rest'" aria-hidden="true" />
+    <DmLoader v-if="waiting" label="Reading the organization…" :size="56" />
+    <v-card-text v-else-if="!lastRun" class="dm-calm">
+      <DmLogo state="sleep" :size="40" />
+      <span class="text-medium-emphasis">No discovery run yet.</span>
+    </v-card-text>
+    <v-card-text v-else class="dm-run__body">
+      <div class="dm-run__icon">
+        <DmLogo :state="scanning ? 'load' : 'wake'" :size="52" />
       </div>
-      <v-alert v-if="lastRun.error" type="error" variant="tonal" density="compact" class="mt-3" :text="lastRun.error" />
-      <p v-if="lastRun.skippedReason" class="text-medium-emphasis mt-2">Skipped: {{ lastRun.skippedReason }}.</p>
-      <p v-if="refused" class="text-medium-emphasis mt-2">Run now {{ relative(refused.startedAt, now) }}<template v-if="refused.by"> by {{ refused.by }}</template> was refused: {{ refused.skippedReason }}.</p>
-      <ul v-if="failed.length" class="mt-3 pl-4">
-        <li v-for="t in failed" :key="`${t.account}/${t.region}`" class="text-body-medium text-error">{{ targetText(t) }}</li>
-      </ul>
+      <div class="dm-run__main">
+        <div class="dm-eyebrow">{{ lastRun.trigger }}<template v-if="lastRun.by"> by {{ lastRun.by }}</template></div>
+        <div class="dm-run__headline">
+          <span>Last run {{ relative(lastRun.startedAt, now) }}</span>
+          <v-chip :color="runColor(lastRun.status)" variant="tonal" label size="small" class="dm-run__status">{{ lastRun.status }}</v-chip>
+        </div>
+        <div class="dm-run__tiles">
+          <div v-for="t in runTiles" :key="t.key" class="dm-figure" :class="{ 'dm-figure--alarm': t.key === 'failed' && failed.length }">
+            <v-avatar :color="t.color" variant="tonal" rounded="lg" size="34"><v-icon :icon="t.icon" size="18" /></v-avatar>
+            <div class="dm-figure__text">
+              <div class="dm-figure__value">{{ t.value }}</div>
+              <div class="dm-figure__label">{{ t.label }}</div>
+            </div>
+          </div>
+        </div>
+        <v-alert v-if="lastRun.error" type="error" variant="tonal" density="compact" class="mt-4" :text="lastRun.error" />
+        <p v-if="lastRun.skippedReason" class="text-body-medium text-medium-emphasis mt-3">Skipped: {{ lastRun.skippedReason }}.</p>
+        <p v-if="refused" class="text-body-medium text-medium-emphasis mt-3">Run now {{ relative(refused.startedAt, now) }}<template v-if="refused.by"> by {{ refused.by }}</template> was refused: {{ refused.skippedReason }}.</p>
+        <ul v-if="failed.length" class="dm-run__failed mt-4">
+          <li v-for="t in failed" :key="`${t.account}/${t.region}`" class="text-body-medium">
+            <v-icon :icon="mdiAlertCircleOutline" color="error" size="16" class="dm-run__failed-icon" />
+            <span class="text-error">{{ targetText(t) }}</span>
+          </li>
+        </ul>
+      </div>
     </v-card-text>
   </v-card>
 
   <LintAlert v-if="lastRun" :findings="lastRun.lint" :settings-link="session.isAdmin" />
   <OrganizationAccess v-if="access && access.checkedAt" :report="access" :roles="roles" />
 
-  <div class="d-flex flex-wrap align-center ga-2 mb-2">
-    <v-chip-group :model-value="status" mandatory column @update:model-value="show">
-      <v-tooltip v-for="s in visibleStatuses(counts, status)" :key="s" location="top" max-width="380">
-        <template #activator="{ props }">
-          <v-chip v-bind="props" :value="s" :color="statusColor(s)" filter variant="tonal">{{ statusLabel(s) }} ({{ counts[s] ?? 0 }})</v-chip>
-        </template>
-        <StatusHelp :status="s" />
-      </v-tooltip>
-    </v-chip-group>
-    <v-spacer />
-    <template v-if="session.canOperate && selected.length">
-      <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
-        <template #activator="{ props }">
-          <span v-bind="props"><v-btn variant="tonal" disabled><template #prepend><v-progress-circular indeterminate size="16" width="2" /></template>{{ single.operation.type === 'onboard' ? 'Onboarding…' : 'Offboarding…' }}</v-btn></span>
-        </template>
-      </v-tooltip>
-      <v-tooltip v-else-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
-        <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
-      </v-tooltip>
-      <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="tonal" @click="onboardOpen = true">Onboard…</v-btn>
-      <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" variant="tonal" @click="offboard">Offboard</v-btn>
-      <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
-      <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
-      <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
-    </template>
-  </div>
-
-  <div class="d-flex flex-wrap ga-2 mb-2">
-    <v-text-field v-model="account" label="Account" placeholder="12 digits" density="compact" hide-details clearable max-width="220" @update:model-value="restartSoon" />
-    <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" :disabled="!filtered" @update:model-value="restartSoon" />
-  </div>
-
-  <v-card>
-    <v-data-table v-model="selected" :mobile="smAndDown" :headers="headers" :items="candidates" :loading="loading" item-value="id"
+  <v-card class="dm-candidates">
+    <div v-if="status" class="dm-candidates__tabs">
+      <v-chip-group :model-value="status" mandatory column @update:model-value="show">
+        <v-tooltip v-for="s in visibleStatuses(counts, status)" :key="s" location="top" max-width="380">
+          <template #activator="{ props }">
+            <v-chip v-bind="props" :value="s" :color="statusColor(s)" variant="tonal" size="default" class="dm-tab">{{ statusLabel(s) }}
+              <span class="dm-tab__count">{{ counts[s] ?? 0 }}</span></v-chip>
+          </template>
+          <StatusHelp :status="s" />
+        </v-tooltip>
+      </v-chip-group>
+    </div>
+    <v-divider v-if="status" />
+    <div class="dm-candidates__tools">
+      <v-text-field v-model="account" label="Account" placeholder="12 digits" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
+      <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
+      <v-spacer />
+      <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
+        <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
+          <template #activator="{ props }">
+            <span v-bind="props"><v-btn variant="tonal" disabled><template #prepend><v-progress-circular indeterminate size="16" width="2" /></template>{{ single.operation.type === 'onboard' ? 'Onboarding…' : 'Offboarding…' }}</v-btn></span>
+          </template>
+        </v-tooltip>
+        <v-tooltip v-else-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
+          <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
+        </v-tooltip>
+        <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="flat" @click="onboardOpen = true">Onboard…</v-btn>
+        <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" color="warning" variant="tonal" @click="offboard">Offboard</v-btn>
+        <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
+        <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
+        <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
+      </div>
+    </div>
+    <v-data-table v-model="selected" class="dm-table" :mobile="smAndDown" :headers="headers" :items="candidates" :loading="loading" item-value="id"
       :show-select="session.canOperate" :items-per-page="-1" hide-default-footer>
       <template #[`item.status`]="{ item }">
         <v-tooltip v-if="item.operation" location="top" max-width="380" :text="`${operationLabel(item.operation.type, subjectOf(item))} is running: open its steps in Operations.`">
@@ -377,74 +424,105 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
         </v-tooltip>
         <DiscoveryStatusChip v-else :status="item.status" />
       </template>
+      <template #[`item.conditions`]="{ item }">
+        <div class="dm-rule">
+          <div class="dm-rule__host">{{ item.conditions }}</div>
+          <div class="dm-rule__where">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
+            <v-tooltip v-if="item.rules?.length > 1" location="top" max-width="520">
+              <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" class="ml-1" tabindex="0">{{ item.rules.length }} rules</v-chip></template>
+              <div v-for="line in ruleLines(item.rules)" :key="line">{{ line }}</div>
+            </v-tooltip>
+          </div>
+        </div>
+      </template>
       <template #[`item.account`]="{ item }">
-        <div>{{ item.accountName }}</div>
+        <div class="nowrap">{{ item.accountName }}</div>
         <div class="text-body-small text-medium-emphasis mono">{{ item.account }}</div>
       </template>
       <template #[`item.region`]="{ item }"><RegionLabel :region="item.region" /></template>
-      <template #[`item.conditions`]="{ item }">
-        <div class="font-weight-medium">{{ item.conditions }}</div>
-        <div class="text-body-small text-medium-emphasis">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
-          <v-tooltip v-if="item.rules?.length > 1" location="top" max-width="520">
-            <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" class="ml-1" tabindex="0">{{ item.rules.length }} rules</v-chip></template>
-            <div v-for="line in ruleLines(item.rules)" :key="line">{{ line }}</div>
-          </v-tooltip>
-        </div>
-      </template>
       <template #[`item.backend`]="{ item }">
         <BackendLabel v-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
         <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ item.workload?.name ?? item.workloadId }}</span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
-        <IdleBar v-if="item.idleHours7d !== null" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
+        <div v-if="item.idleHours7d !== null" class="dm-idle">
+          <span class="dm-idle__share" aria-hidden="true">{{ idleShare(item) }}</span>
+          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
+        </div>
       </template>
       <template #[`item.statusReason`]="{ item }">
-        <span v-if="item.status === 'managed' && item.workload" class="text-medium-emphasis">managed as
-          <router-link :to="`/workloads/${item.workload.router}/${item.workload.workloadId}`">{{ item.workload.name }}</router-link></span>
-        <span v-else class="text-medium-emphasis">{{ item.status === 'managed' && item.workloadId ? `managed as workload ${item.workloadId}` : item.statusReason }}</span>
+        <div class="dm-reason">
+          <span v-if="item.status === 'managed' && item.workload" class="text-medium-emphasis">managed as
+            <router-link :to="`/workloads/${item.workload.router}/${item.workload.workloadId}`">{{ item.workload.name }}</router-link></span>
+          <span v-else class="text-medium-emphasis">{{ item.status === 'managed' && item.workloadId ? `managed as workload ${item.workloadId}` : item.statusReason }}</span>
+        </div>
       </template>
-      <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap">{{ relative(item.firstSeenAt, now) }}</span></template>
+      <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap text-medium-emphasis dm-num">{{ relative(item.firstSeenAt, now) }}</span></template>
+      <template #loading>
+        <DmLoader label="Reading the candidates…" :size="40" class="dm-table__loader" />
+      </template>
+      <template #no-data>
+        <div class="dm-calm justify-center py-6">
+          <DmLogo state="sleep" :size="40" />
+          <span class="text-medium-emphasis">No candidate here.</span>
+        </div>
+      </template>
     </v-data-table>
-    <v-card-actions>
-      <span class="text-body-small text-medium-emphasis">{{ first }}–{{ last }}<template v-if="!filtered && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
+    <v-divider />
+    <v-card-actions class="dm-candidates__foot">
+      <span class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!filtered && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
       <v-spacer />
-      <v-btn variant="text" :disabled="page === 0 || loading" @click="turn(-1)">Previous</v-btn>
-      <v-btn variant="text" :disabled="!hasNext || loading" @click="turn(1)">Next</v-btn>
+      <v-btn variant="text" :prepend-icon="mdiChevronLeft" :disabled="page === 0 || loading" @click="turn(-1)">Previous</v-btn>
+      <v-btn variant="text" :append-icon="mdiChevronRight" :disabled="!hasNext || loading" @click="turn(1)">Next</v-btn>
     </v-card-actions>
   </v-card>
 
   <v-card id="exclusions" class="mt-4" title="Exclusions">
     <v-card-subtitle class="text-wrap">Target groups, load balancers and accounts kept away from Dormeto: discovery never proposes them, whatever
       the perimeter includes, and the managed workloads they match stay awake until offboarded.</v-card-subtitle>
-    <v-list v-if="exclusions.length" lines="three">
+    <v-list v-if="exclusions.length" lines="three" class="bg-transparent">
       <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
+        <template #prepend>
+          <v-avatar color="error" variant="tonal" rounded="lg" size="36" class="mr-1"><v-icon :icon="KIND_ICONS[e.target.kind] ?? mdiCancel" size="18" /></v-avatar>
+        </template>
         <v-list-item-subtitle class="text-wrap">
           {{ e.reason }} · by {{ e.by }} {{ relative(e.at, now) }} · {{ e.expiresAt ? (e.expired ? `expired ${relative(e.expiresAt, now)}` : `expires ${relative(e.expiresAt, now)}`) : 'no expiry' }}
           <template v-if="e.paused?.length"> · {{ e.lifting ? 'still to resume' : 'paused' }} {{ e.paused.map((p) => `${p.name ?? p.workloadId} (${p.router})`).join(', ') }}</template>
         </v-list-item-subtitle>
         <template #append>
-          <v-chip v-if="e.expired" variant="tonal" label class="mr-2">expired</v-chip>
-          <v-chip v-if="e.lifting" color="warning" variant="tonal" label class="mr-2">lift incomplete</v-chip>
-          <v-btn v-if="session.canOperate" variant="tonal" size="small" @click="lift(e)">{{ e.lifting ? 'Retry lift' : 'Lift' }}</v-btn>
+          <div class="d-flex flex-wrap align-center justify-end ga-2">
+            <v-chip v-if="e.expired" variant="tonal" label>expired</v-chip>
+            <v-chip v-if="e.lifting" color="warning" variant="tonal" label>lift incomplete</v-chip>
+            <v-btn v-if="session.canOperate" variant="tonal" size="small" @click="lift(e)">{{ e.lifting ? 'Retry lift' : 'Lift' }}</v-btn>
+          </div>
         </template>
       </v-list-item>
     </v-list>
-    <v-card-text v-else class="text-medium-emphasis">No exclusion. Select a candidate and choose Exclude to keep it, its load balancer or its account away from Dormeto.</v-card-text>
+    <v-card-text v-else class="dm-calm">
+      <DmLogo state="sleep" :size="40" />
+      <span class="text-medium-emphasis">No exclusion. Select a candidate and choose Exclude to keep it, its load balancer or its account away from Dormeto.</span>
+    </v-card-text>
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
-    <v-card title="Dismiss candidates">
+    <v-card class="dm-dialog">
+      <v-card-item>
+        <template #prepend>
+          <v-avatar color="info" variant="tonal" rounded="lg" size="40"><v-icon :icon="mdiEyeOffOutline" size="20" /></v-avatar>
+        </template>
+        <v-card-title>Dismiss candidates</v-card-title>
+      </v-card-item>
       <v-card-text>
-        <p class="mb-3">The {{ selected.length }} selected rule{{ selected.length === 1 ? '' : 's' }} will stay dismissed, whatever later scans find, until restored.</p>
+        <p class="mb-4">The {{ selected.length }} selected rule{{ selected.length === 1 ? '' : 's' }} will stay dismissed, whatever later scans find, until restored.</p>
         <v-text-field v-model="note" label="Note (why)" maxlength="256" counter />
       </v-card-text>
-      <v-card-actions>
+      <v-card-actions class="px-6 pb-5">
         <v-spacer />
         <v-btn variant="text" @click="dismissDialog = false">Cancel</v-btn>
-        <v-btn color="primary" variant="tonal" @click="changeDismissal('dismiss')">Dismiss</v-btn>
+        <v-btn color="primary" variant="flat" @click="changeDismissal('dismiss')">Dismiss</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -452,4 +530,70 @@ const last = computed(() => page.value * PAGE + candidates.value.length);
 
 <style scoped>
 .running { text-decoration: none; }
+/* Readable over the page: the overlay's glass, nearly opaque (the global glass of cards would let the page through). */
+.v-card.dm-dialog:not(.v-card--variant-text):not(.v-card--variant-plain) { background: rgba(var(--v-theme-surface), 0.95) !important; }
+.dm-lede { max-width: 78ch; }
+.dm-num { font-variant-numeric: tabular-nums; }
+/* An empty state: the sleeping icon and its sentence, centred in its card. */
+.dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding-block: 24px !important; }
+
+/* The last run: the icon (its sun turns while a run scans), the figures as tiles. */
+.dm-run { position: relative; overflow: hidden; }
+.dm-run__sky { position: absolute; inset: 0; pointer-events: none; transition: opacity 1.2s;
+  background: radial-gradient(55% 140% at 0% 0%, rgba(var(--v-theme-primary), 0.12), transparent 65%), radial-gradient(40% 100% at 100% 100%, rgba(var(--v-theme-sun), 0.07), transparent 70%); }
+.dm-run__sky[data-mood="load"] { background: radial-gradient(55% 140% at 0% 0%, rgba(var(--v-theme-primary), 0.22), transparent 65%), radial-gradient(40% 100% at 100% 100%, rgba(var(--v-theme-sun), 0.14), transparent 70%); }
+.dm-run__body { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: start; padding: 24px !important; }
+.dm-run__icon { display: grid; place-items: center; width: 84px; height: 84px; border-radius: 50%; border: 1px dashed rgba(var(--v-border-color), 0.2); }
+.dm-run__headline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 4px 0 16px; font-size: clamp(1.2rem, 1rem + 0.7vw, 1.5rem); font-weight: 600;
+  letter-spacing: -0.03em; line-height: 1.2; }
+.dm-run__status { font-family: var(--dm-mono); font-size: 0.72rem; letter-spacing: 0.04em; }
+.dm-run__tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.dm-figure { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 12px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 14px;
+  background: rgba(var(--v-theme-on-surface), 0.02); }
+.dm-figure--alarm { border-color: rgba(var(--v-theme-error), 0.4); background: rgba(var(--v-theme-error), 0.06); }
+.dm-figure__text { min-width: 0; }
+.dm-figure__value { font-size: 1.45rem; font-weight: 600; line-height: 1.05; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.dm-figure__label { font-size: 0.78rem; line-height: 1.25; opacity: 0.66; }
+.dm-run__failed { list-style: none; display: grid; gap: 6px; margin-bottom: 0; padding: 0; }
+.dm-run__failed li { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-radius: 12px; background: rgba(var(--v-theme-error), 0.06); }
+.dm-run__failed-icon { margin-top: 2px; }
+
+/* The candidates: status tabs with their counts, filters and actions, the table. */
+.dm-candidates { overflow: hidden; }
+.dm-candidates__tabs { padding: 10px 14px 4px; }
+.dm-tab { font-weight: 500; }
+.dm-tab__count { margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.08); font: 500 0.72rem/1.4 var(--dm-mono);
+  font-variant-numeric: tabular-nums; }
+.dm-tab.v-chip--selected .dm-tab__count, .dm-tab.v-chip--active .dm-tab__count { background: rgba(var(--v-theme-on-surface), 0.12); }
+.dm-candidates__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 16px; }
+.dm-filter { flex: 1 1 160px; }
+.dm-candidates__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dm-candidates__foot { padding: 8px 16px; }
+.dm-table__loader { padding: 28px 16px; }
+.dm-table :deep(th) { white-space: nowrap; padding-inline: 10px !important; }
+.dm-table :deep(td) { padding: 10px !important; vertical-align: middle; }
+.dm-table :deep(th:first-child), .dm-table :deep(td:first-child) { padding-left: 16px !important; }
+.dm-table :deep(.backend-label .mono) { display: inline-block; max-width: 144px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.dm-rule { min-width: 176px; max-width: 300px; }
+.dm-rule__host { font-weight: 500; overflow-wrap: anywhere; }
+.dm-rule__where { margin-top: 2px; font-size: 0.78rem; opacity: 0.62; }
+.dm-reason { min-width: 90px; max-width: 260px; }
+.dm-idle { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.dm-idle__share { min-width: 3.4em; text-align: right; font: 500 0.74rem/1 var(--dm-mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
+.dm-idle :deep(.idle-bar) { width: 60px; margin-left: 0; }
+.dm-idle :deep(.v-progress-linear) { border-radius: 999px; }
+.dm-idle :deep(.v-progress-linear__background) { opacity: 0.14; }
+.dm-idle :deep(.v-progress-linear__determinate) { border-radius: 999px; }
+
+@media (max-width: 960px) {
+  .dm-run__tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .dm-run__body { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px !important; }
+  .dm-run__icon { width: 68px; height: 68px; }
+  .dm-candidates__actions { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dm-run__sky { transition: none; }
+}
 </style>

@@ -1,7 +1,205 @@
-:root { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-.v-application { font-family: inherit; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
+/* The dashboard in the website's design: its fonts (bundled, the policy allows the site's own only; their license:
+   assets/fonts/OFL.txt), the night, glass cards, and the Dormeto icon in motion. Colors come from the Vuetify theme
+   (theme.ts). */
+@font-face { font-family: "Instrument Sans"; font-style: normal; font-weight: 400 700; font-stretch: 75% 100%; font-display: swap; src: url("./assets/fonts/instrument-sans.woff2") format("woff2"); }
+@font-face { font-family: "Instrument Serif"; font-style: italic; font-weight: 400; font-display: swap; src: url("./assets/fonts/instrument-serif-italic.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-style: normal; font-weight: 400 600; font-display: swap; src: url("./assets/fonts/geist-mono.woff2") format("woff2"); }
+
+:root {
+  --dm-font: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --dm-serif: "Instrument Serif", ui-serif, Georgia, serif;
+  --dm-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --dm-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dm-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-family: var(--dm-font);
+}
+/* The typography classes only: other text- classes (colors, emphasis) inherit it, and the monospace keeps its own. */
+.v-application, .v-overlay-container,
+:is([class*="text-body-"], [class*="text-title-"], [class*="text-headline-"], [class*="text-label-"], [class*="text-display-"]):not(.mono, code, kbd) { font-family: var(--dm-font) !important; }
+.v-application { font-feature-settings: "ss01", "cv11"; -webkit-font-smoothing: antialiased; }
+.mono, code, kbd { font-family: var(--dm-mono); font-size: 0.85em; }
 .nowrap { white-space: nowrap; }
 .setting { cursor: help; border-radius: 4px; }
 .setting:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
 .backend-icon { border-radius: 6px; flex: none; }
+
+/* Titles: tight, like the website's. */
+.text-headline-small, .text-headline-medium, .text-headline-large, .text-title-large, .text-title-medium, .v-card-title {
+  letter-spacing: -0.025em !important; font-weight: 600; }
+h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important; letter-spacing: -0.04em !important; }
+.v-card-title { font-size: 1.05rem !important; }
+.dm-eyebrow { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.12em; text-transform: uppercase; color: rgb(var(--v-theme-secondary)); }
+.dm-serif { font-family: var(--dm-serif); font-style: italic; font-weight: 400; letter-spacing: -0.01em; }
+
+/* The night: a sky at the top of the page, a faint grain. */
+.v-theme--dark.v-application {
+  background:
+    radial-gradient(1200px 520px at 70% -120px, rgba(19, 41, 90, 0.85), transparent 70%),
+    radial-gradient(900px 400px at 0% 0%, rgba(69, 137, 202, 0.12), transparent 70%),
+    rgb(var(--v-theme-background)) !important;
+}
+.v-theme--light.v-application {
+  background: radial-gradient(1200px 520px at 70% -160px, rgba(69, 137, 202, 0.14), transparent 70%), rgb(var(--v-theme-background)) !important;
+}
+
+/* Glass cards (their blur only on the bar, the drawer and the overlays: on every card and table, it costs much and shows
+   little over the page's plain night). */
+.v-theme--dark .v-card:not(.v-card--variant-text):not(.v-card--variant-plain) {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)) !important;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06), 0 30px 60px -40px rgba(0, 0, 0, 0.8) !important;
+}
+.v-theme--light .v-card:not(.v-card--variant-text):not(.v-card--variant-plain) { box-shadow: 0 1px 2px rgba(11, 18, 32, 0.04), 0 18px 40px -30px rgba(11, 18, 32, 0.25) !important; }
+.v-overlay .v-card, .v-menu > .v-overlay__content > .v-list, .v-menu > .v-overlay__content > .v-card { backdrop-filter: blur(18px); }
+.v-theme--dark .v-overlay__content > .v-card, .v-theme--dark .v-menu .v-list { background: rgba(13, 20, 34, 0.94) !important; }
+.v-card-title { padding-top: 18px !important; }
+
+/* Tables: quiet headers, rows that light up. */
+.v-table { background: transparent !important; }
+.v-table > .v-table__wrapper > table > thead > tr > th {
+  font: 500 0.68rem/1.2 var(--dm-mono) !important; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), 0.6) !important; }
+.v-table > .v-table__wrapper > table > tbody > tr { transition: background-color 0.2s; }
+.v-table > .v-table__wrapper > table > tbody > tr:hover { background: rgba(var(--v-theme-primary), 0.06); }
+
+/* Chips and buttons. */
+.v-chip { font-weight: 500; letter-spacing: 0; }
+.v-chip--label { border-radius: 8px !important; }
+.v-btn--variant-flat.bg-primary, .v-btn--variant-elevated.bg-primary { box-shadow: 0 10px 24px -14px rgba(var(--v-theme-primary), 0.9); }
+.v-btn { letter-spacing: 0 !important; font-weight: 600; }
+
+/* Loading bars: the dawn, from the night's blue to the sun. */
+.v-progress-linear__indeterminate { background: linear-gradient(90deg, #4589ca, #ff9b55) !important; }
+
+/* Tooltips and alerts. */
+.dm-tooltip { background: rgba(13, 20, 34, 0.96) !important; color: #edf1f8 !important; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px !important; font-size: 0.82rem !important; }
+.v-alert { border-radius: 16px !important; }
+
+/* The navigation. */
+.dm-drawer.v-navigation-drawer { border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)) !important; }
+.v-theme--dark .dm-drawer.v-navigation-drawer { background: rgba(5, 7, 13, 0.72) !important; backdrop-filter: blur(16px); }
+.dm-drawer .v-list-item { border-radius: 12px !important; min-height: 42px !important; margin-bottom: 2px; }
+.dm-drawer .v-list-item--active { background: rgba(var(--v-theme-primary), 0.12); }
+.dm-drawer .v-list-item--active::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: rgb(var(--v-theme-secondary)); opacity: 1; }
+.dm-drawer .v-list-item--active > .v-list-item__overlay { opacity: 0 !important; }
+.dm-drawer .v-list-item-title { font-weight: 500 !important; }
+.v-theme--dark .dm-bar.v-app-bar { background: rgba(5, 7, 13, 0.6) !important; backdrop-filter: blur(16px) saturate(1.4); }
+.v-theme--light .dm-bar.v-app-bar { background: rgba(243, 245, 249, 0.8) !important; backdrop-filter: blur(16px) saturate(1.4); }
+
+/* Pages come in. */
+/* backwards only: once in, nothing stays transformed (a transform would trap position: fixed in the views). */
+.dm-page { animation: dm-page-in 0.6s var(--dm-ease) backwards; }
+@keyframes dm-page-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* ============================================================
+   The Dormeto icon (DmLogo.vue), the website's: is-sleep, is-load, is-wake.
+   ============================================================ */
+.dm { overflow: visible; display: block; }
+.dm-tile { fill: #4589ca; transition: fill 1.2s ease; }
+.dm-moon { fill: #034b80; transform-origin: 30px 32px; transition: fill 1.2s ease; }
+.dm-head { fill: #ffffff; }
+.dm-face { transform-origin: 32px 52px; }
+.dm-eye-closed { fill: none; stroke: #034b80; stroke-width: 3; stroke-linecap: round; transition: opacity 0.16s linear 0.24s; }
+.dm-eyes { transform-box: fill-box; transform-origin: center; }
+.dm-eye-open { fill: #034b80; transform: scaleY(0); transform-box: fill-box; transform-origin: center; transition: transform 0.3s var(--dm-ease); }
+.dm-glint { fill: #ffffff; }
+.dm-sun-core { fill: #ff6900; }
+.dm-rays { transform-origin: 52px 12px; transition: opacity 0.4s ease; }
+.dm-ray { fill: none; stroke: #ff6900; stroke-width: 1.8; stroke-linecap: round; transform-origin: 52px 12px; }
+.dm-sun-x { transition: transform 1.15s cubic-bezier(0.45, 0, 0.55, 1); }
+.dm-sun-y { transition: transform 1.15s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.dm-stars { opacity: 0; transition: opacity 0.9s ease; }
+.dm-stars circle { fill: #ffffff; }
+.dm-zzz { opacity: 0; transition: opacity 0.4s ease; }
+.dm-z { fill: none; stroke: #f6e5b8; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.dm--small .dm-ray { stroke-width: 3.2; }
+.dm--small .dm-eye-closed { stroke-width: 3.8; }
+
+.is-sleep .dm-tile { fill: #0e2446; }
+.is-sleep .dm-moon { fill: #f6e5b8; animation: dm-rock 7s ease-in-out infinite; }
+.is-sleep .dm-sun-x { transform: translateX(-13px); }
+.is-sleep .dm-sun-y { transform: translateY(27px); }
+.is-sleep .dm-rays { opacity: 0; }
+.is-sleep .dm-stars { opacity: 1; }
+.is-sleep .dm-stars circle { animation: dm-twinkle 3.2s ease-in-out infinite; animation-delay: var(--d); }
+.is-sleep .dm-zzz { opacity: 1; }
+.is-sleep .dm-z { animation: dm-z 3s ease-out infinite; animation-delay: var(--d); }
+.is-sleep .dm-face, .is-load .dm-face { animation: dm-breathe 3.6s ease-in-out infinite; }
+.is-load .dm-tile { fill: #3a7dbf; }
+.is-load .dm-ray { animation: dm-seg 1.04s linear infinite; animation-delay: calc(var(--i) * 0.13s - 1.04s); }
+.is-wake .dm-eye-closed { opacity: 0; transition: opacity 0.12s linear var(--eye-delay, 0.95s); }
+.is-wake .dm-eye-open { transform: scaleY(1); transition: transform 0.34s var(--dm-spring) var(--eye-delay, 0.95s); }
+.is-wake .dm-eyes { animation: dm-blink 4.6s ease-in-out infinite; animation-delay: calc(var(--eye-delay, 0.95s) + 1.6s); }
+.is-wake .dm-face { animation: dm-hop 0.7s var(--dm-ease) both; animation-delay: var(--eye-delay, 0.95s); }
+.is-wake .dm-ray { animation: dm-burst 0.75s var(--dm-spring) both; animation-delay: calc(var(--ray-delay, 0.8s) + var(--i) * 45ms); }
+.is-wake .dm-rays { animation: dm-spin 30s linear infinite; animation-delay: calc(var(--ray-delay, 0.8s) + 0.8s); }
+/* The brand's icon rests as the icon and wakes when pointed at. */
+.dm--still .dm-ray { opacity: 0; }
+.dm-wakes:hover .dm--still { --eye-delay: 0.05s; --ray-delay: 0s; }
+.dm-wakes:hover .dm--still .dm-eye-closed { opacity: 0; transition: opacity 0.12s linear 0.05s; }
+.dm-wakes:hover .dm--still .dm-eye-open { transform: scaleY(1); transition: transform 0.34s var(--dm-spring) 0.05s; }
+.dm-wakes:hover .dm--still .dm-ray { animation: dm-burst 0.75s var(--dm-spring) both; animation-delay: calc(var(--i) * 45ms); }
+.dm-wakes:hover .dm--still .dm-face { animation: dm-hop 0.6s var(--dm-ease) both; }
+
+@keyframes dm-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.018, 1.03); } }
+@keyframes dm-rock { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@keyframes dm-twinkle { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+@keyframes dm-z { 0% { opacity: 0; transform: translate(0, 0) scale(0.55); } 18% { opacity: 1; } 100% { opacity: 0; transform: translate(8px, -14px) scale(1.3); } }
+@keyframes dm-seg { 0% { opacity: 1; transform: scale(1.25); } 70%, 100% { opacity: 0.18; transform: scale(1); } }
+@keyframes dm-burst { 0% { opacity: 0; transform: scale(0.2); } 60% { opacity: 1; transform: scale(1.4); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes dm-spin { to { transform: rotate(360deg); } }
+@keyframes dm-blink { 0%, 90%, 100% { transform: scaleY(1); } 94% { transform: scaleY(0.08); } }
+@keyframes dm-hop { 0% { transform: none; } 28% { transform: scale(1.05, 0.92); } 62% { transform: translateY(-1px) scale(0.97, 1.06); } 100% { transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .dm, .dm *, .dm-page { animation: none !important; transition: none !important; }
+  .is-load .dm-ray, .is-wake .dm-ray { opacity: 1; }
+}
+
+/* Lists inside cards take the card's glass. */
+.v-card .v-list { background: transparent !important; }
+
+/* Dialogs and menus: opaque, over the glass rule (which would let the page show through). */
+.v-theme--dark .v-overlay__content > .v-card:not(.v-card--variant-text):not(.v-card--variant-plain),
+.v-theme--dark .v-overlay__content > .v-sheet { background: rgba(13, 20, 34, 0.97) !important; }
+.v-theme--light .v-overlay__content > .v-card:not(.v-card--variant-text):not(.v-card--variant-plain) { background: rgba(255, 255, 255, 0.98) !important; }
+
+/* ============================================================
+   The navigation's icons (NavIcon.vue): a line, one part in the sun, a motion each.
+   ============================================================ */
+.dm-nav-well { display: grid; place-items: center; width: 36px; height: 36px; margin-right: 12px; border-radius: 11px; transition: background-color 0.3s, box-shadow 0.3s; }
+.dm-nav-icon { overflow: visible; }
+.dm-nav-icon .ni-line { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; opacity: 0.75; transition: opacity 0.3s; }
+.dm-nav-icon .ni-accent { fill: rgba(var(--v-theme-secondary), 0.45); transition: fill 0.35s; }
+.dm-nav-icon .ni-accent-line { fill: none; stroke: rgba(var(--v-theme-secondary), 0.55); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: stroke 0.35s; }
+.dm-nav-item:hover .ni-accent, .dm-nav-item.v-list-item--active .ni-accent { fill: rgb(var(--v-theme-secondary)); }
+.dm-nav-item:hover .ni-accent-line, .dm-nav-item.v-list-item--active .ni-accent-line { stroke: rgb(var(--v-theme-secondary)); }
+.dm-nav-item:hover .ni-line, .dm-nav-item.v-list-item--active .ni-line { opacity: 1; }
+.dm-nav-item.v-list-item--active .dm-nav-well {
+  background: linear-gradient(155deg, rgba(var(--v-theme-primary), 0.28), rgba(var(--v-theme-primary), 0.06));
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-primary), 0.3), 0 8px 20px -10px rgba(var(--v-theme-secondary), 0.6); }
+.dm-nav-item:hover:not(.v-list-item--active) .dm-nav-well { background: rgba(var(--v-theme-on-surface), 0.05); }
+/* Each its motion. */
+.dm-nav-icon--overview .ni-tile { transform-box: fill-box; transform-origin: center; transition: transform 0.45s var(--dm-spring); }
+.dm-nav-item:hover .dm-nav-icon--overview .ni-tile { transform: scale(1.18) rotate(8deg); }
+.dm-nav-item:hover .ni-led, .dm-nav-item.v-list-item--active .ni-led { animation: ni-blink 1.6s steps(1) infinite; }
+.ni-led2 { animation-delay: 0.4s !important; } .ni-led3 { animation-delay: 0.8s !important; }
+@keyframes ni-blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0.25; } }
+.dm-nav-icon--routers .ni-route { stroke-dasharray: 3 2; }
+.dm-nav-item:hover .dm-nav-icon--routers .ni-route { animation: ni-flow 0.8s linear infinite; }
+@keyframes ni-flow { to { stroke-dashoffset: -10; } }
+.dm-nav-item.v-list-item--active .dm-nav-icon--routers .ni-node { animation: ni-pulse 2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes ni-pulse { 50% { transform: scale(1.35); } }
+.ni-needle { transform-origin: 12px 12px; transition: transform 0.9s var(--dm-spring); }
+.dm-nav-item:hover .ni-needle { transform: rotate(200deg); }
+.dm-nav-item.v-list-item--active .ni-needle { animation: ni-seek 4s ease-in-out infinite; }
+@keyframes ni-seek { 0%, 100% { transform: rotate(-14deg); } 50% { transform: rotate(16deg); } }
+.ni-gear { transform-origin: 12px 12px; }
+.dm-nav-item:hover .ni-gear, .dm-nav-item.v-list-item--active .ni-gear { animation: ni-turn 6s linear infinite; }
+.dm-nav-item:hover .ni-gear { animation-duration: 2.4s; }
+@keyframes ni-turn { to { transform: rotate(360deg); } }
+.ni-second { transition: transform 0.45s var(--dm-spring); }
+.dm-nav-item:hover .ni-second { transform: translateX(1.5px) translateY(-1px); }
+.ni-check { stroke-dasharray: 10; stroke-dashoffset: 0; }
+.dm-nav-item:hover .ni-check { animation: ni-draw 0.6s var(--dm-ease); }
+@keyframes ni-draw { from { stroke-dashoffset: 10; } }
+.dm-drawer .v-list-item__prepend > .v-list-item__spacer { display: none; }
+@media (prefers-reduced-motion: reduce) { .dm-nav-icon * { animation: none !important; transition: none !important; } }

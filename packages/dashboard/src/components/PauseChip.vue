@@ -14,9 +14,14 @@ const label = computed(() => pauseLabel(props.pauses));
 <template>
   <v-tooltip v-if="label" location="top" max-width="420" open-on-click open-on-focus>
     <template #activator="{ props: activator }">
-      <v-chip v-bind="activator" :prepend-icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" variant="tonal" label tabindex="0">{{ label }}</v-chip>
+      <v-chip v-bind="activator" :prepend-icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" variant="tonal" label tabindex="0" class="dm-pause">{{ label }}</v-chip>
     </template>
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">{{ pauseLine(p, now) }}</div>
-    <div class="text-body-small mt-1">Never napped while paused; requests still wake it.</div>
+    <div class="text-body-small mt-1 dm-pause__note">Never napped while paused; requests still wake it.</div>
   </v-tooltip>
 </template>
+
+<style scoped>
+.dm-pause { flex: none; }
+.dm-pause__note { opacity: 0.8; }
+</style>

@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:mock": "VITE_MOCK=1 vite",
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@dormeto/fleet": "*",
     "@types/qrcode": "1.5.5",
     "@vitejs/plugin-vue": "^6.0.9",
     "@vue/test-utils": "^2.5.1",

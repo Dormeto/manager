@@ -19,6 +19,7 @@ export interface Pause {
 }
 
 import type { Failure, Fallback } from './failures';
+import type { Energy, FleetEnergy } from './energy';
 
 export interface WorkloadSummary {
   router: string;
@@ -44,6 +45,7 @@ export interface WorkloadSummary {
   requests7d?: number | null;
   states7d?: StatesWeek; // seconds in each state over the last 7 days, from the history (asked with states=1)
   costs?: Costs; // its savings over the last 30 days (asked with states=1, in a manager with prices)
+  energy?: Energy; // with its costs: the energy its naps did not use, as the API estimates it
   pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored: number; deferred: number; wakes: number } | null;
   settings: Settings;
@@ -86,6 +88,7 @@ export interface FleetStates {
   cacheMinutes: number;
   states7d: StatesWeek;
   costs?: { baseline: Costs['baseline']; saved: Costs['saved']; hourly: number | null; monthly: number | null; priced: number; discounts?: Discounts };
+  energy?: FleetEnergy; // with its costs: the energy the naps did not use, as the API estimates it (the Overview)
 }
 
 export interface Counts {
@@ -141,6 +144,7 @@ export interface WorkloadStatus {
   region?: string;
   states7d?: StatesWeek; // the manager's: as on its Workloads row
   costs?: Costs;
+  energy?: Energy;
   idleHours7d?: number;
   requests7d?: number | null;
   drift?: { at: string; kind: string; detail: string; by: string }[]; // repairs of what onboarding added, newest first

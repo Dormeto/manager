@@ -17,5 +17,6 @@ defineProps<{ status: Status }>();
 
 <style scoped>
 .transitions { padding-left: 1.1em; }
+.transitions li::marker { color: rgb(var(--v-theme-secondary)); }
 .note { opacity: 0.8; }
 </style>

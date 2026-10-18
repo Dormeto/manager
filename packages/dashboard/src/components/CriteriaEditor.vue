@@ -37,14 +37,14 @@ function note(text: string) {
 
 <template>
   <div class="criterion">
-    <div v-for="key in usedDimensions(modelValue)" :key="key" class="d-flex align-center ga-2 mb-2">
-      <span class="dimension text-body-medium">{{ dimensionOf(key).label }}</span>
+    <div v-for="key in usedDimensions(modelValue)" :key="key" class="dimension-row">
+      <span class="dimension">{{ dimensionOf(key).label }}</span>
       <v-text-field :model-value="texts[key]" :data-dimension="key" :hint="dimensionOf(key).hint" :placeholder="dimensionOf(key).hint"
-        density="compact" variant="outlined" hide-details="auto" :disabled="disabled" @update:model-value="(v: string) => edit(key, v)" />
+        density="compact" variant="outlined" hide-details="auto" :disabled="disabled" class="dimension-value" @update:model-value="(v: string) => edit(key, v)" />
       <v-btn :icon="mdiClose" :data-remove="key" size="small" variant="text" :disabled="disabled" :aria-label="`Remove ${dimensionOf(key).label}`" @click="remove(key)" />
     </div>
     <p v-if="!usedDimensions(modelValue).length" class="text-body-small text-medium-emphasis mb-2">No condition: matches every account, region and rule.</p>
-    <div class="d-flex align-center ga-2">
+    <div class="criterion-foot">
       <v-menu v-if="!disabled && availableDimensions(modelValue).length">
         <template #activator="{ props: menu }">
           <v-btn v-bind="menu" :prepend-icon="mdiPlus" size="small" variant="tonal">Condition</v-btn>
@@ -54,13 +54,18 @@ function note(text: string) {
         </v-list>
       </v-menu>
       <v-text-field :model-value="modelValue.note ?? ''" label="Note" density="compact" variant="underlined" hide-details :disabled="disabled"
-        style="max-width: 280px" @update:model-value="note" />
+        class="criterion-note" @update:model-value="note" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.dimension {
-  min-width: 120px;
+.dimension-row { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+.dimension { font: 500 0.68rem/1.3 var(--dm-mono); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.72; }
+.criterion-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.criterion-note { flex: 0 1 280px; min-width: 160px; }
+@media (max-width: 600px) {
+  .dimension-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .dimension { grid-column: 1 / -1; }
 }
 </style>

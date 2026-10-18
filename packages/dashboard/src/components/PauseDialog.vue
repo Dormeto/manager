@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Pause a router or a workload: reason, automatic resume, keep asleep.
 import { ref, watch } from 'vue';
+import { mdiPauseCircleOutline } from '@mdi/js';
 import { UNTIL_CHOICES, untilFrom, type UntilChoice } from '../pause';
 
 const props = defineProps<{ modelValue: boolean; subject: string; router?: boolean }>();
@@ -26,14 +27,15 @@ function submit() {
 <template>
   <v-dialog :model-value="modelValue" max-width="520" @update:model-value="emit('update:modelValue', $event)">
     <v-card :title="`Pause ${subject}`">
+      <template #prepend><v-avatar color="secondary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiPauseCircleOutline" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-4">{{ router ? 'No workload of this router' : 'This workload' }} is napped while paused. Requests still wake; the instrumentation stays, so resuming is immediate.</p>
+        <p class="mb-5 text-medium-emphasis">{{ router ? 'No workload of this router' : 'This workload' }} is napped while paused. Requests still wake; the instrumentation stays, so resuming is immediate.</p>
         <v-text-field v-model="reason" label="Reason" placeholder="Incident, migration, change freeze, load test…" maxlength="256" counter autofocus />
         <v-select v-model="choice" :items="UNTIL_CHOICES" label="Resume automatically" />
         <v-text-field v-if="choice === 'date'" v-model="date" type="datetime-local" label="Resume at (local time)" />
         <v-checkbox v-model="keepAsleep" hide-details :label="router ? 'Leave asleep workloads asleep (else they are woken now)' : 'Leave it asleep if it sleeps (else it is woken now)'" />
       </v-card-text>
-      <v-card-actions>
+      <v-card-actions class="px-4 pb-4">
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
         <v-btn color="primary" variant="flat" :disabled="!reason.trim() || (choice === 'date' && !date)" @click="submit">Pause</v-btn>
