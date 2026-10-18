@@ -366,6 +366,13 @@ export function createApi({
     if (!router || (identity && !sees(identity, router.account ?? managerAccount ?? '', router.region))) throw new HttpError(404, 'not_found', `unknown router: ${name}`);
     return router;
   };
+  const decoded = (raw: string | undefined): string => {
+    try {
+      return decodeURIComponent(raw ?? '');
+    } catch {
+      return raw ?? '';
+    }
+  };
   const workloadId = (raw: string | undefined): string => {
     const id = decodeURIComponent(raw ?? '');
     if (!ID.test(id)) throw new HttpError(400, 'bad_request', `invalid workload id: ${id}`);
@@ -1127,15 +1134,18 @@ export function createApi({
     }
 
     if (resource === 'workloads' && a && b) {
-      // A member cannot tell an unknown router from a workload they do not read.
+      // A member cannot tell an unknown router, a malformed id or a workload they do not read apart.
+      const member = identity.role === 'member';
       let router: Router;
+      let id: string;
       try {
+        id = workloadId(b);
         router = routerOf(a, identity);
       } catch (err) {
-        if (identity.role === 'member' && err instanceof HttpError && err.statusCode === 404) throw new HttpError(404, 'not_found', `unknown workload: ${b}`);
+        if (member && err instanceof HttpError && (err.statusCode === 404 || err.statusCode === 400)) throw new HttpError(404, 'not_found', `unknown workload: ${decoded(b)}`);
+        if (member && err instanceof URIError) throw new HttpError(404, 'not_found', `unknown workload: ${b}`);
         throw err;
       }
-      const id = workloadId(b);
       // Where its tags are read, when the caller's grants do not cover every workload: a router that reports, from its
       // summary in the fleet; one that does not, live from the router (its status), never from a stale fleet item.
       let summaryKept: WorkloadSummary | null | undefined;
@@ -1154,7 +1164,11 @@ export function createApi({
         return reportingKept;
       };
       let tagsKept: Record<string, string> | undefined;
-      const tagsNow = async () => (tagsKept ??= tagsOf(await reportsNow() ? await summaryNow() : await statusNow()));
+      // A member whose tags cannot be read (a silent router failing) learns nothing of the router: the same 404.
+      const tagsNow = async () => (tagsKept ??= await (async () => tagsOf(await reportsNow() ? await summaryNow() : await statusNow()))().catch((err) => {
+        if (member) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
+        throw err;
+      }));
       // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
       const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? ''));
       if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, await tagsNow(), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);

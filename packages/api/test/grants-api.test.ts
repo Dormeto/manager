@@ -1,7 +1,7 @@
 // Tag-driven access control on the routes (tags design §5): rows filtered before the counts, an unreadable workload
 // answers 404, a readable one without the permission 403 (audited), and the aggregates of what the caller reads.
 import { describe, expect, it, vi } from 'vitest';
-import { createApi, type ApiEvent, type AuditEntry, type Router } from '../src/api.js';
+import { RouterError, createApi, type ApiEvent, type AuditEntry, type Router } from '../src/api.js';
 import type { Operation } from '@dormeto/operations';
 
 const NOW = Date.parse('2026-10-18T12:00:00.000Z');
@@ -73,8 +73,9 @@ interface Options {
   summary?: typeof SAVINGS;
   historyDays?: number;
   mfa?: boolean;
+  failStatus?: Error; // the router's status fails
 }
-function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: NOW }, summary: savingsSummary = SAVINGS, historyDays, mfa }: Options = {}) {
+function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: NOW }, summary: savingsSummary = SAVINGS, historyDays, mfa, failStatus }: Options = {}) {
   const audit: AuditEntry[] = [];
   const calls: [string, string][] = [];
   const reads: string[] = [];
@@ -90,6 +91,7 @@ function setup({ tagged = true, silent = false, live, fleetTags, clock = { now: 
       if (payload.action === 'request-nap') return { requested: true };
       if (payload.action === 'force-wake') return { state: 'WAKING' };
       if (payload.action === 'pause') return { woken: [] };
+      if (payload.action === 'status' && failStatus) throw failStatus;
       if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', tags: tagsLive(String(payload.workloadId)) };
       if (payload.action === 'list') return { router: { name: 'dmt-dev' }, workloads: workloads.map((w) => ({ workloadId: w.workloadId, state: w.state, tags: tagsLive(w.workloadId) })) };
       return { ok: true };
@@ -373,5 +375,26 @@ describe('review fixes', () => {
     expect([noRouter.statusCode, json(noRouter)]).toEqual([404, unreadable]);
     // Built-in roles keep the router's own message.
     expect(json(await s.api(event('viewer', 'GET', '/api/workloads/nope/search'))).message).toBe('unknown router: nope');
+  });
+
+  it('answers a member the same 404 for a malformed workload id as for an unreadable one, whatever the router', async () => {
+    const s = setup();
+    const known = await s.api(event('pay', 'GET', '/api/workloads/dmt-dev/bad%20id'));
+    const unknown = await s.api(event('pay', 'GET', '/api/workloads/nope/bad%20id'));
+    expect([known.statusCode, json(known)]).toEqual([404, { error: 'not_found', message: 'unknown workload: bad id' }]);
+    expect([unknown.statusCode, json(unknown)]).toEqual([404, json(known)]);
+    expect((await s.api(event('pay', 'GET', '/api/workloads/dmt-dev/%E0%A4%A'))).statusCode).toBe(404);
+    // Built-in roles keep the 400.
+    expect((await s.api(event('viewer', 'GET', '/api/workloads/dmt-dev/bad%20id'))).statusCode).toBe(400);
+  });
+
+  it('answers a member 404 unknown workload when the live tag lookup of a silent router fails, without the router\'s words', async () => {
+    for (const failStatus of [new Error('secret: arn:aws:lambda:eu-west-1:1:function:dmt-dev'), new RouterError('router said no')]) {
+      const s = setup({ silent: true, failStatus });
+      for (const [method, path] of [['GET', ''], ['GET', '/history'], ['POST', '/wake'], ['POST', '/nap']] as const) {
+        const res = await s.api(event('pay', method, `/api/workloads/dmt-dev/search${path}`));
+        expect([res.statusCode, json(res)], path).toEqual([404, { error: 'not_found', message: 'unknown workload: search' }]);
+      }
+    }
   });
 });
