@@ -6,6 +6,7 @@ export interface Config {
   authority: string;
   clientId: string;
   authDomain: string;
+  passkeys: boolean; // the pool offers passkeys (the module's passkeys, not under mfa = required)
 }
 
 let config: Config | null = null;
@@ -13,7 +14,7 @@ let config: Config | null = null;
 export async function loadConfig(): Promise<Config> {
   // Demo data (npm run dev:mock, development only): no deployment to read it from.
   if (DEMO) {
-    config ??= { env: 'demo', authority: 'https://example.invalid', clientId: 'demo', authDomain: 'example.invalid' };
+    config ??= { env: 'demo', authority: 'https://example.invalid', clientId: 'demo', authDomain: 'example.invalid', passkeys: true };
     return config;
   }
   if (!config) {

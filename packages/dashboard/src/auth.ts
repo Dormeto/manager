@@ -17,6 +17,9 @@ export function initAuth(config: Config): void {
     response_type: 'code',
     // aws.cognito.signin.user.admin: the user sets up their own MFA with their access token (R6c).
     scope: 'openid email profile aws.cognito.signin.user.admin',
+    // The lowest authentication level (Essentials plan): nobody is asked for more, and the tokens tell how the user signed
+    // in (amr: pwd, otp, swk and hwk for passkeys, mfa), which the API's MFA policy reads.
+    extraQueryParams: { acr_values: 'urn:cognito:loa:1' },
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     automaticSilentRenew: true,
     loadUserInfo: false,
