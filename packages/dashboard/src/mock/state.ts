@@ -46,6 +46,7 @@ export interface DemoWorkload {
   hosts: string[];
   wakeMode: 'any' | 'browser';
   source: 'terraform' | 'manager';
+  tags: Record<string, string>; // R11: Dormeto's own tags
   settings: Settings;
   backends: BackendSpec[];
   items: { item: StoppedItem; hourly: number }[];
@@ -96,7 +97,8 @@ export interface DemoOperation {
   applied: boolean;
 }
 
-export interface DemoUser { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa: boolean | null }
+export interface DemoUser { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa: boolean | null; groups?: string[] }
+export interface DemoGroup { name: string; description: string; grants: { tags: Record<string, string>; permissions: ('read' | 'wake' | 'nap')[] }[]; updatedAt: string | null; updatedBy: string | null }
 export interface AuditEntry { id: string; at: string; who: string; role: string; action: string; target: string; result: string }
 type StoredExclusion = Omit<Exclusion, 'expired' | 'lifting'>;
 
@@ -204,6 +206,7 @@ export interface Demo {
   runs: { record: RunRecord; finishAt: number }[];
   config: { config: DiscoveryConfig; updatedAt: string | null; updatedBy: string | null };
   users: DemoUser[];
+  groups: DemoGroup[];
   audit: AuditEntry[];
 }
 
@@ -222,6 +225,9 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
   };
 }
 
+// R11: the demo's teams, whose workloads the groups below pick by their team tag.
+const TEAMS = ['payments', 'platform', 'data', 'web'];
+
 function baseWorkload(fields: { name: string; router: DemoRouter; backends: BackendSpec[]; idleMinutes: number; wakeMode: 'any' | 'browser'; source: 'terraform' | 'manager'; hosts: string[] }): DemoWorkload {
   const { name, router, backends } = fields;
   const { account, region } = router;
@@ -229,6 +235,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   const seed = hash(name);
   return {
     workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
+    tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
     wakeMs: ((time.wake[0] + time.wake[1]) / 2) * SECOND, napMs: time.nap, state: 'ASLEEP', entries: [], bursts: [], pauses: [],
     failure: null, consecutiveFailures: 0, nextAttemptAt: null, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null,
@@ -444,6 +451,10 @@ function build(now: number): Demo {
     runs: [],
     config: { config: configOf(), updatedAt: iso(now - 3 * DAY - 5 * HOUR), updatedBy: ME },
     users: ORG.people.map((u) => ({ email: u.email, role: u.role, status: u.status, enabled: u.enabled, createdAt: iso(now - u.createdDays * DAY - 4 * HOUR), mfa: u.mfa })),
+    groups: [
+      { name: 'payments', description: 'The payments team: its workloads, to wake and nap', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake', 'nap'] }], updatedAt: iso(now - 6 * DAY), updatedBy: ME },
+      { name: 'auditors', description: 'Read-only on staging', grants: [{ tags: { env: 'staging' }, permissions: ['read'] }], updatedAt: iso(now - 12 * DAY), updatedBy: ME },
+    ],
     audit: [],
   };
 
@@ -651,7 +662,7 @@ export function addOperation(d: Demo, op: Omit<DemoOperation, 'applied'>): DemoO
 export const routerIn = (d: Demo, account: string, region: string) => d.routers.find((r) => r.account === account && r.region === region) ?? null;
 
 // A workload onboarded from a candidate: awake, its costs known from its first nap.
-export function onboardedWorkload(d: Demo, c: Candidate, router: DemoRouter, input: { name?: string; settings?: Record<string, unknown>; databases?: { kind: string; id: string }[] }, at: number): DemoWorkload {
+export function onboardedWorkload(d: Demo, c: Candidate, router: DemoRouter, input: { name?: string; settings?: Record<string, unknown>; databases?: { kind: string; id: string }[]; tags?: Record<string, string> }, at: number): DemoWorkload {
   const kind = c.backend?.kind ?? 'instance';
   const backends: BackendSpec[] = [
     kind === 'asg' ? { kind: 'asg', type: 't3.small', count: 1 }
@@ -667,7 +678,7 @@ export function onboardedWorkload(d: Demo, c: Candidate, router: DemoRouter, inp
     wakeMode: input.settings?.wakeMode === 'browser' ? 'browser' : 'any', source: 'manager', hosts: c.hosts.length ? c.hosts : [`${name}.${ORG.scenario.domain}`],
   });
   return Object.assign(w, {
-    name, itemsKnown: false, state: 'AWAKE' as State, entries: [{ from: null, to: 'AWAKE', at: iso(at) }], awakeSince: at, updatedAt: at, activeUntil: at + 4 * MINUTE,
+    name, tags: { ...(input.tags ?? {}) }, itemsKnown: false, state: 'AWAKE' as State, entries: [{ from: null, to: 'AWAKE', at: iso(at) }], awakeSince: at, updatedAt: at, activeUntil: at + 4 * MINUTE,
     targetGroupArn: c.targetGroupArn ?? w.targetGroupArn, loadBalancerArn: c.loadBalancerArn, ruleArns: c.rules.map((x) => x.id), priority: Number(c.priority) || w.priority,
     idleHours7d: c.idleHours7d, requests7d: c.requests7d,
   });

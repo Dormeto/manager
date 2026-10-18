@@ -2,10 +2,13 @@
 import type { Candidate, DiscoveryConfig } from '@dormeto/discovery/types';
 import type { Pause } from '../types';
 import { AVAILABLE } from './fixtures';
+import { groupNameProblem, tagsProblem } from '../tags';
+import { grantRowsProblem } from '../groups';
+import { rowsOf } from '../tags';
 import { ACCOUNTS, ME, accountName } from './org';
 import {
   addOperation, audited, change, fail, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
-  type Demo, type DemoOperation, type DemoRouter, type DemoWorkload, type WorkflowType,
+  type Demo, type DemoGroup, type DemoOperation, type DemoRouter, type DemoWorkload, type WorkflowType,
 } from './state';
 import { operationView } from './views';
 import { MINUTE, SECOND, iso } from './util';
@@ -14,7 +17,7 @@ type Body = Record<string, unknown>;
 const ACCOUNT = /^\d{12}$/;
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const ROLES = ['viewer', 'operator', 'admin'];
+const ROLES = ['viewer', 'operator', 'admin', 'member'];
 const CLUSTER_STEPS = ['access entries', 'check clusters'];
 
 // --- Pauses, naps and wakes ----------------------------------------------------------------------------------------------
@@ -151,6 +154,8 @@ export function startOperation(d: Demo, body: Body, now: number) {
     const c = d.candidates.find((x) => x.id === body.candidateId) ?? fail(400, 'bad_request', `unknown candidate: ${String(body.candidateId)}`);
     const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined;
     if (name && name.length > 64) fail(400, 'bad_request', 'name: at most 64 characters');
+    const tagsError = body.tags === undefined ? null : tagsProblem(body.tags as Record<string, string>);
+    if (tagsError) fail(400, 'bad_request', tagsError);
     commandRole(c.account);
     if (c.status !== 'pending-onboarding') fail(409, 'conflict', `${c.targetGroup ?? c.id} is not to onboard (${c.status})`);
     conflict(d, now, (o) => o.target.targetGroupArn === c.targetGroupArn);
@@ -158,7 +163,7 @@ export function startOperation(d: Demo, body: Body, now: number) {
     const kubernetes = c.backend?.kind === 'k8s';
     op = {
       id, type, target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn ?? c.id, loadBalancerArn: c.loadBalancerArn },
-      input: { candidateId: c.id, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [] }, context: { name: name ?? c.targetGroup ?? c.id },
+      input: { candidateId: c.id, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [], ...(body.tags !== undefined ? { tags: body.tags } : {}) }, context: { name: name ?? c.targetGroup ?? c.id },
       by: ME, createdAt: now,
       steps: plan('onboard', now, {
         skip: (s) => (router ? s.startsWith('install ') || s === 'register router' : false) || (!kubernetes && CLUSTER_STEPS.includes(s)),
@@ -363,10 +368,11 @@ export function userAction(d: Demo, method: string, email: string | undefined, b
     const address = String(body.email ?? '').trim().toLowerCase();
     if (!EMAIL.test(address)) fail(400, 'bad_request', 'valid email required');
     const role = String(body.role ?? '');
-    if (!ROLES.includes(role)) fail(400, 'bad_request', 'role must be viewer, operator or admin');
+    if (!ROLES.includes(role)) fail(400, 'bad_request', 'role must be viewer, operator, admin or member');
+    const groups = knownGroups(d, body.groups ?? []);
     return audited(d, 'invite', address, () => {
       if (d.users.some((u) => u.email === address)) fail(409, 'conflict', `${address} already has an account`);
-      d.users.push({ email: address, role, status: 'FORCE_CHANGE_PASSWORD', enabled: true, createdAt: iso(now), mfa: false });
+      d.users.push({ email: address, role, status: 'FORCE_CHANGE_PASSWORD', enabled: true, createdAt: iso(now), mfa: false, groups });
       return { result: `${role}, sent`, response: { email: address, role, invitation: 'sent' } };
     });
   }
@@ -375,8 +381,12 @@ export function userAction(d: Demo, method: string, email: string | undefined, b
   const notSelf = () => { if (address === d.me.email) fail(409, 'conflict', 'you cannot change your own account'); };
   if (method === 'PUT' && b === 'role' && !action) {
     const role = String(body.role ?? '');
-    if (!ROLES.includes(role)) fail(400, 'bad_request', 'role must be viewer, operator or admin');
+    if (!ROLES.includes(role)) fail(400, 'bad_request', 'role must be viewer, operator, admin or member');
     return audited(d, 'role', address, () => { notSelf(); user.role = role; return { result: role, response: { email: address, role } }; });
+  }
+  if (method === 'PUT' && b === 'groups' && !action) {
+    const groups = knownGroups(d, body.groups);
+    return audited(d, 'user-groups', address, () => { user.groups = groups; return { result: groups.join(', ') || 'none', response: { email: address, groups } }; });
   }
   if (method === 'POST' && b === 'resend' && !action) return audited(d, 'resend', address, () => ({ result: 'sent', response: { email: address, invitation: 'sent' } }));
   if (method === 'POST' && (b === 'enable' || b === 'disable') && !action) {
@@ -391,6 +401,65 @@ export function userAction(d: Demo, method: string, email: string | undefined, b
     });
   }
   return fail(404, 'not_found', `no route for ${method} /api/users/${[email, b, action].filter(Boolean).join('/')}`);
+}
+
+// --- Tags and groups (R11) -----------------------------------------------------------------------------------------------
+
+function knownGroups(d: Demo, value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((g) => typeof g === 'string')) fail(400, 'bad_request', 'groups: an array of group names');
+  const unknown = (value as string[]).find((g) => !d.groups.some((x) => x.name === g));
+  if (unknown) fail(400, 'bad_request', `unknown group: ${unknown}`);
+  return [...new Set(value as string[])];
+}
+
+export function setTags(d: Demo, router: string, id: string, body: Body) {
+  const w = workloadOf(d, router, id);
+  const problem = tagsProblem(body.tags as Record<string, string>);
+  if (problem) fail(400, 'bad_request', problem);
+  return audited(d, 'tags', `${router}/${id}`, () => {
+    if (w.source === 'terraform') fail(409, 'conflict', `workload ${id} was written by Terraform: set tags in its workload module`);
+    w.tags = { ...(body.tags as Record<string, string>) };
+    return { result: Object.entries(w.tags).map(([k, v]) => `${k}=${v}`).join(', ') || 'no tags', response: { workloadId: id, tags: w.tags } };
+  });
+}
+
+export function groupsAction(d: Demo, method: string, name: string | undefined, body: Body, now: number) {
+  if (method === 'GET' && !name) return { groups: d.groups };
+  const checked = (current: Pick<DemoGroup, 'description' | 'grants'>) => {
+    if (body.description !== undefined && (typeof body.description !== 'string' || [...body.description].length > 200)) fail(400, 'bad_request', 'description: at most 200 characters');
+    if (body.grants !== undefined) {
+      const grants = body.grants as DemoGroup['grants'];
+      const problem = Array.isArray(grants) ? grantRowsProblem(grants.map((g) => ({ rows: rowsOf(g.tags), permissions: g.permissions }))) : 'grants: an array';
+      if (problem) fail(400, 'bad_request', problem);
+    }
+    return { description: (body.description as string | undefined)?.trim() ?? current.description, grants: (body.grants as DemoGroup['grants'] | undefined) ?? current.grants };
+  };
+  if (method === 'POST' && !name) {
+    const problem = groupNameProblem(String(body.name ?? ''));
+    if (problem) fail(400, 'bad_request', problem);
+    if (d.groups.length >= 100) fail(409, 'conflict', 'at most 100 groups');
+    return audited(d, 'group-create', String(body.name), () => {
+      if (d.groups.some((g) => g.name === body.name)) fail(409, 'conflict', `group ${String(body.name)} already exists`);
+      const group = { name: String(body.name), ...checked({ description: '', grants: [] }), updatedAt: iso(now), updatedBy: ME };
+      d.groups.push(group);
+      return { result: `${group.grants.length} grants`, response: { group } };
+    });
+  }
+  const group = d.groups.find((g) => g.name === name) ?? fail(404, 'not_found', `unknown group: ${name}`);
+  if (method === 'PUT') {
+    return audited(d, 'group-update', group.name, () => {
+      Object.assign(group, checked(group), { updatedAt: iso(now), updatedBy: ME });
+      return { result: `${group.grants.length} grants`, response: { group } };
+    });
+  }
+  if (method === 'DELETE') {
+    return audited(d, 'group-delete', group.name, () => {
+      d.groups = d.groups.filter((g) => g !== group);
+      for (const u of d.users) u.groups = (u.groups ?? []).filter((g) => g !== group.name);
+      return { result: 'deleted', response: { deleted: group.name } };
+    });
+  }
+  return fail(404, 'not_found', `no route for ${method} /api/groups/${name ?? ''}`);
 }
 
 export function putPreferences(d: Demo, body: Body) {

@@ -86,4 +86,44 @@ describe('demo scenario', () => {
     expect(audit.entries.every((e) => e.who.endsWith('@example.com') || e.who === 'discovery')).toBe(true);
     vi.useRealTimers();
   });
+
+  // R11: the demo answers the tags, groups and member routes as the API does.
+  it('answers the tag filter, a retag, groups and a member invitation as the API does', async () => {
+    sessionStorage.setItem('dormeto.demo', 'initech,workloads=30,routers=3');
+    const { mockApi } = await import('../src/mock');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const call = <T>(path: string, init?: RequestInit) => {
+      const answer = mockApi(path, init) as Promise<T>;
+      vi.runAllTimers();
+      return answer;
+    };
+    const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
+    type Row = { router: string; workloadId: string; tags: Record<string, string>; can: { wake: boolean; nap: boolean } };
+    const all = await call<{ workloads: Row[] }>('/workloads?limit=1000');
+    expect(all.workloads.every((w) => w.can.wake && w.can.nap && Object.keys(w.tags).length > 0)).toBe(true);
+    const some = all.workloads[0]!;
+    const filtered = await call<{ workloads: Row[] }>(`/workloads?limit=1000&tag=team=${some.tags.team}&tag=env=${some.tags.env}`);
+    expect(filtered.workloads.length).toBeGreaterThan(0);
+    expect(filtered.workloads.every((w) => w.tags.team === some.tags.team && w.tags.env === some.tags.env)).toBe(true);
+    // A retag; the rules refuse a reserved prefix.
+    await expect(call(`/workloads/${some.router}/${some.workloadId}/tags`, json('PUT', { tags: { 'Dormeto:x': '1' } }))).rejects.toMatchObject({ status: 400 });
+    const manager = (await Promise.all(all.workloads.map((w) => call<{ source: string }>(`/workloads/${w.router}/${w.workloadId}`).then((s) => ({ w, s }))))).find(({ s }) => s.source === 'manager');
+    const terraform = (await Promise.all(all.workloads.map((w) => call<{ source: string }>(`/workloads/${w.router}/${w.workloadId}`).then((s) => ({ w, s }))))).find(({ s }) => s.source === 'terraform');
+    if (manager) {
+      await call(`/workloads/${manager.w.router}/${manager.w.workloadId}/tags`, json('PUT', { tags: { team: 'billing' } }));
+      expect((await call<{ tags: unknown }>(`/workloads/${manager.w.router}/${manager.w.workloadId}`)).tags).toEqual({ team: 'billing' });
+    }
+    if (terraform) await expect(call(`/workloads/${terraform.w.router}/${terraform.w.workloadId}/tags`, json('PUT', { tags: { team: 'x' } }))).rejects.toMatchObject({ status: 409 });
+    // Groups.
+    const created = await call<{ group: { name: string } }>('/groups', json('POST', { name: 'billing', description: 'Billing', grants: [{ tags: { team: 'billing' }, permissions: ['read', 'nap'] }] }));
+    expect(created.group.name).toBe('billing');
+    await expect(call('/groups', json('POST', { name: 'dmt-x', description: '', grants: [] }))).rejects.toMatchObject({ status: 400 });
+    expect((await call<{ groups: unknown[] }>('/groups')).groups).toHaveLength(3);
+    await call('/users', json('POST', { email: 'new.member@example.com', role: 'member', groups: ['billing'] }));
+    const users = (await call<{ users: { email: string; role: string; groups?: string[] }[] }>('/users')).users;
+    expect(users.find((u) => u.email === 'new.member@example.com')).toMatchObject({ role: 'member', groups: ['billing'] });
+    await call('/groups/billing', { method: 'DELETE' });
+    expect((await call<{ users: { email: string; groups?: string[] }[] }>('/users')).users.find((u) => u.email === 'new.member@example.com')!.groups).toEqual([]);
+    vi.useRealTimers();
+  });
 });

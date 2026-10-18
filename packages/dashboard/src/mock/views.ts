@@ -178,7 +178,7 @@ export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = fals
   const total = countsOf(w, now - 7 * DAY, now);
   const costs = states ? costsOf(d, w, now) : null;
   return {
-    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode,
+    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode,
     wakeCount: w.wakeCount, awakeSince: w.awakeSince === null ? null : iso(w.awakeSince), wakeStartedAt: w.wakeStartedAt === null ? null : iso(w.wakeStartedAt),
     failedAt: w.failedAt === null ? null : iso(w.failedAt), failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: w.nextAttemptAt === null ? null : iso(w.nextAttemptAt), fallbacks: [], updatedAt: w.updatedAt === null ? null : iso(w.updatedAt),
@@ -237,7 +237,7 @@ export function workloadStatus(d: Demo, w: DemoWorkload, now: number): WorkloadS
   const route = w.state === 'AWAKE' ? 'app' : 'waker';
   const today = Math.floor(now / DAY) * DAY;
   return {
-    workloadId: w.workloadId, name: w.name, url: row.url, router: { version: router.version, build: router.build }, state: w.state, updatedAt: row.updatedAt,
+    workloadId: w.workloadId, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, url: row.url, router: { version: router.version, build: router.build }, state: w.state, updatedAt: row.updatedAt,
     awakeSince: row.awakeSince, wakeStartedAt: row.wakeStartedAt, failedAt: row.failedAt, failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: row.nextAttemptAt ?? null, fallbacks: [], wakeCount: w.wakeCount, holders: w.state === 'WAKING' ? 1 : 0, pendingWake: w.pendingWake, pauses,
     targetGroupArn: w.targetGroupArn, source: w.source, account: w.account, region: w.region, states7d: row.states7d, costs: row.costs, energy: row.energy,

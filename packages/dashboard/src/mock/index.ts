@@ -7,8 +7,8 @@ import type { Status } from '@dormeto/discovery/types';
 import { ApiError } from '../api';
 import { STATUSES } from '../discovery';
 import {
-  changeDismissal, createExclusion, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
-  workloadAction,
+  changeDismissal, createExclusion, groupsAction, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
+  setTags, workloadAction,
 } from './actions';
 import { AVAILABLE } from './fixtures';
 import { ME } from './org';
@@ -55,7 +55,7 @@ export async function mockApi(path: string, init: RequestInit = {}): Promise<unk
 function route(d: Demo, method: string, parts: string[], q: URLSearchParams, body: Body, now: number): unknown {
   const [resource, a, b, action] = parts;
   if (method === 'GET' && resource === 'health' && !a) return { status: 'ok', version: 'demo' };
-  if (method === 'GET' && resource === 'me' && !a) return { ...d.me, groups: ['dmt-admin'] };
+  if (method === 'GET' && resource === 'me' && !a) return { ...d.me, groups: [], grants: [{ tags: {}, permissions: ['read', 'wake', 'nap'] }] };
   if (resource === 'preferences' && !a) {
     if (method === 'GET') return d.preferences;
     if (method === 'PUT') return putPreferences(d, body);
@@ -72,6 +72,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (method === 'POST' && a === 'plan') return updateRequest('plan', String(body.version ?? ''), now);
     if (method === 'POST' && a === 'apply') return updateRequest('apply', updateState(now).versions[0]!.version, now, String(body.planBuild ?? ''));
   }
+  if (resource === 'groups' && !b) return groupsAction(d, method, a, body, now);
   if (resource === 'users') return userAction(d, method, a, b, action, body, now);
 
   if (resource === 'routers') {
@@ -100,6 +101,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
         return workloadHistory(d, workloadOf(d, a, b), days, now);
       }
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
+      if (method === 'PUT' && action === 'tags') return setTags(d, a, b, body);
       if (method === 'POST' && action) return workloadAction(d, a, b, action, body, now);
     }
   }
@@ -136,8 +138,10 @@ function workloads(d: Demo, q: URLSearchParams, now: number) {
   const states = q.get('state')?.split(',') ?? null;
   const text = q.get('q')?.toLowerCase();
   const router = q.get('router');
+  const wanted = q.getAll('tag').map((t) => [t.slice(0, t.indexOf('=')), t.slice(t.indexOf('=') + 1)] as const);
   const attention = q.get('attention') === '1';
   const matching = ordered.filter((w) => (!states || states.includes(w.state)) && (!router || w.router === router)
+    && wanted.every(([key, value]) => w.tags[key] === value)
     && (!text || `${w.name} ${w.workloadId}`.toLowerCase().includes(text))
     && (!attention || w.state === 'FAILED' || w.state === 'WAKING' || pausesOf(d, w).length > 0));
   const limited = q.has('limit');
