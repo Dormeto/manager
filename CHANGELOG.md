@@ -7,6 +7,30 @@ CLI script, of the same release).
 
 ## Unreleased
 
+Router 0.30.0. Access: nothing to apply again; upgrade the routers to 0.30.0 for their workloads' tags (a router before
+0.30.0 reports none: its workloads are seen only by the built-in roles and by grants on every workload).
+
+- Workload tags (R11): Dormeto's own labels (`team=payments`), at most 50 per workload, `dormeto:` reserved, kept by the
+  router. Administrators set them at onboarding (the dialog can copy the target group's AWS tags on request; nothing is
+  copied otherwise) and from the workload's page (`PUT /api/workloads/:router/:id/tags`, audited); a Terraform workload's
+  are its module's `tags`. The Workloads list gains a Tags column and a tag filter (`?tag=key=value`, repeatable).
+- Groups and grants (R11): custom groups, created and deleted by administrators in the Users view (`GET` and `POST
+  /api/groups`, `PUT` and `DELETE /api/groups/:name`, `PUT /api/users/:email/groups`), each with up to 20 grants (a tag
+  selector and `read`, `wake` or `nap`; `wake` and `nap` imply `read`; no tag means every workload). Groups are Cognito
+  groups of the user pool, their grants are kept in the manager's table; the API's role gains `cognito-idp:CreateGroup`,
+  `DeleteGroup`, `UpdateGroup`, `ListGroups` and `AdminListGroupsForUser`. Group membership applies at the user's next
+  token (within an hour), grants within a minute, retags at once.
+- Members (R11): a user in no built-in group is a member and sees the workloads their groups' grants give, in lists,
+  counts, savings, alerts, operations, history and idle windows, and nothing else of the fleet; the dashboard hides
+  Routers, Discovery, Operations and the administration pages from them. Invitations take `role` `member` and `groups`.
+- Enforcement (R11): every workload route checks the caller's grants; a workload they cannot read is a 404, one they can
+  read without the permission a 403. Workload payloads carry `tags` and `can: { wake, nap }`; `GET /api/me` carries
+  `groups` and the effective `grants`; the dashboard shows only the actions allowed. A pause that wakes a workload also
+  needs `wake`. Under the `operators` MFA mode, a grant giving `wake` or `nap` needs a multi-factor session, like the
+  operator role.
+- Audit (R11): refused workload actions are audited with `result: refused` and the reason, and every entry records the
+  caller's groups.
+- Documentation: [Access control](docs/access-control.md).
 - Passkeys, in the `optional` and `operators` MFA modes. The module's new `passkeys` variable (true by default; not
   offered with `mfa = required`, where Cognito enforces the authenticator app) turns on choice-based sign-in: the user
   pool's `sign_in_policy` allows `PASSWORD` and `WEB_AUTHN`, its `web_authn_configuration` requires user verification (the

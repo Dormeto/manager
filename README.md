@@ -107,6 +107,8 @@ account, one change per load balancer at a time.</p>
   create. Nothing is sent to Dormeto, and there is no CloudFormation anywhere.
 - **People and audit.** Viewers, operators and administrators, Amazon Cognito sign-in with MFA, and every change
   recorded with its author, its target and its result.
+- **Delegation by tags.** Tag workloads, group users, and give a group the right to see, wake or nap the workloads
+  whose tags match: a team handles its own environments and sees nobody else's.
 
 ## Measured, not promised
 
@@ -160,6 +162,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 
 | Topic | What it covers |
 |---|---|
+| [Access control](docs/access-control.md) | Roles, members, workload tags, groups and grants, permissions, when changes apply |
 | [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced, Spot, discounts, the daily job, the idle window advisor |
 | [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto estimate`: accounts, filters, uptime, companion databases, cache, permissions |
