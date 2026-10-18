@@ -81,6 +81,9 @@ describe('identity', () => {
       expect([path, res.statusCode]).toEqual([path, 403]);
     }
     expect((await s.api(event('/api/me', 'payments'))).statusCode).toBe(200);
+    expect((await s.api(event('/api/me/x', 'payments'))).statusCode).toBe(403);
+    expect((await s.api(event('/api/preferences/x', 'payments'))).statusCode).toBe(403);
+    expect((await s.api({ ...event('/api/preferences', 'payments'), requestContext: { ...event('/api/preferences', 'payments').requestContext, http: { method: 'DELETE' } } })).statusCode).toBe(403);
     expect((await s.api(event('/api/routers', 'dmt-viewer payments'))).statusCode).toBe(200);
   });
 });

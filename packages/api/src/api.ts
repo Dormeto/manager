@@ -792,7 +792,7 @@ export function createApi({
     const [resource, a, b, action] = parts;
     if (method === 'GET' && resource === 'me' && !a) return reply(200, me(identity));
     // A member has none of the fleet routes (those of their workloads come with the grants' enforcement).
-    if (identity.role === 'member' && resource !== 'preferences') throw new HttpError(403, 'forbidden', 'viewer role required');
+    if (identity.role === 'member' && !(resource === 'preferences' && !a && (method === 'GET' || method === 'PUT'))) throw new HttpError(403, 'forbidden', 'viewer role required');
 
     if (resource === 'preferences' && !a && preferences) {
       if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });
