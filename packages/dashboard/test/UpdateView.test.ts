@@ -77,7 +77,21 @@ describe('Update', () => {
     h.answer = () => state({ versions: [] });
     await mountView();
     expect(wrapper.text()).toContain('Up to date');
+    expect(wrapper.text()).not.toContain('could not be read');
     expect(wrapper.findComponent({ name: 'VSelect' }).exists()).toBe(false);
+  });
+
+  it('says the releases could not be read instead of "Up to date", and still offers the staged release', async () => {
+    h.answer = () => state({ versions: [], releasesUnreachable: true });
+    await mountView();
+    expect(wrapper.text()).toContain('The releases could not be read: try again later.');
+    expect(wrapper.text()).not.toContain('Up to date');
+    expect(wrapper.findComponent({ name: 'VSelect' }).exists()).toBe(false);
+    wrapper.unmount();
+    h.answer = () => state({ versions: [{ version: '0.13.0-dev.1', router: null, minCli: null, published: null, staged: true }], releasesUnreachable: true });
+    await mountView();
+    expect(wrapper.text()).toContain('The releases could not be read: try again later.');
+    expect(wrapper.findComponent({ name: 'VSelect' }).exists()).toBe(true);
   });
 
   it('loads the release changes of the selected version, with the Access alert and "Release notes unavailable"', async () => {
@@ -209,8 +223,19 @@ describe('Update', () => {
     h.answer = () => state({ pending: { ...pending, notStarted: true } });
     await mountView();
     await select('0.13.0');
-    expect(wrapper.text().toLowerCase()).toContain('the update did not start');
+    expect(wrapper.text()).toContain('The update did not start. Prepare the update again.');
     expect(button('Prepare').attributes('disabled')).toBeUndefined();
+  });
+
+  it('says to confirm again when an apply request did not start, its plan still confirmable', async () => {
+    const plan = { build: 'dmt-dev-install:p1', version: '0.13.0', summary: { add: 1, change: 0, destroy: 0, replaced: [], destroyed: [] } };
+    const pending = { key: 'k', id: 'i', action: 'apply' as const, version: '0.13.0', planBuild: plan.build, at: '2026-10-18T10:00:00Z', who: 'a@b.c', notStarted: true as const };
+    h.answer = (path) => (path.startsWith('/update/changes') ? sections : state({ plan, pending }));
+    await mountView();
+    expect(wrapper.text()).toContain('The update did not start. Confirm again.');
+    expect(wrapper.text()).not.toContain('Prepare the update again.');
+    await select('0.13.0');
+    expect(button('Confirm').attributes('disabled')).toBeUndefined();
   });
 
   it('says what a successful apply did, and what a failed one left', async () => {
@@ -220,9 +245,28 @@ describe('Update', () => {
     wrapper.unmount();
     h.answer = () => running({ status: 'FAILED', steps: ['download', 'apply'], tail: ['Error: boom', 'exit 1'] });
     await mountView();
-    expect(wrapper.text()).toContain('apply');
+    expect(wrapper.text()).toContain('The step that failed: apply');
     expect(wrapper.find('pre').text()).toBe('Error: boom\nexit 1');
     expect(wrapper.text()).toContain('The manager is as the failure left it: prepare the update again, or run dormeto install from a laptop.');
+  });
+
+  it('says a failed or refused dashboard plan was not prepared, with its last step, and nothing about the manager', async () => {
+    h.answer = () => running({ action: 'plan', status: 'FAILED', steps: ['reading the request r1', 'manager 0.13.0 is neither published nor staged'], tail: ['dormeto: manager 0.13.0 is neither published nor staged'] });
+    await mountView();
+    expect(wrapper.text()).toContain('The plan was not prepared: manager 0.13.0 is neither published nor staged.');
+    expect(wrapper.find('pre').text()).toBe('dormeto: manager 0.13.0 is neither published nor staged');
+    expect(wrapper.text()).not.toContain('The manager is as the failure left it');
+    expect(wrapper.text()).not.toContain('The step that failed');
+  });
+
+  it('shows a failed CLI build\'s status, step and tail, without the dashboard\'s sentences', async () => {
+    h.answer = () => running({ by: 'cli', action: 'apply', status: 'FAILED', steps: ['download', 'terraform apply'], tail: ['Error: boom'] });
+    await mountView();
+    expect(wrapper.text()).toContain('FAILED');
+    expect(wrapper.text()).toContain('The step that failed: terraform apply');
+    expect(wrapper.find('pre').text()).toBe('Error: boom');
+    expect(wrapper.text()).not.toContain('The manager is as the failure left it');
+    expect(wrapper.text()).not.toContain('The plan was not prepared');
   });
 
   it('retries failed polls silently while the API is replaced, then offers the reload', async () => {
@@ -285,14 +329,21 @@ describe('Update', () => {
     wrapper = mount({ render: () => null });
   });
 
-  it('explains an install without the CLI, with no picker and no button', async () => {
+  // The API answers so whenever the module's install input is unset: an install made without the CLI, with a CLI older
+  // than 0.2.0, or with --build-role.
+  it('explains why updates are not set up, and how to update either install, with no picker and no button', async () => {
     h.answer = () => ({ installedWithCli: false, version: '0.11.0' });
     await mountView();
-    expect(wrapper.text()).toContain('0.11.0');
-    expect(wrapper.text()).toContain('this manager was not installed with dormeto install');
+    const text = wrapper.text();
+    expect(text).toContain('0.11.0');
+    expect(text).toContain('Updates from this page are not set up for this manager.');
+    expect(text).toContain('It was installed without dormeto install, or with a CLI older than 0.2.0, or with --build-role.');
+    expect(text).toContain('Installed with the CLI: run dormeto install again with the CLI 0.2.0 or later (without --build-role) to set up updates from this page, or dormeto install --version <version> from a laptop.');
+    expect(text).toContain('Installed with the Terraform module: raise the module\'s version in the configuration that installed it, and apply.');
+    expect(text).not.toContain('was not installed with');
+    expect(text).not.toContain('new install');
     const hrefs = wrapper.findAll('a').map((a) => a.attributes('href'));
-    expect(hrefs).toContain('https://dormeto.com/get-started.html');
-    expect(hrefs).toContain('https://dormeto.com/configuration.html');
+    expect(hrefs).toEqual(['https://dormeto.com/get-started.html#update', 'https://dormeto.com/get-started.html#upgrade']);
     expect(wrapper.findAll('button')).toHaveLength(0);
     expect(wrapper.findComponent({ name: 'VSelect' }).exists()).toBe(false);
   });

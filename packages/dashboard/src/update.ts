@@ -18,6 +18,7 @@ export type UpdateState = {
   build: BuildView | null;
   pending: (Pending & { notStarted?: true }) | null;
   plan: { build: string; version: string; summary: PlanSummary } | null;
+  releasesUnreachable?: true;
 };
 export type NotInstalled = { installedWithCli: false; version: string };
 

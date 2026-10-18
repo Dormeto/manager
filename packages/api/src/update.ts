@@ -105,7 +105,7 @@ export type UpdatePort = {
   // The install project's newest builds, newest first.
   builds(): Promise<Build[]>;
   logLines(group: string, stream: string): Promise<string[]>;
-  // null on any failure.
+  // null on any failure, no answer in time included.
   fetchText(url: string): Promise<string | null>;
   pending: { get(): Promise<Pending | null>; put(p: Pending | null): Promise<void> };
 };
@@ -124,6 +124,8 @@ export type UpdateState = {
   build: BuildView | null;
   pending: (Pending & { notStarted?: true }) | null;
   plan: { build: string; version: string; summary: PlanSummary } | null;
+  // Neither versions.json nor latest.json could be read: the page does not say "Up to date" then.
+  releasesUnreachable?: true;
 };
 
 export type UpdateService = {
@@ -164,6 +166,19 @@ export function absent(err: unknown): boolean {
 // A build's log stream may not exist yet when its name is already known.
 export const missingStream = (err: unknown) => (err as { name?: string }).name === 'ResourceNotFoundException';
 
+export const FETCH_MS = 5_000;
+
+// The port's fetchText: a releases URL's text, null on an HTTP error, any failure, or no answer within ms (a hung
+// releases site must not hold the page's every poll).
+export async function fetchText(url: string, fetcher: typeof fetch = fetch, ms = FETCH_MS): Promise<string | null> {
+  try {
+    const res = await fetcher(url, { signal: AbortSignal.timeout(ms) });
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
+  }
+}
+
 const textOrNull = (v: unknown) => (typeof v === 'string' ? v : null);
 
 // A version's own section of a CHANGELOG.md: from its `## <version>` heading to the next `## `.
@@ -179,7 +194,8 @@ function sectionOf(changelog: string, version: string): string | null {
 export function createUpdate(port: UpdatePort, o: { env: string; logGroup: string; version: string; releasesUrl: string; now: () => Date; random: () => string }): UpdateService {
   const key = (path: string) => `${o.env}/${path}`;
 
-  async function published(): Promise<VersionEntry[]> {
+  // The published versions; null when neither list can be read.
+  async function published(): Promise<VersionEntry[] | null> {
     const list = parse<{ versions?: unknown }>(await port.fetchText(`${o.releasesUrl}/versions.json`));
     if (list && Array.isArray(list.versions)) {
       return list.versions
@@ -187,7 +203,7 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
         .map((e) => ({ version: e.version as string, router: textOrNull(e.router), minCli: textOrNull(e.minCli), published: textOrNull(e.published) }));
     }
     const latest = parse<Record<string, unknown>>(await port.fetchText(`${o.releasesUrl}/latest.json`));
-    return typeof latest?.version === 'string' ? [{ version: latest.version, router: textOrNull(latest.router), minCli: null, published: textOrNull(latest.published) }] : [];
+    return typeof latest?.version === 'string' ? [{ version: latest.version, router: textOrNull(latest.router), minCli: null, published: textOrNull(latest.published) }] : null;
   }
 
   // The release the CLI staged in the install bucket: the version of its terraform-aws-dormeto-<v>.zip checksum line.
@@ -200,7 +216,8 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
   async function offers() {
     const cli = parse<{ version?: unknown }>(await port.get(key('cli.json')))?.version;
     const cliVersion = typeof cli === 'string' ? cli : null;
-    return { cli: cliVersion, versions: offered(await published(), o.version, cliVersion, await staged()) };
+    const list = await published();
+    return { cli: cliVersion, versions: offered(list ?? [], o.version, cliVersion, await staged()), releasesUnreachable: list === null };
   }
 
   const resultOf = async (id: string) => parse<Result>(await port.get(key(`results/${id}.json`)));
@@ -256,7 +273,7 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
   }
 
   async function state(): Promise<UpdateState> {
-    const [builds, storedPending, { cli, versions }] = await Promise.all([port.builds(), port.pending.get(), offers()]);
+    const [builds, storedPending, { cli, versions, releasesUnreachable }] = await Promise.all([port.builds(), port.pending.get(), offers()]);
     const applied = parse<{ version?: unknown; build?: unknown }>(await port.get(key('applied.json')));
     return {
       installedWithCli: true,
@@ -269,6 +286,7 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
       build: builds[0] ? await view(builds[0]) : null,
       pending: await pendingNow(storedPending, builds),
       plan: await confirmable(builds),
+      ...(releasesUnreachable ? { releasesUnreachable: true as const } : {}),
     };
   }
 

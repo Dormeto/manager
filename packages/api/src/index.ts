@@ -23,7 +23,7 @@ import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
 import { readJson } from './s3-json.js';
-import { absent, createUpdate, missingStream, type Build, type Pending } from './update.js';
+import { absent, createUpdate, fetchText, missingStream, type Build, type Pending } from './update.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
 const routers: Router[] = JSON.parse(process.env.ROUTERS ?? '[]');
@@ -226,14 +226,7 @@ const update = installBucket ? (() => {
       }
       return lines;
     },
-    async fetchText(url) {
-      try {
-        const res = await fetch(url);
-        return res.ok ? await res.text() : null;
-      } catch {
-        return null;
-      }
-    },
+    fetchText: (url) => fetchText(url),
     pending: {
       async get() {
         const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: pendingKey }));

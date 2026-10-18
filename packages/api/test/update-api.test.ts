@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createApi, type ApiEvent, type AuditEntry } from '../src/api.js';
-import { absent, missingStream, createUpdate, type Build, type Pending, type UpdatePort } from '../src/update.js';
+import { absent, missingStream, createUpdate, fetchText, FETCH_MS, type Build, type Pending, type UpdatePort } from '../src/update.js';
 
 const RELEASES = 'https://releases.test/manager';
 const START = Date.parse('2026-10-20T10:00:00Z');
@@ -114,10 +114,27 @@ describe('the state', () => {
     expect((await get(s)).versions.map((v: { version: string }) => v.version)).toEqual(['0.12.0']);
   });
 
-  it('offers the staged release, and nothing when no list is reachable', async () => {
+  it('offers the staged release, and says the releases are unreachable when no list can be read', async () => {
     const s = setup({ files: { 'prod/release/SHA256SUMS': 'abc  terraform-aws-dormeto-0.13.0-dev.1.zip\ndef  other.zip\n' } });
     s.urls.clear();
-    expect((await get(s)).versions).toEqual([{ version: '0.13.0-dev.1', router: null, minCli: null, published: null, staged: true }]);
+    const body = await get(s);
+    expect(body.versions).toEqual([{ version: '0.13.0-dev.1', router: null, minCli: null, published: null, staged: true }]);
+    expect(body.releasesUnreachable).toBe(true);
+    s.urls.set(`${RELEASES}/versions.json`, 'not json');
+    s.urls.set(`${RELEASES}/latest.json`, '{"router":"0.29.0"}');
+    expect((await get(s)).releasesUnreachable).toBe(true);
+  });
+
+  it('does not say the releases are unreachable when either list is read, even with nothing newer', async () => {
+    const s = setup({ running: '0.12.0' });
+    let body = await get(s);
+    expect(body.versions).toEqual([]);
+    expect(body).not.toHaveProperty('releasesUnreachable');
+    s.urls.delete(`${RELEASES}/versions.json`);
+    s.urls.set(`${RELEASES}/latest.json`, JSON.stringify({ version: '0.12.0', router: '0.29.0', published: '2026-10-20T10:00:00Z' }));
+    body = await get(s);
+    expect(body.versions).toEqual([]);
+    expect(body).not.toHaveProperty('releasesUnreachable');
   });
 
   it('shows a CLI build running, with the dormeto steps, and refuses a plan', async () => {
@@ -356,5 +373,23 @@ describe('the port decisions', () => {
   it('reads a log stream not created yet as empty', () => {
     expect(missingStream({ name: 'ResourceNotFoundException' })).toBe(true);
     expect(missingStream({ name: 'ThrottlingException' })).toBe(false);
+  });
+
+  it('reads a releases URL within 5 s: the text when it answers 200, null for an HTTP error, a failure or a timeout', async () => {
+    const seen: Array<AbortSignal | null | undefined> = [];
+    const answering = (res: Response) => (async (_url: string | URL | Request, init?: RequestInit) => { seen.push(init?.signal); return res; }) as typeof fetch;
+    expect(await fetchText('https://r.test/a', answering(new Response('hello')))).toBe('hello');
+    expect(seen[0]).toBeInstanceOf(AbortSignal);
+    expect(seen[0]!.aborted).toBe(false);
+    expect(await fetchText('https://r.test/a', answering(new Response('no', { status: 403 })))).toBeNull();
+    expect(await fetchText('https://r.test/a', (async () => { throw new TypeError('fetch failed'); }) as typeof fetch)).toBeNull();
+    // A server that never answers: the request is aborted at the timeout.
+    const hanging = ((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+    })) as typeof fetch;
+    const started = Date.now();
+    expect(await fetchText('https://r.test/a', hanging, 50)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(FETCH_MS).toBe(5_000);
   });
 });

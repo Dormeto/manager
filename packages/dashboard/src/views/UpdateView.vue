@@ -8,8 +8,9 @@ import NoticeAlert from '../components/NoticeAlert.vue';
 import ReleaseNotes from '../components/ReleaseNotes.vue';
 import { busy, codeParts, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateState } from '../update';
 
-const GET_STARTED = 'https://dormeto.com/get-started.html';
-const CONFIGURATION = 'https://dormeto.com/configuration.html';
+// Get started's "Updating the manager" (the CLI's ways) and "Upgrade" (the Terraform module's).
+const UPDATING = 'https://dormeto.com/get-started.html#update';
+const MODULE_UPGRADE = 'https://dormeto.com/get-started.html#upgrade';
 
 const current = ref<UpdateState | NotInstalled | null>(null);
 const error = ref('');
@@ -31,6 +32,9 @@ const build = computed(() => state.value?.build ?? null);
 const finished = computed(() => (build.value?.by === 'dashboard' && build.value.action === 'apply' && build.value.status !== 'IN_PROGRESS' ? build.value : null));
 const succeeded = computed(() => finished.value?.status === 'SUCCEEDED');
 const failed = computed(() => (build.value && build.value.status !== 'IN_PROGRESS' && build.value.status !== 'SUCCEEDED' ? build.value : null));
+const failedStep = computed(() => failed.value?.steps[failed.value.steps.length - 1] ?? null);
+// What a failure left: an apply from this page may have changed the manager; a plan from this page changed nothing.
+const failedBy = computed(() => (failed.value?.by === 'dashboard' && (failed.value.action === 'apply' || failed.value.action === 'plan') ? failed.value.action : null));
 const plan = computed(() => state.value?.plan ?? null);
 const changesNothing = computed(() => plan.value !== null && !plan.value.summary.add && !plan.value.summary.change && !plan.value.summary.destroy);
 const items = computed(() => (state.value?.versions ?? []).map((v) => ({ ...v, value: v.version })));
@@ -164,17 +168,21 @@ onBeforeUnmount(() => {
       </v-card-text>
     </v-card>
 
-    <v-card v-if="current && !current.installedWithCli" title="Updates are unavailable here">
+    <!-- The API answers so whenever the module's install input is unset: also for a CLI install made with --build-role
+         or with a CLI older than 0.2.0. -->
+    <v-card v-if="current && !current.installedWithCli">
       <v-card-text>
-        <p class="mb-3">This page cannot update the manager: this manager was not installed with <code>dormeto install</code>. Two ways to update it:</p>
+        <p class="text-title-medium mb-2">Updates from this page are not set up for this manager.</p>
+        <p class="mb-3">It was installed without <code>dormeto install</code>, or with a CLI older than 0.2.0, or with <code>--build-role</code>.</p>
         <ul class="dm-ways">
           <li>
-            Install it again with <code>dormeto install</code> (the CLI installs or adopts nothing it did not install, so this means a new install).
-            <a :href="GET_STARTED" rel="noopener" target="_blank">Get started<v-icon :icon="mdiOpenInNew" size="14" /></a>
+            Installed with the CLI: run <code>dormeto install</code> again with the CLI 0.2.0 or later (without <code>--build-role</code>) to set up updates
+            from this page, or <code>dormeto install --version &lt;version&gt;</code> from a laptop.
+            <a :href="UPDATING" rel="noopener" target="_blank">Updating the manager<v-icon :icon="mdiOpenInNew" size="14" /></a>
           </li>
           <li>
-            Raise the Terraform module's version in the configuration that installed it, and apply it.
-            <a :href="CONFIGURATION" rel="noopener" target="_blank">Configuration<v-icon :icon="mdiOpenInNew" size="14" /></a>
+            Installed with the Terraform module: raise the module's version in the configuration that installed it, and apply.
+            <a :href="MODULE_UPGRADE" rel="noopener" target="_blank">Upgrade<v-icon :icon="mdiOpenInNew" size="14" /></a>
           </li>
         </ul>
       </v-card-text>
@@ -182,7 +190,7 @@ onBeforeUnmount(() => {
 
     <template v-if="state">
       <v-alert v-if="state.pending?.notStarted" type="warning" class="mb-4" :icon="mdiAlertOutline">
-        The update did not start. Prepare the update again.
+        The update did not start. {{ state.pending.action === 'apply' ? 'Confirm again.' : 'Prepare the update again.' }}
       </v-alert>
       <v-alert v-if="succeeded && !reloadOffer" type="success" class="mb-4" :icon="mdiCheckCircleOutline">The manager now runs {{ finished!.version }}.</v-alert>
 
@@ -201,9 +209,10 @@ onBeforeUnmount(() => {
           </template>
           <div v-else class="d-flex align-center ga-2"><v-icon :icon="mdiProgressClock" size="18" />The request is waiting for its build.</div>
           <template v-if="failed">
-            <p v-if="failed.steps.length" class="mt-3 mb-2">The step that failed: <strong>{{ failed.steps[failed.steps.length - 1] }}</strong></p>
+            <p v-if="failedBy === 'plan'" class="mt-3 mb-2">The plan was not prepared<template v-if="failedStep">: <strong>{{ failedStep }}</strong></template>.</p>
+            <p v-else-if="failedStep" class="mt-3 mb-2">The step that failed: <strong>{{ failedStep }}</strong></p>
             <pre v-if="failed.tail.length" class="dm-tail">{{ failed.tail.join('\n') }}</pre>
-            <p class="mt-3 mb-0">
+            <p v-if="failedBy === 'apply'" class="mt-3 mb-0">
               The manager is as the failure left it: prepare the update again, or run <code>dormeto install</code> from a laptop.
             </p>
           </template>
@@ -212,8 +221,9 @@ onBeforeUnmount(() => {
 
       <v-card class="mb-4" title="Target version">
         <v-card-text>
-          <p v-if="!items.length" class="mb-0">Up to date</p>
-          <v-select v-else v-model="target" :items="items" item-title="version" item-value="value" label="Version" clearable hide-details="auto"
+          <p v-if="state.releasesUnreachable" :class="items.length ? 'mb-3' : 'mb-0'">The releases could not be read: try again later.</p>
+          <p v-else-if="!items.length" class="mb-0">Up to date</p>
+          <v-select v-if="items.length" v-model="target" :items="items" item-title="version" item-value="value" label="Version" clearable hide-details="auto"
             :item-props="(v: (typeof items)[number]) => ({ disabled: !!v.disabled })">
             <template #item="{ item, props }">
               <v-list-item v-bind="props" :title="item.version">
