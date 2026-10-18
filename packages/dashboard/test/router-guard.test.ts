@@ -19,4 +19,19 @@ describe('router guard', () => {
     await router.push('/routers');
     expect(router.currentRoute.value.path).toBe('/account');
   });
+
+  // R11: the fleet's pages are none of a member's; their own are open.
+  it('sends a member away from Routers, Discovery and Operations, and lets them into Workloads', async () => {
+    setActivePinia(createPinia());
+    me.value = { email: 'a@example.com', role: 'member', effectiveRole: 'member', groups: ['payments'], grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake'] }] };
+    const { router } = await import('../src/router');
+    for (const path of ['/routers', '/routers/dmt-dev', '/discovery', '/operations', '/users']) {
+      await router.push(path);
+      expect(router.currentRoute.value.path, path).toBe('/');
+    }
+    await router.push('/workloads');
+    expect(router.currentRoute.value.path).toBe('/workloads');
+    await router.push('/workloads/dmt-dev/abc');
+    expect(router.currentRoute.value.path).toBe('/workloads/dmt-dev/abc');
+  });
 });

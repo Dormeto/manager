@@ -10,10 +10,10 @@ export const router = createRouter({
     { path: '/', name: 'overview', component: () => import('./views/OverviewView.vue') },
     { path: '/workloads', name: 'workloads', component: () => import('./views/WorkloadsView.vue') },
     { path: '/workloads/:router/:id', name: 'workload', component: () => import('./views/WorkloadView.vue'), props: true },
-    { path: '/routers', name: 'routers', component: () => import('./views/RoutersView.vue') },
-    { path: '/routers/:name', name: 'router', component: () => import('./views/RouterView.vue'), props: true },
-    { path: '/operations', name: 'operations', component: () => import('./views/OperationsView.vue') },
-    { path: '/discovery', name: 'discovery', component: () => import('./views/DiscoveryView.vue') },
+    { path: '/routers', name: 'routers', component: () => import('./views/RoutersView.vue'), meta: { fleet: true } },
+    { path: '/routers/:name', name: 'router', component: () => import('./views/RouterView.vue'), props: true, meta: { fleet: true } },
+    { path: '/operations', name: 'operations', component: () => import('./views/OperationsView.vue'), meta: { fleet: true } },
+    { path: '/discovery', name: 'discovery', component: () => import('./views/DiscoveryView.vue'), meta: { fleet: true } },
     { path: '/discovery/settings', name: 'discovery-settings', component: () => import('./views/DiscoverySettingsView.vue'), meta: { admin: true } },
     { path: '/users', name: 'users', component: () => import('./views/UsersView.vue'), meta: { admin: true } },
     { path: '/audit', name: 'audit', component: () => import('./views/AuditView.vue'), meta: { admin: true } },
@@ -46,6 +46,7 @@ router.beforeEach(async (to) => {
   // Nothing is allowed until MFA is set up (policy required): the Account page only.
   if (session.loaded && session.effectiveRole === null && to.name !== 'account') return '/account';
   // The API enforces the roles; the dashboard only hides what the role cannot use.
+  if (to.meta.fleet && session.isMember) return '/';
   if (to.meta.admin && !session.isAdmin) return '/';
   return true;
 });

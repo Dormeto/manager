@@ -169,4 +169,25 @@ describe('App', () => {
     expect(icon.find('.ni-gear').exists()).toBe(false);
     wrapper.unmount();
   });
+
+  // R11: a member (no built-in role) sees workloads by their groups' grants only.
+  it('shows a member Overview and Workloads only: no Routers, Discovery, Operations or administration (R11)', async () => {
+    const member = await mountSignedIn({ email: 'dev@example.com', role: 'member', effectiveRole: 'member' });
+    expect(member.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads']);
+    // The fleet's other reads are none of theirs: the API would refuse them.
+    expect(h.calls).not.toContain('/discovery');
+    member.unmount();
+    const viewer = await mountSignedIn({ email: 'v@example.com', role: 'viewer', effectiveRole: 'viewer' });
+    expect(viewer.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads', 'Routers', 'Discovery', 'Operations']);
+    viewer.unmount();
+  });
+
+  it('hides them again when /me says member after the sign-in', async () => {
+    const wrapper = await mountSignedIn({ email: 'ops@example.com', role: 'operator', effectiveRole: 'operator' });
+    expect(wrapper.findAll('.dm-nav-item').map((i) => i.text())).toContain('Routers');
+    useSession().applyMe({ email: 'ops@example.com', role: 'member', effectiveRole: 'member' });
+    await flushPromises();
+    expect(wrapper.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads']);
+    wrapper.unmount();
+  });
 });

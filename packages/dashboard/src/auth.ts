@@ -79,11 +79,13 @@ export async function accessToken(): Promise<string | null> {
   }
 }
 
-export type Role = 'viewer' | 'operator' | 'admin';
+// member (R11): no built-in group; the workloads their groups' grants give, and nothing else of the fleet.
+export type Role = 'viewer' | 'operator' | 'admin' | 'member';
 
 export function roleOf(user: User | null): Role {
   const groups = (user?.profile['cognito:groups'] as string[] | undefined) ?? [];
   if (groups.includes('dmt-admin')) return 'admin';
   if (groups.includes('dmt-operator')) return 'operator';
-  return 'viewer';
+  if (groups.includes('dmt-viewer')) return 'viewer';
+  return 'member';
 }

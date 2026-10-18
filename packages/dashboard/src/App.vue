@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { useRoute } from 'vue-router';
 import { mdiAccountCogOutline, mdiLogout, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
@@ -31,9 +31,10 @@ const item = (title: string, to: string, icon: NavItem['icon'], count?: number, 
 const pendingLabel = (n: number) => `${n} pending onboardings or offboardings`;
 const updatesLabel = (n: number) => (n === 1 ? '1 update available' : `${n} updates available`);
 // The fleet, the organization, the people: the views in three groups.
+// A member (R11) sees Overview and Workloads: the routers, discovery and operations are the built-in roles'.
 const groups = computed<{ title: string; items: NavItem[] }[]>(() => [
-  { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), item('Routers', '/routers', 'routers')] },
-  { title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending, pendingLabel), item('Operations', '/operations', 'operations')] },
+  { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), ...(session.isMember ? [] : [item('Routers', '/routers', 'routers')])] },
+  ...(session.isMember ? [] : [{ title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending, pendingLabel), item('Operations', '/operations', 'operations')] }]),
   ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update', updates.count, updatesLabel)] }] : []),
 ]);
 const initials = computed(() => (session.email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?');
@@ -42,9 +43,9 @@ const initials = computed(() => (session.email.split('@')[0] ?? '').split(/[._-]
 const roleText = computed(() => `Role: ${session.role}${session.loaded && session.effectiveRole !== session.role ? ` (acting as ${session.effectiveRole ?? 'nothing'})` : ''}`);
 
 // Pending onboardings and offboardings of the last discovery run, next to Discovery.
-onMounted(() => {
-  if (signedIn.value) void badge.refresh();
-});
+watch(() => signedIn.value && !session.isMember, (yes) => {
+  if (yes) void badge.refresh();
+}, { immediate: true });
 
 // The manager's own version (the release's, from the public /health), read once when signed in; nothing while unknown.
 const version = ref('');
