@@ -31,6 +31,16 @@ Router 0.30.0. Access: nothing to apply again; upgrade the routers to 0.30.0 for
 - Audit (R11): refused workload actions are audited with `result: refused` and the reason, and every entry records the
   caller's groups.
 - Documentation: [Access control](docs/access-control.md).
+- Upgrade note: before 0.14.0 a user in no built-in group was a viewer; they are now a member and see nothing until a group
+  grants them access. Users invited through the dashboard always have a built-in group; add any user created by hand in
+  Cognito to `dmt-viewer` or to a custom group.
+- Review fixes (R11): tags at onboarding need an administrator (403 for operators, audited; the dialog hides the Tags section
+  from them), and an onboarding with tags fails on a router before 0.30.0; the API returns `tags` only when the router reports
+  them and the workload's page says "Tags unknown"; Edit tags only on manager workloads; members see router names as text, no
+  Routers list or map on the Overview; the tag filter takes `key=value` only (splits at the first `=`), encodes values with
+  `%20`, and its chips are keyboard-reachable; the Users page says when the groups cannot be read. With `passkeys = false`
+  (or `mfa = required`) the user pool's `sign_in_policy` is written with `PASSWORD` alone, so turning passkeys off reverts a
+  pool that allowed them (an in-place update).
 - Passkeys, in the `optional` and `operators` MFA modes. The module's new `passkeys` variable (true by default; not
   offered with `mfa = required`, where Cognito enforces the authenticator app) turns on choice-based sign-in: the user
   pool's `sign_in_policy` allows `PASSWORD` and `WEB_AUTHN`, its `web_authn_configuration` requires user verification (the

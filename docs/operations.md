@@ -30,7 +30,8 @@ time per target group, router or workload, one per load balancer (lock), three p
   failed or grew old.
 - **MFA:** `mfa` sets the user pool's MFA (`ON` only for `required`) and the API's policy (`MFA_MODE`): the API reads each
   user's MFA with `AdminGetUser` (cached 5 minutes when on, 30 seconds when off, `/api/me?fresh=1`), and lowers an
-  administrator or operator without it to viewer under `operators`. The Account page sets up TOTP with the user's access
+  administrator or operator without it to viewer under `operators`; in that mode a group's grant giving `wake` or `nap` also needs a
+  multi-factor session (without it the user keeps `read`). The Account page sets up TOTP with the user's access
   token; Users resets another user's. The smoke user is enrolled by `scripts/smoke.mjs` at its first run (secret in SSM
   `/dmt-<env>/manager/smoke-totp`). No client may write a user's email (with the scope the Account page needs, a stolen
   access token could otherwise move the account to another address).

@@ -14,7 +14,12 @@ A user's role comes from their Cognito groups; the highest one wins.
 | Viewer | `dmt-viewer` | all: read | read-only views |
 | Member | none of the above | only what their groups' grants give | Overview, Workloads and their workload views; nothing else |
 
-A user in no built-in group is a **member**. The built-in roles' rights are unchanged: existing users see no difference.
+A user in no built-in group is a **member**. The built-in roles' rights are unchanged: existing users in a built-in group see no
+difference.
+
+**Upgrading to 0.14.0:** before 0.14.0 a user in no built-in group was a viewer; they are now a member and see nothing until
+a group grants them access. Users invited through the dashboard always have a built-in group, so only users created by hand
+in Cognito are concerned: add them to `dmt-viewer`, or to a custom group.
 Grants cover workloads only; routers, discovery, exclusions, organization access, onboarding, renaming, users, audit and
 updates stay with the built-in roles (a member does not see their entries in the dashboard, and the API refuses them).
 
@@ -27,9 +32,11 @@ configuration in its router, beside its name.
   `_ . : / = + - @`; keys are case-sensitive; the prefix `dormeto:` is reserved.
 - A workload the manager onboarded has its tags set by administrators: in the onboarding dialog (nothing is copied from AWS
   unless you press "Copy the target group's AWS tags", which takes the first value of each key, for you to edit), then
-  from the workload's page (Edit tags), `PUT /api/workloads/:router/:id/tags`. A retag takes effect at once.
+  from the workload's page (Edit tags), `PUT /api/workloads/:router/:id/tags`. A retag takes effect at once. An operator cannot set tags at onboarding: the API refuses (403, audited) an onboarding with
+  tags from anyone but an administrator, and the dialog shows them the Tags section only to administrators.
 - A Terraform workload's tags are the `tags` of its `workload` module; the manager shows them and says "set in Terraform".
-- The Workloads list has a Tags column and a tag filter (`GET /api/workloads?tag=key=value`, repeatable; all must match).
+- The Workloads list has a Tags column and a tag filter (`GET /api/workloads?tag=key=value`, repeatable; all must match). The filter takes `key=value` only (free text is refused in the dashboard, 400 from the API) and splits
+  at the first `=`, so a key containing `=` cannot be filtered.
 
 ## Groups and grants
 
@@ -72,7 +79,8 @@ any grant gives `wake` or `nap`. Without it they keep `read` grants only.
 
 Routers before 0.30.0 report no tags. Their workloads are seen only by the built-in roles and by grants with an empty
 selector (`{}`), until the router is upgraded (the Routers view offers it); tags cannot be set on them (the API answers
-409).
+409). The API returns no `tags` for such a workload and the workload's page says "Tags unknown (router before 0.30.0)"; an
+onboarding with tags fails at its preview on such a router ("upgrade it to onboard with tags").
 
 ## Records follow the workload id
 
