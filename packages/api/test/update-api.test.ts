@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Operation } from '@dormeto/operations';
+import type { UpdateCheck, UpdateResult } from '@dormeto/fleet';
 import { createApi, type ApiEvent, type AuditEntry } from '../src/api.js';
 import { absent, missingStream, createUpdate, fetchText, FETCH_MS, type Build, type Pending, type UpdatePort } from '../src/update.js';
 
@@ -705,5 +706,57 @@ describe('the port decisions', () => {
     expect(await fetchText('https://r.test/a', hanging, 50)).toBeNull();
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(FETCH_MS).toBe(5_000);
+  });
+});
+
+describe('the daily update check', () => {
+  function checking(over: { result?: UpdateResult | null } = {}) {
+    let check: UpdateCheck = { enabled: false, alert: false };
+    const audit: AuditEntry[] = [];
+    const api = createApi({
+      routers: [], invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit }, now: () => START, newId: () => 'id', version: '0.10.0',
+      fleet: {
+        getUpdateCheck: async () => check,
+        putUpdateCheck: async (c: UpdateCheck & { updatedBy: string }) => { const { updatedBy, ...rest } = c; check = { ...rest, updatedAt: new Date(START).toISOString(), updatedBy }; },
+        getUpdateResult: async () => over.result ?? null,
+      } as never,
+    });
+    return { api, audit };
+  }
+
+  it('is for administrators only', async () => {
+    const s = checking();
+    for (const group of ['dmt-viewer', 'dmt-operator']) {
+      for (const method of ['GET', 'PUT']) expect((await s.api(event(method, '/api/update/check', group, { enabled: true, alert: false }))).statusCode).toBe(403);
+    }
+    expect(s.audit).toEqual([]);
+  });
+
+  it('is off by default, with no result', async () => {
+    const res = await checking().api(event('GET', '/api/update/check', 'dmt-admin'));
+    expect([res.statusCode, json(res)]).toEqual([200, { enabled: false, alert: false, result: null }]);
+  });
+
+  it('is set, then read with who set it, the last result and an audit entry', async () => {
+    const result = { checkedAt: '2026-10-20T07:00:00.000Z', running: '0.10.0', latest: '0.12.0' };
+    const s = checking({ result });
+    const put = await s.api(event('PUT', '/api/update/check', 'dmt-admin', { enabled: true, alert: true }));
+    expect([put.statusCode, json(put)]).toEqual([200, { enabled: true, alert: true, updatedAt: new Date(START).toISOString(), updatedBy: 'admin@example.com', result }]);
+    expect(json(await s.api(event('GET', '/api/update/check', 'dmt-admin')))).toMatchObject({ enabled: true, alert: true, updatedBy: 'admin@example.com', result });
+    expect(s.audit).toEqual([expect.objectContaining({ action: 'update-check', target: 'update', result: 'enabled, alert' })]);
+  });
+
+  it('refuses the alert without the check, and a body that is not two booleans', async () => {
+    const s = checking();
+    for (const body of [{ enabled: false, alert: true }, { enabled: 'yes', alert: false }, { enabled: true }, {}]) {
+      expect((await s.api(event('PUT', '/api/update/check', 'dmt-admin', body))).statusCode, JSON.stringify(body)).toBe(400);
+    }
+    expect((await s.api(event('GET', '/api/update/check', 'dmt-admin'))).statusCode).toBe(200);
+    expect(s.audit).toEqual([]);
+  });
+
+  it('is absent without the fleet store', async () => {
+    const api = createApi({ routers: [], invoke: async () => ({}), audit: { write: async () => {}, list: async () => [] }, version: '0.1.0' });
+    expect((await api(event('GET', '/api/update/check', 'dmt-admin'))).statusCode).toBe(404);
   });
 });

@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
@@ -163,6 +163,10 @@ export interface ApiOptions {
     // The discounts for commitments (R9.5).
     getSavingsSettings?(): Promise<SavingsSettings>;
     putSavingsSettings?(discounts: Discounts, by: string): Promise<void>;
+    // The daily update check (its setting, and the last result).
+    getUpdateCheck?(): Promise<UpdateCheck>;
+    putUpdateCheck?(check: UpdateCheck & { updatedBy: string }): Promise<void>;
+    getUpdateResult?(): Promise<UpdateResult | null>;
     // A workload's idle window advice (R10), kept a day.
     getIdleWindow?(account: string, region: string, id: string): Promise<IdleWindowAdvice | null>;
     putIdleWindow?(account: string, region: string, id: string, advice: IdleWindowAdvice): Promise<void>;
@@ -1044,6 +1048,20 @@ export function createApi({
     if (resource === 'update' && !b) {
       need(identity, 'admin');
       if (method === 'GET' && !a) return reply(200, update ? await update.state() : { installedWithCli: false, version, env: install?.env ?? '', region: install?.region ?? '' });
+      if (a === 'check' && (method === 'GET' || method === 'PUT')) {
+        if (!fleet?.getUpdateCheck || !fleet.putUpdateCheck || !fleet.getUpdateResult) throw new HttpError(404, 'not_found', 'no update check in this manager');
+        if (method === 'GET') return reply(200, { ...(await fleet.getUpdateCheck()), result: await fleet.getUpdateResult() });
+        const body = bodyOf(event);
+        if (typeof body.enabled !== 'boolean' || typeof body.alert !== 'boolean') throw new HttpError(400, 'bad_request', 'enabled and alert must be true or false');
+        if (body.alert && !body.enabled) throw new HttpError(400, 'bad_request', 'the alert needs the daily check turned on');
+        const check = { enabled: body.enabled, alert: body.alert };
+        return audited(identity, 'update-check', 'update', async () => {
+          await fleet.putUpdateCheck!({ ...check, updatedBy: identity.email });
+          // Answered with what was written, as the discounts are.
+          const saved = { ...check, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
+          return { result: [check.enabled ? 'enabled' : 'disabled', ...(check.alert ? ['alert'] : [])].join(', '), response: reply(200, { ...saved, result: await fleet.getUpdateResult!() }) };
+        });
+      }
       if (method === 'GET' && a === 'available') return reply(200, { count: update ? await update.available() : 0 });
       if (update && method === 'GET' && a === 'changes') {
         const to = event.queryStringParameters?.to;
