@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { useSession } from '../src/stores/session';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -11,7 +13,9 @@ Object.defineProperty(window, 'visualViewport', {
   value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
 });
 
-async function openDialog(extra: Record<string, unknown> = {}) {
+async function openDialog(extra: Record<string, unknown> = {}, role: 'admin' | 'operator' = 'admin') {
+  setActivePinia(createPinia());
+  useSession().role = role;
   const wrapper = mount(OnboardDialog, { props: { modelValue: false, title: 'shop.example.com', defaultName: 'shop', ...extra }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
   await wrapper.setProps({ modelValue: true });
   await flushPromises();
@@ -107,6 +111,19 @@ describe('OnboardDialog', () => {
     onboardButton().click();
     expect((wrapper.emitted('submit')![1]![0] as { tags: unknown }).tags).toEqual({ team: 'payments' });
     wrapper.unmount();
+  });
+
+  it('shows the Tags section and the copy button to administrators only, and sends no tags for an operator', async () => {
+    const operator = await openDialog({ awsTags: { team: ['payments'] } }, 'operator');
+    expect(document.querySelector('.v-dialog')!.textContent).not.toContain('Tags');
+    expect(button("Copy the target group's AWS tags")).toBeUndefined();
+    expect(button('Add a tag')).toBeUndefined();
+    onboardButton().click();
+    expect(operator.emitted('submit')![0]![0]).not.toHaveProperty('tags');
+    operator.unmount();
+    const admin = await openDialog({ awsTags: { team: ['payments'] } });
+    expect(button("Copy the target group's AWS tags")).toBeDefined();
+    admin.unmount();
   });
 
   it('copies nothing from the target group\'s AWS tags by default, and the first value of each key on request, for the administrator to edit', async () => {

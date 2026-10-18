@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // A notice above a view; an operation it announces links to its steps in the Operations view.
 import { computed } from 'vue';
+import { useSession } from '../stores/session';
 import { mdiAlertCircleOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiInformationOutline } from '@mdi/js';
 
 export interface Notice {
@@ -11,6 +12,8 @@ export interface Notice {
 const props = defineProps<{ notice: Notice }>();
 defineEmits<{ close: [] }>();
 const ICONS = { success: mdiCheckCircleOutline, error: mdiAlertCircleOutline, info: mdiInformationOutline, warning: mdiAlertOutline };
+// A member has no Operations view: the notice stays text.
+const session = useSession();
 const icon = computed(() => ICONS[props.notice.type]);
 </script>
 
@@ -18,7 +21,7 @@ const icon = computed(() => ICONS[props.notice.type]);
   <v-alert :type="notice.type" variant="tonal" closable class="mb-4 notice" :class="`notice--${notice.type}`" @click:close="$emit('close')">
     <template #prepend><span class="notice__icon"><v-icon :icon="icon" size="20" /></span></template>
     {{ notice.text }}
-    <router-link v-if="notice.operation" :to="{ path: '/operations', query: { id: notice.operation } }">Follow it in Operations</router-link>
+    <router-link v-if="notice.operation && !session.isMember" :to="{ path: '/operations', query: { id: notice.operation } }">Follow it in Operations</router-link>
   </v-alert>
 </template>
 

@@ -40,7 +40,7 @@ vi.mock('../src/api', () => ({
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 // Reduced motion: the figures show at once, without counting up.
 window.matchMedia ??= ((query: string) => ({ matches: query.includes('reduce'), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
-async function mountOverview(role: 'admin' | 'viewer' = 'viewer', dismissedUpdate = '') {
+async function mountOverview(role: 'admin' | 'viewer' | 'member' = 'viewer', dismissedUpdate = '') {
   const pinia = createPinia();
   setActivePinia(pinia);
   usePreferences().dismissedUpdate = dismissedUpdate;
@@ -89,6 +89,18 @@ describe('Overview', () => {
     expect(links.length).toBeGreaterThanOrEqual(2);
     expect(new Set(links)).toEqual(new Set(['/routers/dmt-dev']));
     wrapper.unmount();
+  });
+
+  it('shows a member no routers list and no fleet map: the API sends them no routers', async () => {
+    const member = await mountOverview('member');
+    expect(member.find('[data-test="routers-card"]').exists()).toBe(false);
+    expect(member.text()).not.toContain('Your fleet, live');
+    expect(member.text()).not.toContain('router 0.24.0');
+    member.unmount();
+    const viewer = await mountOverview('viewer');
+    expect(viewer.find('[data-test="routers-card"]').exists()).toBe(true);
+    expect(viewer.text()).toContain('Your fleet, live');
+    viewer.unmount();
   });
 
   it('says the energy the naps did not use as the API estimates it, from the bar of all workloads: never every workload (PR #1)', async () => {

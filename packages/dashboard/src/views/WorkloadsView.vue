@@ -19,8 +19,11 @@ import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
 import { tagsList } from '../tags';
+import { useSession } from '../stores/session';
 
 const now = useNow();
+// A member has no Routers view: the router column is text.
+const session = useSession();
 const { smAndDown } = useDisplay();
 // The bar of all workloads (user request): the API keeps each workload's figures an hour by default; asked again every
 // 10 minutes.
@@ -50,8 +53,16 @@ const stateFilter = ref(typeof route.query.state === 'string' ? route.query.stat
 const tagFilter = ref<string[]>([]);
 const tagsSeen = ref<string[]>([]);
 const tagChoices = computed(() => [...new Set([...tagsSeen.value, ...tagFilter.value])].sort());
+// A tag is written key=value (split at the first =, so a key holding = cannot be filtered); free text is refused here.
+const tagHint = ref('');
+const isTag = (t: string) => t.indexOf('=') > 0;
 function filterByTags(next: string[]) {
-  tagFilter.value = next;
+  const bad = next.find((t) => !isTag(t));
+  tagHint.value = bad === undefined ? '' : `"${bad}" is not a tag: write it as key=value, for example team=payments`;
+  const good = next.filter(isTag);
+  const same = good.length === tagFilter.value.length && good.every((t, i) => t === tagFilter.value[i]);
+  tagFilter.value = good;
+  if (same) return;
   page.value = 1;
   void run();
 }
@@ -68,8 +79,9 @@ const { error, loading, nextAt, refreshedAt, run } = usePoll(async () => {
     ...(attentionOnly.value ? { attention: '1' } : {}), ...(withRouters ? { routers: '1' } : {}),
     ...(routerFilter.value ? { router: routerFilter.value } : {}), ...(stateFilter.value ? { state: stateFilter.value } : {}),
   });
-  for (const tag of tagFilter.value) query.append('tag', tag);
-  const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] }>(`/workloads?${query}`);
+  // Each tag percent-encoded (a space is %20, not the + of a form).
+  const tags = tagFilter.value.map((tag) => `&tag=${encodeURIComponent(tag)}`).join('');
+  const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] }>(`/workloads?${query}${tags}`);
   workloads.value = result.workloads;
   tagsSeen.value = [...new Set([...tagsSeen.value, ...result.workloads.flatMap((w) => tagsList(w.tags).map((t) => t.text))])];
   total.value = result.total ?? result.workloads.length;
@@ -84,6 +96,7 @@ function allWorkloads() {
   routerFilter.value = '';
   stateFilter.value = '';
   tagFilter.value = [];
+  tagHint.value = '';
   page.value = 1;
   void router.replace({ query: {} });
   void run();
@@ -176,7 +189,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         <v-chip v-if="attentionOnly" closable label color="secondary" variant="tonal" @click:close="allWorkloads">Needing attention</v-chip>
         <v-chip v-if="routerFilter || stateFilter" closable label color="primary" variant="tonal" @click:close="allWorkloads">{{ [routerFilter, stateFilter.toLowerCase()].filter(Boolean).join(' · ') }}</v-chip>
       </div>
-      <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" hide-details
+      <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
         class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
       <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line class="dm-toolbar__search" />
     </div>
@@ -198,10 +211,13 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         </div>
       </template>
       <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" /></template>
-      <template #[`item.router`]="{ item }"><router-link :to="`/routers/${encodeURIComponent(item.router)}`" class="dm-link dm-router">{{ item.router }}</router-link></template>
+      <template #[`item.router`]="{ item }">
+        <span v-if="session.isMember" class="dm-link dm-router">{{ item.router }}</span>
+        <router-link v-else :to="`/routers/${encodeURIComponent(item.router)}`" class="dm-link dm-router">{{ item.router }}</router-link>
+      </template>
       <template #[`item.tags`]="{ item }">
         <span class="dm-tags">
-          <v-chip v-for="t in tagsList(item.tags)" :key="t.key" data-test="tag" size="small" label variant="tonal" :title="`Show only ${t.text}`" @click="!tagFilter.includes(t.text) && filterByTags([...tagFilter, t.text])">{{ t.text }}</v-chip>
+          <v-chip v-for="t in tagsList(item.tags)" :key="t.key" data-test="tag" size="small" label variant="tonal" link :title="`Show only ${t.text}`" @click="!tagFilter.includes(t.text) && filterByTags([...tagFilter, t.text])">{{ t.text }}</v-chip>
         </span>
       </template>
       <template #[`item.state`]="{ item }"><span class="dm-state"><StateChip :state="item.state" :failure="item.failure" /><PauseChip :pauses="item.pauses" /></span></template>

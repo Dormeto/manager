@@ -3,6 +3,7 @@ import { useNow } from '../now';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { mdiAlertCircleOutline, mdiArrowRight, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
 import { api } from '../api';
+import { useSession } from '../stores/session';
 import { usePoll } from '../poll';
 import { attentionMore, relative } from '../format';
 import { routerStatus } from '../pause';
@@ -18,6 +19,8 @@ import FleetMap from '../components/FleetMap.vue';
 import type { AlertsInfo, FleetStates, RouterInfo, WorkloadSummary } from '../types';
 
 const now = useNow();
+// A member reads the workloads their grants cover, not the routers: the API sends none, so neither the map nor the list shows.
+const session = useSession();
 // Counts, 7-day totals and the workloads that need attention, from the API (never every workload).
 const attention = ref<WorkloadSummary[]>([]);
 const byState = ref<Record<string, number>>({});
@@ -143,8 +146,8 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
         </div>
       </div>
     </v-card-text>
-    <v-divider class="mx-7" />
-    <v-card-text class="dm-fleet__map">
+    <v-divider v-if="!session.isMember" class="mx-7" />
+    <v-card-text v-if="!session.isMember" class="dm-fleet__map">
       <div class="dm-eyebrow mb-3">Your fleet, live</div>
       <FleetMap :routers="routers" />
     </v-card-text>
@@ -165,7 +168,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
           </v-card-text>
         </v-card>
       </div>
-      <v-card title="Routers" class="flex-grow-1">
+      <v-card v-if="!session.isMember" title="Routers" class="flex-grow-1" data-test="routers-card">
         <v-list lines="two" class="bg-transparent">
           <v-list-item v-for="r in routers" :key="r.name" :title="r.name" :to="`/routers/${encodeURIComponent(r.name)}`"
             :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${routerStatus(r, now).detail}`">

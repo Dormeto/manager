@@ -252,7 +252,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <v-btn :icon="mdiArrowLeft" variant="text" size="small" density="comfortable" to="/workloads" aria-label="Back to the workloads" class="dm-hero__back" />
           <span class="dm-eyebrow">Fleet</span>
           <span class="dm-hero__sep" aria-hidden="true">/</span>
-          <router-link :to="`/routers/${encodeURIComponent(router)}`" class="dm-hero__router">{{ router }}</router-link>
+          <span v-if="session.isMember" data-test="router-text" class="dm-hero__router">{{ router }}</span>
+          <router-link v-else :to="`/routers/${encodeURIComponent(router)}`" class="dm-hero__router">{{ router }}</router-link>
           <template v-if="status?.region"><span class="dm-hero__sep" aria-hidden="true">·</span><span class="dm-hero__region">{{ status.region }}</span></template>
         </div>
         <h1 class="text-headline-small dm-hero__title">{{ title }}</h1>
@@ -265,12 +266,12 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <a v-if="url" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
         </div>
         <!-- R11: its tags (Dormeto's own labels); administrators edit a manager workload's, a Terraform one's are set there. -->
-        <div v-if="status && (tags.length || status.tags || session.isAdmin)" class="dm-hero__tags" data-test="tags">
+        <div v-if="status" class="dm-hero__tags" data-test="tags">
           <v-icon :icon="mdiTagOutline" size="16" class="text-medium-emphasis" aria-hidden="true" />
           <v-chip v-for="t in tags" :key="t.key" data-test="tag" size="small" label variant="tonal">{{ t.text }}</v-chip>
           <span v-if="!tags.length" class="text-body-small text-medium-emphasis">{{ status.tags ? 'No tags' : 'Tags unknown (router before 0.30.0)' }}</span>
           <span v-if="status.source === 'terraform'" data-test="tags-terraform" class="text-body-small text-medium-emphasis">set in Terraform</span>
-          <v-btn v-else-if="session.isAdmin" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
+          <v-btn v-else-if="session.isAdmin && status.source === 'manager' && status.tags" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
         </div>
         <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" />
         </div>
@@ -306,8 +307,10 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   <v-alert v-if="pauses.length" type="info" variant="tonal" class="mb-4 dm-alert-links" :title="excluded ? 'Excluded: never napped, waiting for offboarding' : 'Paused: never napped, requests still wake it'">
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">
       {{ pauseLine(p, now) }}
-      <router-link v-if="p.exclusionId" to="/discovery" class="ml-1">Lift the exclusion in Discovery</router-link>
-      <router-link v-else-if="p.scope === 'router'" to="/routers" class="ml-1">Resume the router</router-link>
+      <template v-if="!session.isMember">
+        <router-link v-if="p.exclusionId" to="/discovery" class="ml-1">Lift the exclusion in Discovery</router-link>
+        <router-link v-else-if="p.scope === 'router'" to="/routers" class="ml-1">Resume the router</router-link>
+      </template>
     </div>
   </v-alert>
   <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure)">

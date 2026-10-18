@@ -325,6 +325,44 @@ describe('Workload view', () => {
     current = status;
   });
 
+  it('says the tags are unknown, with no edit button, when the router reports none (before 0.30.0), even for an administrator', async () => {
+    current = { ...status, source: 'manager' };
+    const wrapper = await mountView('admin');
+    expect(wrapper.find('[data-test="tags"]').text()).toContain('Tags unknown (router before 0.30.0)');
+    expect(wrapper.find('[data-test="edit-tags"]').exists()).toBe(false);
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('offers Edit tags to an administrator on a manager workload only, not on one that is neither manager nor Terraform', async () => {
+    current = { ...status, tags: { team: 'payments' } };
+    const wrapper = await mountView('admin');
+    expect(wrapper.find('[data-test="edit-tags"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="tags-terraform"]').exists()).toBe(false);
+    wrapper.unmount();
+    current = { ...status, source: 'manager', tags: { team: 'payments' } };
+    const manager = await mountView('admin');
+    expect(manager.find('[data-test="edit-tags"]').exists()).toBe(true);
+    manager.unmount();
+    current = status;
+  });
+
+  it('shows a member the router and the pause links as plain text, an administrator as links', async () => {
+    current = { ...status, tags: { team: 'payments' }, can: { wake: false, nap: false }, pauses: [{ scope: 'router', by: 'ops', at: minutesAgo(5), reason: 'maintenance' }, { scope: 'workload', exclusionId: 'ex-1', by: 'ops', at: minutesAgo(5), reason: 'excluded: shared' }] };
+    const member = await mountView('member');
+    expect(member.find('.dm-hero__router').element.tagName).toBe('SPAN');
+    expect(member.find('.dm-hero__router').text()).toBe('dmtr-dev');
+    expect(member.text()).not.toContain('Resume the router');
+    expect(member.text()).not.toContain('Lift the exclusion in Discovery');
+    member.unmount();
+    const admin = await mountView('admin');
+    expect(admin.find('a.dm-hero__router').attributes('href')).toBe('/routers/dmtr-dev');
+    expect(admin.text()).toContain('Resume the router');
+    expect(admin.text()).toContain('Lift the exclusion in Discovery');
+    admin.unmount();
+    current = status;
+  });
+
   it('says a Terraform workload\'s tags are set in Terraform, with no edit button, even for an administrator', async () => {
     current = { ...status, source: 'terraform', tags: { team: 'payments' } };
     const wrapper = await mountView('admin');

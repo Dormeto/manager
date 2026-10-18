@@ -7,12 +7,15 @@ import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlus
 import { nameRule } from '../format';
 import { copiedTags, rowsOf, rowsProblem, tagsOf, type TagRow, type Tags } from '../tags';
 import TagsEditor from './TagsEditor.vue';
+import { useSession } from '../stores/session';
 import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
 
 const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]> }>();
 const access = computed(() => (props.kubernetes ? accessText(props.kubernetes.cluster, props.access) : null));
 const snippet = computed(() => (props.kubernetes ? gitopsSnippet(props.kubernetes) : null));
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Tags }] }>();
+// Tags at onboarding are the administrators' (the API refuses an operator's).
+const session = useSession();
 const name = ref('');
 const idleMinutes = ref(15);
 const wakeMode = ref('any');
@@ -58,7 +61,7 @@ const changes = computed(() => {
 
 function submit() {
   const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
-  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}) }, databases: list, ...(Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
+  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
 }
 </script>
 
@@ -118,12 +121,14 @@ function submit() {
         <v-text-field v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
+        <template v-if="session.isAdmin">
         <div class="dm-eyebrow mt-6 mb-1">Tags</div>
         <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not AWS tags: the groups' grants pick workloads by them. Administrators can change them later.</p>
         <TagsEditor v-model="tagRows" />
         <v-btn v-if="hasAwsTags" variant="tonal" size="small" class="mb-2" @click="copyAws">Copy the target group's AWS tags</v-btn>
         <p v-if="copyNote" class="text-body-small text-medium-emphasis">{{ copyNote }}</p>
         <v-alert v-if="tagsError" type="error" variant="tonal" density="compact" class="mt-2" :text="tagsError" />
+        </template>
       </v-card-text>
       <v-card-actions class="dm-dialog__actions">
         <v-spacer />

@@ -7,6 +7,7 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadsView from '../src/views/WorkloadsView.vue';
 import StateBar from '../src/components/StateBar.vue';
+import { useSession } from '../src/stores/session';
 import { barSavings } from '../src/costs';
 
 const paths: string[] = [];
@@ -136,9 +137,10 @@ describe('Workloads view', () => {
   });
 
   // R11: tags, and the filter by tags.
-  const mountList = async () => {
+  const mountList = async (role?: 'member') => {
     const pinia = createPinia();
     setActivePinia(pinia);
+    if (role) useSession().role = role;
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers/:name', component: { render: () => null } }] });
     await router.push('/workloads');
     const wrapper = mount(WorkloadsView, { attachTo: document.body, global: { plugins: [createVuetify({ components }), pinia, router] } });
@@ -178,6 +180,43 @@ describe('Workloads view', () => {
     filter.vm.$emit('update:modelValue', []);
     await flushPromises();
     expect(asked()).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('refuses free text in the tag filter with a hint and no request, encodes spaces as %20, and makes the row chips keyboard reachable', async () => {
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [{ ...SHOP, tags: { 'cost center': 'a b' } }], total: 1, errors: [] }; }) as never);
+    paths.length = 0;
+    const wrapper = await mountList();
+    const lists = () => paths.filter((p) => p.startsWith('/workloads?'));
+    const before = lists().length;
+    const filter = wrapper.findComponent({ name: 'VCombobox' });
+    filter.vm.$emit('update:modelValue', ['payments']);
+    await flushPromises();
+    expect(lists()).toHaveLength(before);
+    expect(wrapper.text()).toContain('"payments" is not a tag: write it as key=value');
+    expect(filter.props('modelValue')).toEqual([]);
+    filter.vm.$emit('update:modelValue', ['=x']);
+    await flushPromises();
+    expect(lists()).toHaveLength(before);
+    // A chip of a row is reachable by keyboard; its filter has the spaces percent-encoded.
+    const chip = wrapper.find('[data-test="tag"]');
+    expect(chip.attributes('tabindex')).toBe('0');
+    await chip.trigger('click');
+    await flushPromises();
+    expect(lists().at(-1)).toContain('&tag=cost%20center%3Da%20b');
+    expect(lists().at(-1)).not.toContain('+center');
+    expect(wrapper.text()).not.toContain('is not a tag');
+    wrapper.unmount();
+  });
+
+  it('shows a member the router column as text, an administrator as links', async () => {
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [SHOP], total: 1, errors: [] }; }) as never);
+    const wrapper = await mountList('member');
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    const cell = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Router')]!;
+    expect([cell.text(), cell.find('a').exists()]).toEqual(['dmt-dev', false]);
     wrapper.unmount();
   });
 });
