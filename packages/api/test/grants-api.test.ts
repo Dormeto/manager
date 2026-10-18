@@ -2,6 +2,7 @@
 // answers 404, a readable one without the permission 403 (audited), and the aggregates of what the caller reads.
 import { describe, expect, it } from 'vitest';
 import { createApi, type ApiEvent, type AuditEntry, type Router } from '../src/api.js';
+import type { Operation } from '@dormeto/operations';
 
 const NOW = Date.parse('2026-10-18T12:00:00.000Z');
 const ACCOUNT = '121014831971';
@@ -28,6 +29,37 @@ const GROUPS = [
   { name: 'payers', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake'] }], updatedAt: null, updatedBy: null },
 ];
 
+const day = (date: string, id: string, usd: number) => ({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: id, usd, asleepHours: 2, hours: 2, unpriced: [] });
+const DAYS: Record<string, ReturnType<typeof day>[]> = {};
+for (const date of ['2026-10-16', '2026-10-17']) DAYS[date] = [day(date, 'pay', 1), day(date, 'search', 2), day(date, 'plain', 4)];
+const dates = Array.from({ length: 31 }, (_, i) => iso(Date.parse('2026-10-17T00:00:00.000Z') - (30 - i) * 86_400_000).slice(0, 10));
+const SAVINGS = {
+  computedAt: iso(NOW - 3_600_000), day: '2026-10-17', baseline: { kind: 'always' },
+  last30: { usd: 14, asleepHours: 12, days: dates.slice(1).map((date) => ({ date, usd: DAYS[date] ? 7 : 0 })) },
+  month: { month: '2026-10', usd: 14 }, cumulative: { usd: 14, since: '2026-10-16', lastDay: '2026-10-17' }, counted: { '2026-10-16': 7, '2026-10-17': 7 }, failed: 0,
+  top: [{ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'plain', usd: 8 }, { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'search', usd: 4 }, { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'pay', usd: 2 }],
+  unpriced: { workloads: 0, hours: 0 }, workloads: 3, dormeto: { usdMonth: 30 },
+};
+
+const at = iso(NOW - 600_000);
+const alarm = (id: string, kind: 'workload' | 'router' | 'list', over: Record<string, unknown> = {}) => ({
+  subject: { id, kind, name: id, ...over }, level: 'warning', since: at, problems: [{ code: 'x', level: 'warning', text: 't', hint: 'h', since: at }], notified: [], cleared: {},
+});
+const ALARMS = [
+  alarm('workload#pay', 'workload', { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'pay' }),
+  alarm('workload#search', 'workload', { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'search' }),
+  alarm('router#1', 'router', { account: ACCOUNT, region: 'eu-west-1' }),
+  alarm('list#ipsum', 'list'),
+];
+const op = (id: string, type: string, target: Record<string, string>, context: Record<string, unknown> = {}) => ({ id, type, target, input: {}, status: 'succeeded', steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: id, context, by: 'a', createdAt: at, updatedAt: at }) as unknown as Operation;
+const OPERATIONS = [
+  op('o1', 'offboard', { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'pay' }),
+  op('o2', 'offboard', { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'search' }),
+  op('o3', 'upgrade-router', { account: ACCOUNT, region: 'eu-west-1' }),
+  op('o4', 'onboard', { account: ACCOUNT, region: 'eu-west-1', targetGroupArn: 'arn:tg/pay' }, { workloadId: 'pay' }),
+  op('o5', 'onboard', { account: ACCOUNT, region: 'eu-west-1', targetGroupArn: 'arn:tg/x' }),
+];
+
 function setup({ tagged = true }: { tagged?: boolean } = {}) {
   const audit: AuditEntry[] = [];
   const calls: [string, string][] = [];
@@ -47,9 +79,14 @@ function setup({ tagged = true }: { tagged?: boolean } = {}) {
       listWorkloads: async () => workloads as never,
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
       listGroups: async () => GROUPS as never,
+      getSavingsSummary: async () => SAVINGS as never,
+      getSavingsSettings: async () => ({ compute: 0, databases: 0, updatedAt: null, updatedBy: null }),
+      listSavingsDay: async (date: string) => (DAYS[date] ?? []) as never,
       listHistory: async () => ({ entries: [], truncated: false }),
       historyBefore: async () => null,
     },
+    alerts: { open: async () => ALARMS as never, subscriptions: async () => ({ topicArn: 'arn:topic', subscriptions: [] }) },
+    operations: { list: async () => OPERATIONS, get: async (id: string) => OPERATIONS.find((o) => o.id === id) ?? null, create: async () => OPERATIONS[0]!, installedRouters: async () => [] } as never,
   });
   return { api, audit, calls };
 }
@@ -160,5 +197,39 @@ describe('one workload', () => {
     for (const [method, path] of [['POST', '/api/workloads/dmt-dev/pay/rename'], ['GET', '/api/routers'], ['GET', '/api/discovery/candidates'], ['GET', '/api/users'], ['GET', '/api/audit'], ['POST', '/api/operations'], ['POST', '/api/routers/dmt-dev/pause'], ['GET', '/api/exclusions']] as const) {
       expect((await s.api(event('payWake', method, path, {}, method === 'POST' ? { name: 'x', type: 'offboard' } : undefined))).statusCode, `${method} ${path}`).toBe(403);
     }
+  });
+});
+
+describe('aggregates', () => {
+  const savings = async (s: ReturnType<typeof setup>, user: keyof typeof USERS) => json(await s.api(event(user, 'GET', '/api/savings'))).summary;
+
+  it('gives a member the sums of the readable workloads\' days; a viewer\'s are unchanged', async () => {
+    const s = setup();
+    expect(await savings(s, 'viewer')).toEqual(SAVINGS);
+    const pay = await savings(s, 'pay');
+    expect([pay.last30.usd, pay.last30.asleepHours, pay.month.usd, pay.cumulative.usd, pay.counted, pay.workloads, pay.top.map((t: { workloadId: string; usd: number }) => [t.workloadId, t.usd])])
+      .toEqual([2, 4, 2, 2, { '2026-10-16': 1, '2026-10-17': 1 }, 1, [['pay', 2]]]);
+    expect(pay.last30.days.filter((d: { usd: number }) => d.usd > 0)).toEqual([{ date: '2026-10-16', usd: 1 }, { date: '2026-10-17', usd: 1 }]);
+    const none = await savings(s, 'none');
+    expect([none.last30.usd, none.month.usd, none.cumulative.usd, none.workloads, none.top]).toEqual([0, 0, 0, 0, []]);
+    expect(pay.dormeto).toBeUndefined();
+  });
+
+  it('filters the alerts: workload alarms by read, the router, list alarms for the built-in roles', async () => {
+    const s = setup();
+    const alarms = async (user: keyof typeof USERS) => { const r = json(await s.api(event(user, 'GET', '/api/alerts'))); return [r.alarms.map((a: { id: string }) => a.id), r.notifications] as const; };
+    expect((await alarms('viewer'))[0]).toEqual(['workload#pay', 'workload#search', 'router#1', 'list#ipsum']);
+    expect(await alarms('pay')).toEqual([['workload#pay'], null]);
+    expect((await alarms('none'))[0]).toEqual([]);
+  });
+
+  it('filters the operations: workload operations by read of the target, the others for the built-in roles', async () => {
+    const s = setup();
+    const list = async (user: keyof typeof USERS) => json(await s.api(event(user, 'GET', '/api/operations'))).operations.map((o: { id: string }) => o.id);
+    expect(await list('viewer')).toEqual(['o1', 'o2', 'o3', 'o4', 'o5']);
+    expect(await list('pay')).toEqual(['o1', 'o4']);
+    expect(await list('none')).toEqual([]);
+    expect((await s.api(event('pay', 'GET', '/api/operations/o1'))).statusCode).toBe(200);
+    for (const id of ['o2', 'o3', 'o5']) expect((await s.api(event('pay', 'GET', `/api/operations/${id}`))).statusCode, id).toBe(404);
   });
 });

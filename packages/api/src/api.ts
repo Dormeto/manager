@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
@@ -181,6 +181,8 @@ export interface ApiOptions {
     historyBefore?(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null>;
     // What the daily savings job computed last (R9).
     getSavingsSummary?(): Promise<SavingsSummary | null>;
+    // A day's savings per workload: what a member's savings are summed from (R11).
+    listSavingsDay?(date: string): Promise<SavingsDay[]>;
     // The discounts for commitments (R9.5).
     getSavingsSettings?(): Promise<SavingsSettings>;
     putSavingsSettings?(discounts: Discounts, by: string): Promise<void>;
@@ -388,6 +390,17 @@ export function createApi({
     ...w, tags: tagsOf(w), can: { wake: can(identity.grants, tagsOf(w), 'wake'), nap: can(identity.grants, tagsOf(w), 'nap') },
   });
   const workloadKey = (account: string, region: string, id: string) => `${account}#${region}#${id}`;
+  // The tags of every workload, by key, for the routes that filter other records (savings, alerts, operations): only
+  // read when the caller's grants do not cover every workload.
+  async function tagIndex(identity: Identity): Promise<Map<string, Record<string, string>>> {
+    const { rows } = await listAll(identity);
+    return new Map(rows.map((w) => {
+      const router = routers.find((r) => r.name === w.router);
+      return [workloadKey(String(w.account ?? (router ? accountOfRouter(router) : '')), String(w.region ?? router?.region ?? ''), String(w.workloadId)), tagsOf(w)] as const;
+    }));
+  }
+  const readsIn = (identity: Identity, index: Map<string, Record<string, string>>, account: string | undefined, region: string | undefined, id: string | undefined) =>
+    everyWorkload(identity, 'read') || (id !== undefined && can(identity.grants, index.get(workloadKey(account ?? '', region ?? '', id)), 'read'));
   // A refused workload action is audited, with its reason, before the 403.
   async function refuse(identity: Identity, action: string, target: string, reason: string): Promise<never> {
     await audit.write({ id: newId(), at: new Date(now()).toISOString(), who: identity.email, role: identity.role, action, target, result: 'refused', groups: identity.groups, reason });
@@ -683,6 +696,51 @@ export function createApi({
     };
   }
 
+  // The savings summary of the workloads a member reads (R11), from the day items the daily job wrote (kept history_days):
+  // its totals over the same 31 days, the top workloads and the unpriced hours of the latest day. What belongs to the
+  // fleet alone (Dormeto's own cost, the failed count) is left out.
+  async function readableSavings(identity: Identity, summary: SavingsSummary) {
+    const index = await tagIndex(identity);
+    const latest = Date.parse(`${summary.day}T00:00:00.000Z`);
+    const last = Array.from({ length: 31 }, (_, i) => new Date(latest - (30 - i) * DAY_MS).toISOString().slice(0, 10));
+    const dates = [...new Set([...Object.keys(summary.counted), ...last])].sort();
+    const read = new Map<string, SavingsDay[]>();
+    const queue = [...dates];
+    await Promise.all(Array.from({ length: 10 }, async () => {
+      for (let d = queue.shift(); d; d = queue.shift()) {
+        const items = (await fleet?.listSavingsDay?.(d)) ?? [];
+        read.set(d, items.filter((w) => readsIn(identity, index, w.account, w.region, w.workloadId)));
+      }
+    }));
+    const sum = (list: SavingsDay[]) => list.reduce((n, d) => n + d.usd, 0);
+    const days = (d: string) => read.get(d) ?? [];
+    const last30 = last.slice(1);
+    const byWorkload = new Map<string, SavingsSummary['top'][number]>();
+    for (const d of last30) {
+      for (const w of days(d)) {
+        const key = workloadKey(w.account, w.region, w.workloadId);
+        const known = byWorkload.get(key) ?? { account: w.account, region: w.region, router: w.router, workloadId: w.workloadId, ...(w.name ? { name: w.name } : {}), usd: 0 };
+        known.usd += w.usd;
+        byWorkload.set(key, known);
+      }
+    }
+    const counted = Object.fromEntries(Object.keys(summary.counted).sort().map((d) => [d, sum(days(d))]));
+    const latestDay = days(summary.day);
+    const unpriced = latestDay.filter((d) => d.unpriced.length);
+    const month = summary.day.slice(0, 7);
+    return {
+      computedAt: summary.computedAt, day: summary.day, baseline: summary.baseline,
+      last30: { usd: last30.reduce((n, d) => n + sum(days(d)), 0), asleepHours: last30.reduce((n, d) => n + days(d).reduce((m, w) => m + w.asleepHours, 0), 0), days: last30.map((d) => ({ date: d, usd: sum(days(d)) })) },
+      month: { month, usd: last.filter((d) => d.startsWith(month)).reduce((n, d) => n + sum(days(d)), 0) },
+      cumulative: { usd: Object.values(counted).reduce((n, v) => n + v, 0), since: Object.keys(counted).sort()[0] ?? summary.cumulative.since, lastDay: summary.cumulative.lastDay },
+      counted,
+      top: [...byWorkload.values()].filter((w) => w.usd > 0).sort((a, b) => b.usd - a.usd).slice(0, 10),
+      unpriced: { workloads: unpriced.length, hours: unpriced.reduce((n, d) => n + d.unpriced.reduce((m, u) => m + u.hours, 0), 0) },
+      workloads: latestDay.length,
+      ...(summary.discounts ? { discounts: summary.discounts } : {}),
+    };
+  }
+
   // What the caller reads of every workload the routers report or list, with their tags and what they can do.
   async function listAll(identity: Identity) {
     const { summaries, workloads } = await reports();
@@ -826,14 +884,17 @@ export function createApi({
   const memberRoute = (method: string, [resource, a, b, action, extra]: string[]): boolean => {
     if (resource === 'preferences') return !a && (method === 'GET' || method === 'PUT');
     if (extra !== undefined) return false;
-    if (method === 'GET') return resource === 'workloads' && (!a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window')));
+    if (method === 'GET') {
+      if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window'));
+      return (resource === 'savings' || resource === 'alerts') ? !a : resource === 'operations' && !b;
+    }
     return method === 'POST' && resource === 'workloads' && !!a && !!b && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '');
   };
 
   async function route(method: string, parts: string[], identity: Identity, event: ApiEvent): Promise<ApiResponse> {
     const [resource, a, b, action] = parts;
     if (method === 'GET' && resource === 'me' && !a) return reply(200, me(identity));
-    // A member reaches their preferences and the routes of workloads, each filtered by
+    // A member reaches their preferences and the routes of workloads, savings, alerts and operations, each filtered by
     // their grants below: none of the fleet's other routes.
     if (identity.role === 'member' && !memberRoute(method, parts)) throw new HttpError(403, 'forbidden', 'viewer role required');
 
@@ -879,8 +940,17 @@ export function createApi({
 
     if (method === 'GET' && resource === 'alerts' && !a) {
       if (!alerts) return reply(200, { alarms: [], notifications: null });
-      const [open, { topicArn, subscriptions }] = await Promise.all([alerts.open(), alerts.subscriptions()]);
-      const shown = open.filter((alarm) => alarm.subject.kind !== 'router' || visible(identity, { account: alarm.subject.account, region: alarm.subject.region ?? '' }));
+      const builtIn = RANK[identity.role] >= RANK.viewer;
+      const [open, { topicArn, subscriptions }, index] = await Promise.all([
+        alerts.open(), alerts.subscriptions(), builtIn ? new Map<string, Record<string, string>>() : tagIndex(identity),
+      ]);
+      // Router, list and digest alarms are the built-in roles'; a workload's, whoever reads it.
+      const shown = open.filter((alarm) => {
+        const s = alarm.subject;
+        if (builtIn) return s.kind !== 'router' || visible(identity, { account: s.account, region: s.region ?? '' });
+        return s.kind === 'workload' && readsIn(identity, index, s.account, s.region, s.workloadId);
+      });
+      if (!builtIn) return reply(200, { alarms: shown.map(({ subject, level, since, problems }) => ({ ...subject, level, since, problems })), notifications: null });
       const confirmed = subscriptions.filter((x) => !x.pending).length;
       return reply(200, {
         alarms: shown.map(({ subject, level, since, problems }) => ({ ...subject, level, since, problems })),
@@ -930,7 +1000,12 @@ export function createApi({
     if (method === 'GET' && resource === 'savings' && !a) {
       // A failed read of the discounts never fails the summary (final review 2).
       const settings = fleet?.getSavingsSettings ? await fleet.getSavingsSettings().catch(() => null) : null;
-      return reply(200, { summary: (await fleet?.getSavingsSummary?.()) ?? null, settings });
+      const summary = (await fleet?.getSavingsSummary?.()) ?? null;
+      // A caller whose grants do not cover every workload: the sums of what they read, from the job's per-workload days.
+      if (!everyWorkload(identity, 'read')) {
+        return reply(200, { summary: summary ? await readableSavings(identity, summary) : null, settings: settings ? { compute: settings.compute, databases: settings.databases } : null });
+      }
+      return reply(200, { summary, settings });
     }
     // The discounts for commitments (R9.5): administrators set them, whole percentages from 0 to 90.
     if (method === 'PUT' && resource === 'savings' && a === 'settings' && !b) {
@@ -1500,9 +1575,21 @@ export function createApi({
   const ADMIN_TYPES = new Set(['install-router', 'upgrade-router', 'uninstall-router']);
   // The manager's updates are the administrators' (the Update page's), whatever the perimeter.
   const seesOperation = (identity: Identity, op: Operation) => (op.type === 'update-manager' ? RANK[identity.role] >= RANK.admin : sees(identity, op.target.account, op.target.region));
+  // The workload an offboarding or an onboarding (once its preview named the workload) concerns.
+  const workloadOf = (op: Operation) => {
+    const id = op.type === 'offboard' ? op.target.workloadId : op.type === 'onboard' ? op.context.workloadId : undefined;
+    return typeof id === 'string' ? { account: op.target.account, region: op.target.region, id } : null;
+  };
+  // A member reads the operations on the workloads they read; the others are the built-in roles'.
+  const readsOperation = (identity: Identity, index: Map<string, Record<string, string>>, op: Operation) => {
+    if (RANK[identity.role] >= RANK.viewer) return seesOperation(identity, op);
+    const w = workloadOf(op);
+    return w !== null && seesOperation(identity, op) && readsIn(identity, index, w.account, w.region, w.id);
+  };
   async function operationsRoute(method: string, id: string | undefined, identity: Identity, event: ApiEvent, ops: OperationsApi): Promise<ApiResponse | null> {
     if (method === 'GET' && !id) {
-      const shown = (await ops.list()).filter((op) => seesOperation(identity, op));
+      const index = RANK[identity.role] >= RANK.viewer ? new Map<string, Record<string, string>>() : await tagIndex(identity);
+      const shown = (await ops.list()).filter((op) => readsOperation(identity, index, op));
       // The running manager updates follow their requests (the install build does not write the records); as they are when
       // that fails (the next read tries again).
       const operations = update ? await update.refreshOperations(shown).catch((err: Error) => {
@@ -1513,7 +1600,8 @@ export function createApi({
     }
     if (method === 'GET' && id) {
       const op = await ops.get(decodeURIComponent(id));
-      if (!op || !seesOperation(identity, op)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
+      const index = op && RANK[identity.role] < RANK.viewer ? await tagIndex(identity) : new Map<string, Record<string, string>>();
+      if (!op || !readsOperation(identity, index, op)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
       return reply(200, op);
     }
     if (method !== 'POST' || id) return null;

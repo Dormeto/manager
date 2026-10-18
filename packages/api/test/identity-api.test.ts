@@ -76,7 +76,7 @@ describe('identity', () => {
 
   it('a member has none of the fleet routes, but reads who they are and keeps their preferences', async () => {
     const s = setup();
-    for (const path of ['/api/routers', '/api/savings', '/api/alerts', '/api/operations', '/api/audit']) {
+    for (const path of ['/api/routers', '/api/audit', '/api/users', '/api/discovery/candidates', '/api/exclusions']) {
       const res = await s.api(event(path, 'payments'));
       expect([path, res.statusCode]).toEqual([path, 403]);
     }
