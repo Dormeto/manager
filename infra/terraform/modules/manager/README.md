@@ -31,6 +31,9 @@ AWS sends; other channels subscribe to the `alerts_topic_arn` output), `ip_lists
 downloads once for every router: `name`, `url`, `action` defer or ignore, `refresh_hours`; no secret in a URL, readable by
 the organization).
 
+A daily check for new manager versions runs from a function of its own (`<name>-update-check`, scheduled at 07:00 UTC); it does
+nothing until an administrator turns it on in the Update page, and may publish to the alert topic then.
+
 To uninstall: offboard the workloads and uninstall the routers from the manager, turn event-driven refresh off and let a
 discovery run disconnect the accounts (Run now), then set `deletion_protection = false`, apply, and `terraform destroy`.
 

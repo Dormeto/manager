@@ -51,7 +51,7 @@ time per target group, router or workload, one per load balancer (lock), three p
   `wake-failed:<kind>`): one alert per kind across retries, "woke again" when the entry leaves; failing again more than
   15 minutes after waking is a new alert (routers and lists are damped 6 hours). Each message is published
   with `MessageStructure: json`: the text for `email` (and `default`), an Amazon Q Developer custom notification for
-  `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`), `account`,
+  `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`, `update`), `account`,
   `region`, `router` and `workload` for subscription filter policies (for example `{"kind": ["workload"], "account":
   ["123456789012"]}` for one team's channel).
 - **Chat:** an Amazon Q Developer in chat applications channel (Slack or Microsoft Teams) subscribed to
@@ -62,6 +62,23 @@ time per target group, router or workload, one per load balancer (lock), three p
   Onboarding takes `fallbackInstanceTypes` (at most 5) and `failedRetrySeconds` (10 to 600), checked by the API.
 - **Access:** fallback instance types need `ec2:ModifyInstanceAttribute` in DmtRouterBoundary (router 0.25.0's
   `router-boundary.json`): apply the access module or the AWS CLI script of 0.5.0 again in every member account.
+
+## Daily update check
+
+- **Setting:** off until an administrator turns it on in the Update page ("Check daily for new versions"), with a second
+  choice, "Also send it to the alert topic". Stored as `UPDATE#CHECK` (`enabled`, `alert`, `updatedAt`, `updatedBy`); the
+  last result as `UPDATE#RESULT` (`checkedAt`, `running`, `latest`, `error`, `notified`).
+- **Run:** the `dmt-<env>-manager-update-check` function, scheduled at 07:00 UTC (`cron(0 7 * * ? *)`, no retry: the next day
+  tries again). Off, it reads the setting and stops. On, it reads `versions.json` of the releases site (else `latest.json`,
+  5 seconds at most), keeps the newest version above the one running and records it; an unreadable index is recorded as
+  an error and sends nothing. Run it by hand from the Lambda console to try it (any test event).
+- **Alert:** with the alert chosen, a newer version than the last one sent (`notified`) is published once to
+  `dmt-<env>-manager-alerts`: subject `[Dormeto <env>] Manager <version> is available`, the running version, the release
+  notes and the Update page's link, with the attributes `kind = update` and `level = info`. `info` is a new level:
+  filter policies on `level` (`warning`, `error`) do not receive it unless widened (`{"level": ["warning", "error",
+  "info"]}`); one channel can take only these with `{"kind": ["update"]}`.
+- **Dashboard:** administrators see a notice on the Overview while the last result names a newer version, until they
+  dismiss it for that version.
 
 ## State history
 

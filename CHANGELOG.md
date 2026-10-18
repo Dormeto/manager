@@ -5,6 +5,17 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- A daily check for new manager versions, off until an administrator turns it on in the Update page's "Daily check" card.
+  A function (`<name>-update-check`, with its role and an EventBridge schedule at 07:00 UTC) reads the setting, then the
+  release index, and records the newest version above the running one. Administrators see a notice on the Overview
+  (dismissed per version, kept in their preferences); when chosen, the version is also sent once to the alert topic
+  (attributes `kind = update`, `level = info`, a new level that the `warning` and `error` filter policies do not receive).
+  New routes `GET` and `PUT /api/update/check` (administrators, the change audited); `PUT /api/preferences` accepts
+  `dismissedUpdate`. The module gains the function, its log group, role, scheduler role and schedule; the release
+  carries `lambda/update-check.zip`.
+
 ## 0.13.0 — 2026-10-18
 
 Router 0.29.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
