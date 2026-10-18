@@ -8,17 +8,17 @@ const READ = [{ tags: { team: 'payments' }, permissions: ['read'] }];
 
 interface Stored { name: string; description: string; grants: unknown[]; updatedAt: string | null; updatedBy: string | null }
 
-function setup({ groups = [] as Stored[], cognitoOnly = [] as string[] } = {}) {
+function setup({ groups = [] as Stored[], cognitoOnly = [] as string[], adopt = new Set<string>(), listed = [{ email: 'a@example.com', role: 'member' as const, groups: ['payments', 'hand-made'], status: 'CONFIRMED', enabled: true, createdAt: null }] } = {}) {
   const calls: unknown[][] = [];
   const audit: AuditEntry[] = [];
   const store = new Map(groups.map((g) => [g.name, g]));
   const users: UsersService = {
-    async list() { calls.push(['list']); return [{ email: 'a@example.com', role: 'member', groups: ['payments'], status: 'CONFIRMED', enabled: true, createdAt: null }]; },
+    async list() { calls.push(['list']); return listed; },
     async invite(email, role, groups) { calls.push(['invite', email, role, groups]); return { invitation: 'sent' }; },
     async resend() { return { invitation: 'sent' }; },
     async setRole(email, role) { calls.push(['role', email, role]); },
-    async setGroups(email, names) { calls.push(['set-groups', email, names]); },
-    async createGroup(name, description) { calls.push(['cognito-create', name, description]); },
+    async setGroups(email, names, managed) { calls.push(['set-groups', email, names, managed]); },
+    async createGroup(name, description) { calls.push(['cognito-create', name, description]); return { adopted: adopt.has(name) }; },
     async updateGroup(name, description) { calls.push(['cognito-update', name, description]); },
     async deleteGroup(name) { calls.push(['cognito-delete', name]); },
     async groupNames() { return [...new Set([...store.keys(), ...cognitoOnly])]; },
@@ -72,6 +72,12 @@ describe('groups: list and create', () => {
     expect(json(res).group).toEqual({ name: 'payments', description: 'The payments team', grants: READ, updatedAt: new Date(NOW).toISOString(), updatedBy: 'admin@example.com' });
     expect(s.calls).toEqual([['cognito-create', 'payments', 'The payments team'], ['put', 'payments']]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'group-create', target: 'payments', result: '1 grant', who: 'admin@example.com' });
+  });
+
+  it('says in the audit when the group adopted one that existed in the pool', async () => {
+    const s = setup({ adopt: new Set(['legacy']) });
+    expect((await s.api(event('POST', '/api/groups', 'dmt-admin', { name: 'legacy', grants: READ }))).statusCode).toBe(201);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'group-create', result: '1 grant, adopted an existing Cognito group' });
   });
 
   it('a group without grants or description is created empty', async () => {
@@ -168,7 +174,7 @@ describe('groups: write seen at once', () => {
 });
 
 describe('users: members and groups', () => {
-  it('lists each user\'s role and groups', async () => {
+  it('lists each user\'s role and the groups Dormeto manages, not the pool\'s other groups', async () => {
     const s = setup({ groups: [PAYMENTS] });
     expect(json(await s.api(event('GET', '/api/users', 'dmt-admin'))).users).toEqual([{ email: 'a@example.com', role: 'member', groups: ['payments'], status: 'CONFIRMED', enabled: true, createdAt: null }]);
   });
@@ -197,7 +203,7 @@ describe('users: members and groups', () => {
     const s = setup({ groups: [PAYMENTS, { ...PAYMENTS, name: 'search' }] });
     const res = await s.api(event('PUT', '/api/users/A%40example.com/groups', 'dmt-admin', { groups: ['search', 'payments'] }));
     expect([res.statusCode, json(res)]).toEqual([200, { email: 'a@example.com', groups: ['search', 'payments'] }]);
-    expect(s.calls).toEqual([['set-groups', 'a@example.com', ['search', 'payments']]]);
+    expect(s.calls).toEqual([['set-groups', 'a@example.com', ['search', 'payments'], ['payments', 'search']]]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'user-groups', target: 'a@example.com', result: 'search, payments' });
     await s.api(event('PUT', '/api/users/a%40example.com/groups', 'dmt-admin', { groups: [] }));
     expect(s.audit.at(-1)).toMatchObject({ result: 'no groups' });

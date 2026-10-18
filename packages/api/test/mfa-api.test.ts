@@ -13,7 +13,7 @@ function setup(mode: MfaMode, enrolled: Set<string> = new Set(), failing = false
     async invite() { return { invitation: 'sent' as const }; },
     async resend() { return { invitation: 'sent' as const }; },
     async setRole() {},
-    async setGroups() {}, async createGroup() {}, async updateGroup() {}, async deleteGroup() {}, async groupNames() { return [] as string[]; },
+    async setGroups() {}, async createGroup() { return { adopted: false }; }, async updateGroup() {}, async deleteGroup() {}, async groupNames() { return [] as string[]; },
     async setEnabled() {},
     async resetMfa(email: string) { resets.push(email); return { tokenDeleted: true }; },
   } satisfies UsersService;

@@ -93,17 +93,43 @@ describe('users service', () => {
 
   it('sets a user\'s custom groups: adds the missing, removes the others, never touches a built-in group', async () => {
     const { users, calls } = fakes();
-    await users.setGroups('bob@example.com', ['search', 'ops']);
+    await users.setGroups('bob@example.com', ['search', 'ops'], ['payments', 'search', 'ops']);
     expect(calls).toEqual([['groups-of', 'bob@example.com', null], ['add', 'bob@example.com', 'ops'], ['remove', 'bob@example.com', 'payments']]);
     calls.length = 0;
-    await users.setGroups('u-admin', []);
+    await users.setGroups('u-admin', [], ['payments']);
     expect(calls).toEqual([['groups-of', 'u-admin', null], ['groups-of', 'u-admin', 'g2'], ['remove', 'u-admin', 'payments']]);
+  });
+
+  it('leaves the groups made by hand in the pool as they are: only the groups Dormeto manages are removed', async () => {
+    const { users, calls } = fakes();
+    await users.setGroups('bob@example.com', [], ['search']);
+    expect(calls).toEqual([['groups-of', 'bob@example.com', null], ['remove', 'bob@example.com', 'search']]);
+  });
+
+  it('reads the groups and the MFA of every user in one pass, eight users at a time, and fails when a groups read fails', async () => {
+    let running = 0;
+    let peak = 0;
+    const tracked = async <T>(value: T): Promise<T> => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, 2)); running--; return value; };
+    const crowd = Array.from({ length: 30 }, (_, i) => ({ Username: `u${i}`, Attributes: [{ Name: 'email', Value: `u${i}@example.com` }], UserStatus: 'CONFIRMED', Enabled: true }));
+    const port = (failing?: string) => ({
+      async listUsers() { return { Users: crowd }; },
+      adminListGroupsForUser: ({ Username }: { Username: string }) => tracked(Username === failing ? Promise.reject(new Error('throttled')) : { Groups: [{ GroupName: 'payments' }] }).then((x) => x),
+      adminGetUser: () => tracked({ UserMFASettingList: [] as string[] }),
+      ...groupsUnused,
+      async adminCreateUser() { return {}; }, async adminAddUserToGroup() { return {}; }, async adminRemoveUserFromGroup() { return {}; },
+      async adminDisableUser() { return {}; }, async adminEnableUser() { return {}; }, async adminSetUserMFAPreference() { return {}; },
+    });
+    const ses = { getAccount: async () => ({}), getEmailIdentity: async () => ({}), createEmailIdentity: async () => ({}) };
+    const listed = await createUsers({ cognito: port(), ses, userPoolId: 'pool', sender: 'cognito' }).list();
+    expect(listed).toHaveLength(30);
+    expect(peak).toBe(8);
+    await expect(createUsers({ cognito: port('u17'), ses, userPoolId: 'pool', sender: 'cognito' }).list()).rejects.toThrow('throttled');
   });
 
   it('creates, describes and deletes a Cognito group; a group that exists is adopted, one already gone is deleted', async () => {
     const { users, calls } = fakes();
-    await users.createGroup('payments', 'The payments team');
-    await users.createGroup('dup', '');
+    expect(await users.createGroup('payments', 'The payments team')).toEqual({ adopted: false });
+    expect(await users.createGroup('dup', '')).toEqual({ adopted: true });
     await users.updateGroup('payments', 'Payments');
     await users.deleteGroup('payments');
     await users.deleteGroup('gone');

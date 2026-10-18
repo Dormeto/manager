@@ -89,8 +89,9 @@ export interface UsersService {
   resend(email: string): Promise<{ invitation: 'sent' }>;
   setRole(email: string, role: Role): Promise<void>;
   // Custom groups (R11): their membership, and their Cognito groups' lifecycle (the grants are the fleet store's).
-  setGroups(email: string, groups: string[]): Promise<void>;
-  createGroup(name: string, description: string): Promise<void>;
+  // `managed`: the groups Dormeto keeps (those of the fleet store); other groups of the pool are left as they are.
+  setGroups(email: string, groups: string[], managed: string[]): Promise<void>;
+  createGroup(name: string, description: string): Promise<{ adopted: boolean }>;
   updateGroup(name: string, description: string): Promise<void>;
   deleteGroup(name: string): Promise<void>;
   groupNames(): Promise<string[]>;
@@ -1404,7 +1405,11 @@ export function createApi({
 
     if (resource === 'users' && users) {
       need(identity, 'admin');
-      if (method === 'GET' && !a) return reply(200, { users: await users.list() });
+      if (method === 'GET' && !a) {
+        // Only the groups Dormeto keeps; the pool's other groups are none of its business.
+        const managed = new Set((await fleet?.listGroups?.() ?? []).map((g) => g.name));
+        return reply(200, { users: (await users.list()).map((u) => ({ ...u, groups: u.groups.filter((g) => managed.has(g)) })) });
+      }
       if (method === 'POST' && !a) {
         const body = bodyOf(event);
         const email = String(body.email ?? '').trim().toLowerCase();
@@ -1434,8 +1439,9 @@ export function createApi({
       }
       if (method === 'PUT' && b === 'groups' && !action) {
         const groups = await knownGroups(bodyOf(event).groups);
+        const managed = (await fleet?.listGroups?.() ?? []).map((g) => g.name);
         return audited(identity, 'user-groups', email, async () => {
-          await users.setGroups(email, groups);
+          await users.setGroups(email, groups, managed);
           return { result: groups.length ? groups.join(', ') : 'no groups', response: reply(200, { email, groups }) };
         });
       }
@@ -1500,13 +1506,14 @@ export function createApi({
       if (new Set([...stored.map((g) => g.name), ...await svc.groupNames()]).size >= GROUPS_MAX) throw new HttpError(400, 'bad_request', `at most ${GROUPS_MAX} groups`);
       const group = written({ name: groupName as string, ...next });
       return audited(identity, 'group-create', group.name, async () => {
+        let adopted = false;
         try {
-          await svc.createGroup(group.name, group.description);
+          ({ adopted } = await svc.createGroup(group.name, group.description));
           await store.putGroup({ ...group, updatedBy: identity.email });
         } finally {
           groupGrants.changed();
         }
-        return { result: plural(group.grants.length, 'grant'), response: reply(201, { group }) };
+        return { result: `${plural(group.grants.length, 'grant')}${adopted ? ', adopted an existing Cognito group' : ''}`, response: reply(201, { group }) };
       });
     }
 

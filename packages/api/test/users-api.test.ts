@@ -9,7 +9,7 @@ function setup() {
     async invite(email, role, groups) { calls.push(['invite', email, role, groups]); return { invitation: email.endsWith('@new.example') ? 'pending-verification' : 'sent' }; },
     async resend(email) { calls.push(['resend', email]); if (email === 'unverified@example.com') throw new HttpError(409, 'conflict', 'address not verified yet'); return { invitation: 'sent' }; },
     async setRole(email, role) { calls.push(['role', email, role]); },
-    async setGroups() {}, async createGroup() {}, async updateGroup() {}, async deleteGroup() {}, async groupNames() { return []; },
+    async setGroups() {}, async createGroup() { return { adopted: false }; }, async updateGroup() {}, async deleteGroup() {}, async groupNames() { return []; },
     async setEnabled(email, enabled) { calls.push([enabled ? 'enable' : 'disable', email]); },
     async resetMfa(email) { calls.push(['mfa-reset', email]); return { tokenDeleted: true }; },
   };
