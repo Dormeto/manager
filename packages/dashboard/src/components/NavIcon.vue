@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The navigation's own icons: drawn for Dormeto (a line in the text's color, one part in the sun's), each with a small
 // motion when its item is pointed at or active (styled in style.css, .dm-nav-icon).
-defineProps<{ name: 'overview' | 'workloads' | 'routers' | 'discovery' | 'operations' | 'users' | 'audit' }>();
+defineProps<{ name: 'overview' | 'workloads' | 'routers' | 'discovery' | 'operations' | 'users' | 'audit' | 'update' }>();
 </script>
 
 <template>
@@ -45,6 +45,10 @@ defineProps<{ name: 'overview' | 'workloads' | 'routers' | 'discovery' | 'operat
       <path class="ni-line" d="M2.8 20c.7-3.6 3.2-5.5 6.2-5.5s5.5 1.9 6.2 5.5" />
       <circle class="ni-accent ni-second" cx="17" cy="9.5" r="2.6" />
       <path class="ni-line ni-second" d="M16.5 14.6c2.4.2 4.2 1.9 4.7 4.9" />
+    </template>
+    <template v-else-if="name === 'update'">
+      <circle class="ni-line" cx="12" cy="12" r="9" />
+      <path class="ni-accent-line ni-arrow" d="M12 16.5v-9M8.2 11.2L12 7.4l3.8 3.8" />
     </template>
     <template v-else>
       <rect class="ni-line" x="5" y="3.5" width="14" height="17.5" rx="2.5" />

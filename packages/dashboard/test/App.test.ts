@@ -56,4 +56,16 @@ describe('App', () => {
     expect(allowed.find('.dm-me__role').text()).toBe('Role: operator');
     allowed.unmount();
   });
+
+  it('offers the Update page to an administrator, after Audit, and not to an operator', async () => {
+    const admin = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    const titles = admin.findAll('.dm-nav-item').map((i) => i.text());
+    expect(titles).toContain('Update');
+    expect(titles.indexOf('Update')).toBe(titles.indexOf('Audit') + 1);
+    expect(admin.find('.dm-nav-icon--update').exists()).toBe(true);
+    admin.unmount();
+    const operator = await mountSignedIn({ email: 'ops@example.com', role: 'operator', effectiveRole: 'operator' });
+    expect(operator.findAll('.dm-nav-item').map((i) => i.text())).not.toContain('Update');
+    operator.unmount();
+  });
 });

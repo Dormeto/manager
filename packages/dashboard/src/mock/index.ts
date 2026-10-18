@@ -12,6 +12,7 @@ import {
 } from './actions';
 import { AVAILABLE } from './fixtures';
 import { ME } from './org';
+import { updateChanges, updateRequest, updateState } from './update';
 import { MockError, advance, fail, lintOf, pausesOf, routerOf, state, workloadOf, type Demo } from './state';
 import {
   accessReport, alerts, candidateView, exclusionView, fleetStates, idleAdvice, ipLists, operationView, routerDetails, routerRow, savingsSummary, workloadHistory,
@@ -61,6 +62,12 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
   if (method === 'GET' && resource === 'ip-lists' && !a) return ipLists(now);
   if (method === 'GET' && resource === 'alerts' && !a) return alerts(d);
   if (method === 'GET' && resource === 'audit' && !a) return { entries: d.audit };
+  if (resource === 'update') {
+    if (method === 'GET' && !a) return updateState(now);
+    if (method === 'GET' && a === 'changes') return updateChanges(q.get('to'));
+    if (method === 'POST' && a === 'plan') return updateRequest('plan', String(body.version ?? ''), now);
+    if (method === 'POST' && a === 'apply') return updateRequest('apply', updateState(now).versions[0]!.version, now, String(body.planBuild ?? ''));
+  }
   if (resource === 'users') return userAction(d, method, a, b, action, body, now);
 
   if (resource === 'routers') {

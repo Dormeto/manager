@@ -27,7 +27,7 @@ const item = (title: string, to: string, icon: NavItem['icon'], badge?: number):
 const groups = computed<{ title: string; items: NavItem[] }[]>(() => [
   { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), item('Routers', '/routers', 'routers')] },
   { title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending), item('Operations', '/operations', 'operations')] },
-  ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit')] }] : []),
+  ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update')] }] : []),
 ]);
 const initials = computed(() => (session.email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?');
 // The role, and the one the user acts with when MFA lowers it (nothing at all under "required"): in the account menu and

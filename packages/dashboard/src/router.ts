@@ -17,6 +17,7 @@ export const router = createRouter({
     { path: '/discovery/settings', name: 'discovery-settings', component: () => import('./views/DiscoverySettingsView.vue'), meta: { admin: true } },
     { path: '/users', name: 'users', component: () => import('./views/UsersView.vue'), meta: { admin: true } },
     { path: '/audit', name: 'audit', component: () => import('./views/AuditView.vue'), meta: { admin: true } },
+    { path: '/update', name: 'update', component: () => import('./views/UpdateView.vue'), meta: { admin: true } },
     { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },
     { path: '/callback', name: 'callback', component: () => import('./views/CallbackView.vue'), meta: { public: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
