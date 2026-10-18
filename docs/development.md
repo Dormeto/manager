@@ -9,7 +9,7 @@ Building, testing and running the manager in a development environment, and rele
 | `dev` | `https://app.dev.dormeto.com` | `https://auth.app.dev.dormeto.com` | `dmt-dev` |
 
 Roles come from the Cognito groups: `dmt-viewer` (read), `dmt-operator` (nap, wake), `dmt-admin` (users, audit).
-Users are invited by administrators; the first administrators are set in the install's settings (`dev/install.json` in the install bucket, `--var` changes them).
+Users are invited by administrators; the first administrators are the install's `--admin-emails` (kept in `dev/install.json` in the install bucket; `dormeto install --admin-emails …` changes them).
 
 ## Usage
 
