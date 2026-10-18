@@ -412,10 +412,12 @@ export function createApi({
     const tags = (w as { tags?: unknown } | null | undefined)?.tags;
     return tags && typeof tags === 'object' && !Array.isArray(tags) ? tags as Record<string, string> : {};
   };
+  const carriesTags = (w: object | null | undefined) => { const tags = (w as { tags?: unknown } | null | undefined)?.tags; return !!tags && typeof tags === 'object' && !Array.isArray(tags); };
   // The caller's grants give the permission on every workload (the built-in roles'), whatever the tags: nothing to look up.
   const everyWorkload = (identity: Identity, permission: Permission) => can(identity.grants, undefined, permission);
+  // The tags are returned only when the source carries them (a router before 0.30.0 sends none: unknown, not empty).
   const withAccess = <T extends object>(identity: Identity, w: T) => ({
-    ...w, tags: tagsOf(w), can: { wake: can(identity.grants, tagsOf(w), 'wake'), nap: can(identity.grants, tagsOf(w), 'nap') },
+    ...w, ...(carriesTags(w) ? { tags: tagsOf(w) } : {}), can: { wake: can(identity.grants, tagsOf(w), 'wake'), nap: can(identity.grants, tagsOf(w), 'nap') },
   });
   const workloadKey = (account: string, region: string, id: string) => `${account}#${region}#${id}`;
   // The tags of every workload, by key, for the routes that filter other records (savings, alerts, operations): only
@@ -1261,10 +1263,10 @@ export function createApi({
           statesOf(accountOfRouter(router), router.region, id, summary),
           discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
         ]);
-        const access = withAccess(identity, { tags: tagsOf((await reportsNow()) ? summary : status) });
+        const access = withAccess(identity, (((await reportsNow()) ? summary : status) ?? {}) as object);
         return reply(200, {
           // Its account and region: the ARNs of its backends and targets.
-          ...(status as object), tags: access.tags, can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
+          ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
         });
       }
@@ -1860,6 +1862,9 @@ export function createApi({
       if (body.tags !== undefined) {
         const problem = tagsProblem(body.tags);
         if (problem) throw new HttpError(400, 'bad_request', problem);
+        if (Object.keys(body.tags as object).length > 0 && RANK[identity.role] < RANK.admin) {
+          await refuse(identity, 'onboard', name ? `${candidateId} as ${name}` : candidateId, 'admin role required to set tags at onboarding');
+        }
       }
       input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [], ...(body.tags !== undefined ? { tags: body.tags } : {}) };
       target = name ? `${candidateId} as ${name}` : candidateId;

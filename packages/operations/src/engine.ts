@@ -257,6 +257,9 @@ export function createEngine(deps: EngineDeps) {
       ...(kubernetes ? { kubernetes } : {}),
     });
     if (!preview?.workloadId) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.20.0: upgrade it to onboard`);
+    // A router before 0.30.0 ignores the tags: its preview does not echo them, so refuse rather than onboard without.
+    const wanted = op.input.tags && typeof op.input.tags === 'object' ? Object.keys(op.input.tags).length : 0;
+    if (wanted > 0 && !preview.tags) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.30.0: upgrade it to onboard with tags`);
     op.context.workloadId = preview.workloadId;
     op.context.name = preview.name;
     return preview as { ok: boolean; problems?: string[]; workloadId: string; name: string };

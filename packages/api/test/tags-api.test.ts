@@ -40,10 +40,21 @@ const ids = async (s: ReturnType<typeof setup>, query: Record<string, string>) =
 };
 
 describe('the tag filter of the workloads list', () => {
-  it('lists the tags of each workload, {} without', async () => {
+  it('lists the tags of each workload, none for one whose source carries none (a router before 0.30.0), with `can` still answered', async () => {
     const s = setup();
     const rows = json(await s.api(event('GET', '/api/workloads', 'dmt-viewer'))).workloads;
-    expect(rows.map((w: { tags: unknown }) => w.tags)).toEqual([{ team: 'payments', env: 'prod' }, { team: 'payments', env: 'staging' }, { team: 'search', env: 'prod' }, {}]);
+    expect(rows.map((w: { tags?: unknown }) => w.tags)).toEqual([{ team: 'payments', env: 'prod' }, { team: 'payments', env: 'staging' }, { team: 'search', env: 'prod' }, undefined]);
+    expect(rows[3]).not.toHaveProperty('tags');
+    expect(rows[3].can).toEqual({ wake: false, nap: false });
+  });
+
+  it('omits the tags of a workload read live from a router that reports none', async () => {
+    const s = setup(async (_r, payload) => (payload.action === 'status' ? { workloadId: 'plain', state: 'AWAKE' } : null));
+    const res = json(await s.api(event('GET', '/api/workloads/dmt-dev/plain', 'dmt-operator')));
+    expect(res).not.toHaveProperty('tags');
+    expect(res.can).toBeDefined();
+    const s2 = setup(async (_r, payload) => (payload.action === 'status' ? { workloadId: 'pay', state: 'AWAKE', tags: { team: 'payments' } } : null));
+    expect(json(await s2.api(event('GET', '/api/workloads/dmt-dev/pay', 'dmt-operator'))).tags).toEqual({ team: 'payments' });
   });
 
   it('keeps the workloads with the tag; several tags must all match, repeated or joined by commas as the gateway sends them', async () => {
@@ -132,18 +143,28 @@ describe('the tags of an onboarding', () => {
       discovery: { store: { getCandidate: async () => candidate, getAccountScan: async () => null } as never, run: async () => {} },
       operations: { async create(_t: string, input: Record<string, unknown>) { created.push(input); return { id: 'op1' }; }, list: async () => [], get: async () => null, installedRouters: async () => [] } as never,
     });
-    return { api, created };
+    return { api, created, audit };
   }
 
   it('passes valid tags to the operation, none when not given, and refuses bad ones with 400', async () => {
     const s = withDiscovery();
     const post = (body: Record<string, unknown>) => s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: candidate.targetGroupArn, ...body }));
-    expect((await post({ tags: { team: 'payments' } })).statusCode).toBe(202);
+    const admin = (body: Record<string, unknown>) => s.api(event('POST', '/api/operations', 'dmt-admin', { type: 'onboard', candidateId: candidate.targetGroupArn, ...body }));
+    expect((await admin({ tags: { team: 'payments' } })).statusCode).toBe(202);
     expect((await post({})).statusCode).toBe(202);
+    expect((await post({ tags: {} })).statusCode).toBe(202);
     expect(s.created[0]).toMatchObject({ tags: { team: 'payments' } });
     expect(s.created[1]).not.toHaveProperty('tags');
     const bad = await post({ tags: { 'dormeto:x': '1' } });
     expect([bad.statusCode, json(bad).message]).toEqual([400, 'tag "dormeto:x": the dormeto: prefix is reserved']);
-    expect(s.created).toHaveLength(2);
+    expect(s.created).toHaveLength(3);
+  });
+
+  it('refuses tags at onboarding to an operator with 403, audited, and creates nothing', async () => {
+    const s = withDiscovery();
+    const res = await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: candidate.targetGroupArn, tags: { team: 'payments' } }));
+    expect([res.statusCode, json(res).error]).toEqual([403, 'forbidden']);
+    expect(s.created).toEqual([]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'onboard', result: 'refused', who: 'ops@example.com' });
   });
 });

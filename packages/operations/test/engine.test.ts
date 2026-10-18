@@ -44,11 +44,11 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = 
   } as unknown as DiscoveryStore;
   // The router functions of the target account: onboarder and controller actions.
   const invocations: [string, Record<string, unknown>][] = [];
-  const router = { state: 'AWAKE', previewOk: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600, clusterChecks: {} as Record<string, unknown> };
+  const router = { state: 'AWAKE', previewOk: true, echoesTags: true, workloads: 0, source: 'manager', controllerGone: false, wakeTimeout: 600, clusterChecks: {} as Record<string, unknown> };
   const invocationsPaused: Record<string, unknown>[] = [];
   const answers: Record<string, (p: Record<string, unknown>) => unknown> = {
     // Routers 0.20.0 and later derive the workload id from the target group (vision onboarding design, section 7).
-    preview: (p) => (router.previewOk ? { ok: true, problems: [], workloadId: WORKLOAD_ID, name: p.name ?? 'paris-app' } : { ok: false, workloadId: WORKLOAD_ID, name: 'paris-app', problems: ['no backend: no instance, Auto Scaling group or ECS service feeds the target group'] }),
+    preview: (p) => (router.previewOk ? { ok: true, problems: [], workloadId: WORKLOAD_ID, name: p.name ?? 'paris-app', ...(router.echoesTags && p.tags ? { tags: p.tags } : {}) } : { ok: false, workloadId: WORKLOAD_ID, name: 'paris-app', problems: ['no backend: no instance, Auto Scaling group or ECS service feeds the target group'] }),
     onboard: (p) => ({ steps: [{ name: 'tag backends', status: 'done' }], workload: { workloadId: p.workloadId, wakerTargetGroupArn: 'arn:waker' } }),
     offboard: () => ({ steps: [{ name: 'restore rules', status: 'done' }] }),
     status: () => ({ state: router.state, name: 'Paris', source: router.source, route: 'app', issues: [], targetGroupArn: TG, rules: [{ arn: RULE }], settings: { wakeTimeoutSeconds: router.wakeTimeout } }),
@@ -132,6 +132,17 @@ describe('operations engine', () => {
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
     expect(s.invocations[0]![1]).toMatchObject({ action: 'preview', tags: { team: 'payments' } });
     expect(s.invocations[1]![1]).toMatchObject({ action: 'onboard', tags: { team: 'payments' } });
+  });
+
+  it('fails an onboarding with tags when the router\'s preview does not echo them (a router before 0.30.0)', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    s.router.echoesTags = false;
+    const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {}, tags: { team: 'payments' } }, 'ops@example.com');
+    await s.drive(op.id);
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.status).toBe('failed');
+    expect(JSON.stringify(stored.steps)).toContain('router dmt-dev is older than 0.30.0: upgrade it to onboard with tags');
+    expect(s.invocations.map(([, p]) => p.action)).toEqual(['preview']);
   });
 
   it('installs the router of a new account and region first, waiting for the table and the IAM propagation, and registers it', async () => {
