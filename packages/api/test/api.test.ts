@@ -20,7 +20,7 @@ function setup(invoke: Invoke) {
   return { api, audit };
 }
 
-function event(method: string, path: string, groups: string | null = null, body?: unknown): ApiEvent {
+function event(method: string, path: string, groups: string | null = 'dmt-viewer', body?: unknown): ApiEvent {
   const claims: Record<string, string> = { email: 'ops@example.com', sub: 'u-1' };
   if (groups !== null) claims['cognito:groups'] = `[${groups}]`;
   return {
@@ -40,11 +40,11 @@ describe('health and identity', () => {
     expect(json(res)).toEqual({ status: 'ok', version: '0.1.0' });
   });
 
-  it('derives the role from the highest Cognito group, viewer by default', async () => {
+  it('derives the role from the highest built-in Cognito group, member by default', async () => {
     const { api } = setup(async () => ({}));
-    expect(json(await api(event('GET', '/api/me', 'dmt-viewer dmt-admin')))).toEqual({ email: 'ops@example.com', groups: ['dmt-viewer', 'dmt-admin'], role: 'admin', effectiveRole: 'admin' });
+    expect(json(await api(event('GET', '/api/me', 'dmt-viewer dmt-admin')))).toEqual({ email: 'ops@example.com', groups: [], role: 'admin', effectiveRole: 'admin', grants: [{ tags: {}, permissions: ['read', 'wake', 'nap'] }] });
     expect(json(await api(event('GET', '/api/me', 'dmt-operator'))).role).toBe('operator');
-    expect(json(await api(event('GET', '/api/me'))).role).toBe('viewer');
+    expect(json(await api(event('GET', '/api/me', null))).role).toBe('member');
   });
 
   it('rejects calls without identity', async () => {

@@ -5,8 +5,10 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
+import { builtInGrants, effective, type Grant } from './access.js';
+import { createGroupGrants } from './group-grants.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
@@ -118,8 +120,9 @@ export interface Identity {
   sub: string;
   username: string; // cognito:username, the user's name in the user pool
   email: string;
-  groups: string[];
+  groups: string[]; // the custom groups only (the built-in ones give the role)
   role: Role;
+  grants: Grant[]; // what the user may do: their role's and their groups' grants, read only without the MFA the policy requires
   amr: string[] | null; // how this session signed in (the ID token's amr); null when the token has none
 }
 
@@ -131,11 +134,13 @@ export const mfaSession = (identity: Identity): boolean | null => identity.amr &
 export function identityOf(event: ApiEvent): Identity | null {
   const claims = event.requestContext.authorizer?.jwt?.claims;
   if (!claims?.sub) return null;
-  const groups = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
+  const all = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   const amr = claims.amr === undefined || claims.amr === '' ? null : claims.amr.replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
-  const role = groups.map((g) => GROUPS[g]).filter((r): r is Role => r !== undefined)
-    .reduce<Role>((best, r) => (RANK[r] > RANK[best] ? r : best), 'viewer');
-  return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role, amr };
+  // No built-in group: a member, who sees workloads by their groups' grants only.
+  const role = all.map((g) => GROUPS[g]).filter((r): r is Role => r !== undefined)
+    .reduce<Role>((best, r) => (RANK[r] > RANK[best] ? r : best), 'member');
+  const groups = all.filter((g) => !g.startsWith('dmt-'));
+  return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role, grants: builtInGrants(role), amr };
 }
 
 // 'app' only for two factors (otp and mfa): a session that stopped at the password is 'password'.
@@ -167,6 +172,8 @@ export interface ApiOptions {
   // Routers and workloads as the routers report them (scale design §4): read instead of calling every router.
   fleet?: {
     listRouters(): Promise<RouterSummary[]>; listWorkloads(): Promise<WorkloadSummary[]>; getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null>;
+    // The custom groups' grants (R11).
+    listGroups?(): Promise<Group[]>;
     // The state history (R8).
     listHistory?(account: string, region: string, id: string, from: string, to: string): Promise<{ entries: HistoryEntry[]; truncated: boolean }>;
     historyBefore?(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null>;
@@ -380,13 +387,18 @@ export function createApi({
     return enabled;
   }
   // The role a user's groups give, the role they act with, and their MFA, per request.
-  const claimed = new WeakMap<Identity, { role: Role; enabled: boolean | null; effective: Role | null }>();
-  const mfaRequired = (role: Role) => !!mfa && (mfa.mode === 'required' || (mfa.mode === 'operators' && role !== 'viewer'));
+  const claimed = new WeakMap<Identity, { role: Role; enabled: boolean | null; effective: Role | null; required: boolean }>();
+  // In operators mode: operators and administrators, and anyone a group lets wake or nap.
+  const mfaRequired = (role: Role, groupGrants: Grant[][]) => !!mfa && (mfa.mode === 'required'
+    || (mfa.mode === 'operators' && (role === 'operator' || role === 'admin' || groupGrants.some((grants) => grants.some((g) => g.permissions.some((p) => p !== 'read'))))));
+  // The custom groups' grants, read from the fleet store once a minute (tags design §4).
+  const groupGrants = createGroupGrants({ list: async () => (await fleet?.listGroups?.()) ?? [], now });
   // amr counts only where the pool offers passkeys: otherwise the enrollment decides, as before.
   const session = (identity: Identity): boolean | null => (mfa?.passkeys ? mfaSession(identity) : null);
   async function applyMfa(identity: Identity, isMe: boolean, fresh: boolean) {
     const role = identity.role;
-    const required = mfaRequired(role);
+    const own = await groupGrants.of(identity.groups);
+    const required = mfaRequired(role, own);
     // Cognito unable to say (throttled, the user gone): the MFA is unknown, so the rights it gives are not given.
     // A session that says how it signed in (amr) decides by itself; the authenticator is read for /api/me only.
     const enabled = mfa && ((required && session(identity) === null) || isMe)
@@ -395,19 +407,21 @@ export function createApi({
         return null;
       })
       : null;
-    let effective: Role | null = role;
-    if (required && !(session(identity) ?? enabled)) effective = mfa!.mode === 'required' ? null : 'viewer';
-    claimed.set(identity, { role, enabled: enabled ?? null, effective });
-    if (effective === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
-    identity.role = effective ?? 'viewer';
+    const mfaOk = !required || !!(session(identity) ?? enabled);
+    // A member has no rights to lose: they keep the role, and their grants fall to read.
+    const acting: Role | null = mfaOk ? role : mfa!.mode === 'required' ? null : role === 'member' ? 'member' : 'viewer';
+    claimed.set(identity, { role, enabled: enabled ?? null, effective: acting, required });
+    if (acting === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
+    identity.role = acting ?? (role === 'member' ? 'member' : 'viewer');
+    identity.grants = effective(role, own, mfaOk);
   }
   function me(identity: Identity) {
-    const c = claimed.get(identity) ?? { role: identity.role, enabled: null, effective: identity.role };
+    const c = claimed.get(identity) ?? { role: identity.role, enabled: null, effective: identity.role, required: false };
     return {
-      email: identity.email, groups: identity.groups, role: c.role, effectiveRole: c.effective,
+      email: identity.email, groups: identity.groups, role: c.role, effectiveRole: c.effective, grants: identity.grants,
       // enabled: null when Cognito could not say.
       // method: how this session signed in; null for a token without amr.
-      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: mfaRequired(c.role), method: mfa.passkeys ? signInMethod(identity) : null, passkeys: mfa.passkeys ?? false } } : {}),
+      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: c.required, method: mfa.passkeys ? signInMethod(identity) : null, passkeys: mfa.passkeys ?? false } } : {}),
     };
   }
 
@@ -777,6 +791,8 @@ export function createApi({
   async function route(method: string, parts: string[], identity: Identity, event: ApiEvent): Promise<ApiResponse> {
     const [resource, a, b, action] = parts;
     if (method === 'GET' && resource === 'me' && !a) return reply(200, me(identity));
+    // A member has none of the fleet routes (those of their workloads come with the grants' enforcement).
+    if (identity.role === 'member' && resource !== 'preferences') throw new HttpError(403, 'forbidden', 'viewer role required');
 
     if (resource === 'preferences' && !a && preferences) {
       if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });

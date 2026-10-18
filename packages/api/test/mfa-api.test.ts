@@ -35,7 +35,7 @@ describe('MFA policy', () => {
   it('operators: an administrator without MFA acts as a viewer, and may read who they are', async () => {
     const s = setup('operators');
     expect(json(await s.api(event('GET', '/api/me', 'dmt-admin')))).toEqual({
-      email: 'admin@example.com', groups: ['dmt-admin'], role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true, method: null, passkeys: false },
+      email: 'admin@example.com', groups: [], role: 'admin', effectiveRole: 'viewer', grants: [{ tags: {}, permissions: ['read'] }], mfa: { mode: 'operators', enabled: false, required: true, method: null, passkeys: false },
     });
     expect((await s.api(event('GET', '/api/users', 'dmt-admin'))).statusCode).toBe(403);
     expect((await s.api(event('GET', '/api/routers', 'dmt-admin'))).statusCode).toBe(200);

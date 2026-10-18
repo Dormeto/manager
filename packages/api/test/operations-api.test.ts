@@ -42,7 +42,7 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
   return { api, audit, created, calls, operation };
 }
 
-function event(method: string, path: string, groups = '', body?: unknown): ApiEvent {
+function event(method: string, path: string, groups = 'dmt-viewer', body?: unknown): ApiEvent {
   return {
     rawPath: path,
     requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: 'u-1', email: 'ops@example.com', 'cognito:groups': `[${groups}]` } } } },

@@ -29,7 +29,7 @@ function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], op
   return { api, audit, runs, store };
 }
 
-function event(method: string, path: string, groups = '', body?: unknown, query?: Record<string, string>): ApiEvent {
+function event(method: string, path: string, groups = 'dmt-viewer', body?: unknown, query?: Record<string, string>): ApiEvent {
   return {
     rawPath: path,
     requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: 'u-1', email: 'ops@example.com', 'cognito:groups': `[${groups}]` } } } },
@@ -62,7 +62,7 @@ describe('discovery routes', () => {
   it('pages the candidates of a status, within an account or an account and region: 50 by default, at most 200', async () => {
     const many = Array.from({ length: 250 }, (_, i) => candidate(`c${String(i).padStart(3, '0')}`));
     const { api } = setup([...many, R2]);
-    const page = async (q: Record<string, string>) => api(event('GET', '/api/discovery/candidates', '', undefined, q));
+    const page = async (q: Record<string, string>) => api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, q));
     const first = json(await page({ status: 'pending-onboarding' }));
     expect([first.candidates.length, first.candidates[0].id, typeof first.cursor]).toEqual([50, 'c000', 'string']);
     expect(json(await page({ status: 'pending-onboarding', cursor: first.cursor })).candidates[0].id).toBe('c050');
@@ -76,14 +76,14 @@ describe('discovery routes', () => {
 
   it('hides the candidates the caller may not see', async () => {
     const { api } = setup([candidate('r1'), candidate('r3', { region: 'eu-west-3' })], { visible: (_identity, item) => item.region !== 'eu-west-3' });
-    const body = json(await api(event('GET', '/api/discovery/candidates', '', undefined, { status: 'pending-onboarding' })));
+    const body = json(await api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, { status: 'pending-onboarding' })));
     expect(body.candidates.map((c: Candidate) => c.id)).toEqual(['r1']);
   });
 
   it('names the workload of a managed candidate from its summary, with the router the dashboard links to', async () => {
     const managed = candidate('m1', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'a4dffc5bf369a297' });
     const { api } = setup([managed], { workloads: [{ account: '121014831971', region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' }] });
-    const [c] = json(await api(event('GET', '/api/discovery/candidates', '', undefined, { status: 'managed' }))).candidates;
+    const [c] = json(await api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, { status: 'managed' }))).candidates;
     expect(c.workload).toEqual({ router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' });
   });
 
@@ -95,7 +95,7 @@ describe('discovery routes', () => {
     const list = [op('op-on', 'onboard', 'running', { targetGroupArn: 'tg-a' }), op('op-done', 'onboard', 'failed', { targetGroupArn: 'tg-b' }), op('op-off', 'offboard', 'running', { router: 'dmt-dev', workloadId: 'w-c' })];
     const operations: OperationsApi = { create: async () => { throw new Error('unused'); }, list: async () => list as never, get: async () => null, installedRouters: async () => [] };
     const { api } = setup([candidate('a', { targetGroupArn: 'tg-a' }), candidate('b', { targetGroupArn: 'tg-b' }), candidate('c', { targetGroupArn: 'tg-c', workloadId: 'w-c' })], { operations });
-    const listed = json(await api(event('GET', '/api/discovery/candidates', '', undefined, { status: 'pending-onboarding' }))).candidates;
+    const listed = json(await api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, { status: 'pending-onboarding' }))).candidates;
     expect(listed.map((c: { id: string; operation?: unknown }) => [c.id, c.operation ?? null])).toEqual([
       ['a', { id: 'op-on', type: 'onboard' }], ['b', null], ['c', { id: 'op-off', type: 'offboard' }],
     ]);
@@ -172,7 +172,7 @@ describe('discovery routes', () => {
     await api(event('POST', '/api/discovery/restore', 'dmt-operator', { ids: ['r1'] }));
     expect((await store.getCandidate('r1'))!.status).toBe('pending-onboarding');
     expect(audit.map((a) => [a.action, a.target])).toEqual([['discovery-dismiss', 'r1'], ['discovery-restore', 'r1']]);
-    expect((await api(event('POST', '/api/discovery/dismiss', '', { ids: ['r1'] }))).statusCode).toBe(403);
+    expect((await api(event('POST', '/api/discovery/dismiss', 'dmt-viewer', { ids: ['r1'] }))).statusCode).toBe(403);
     expect((await api(event('POST', '/api/discovery/dismiss', 'dmt-operator', { ids: [] }))).statusCode).toBe(400);
   });
 

@@ -59,7 +59,7 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
   return { api, audit, calls, store, created, operations };
 }
 
-function event(method: string, path: string, groups = '', body?: unknown): ApiEvent {
+function event(method: string, path: string, groups = 'dmt-viewer', body?: unknown): ApiEvent {
   return {
     rawPath: path,
     requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: 'u-1', email: 'ops@example.com', 'cognito:groups': `[${groups}]` } } } },
