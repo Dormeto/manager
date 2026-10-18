@@ -126,6 +126,14 @@ describe('operations engine', () => {
     expect(await s.records.claimActive(`TG#${TG}`, 'other', 60_000)).toEqual({ ok: true });
   });
 
+  it('passes the tags of its input to the preview and the onboarding', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {}, tags: { team: 'payments' } }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(s.invocations[0]![1]).toMatchObject({ action: 'preview', tags: { team: 'payments' } });
+    expect(s.invocations[1]![1]).toMatchObject({ action: 'onboard', tags: { team: 'payments' } });
+  });
+
   it('installs the router of a new account and region first, waiting for the table and the IAM propagation, and registers it', async () => {
     const s = setup();
     const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops@example.com');

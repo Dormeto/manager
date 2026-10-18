@@ -7,7 +7,7 @@ import {
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
-import { builtInGrants, can, effective, type Grant, type Permission } from './access.js';
+import { builtInGrants, can, effective, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
@@ -373,6 +373,12 @@ export function createApi({
       return raw ?? '';
     }
   };
+  // The tag=key=value filters of a list: split at the first =, none empty.
+  const tagFilter = (raw: string | undefined): [string, string][] => (raw === undefined ? [] : raw.split(',').map((pair) => {
+    const at = pair.indexOf('=');
+    if (at < 1) throw new HttpError(400, 'bad_request', 'tag must be key=value');
+    return [pair.slice(0, at), pair.slice(at + 1)] as [string, string];
+  }));
   const workloadId = (raw: string | undefined): string => {
     const id = decodeURIComponent(raw ?? '');
     if (!ID.test(id)) throw new HttpError(400, 'bad_request', `invalid workload id: ${id}`);
@@ -1107,7 +1113,10 @@ export function createApi({
       const text = q.q?.toLowerCase();
       // Needs attention: failed or waking, or paused (a pause is easy to forget).
       const attention = (w: Record<string, unknown>) => w.state === 'FAILED' || w.state === 'WAKING' || Boolean((w.pauses as unknown[] | undefined)?.length);
+      // Tags: every key=value asked must be on the workload (the gateway joins a repeated parameter with commas).
+      const wanted = tagFilter(q.tag);
       const matching = seen.filter((w) => (!states || states.includes(String(w.state))) && (!q.router || w.router === q.router)
+        && wanted.every(([key, value]) => tagsOf(w)[key] === value)
         && (!text || `${w.name ?? ''} ${w.workloadId}`.toLowerCase().includes(text)) && (q.attention !== '1' || attention(w)));
       // Pages: an opaque cursor (the offset); without a limit, every workload.
       const limit = q.limit ? Math.min(Math.max(Number(q.limit) || 0, 1), 1000) : matching.length;
@@ -1271,6 +1280,24 @@ export function createApi({
             return { result: result.name, response: reply(200, result) };
           } catch (err) {
             if (unknownAction(err, 'rename')) throw new HttpError(409, 'conflict', `router ${router.name} too old to rename, upgrade it to 0.20.0 or later`);
+            if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);
+            if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
+            throw err;
+          }
+        });
+      }
+      if (method === 'PUT' && action === 'tags' && !parts[4]) {
+        need(identity, 'admin');
+        const tags = bodyOf(event).tags;
+        const problem = tagsProblem(tags);
+        if (problem) throw new HttpError(400, 'bad_request', problem);
+        const shown = Object.entries(tags as Record<string, string>).map(([k, v]) => `${k}=${v}`).join(', ');
+        return audited(identity, 'tag', `${router.name}/${id}`, async () => {
+          try {
+            const result = await invoke(router, { action: 'tag', workloadId: id, tags, by: identity.email }) as { workloadId: string; tags: Record<string, string> };
+            return { result: shown ? shown.slice(0, 300) : 'no tags', response: reply(200, result) };
+          } catch (err) {
+            if (unknownAction(err, 'tag')) throw new HttpError(409, 'conflict', `router ${router.name} too old to set tags, upgrade it to 0.30.0 or later`);
             if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);
             if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
             throw err;
@@ -1713,7 +1740,11 @@ export function createApi({
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
       settingsOfFailures(body.settings as Record<string, unknown> | undefined);
-      input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [] };
+      if (body.tags !== undefined) {
+        const problem = tagsProblem(body.tags);
+        if (problem) throw new HttpError(400, 'bad_request', problem);
+      }
+      input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [], ...(body.tags !== undefined ? { tags: body.tags } : {}) };
       target = name ? `${candidateId} as ${name}` : candidateId;
     } else if (type === 'install-router') {
       const account = String(body.account ?? '');

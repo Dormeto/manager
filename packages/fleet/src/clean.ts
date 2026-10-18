@@ -36,6 +36,15 @@ export const timely = (v: unknown, now: number) => {
   return t !== null && Date.parse(t) <= now + SKEW_MS ? t : null;
 };
 
+// A workload's tags (routers 0.30.0): the pairs of strings within the tag limits, at most 50; none reported (a router
+// before 0.30.0, or not an object): undefined, which the API reads as no tags.
+const TAGS_MAX = 50;
+const tagsOf = (v: unknown) => {
+  if (!isObject(v)) return undefined;
+  const pairs = Object.entries(v).filter((e): e is [string, string] => e[0] !== '' && [...e[0]].length <= 128 && typeof e[1] === 'string' && [...e[1]].length <= 256);
+  return Object.fromEntries(pairs.slice(0, TAGS_MAX));
+};
+
 // A pause as shown: its known texts, each short.
 const pauseOf = (p: unknown) => (isObject(p)
   ? defined({
@@ -124,6 +133,7 @@ export function workloadOf(w: unknown): Json | null {
     workloadId: w.workloadId,
     name: text(w.name, 64),
     targetGroupArn: typeof w.targetGroupArn === 'string' && w.targetGroupArn.startsWith('arn:') ? w.targetGroupArn.slice(0, 512) : undefined,
+    tags: tagsOf(w.tags),
     source: w.source === 'manager' ? 'manager' : 'terraform',
     state: typeof w.state === 'string' && STATES.has(w.state) ? w.state : 'UNKNOWN',
     url: typeof w.url === 'string' && URL.test(w.url) ? w.url : null,

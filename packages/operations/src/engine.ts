@@ -253,7 +253,7 @@ export function createEngine(deps: EngineDeps) {
   async function previewOf(op: Operation) {
     const kubernetes = await kubernetesOf(op);
     const preview = await invokeRouter(op, 'onboarder', {
-      action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [],
+      action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [], ...(op.input.tags ? { tags: op.input.tags } : {}),
       ...(kubernetes ? { kubernetes } : {}),
     });
     if (!preview?.workloadId) throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than 0.20.0: upgrade it to onboard`);
@@ -604,7 +604,7 @@ export function createEngine(deps: EngineDeps) {
         const kubernetes = await kubernetesOf(op);
         const result = await invokeRouter(op, 'onboarder', {
           action: 'onboard', workloadId: op.context.workloadId, targetGroupArn: op.target.targetGroupArn, name: op.context.name,
-          settings: op.input.settings ?? {}, databases: op.input.databases ?? [], by: op.by, ...(kubernetes ? { kubernetes } : {}),
+          settings: op.input.settings ?? {}, databases: op.input.databases ?? [], ...(op.input.tags ? { tags: op.input.tags } : {}), by: op.by, ...(kubernetes ? { kubernetes } : {}),
         });
         op.context.wakerTargetGroupArn = result?.workload?.wakerTargetGroupArn;
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };

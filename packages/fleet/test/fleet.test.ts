@@ -217,6 +217,22 @@ describe('fleet', () => {
     expect([a!.backends, b!.backends, c!.backends]).toEqual([['asg', 'rds-instance'], undefined, undefined]);
   });
 
+  it('keeps the tags a router reports (routers 0.30.0), the valid pairs of at most 50; a router before reports none', async () => {
+    const s = setup();
+    const many = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`k${i}`, 'v']));
+    await s.ingest(checked(T1, [
+      workload('a', 'AWAKE', { tags: { team: 'payments', env: 'prod', n: 7, [`${'k'.repeat(129)}`]: 'x', '': 'y', long: 'v'.repeat(257) } }),
+      workload('b', 'AWAKE', { tags: {} }), workload('c', 'AWAKE', { tags: ['team=payments'] }), workload('d'), workload('e', 'AWAKE', { tags: many }),
+    ]));
+    const get = async (id: string) => (await s.store.getWorkload(ACCOUNT, REGION, id))!.tags;
+    expect([await get('a'), await get('b'), await get('c'), await get('d')]).toEqual([{ team: 'payments', env: 'prod' }, {}, undefined, undefined]);
+    expect(Object.keys((await get('e')) as object)).toHaveLength(50);
+    // A later check replaces them; a state change keeps them.
+    await s.ingest(checked(T2, [workload('a', 'AWAKE', { tags: { team: 'search' } })]));
+    await s.ingest(stateChanged('a', 'AWAKE', 'NAPPING', at(T2, 30)));
+    expect(await get('a')).toEqual({ team: 'search' });
+  });
+
   it('keeps a Kubernetes workload\'s backend kind and the failure kind cluster (routers 0.29.0, R10.5)', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a', 'FAILED', { backends: ['k8s', 'rds-instance'], failure: { kind: 'cluster', step: 'wake', backend: 'k8s:eks-demo/demo/Deployment/web', message: 'GET /apis: no connection within 3000 ms', at: at(T1, -60) }, consecutiveFailures: 1 })]));
