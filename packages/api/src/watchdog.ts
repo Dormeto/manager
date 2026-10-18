@@ -32,7 +32,7 @@ export interface Notification {
   message: string;
   chat?: ChatNotification;
   // Message attributes, for subscription filter policies.
-  attributes: { level: Level | 'resolved'; kind: Subject['kind'] | 'digest'; account?: string; region?: string; router?: string; workload?: string };
+  attributes: { level: Level | 'resolved' | 'info'; kind: Subject['kind'] | 'digest' | 'update'; account?: string; region?: string; router?: string; workload?: string };
 }
 export interface Observation { subject: Subject; problems: Problem[] }
 interface Log { info(event: string, data?: object): void; warn(event: string, data?: object): void; error(event: string, data?: object): void }
@@ -188,7 +188,7 @@ export function evaluate(observation: Observation, previous: Alarm | null, versi
 
 
 // The chat body of a message (Amazon Q Developer custom notification).
-const chatNotification = (title: string, description: string, nextSteps: string[] = []): ChatNotification => ({
+export const chatNotification = (title: string, description: string, nextSteps: string[] = []): ChatNotification => ({
   version: '1.0', source: 'custom', content: { textType: 'client-markdown', title, description, ...(nextSteps.length ? { nextSteps } : {}) },
 });
 function render(change: Change, dashboardUrl: string, env: string, at: string): Notification | null {

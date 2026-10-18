@@ -215,6 +215,18 @@ function sectionOf(changelog: string, version: string): string | null {
   return lines.slice(start, end).join('\n').trimEnd();
 }
 
+// The release index: versions.json, else latest.json (an older index); null when neither can be read.
+export async function readIndex(releasesUrl: string, fetch: (url: string) => Promise<string | null>): Promise<VersionEntry[] | null> {
+  const list = parse<{ versions?: unknown }>(await fetch(`${releasesUrl}/versions.json`));
+  if (list && Array.isArray(list.versions)) {
+    return list.versions
+      .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object' && typeof (e as { version?: unknown }).version === 'string')
+      .map((e) => ({ version: e.version as string, router: textOrNull(e.router), minCli: textOrNull(e.minCli), published: textOrNull(e.published) }));
+  }
+  const latest = parse<Record<string, unknown>>(await fetch(`${releasesUrl}/latest.json`));
+  return typeof latest?.version === 'string' ? [{ version: latest.version, router: textOrNull(latest.router), minCli: null, published: textOrNull(latest.published) }] : null;
+}
+
 // account and region: the manager's own, the target of its update operations.
 export function createUpdate(port: UpdatePort, o: {
   env: string; logGroup: string; version: string; releasesUrl: string; now: () => Date; random: () => string; account: string; region: string; newId?: () => string;
@@ -223,16 +235,7 @@ export function createUpdate(port: UpdatePort, o: {
   const newId = o.newId ?? (() => crypto.randomUUID());
 
   // The published versions; null when neither list can be read.
-  async function published(): Promise<VersionEntry[] | null> {
-    const list = parse<{ versions?: unknown }>(await port.fetchText(`${o.releasesUrl}/versions.json`));
-    if (list && Array.isArray(list.versions)) {
-      return list.versions
-        .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object' && typeof (e as { version?: unknown }).version === 'string')
-        .map((e) => ({ version: e.version as string, router: textOrNull(e.router), minCli: textOrNull(e.minCli), published: textOrNull(e.published) }));
-    }
-    const latest = parse<Record<string, unknown>>(await port.fetchText(`${o.releasesUrl}/latest.json`));
-    return typeof latest?.version === 'string' ? [{ version: latest.version, router: textOrNull(latest.router), minCli: null, published: textOrNull(latest.published) }] : null;
-  }
+  const published = () => readIndex(o.releasesUrl, port.fetchText);
 
   // The release the CLI staged in the install bucket: the version of its terraform-aws-dormeto-<v>.zip checksum line.
   async function staged(): Promise<VersionEntry | null> {
