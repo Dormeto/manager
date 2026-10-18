@@ -303,6 +303,15 @@ describe('a pending request whose build ended or is queueing', () => {
     expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(202);
   });
 
+  it('stops blocking when its build failed before writing any result', async () => {
+    const s = setup();
+    await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));
+    s.state.builds = [mine(5, 'FAILED')];
+    expect((await get(s)).pending).toBeNull();
+    expect(s.state.pending).toBeNull();
+    expect((await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }))).statusCode).toBe(202);
+  });
+
   it('keeps blocking while its build is in progress', async () => {
     const s = setup();
     await s.api(event('POST', '/api/update/plan', 'dmt-admin', { version: '0.12.0' }));

@@ -219,13 +219,14 @@ export function createUpdate(port: UpdatePort, o: { env: string; logGroup: strin
   async function pendingNow(pending: Pending | null, builds: Build[]): Promise<UpdateState['pending']> {
     if (!pending) return null;
     const result = await resultOf(pending.id);
-    const ended = result?.status === 'running' && builds.some((b) => b.id === result.build && b.status !== 'IN_PROGRESS');
+    // Its build: the result's, else a listed request build carrying its id.
+    const mine = builds.find((b) => (result?.build ? b.id === result.build : b.env.ACTION === 'request' && (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '') === pending.id));
+    const ended = !!mine && mine.status !== 'IN_PROGRESS';
     if (result?.status === 'succeeded' || result?.status === 'failed' || ended) {
       await port.pending.put(null);
       return null;
     }
-    const taken = builds.some((b) => b.env.ACTION === 'request' && (b.env.REQUEST_KEY ?? '').split('/').pop()!.replace(/\.json$/, '') === pending.id);
-    if (!result && !taken && o.now().getTime() - Date.parse(pending.at) > NOT_STARTED_MS) return { ...pending, notStarted: true };
+    if (!result && !mine && o.now().getTime() - Date.parse(pending.at) > NOT_STARTED_MS) return { ...pending, notStarted: true };
     return pending;
   }
 
