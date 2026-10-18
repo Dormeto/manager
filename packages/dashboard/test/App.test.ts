@@ -133,4 +133,40 @@ describe('App', () => {
     expect(h.calls.filter((p) => p === '/update/available')).toHaveLength(1);
     wrapper.unmount();
   });
+
+  it('says the manager version at the bottom of the sidebar, as /health answers', async () => {
+    h.answers['/health'] = { status: 'ok', version: '0.12.0-dev.3' };
+    const wrapper = await mountSignedIn();
+    expect(wrapper.find('.dm-drawer .dm-version').text()).toBe('Dormeto manager 0.12.0-dev.3');
+    expect(h.calls.filter((p) => p === '/health')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('shows no version while it is unknown or when /health fails', async () => {
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation(async (path: string) => { if (path === '/health') throw new Error('down'); return {} as never; });
+    const wrapper = await mountSignedIn();
+    expect(wrapper.find('.dm-version').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('draws the brand mark as the website header logo (sun r 6, bold closed eyes, no stars)', async () => {
+    const wrapper = await mountSignedIn();
+    const logo = wrapper.find('.dm-brand svg');
+    expect(logo.find('.dm-sun-core').attributes('r')).toBe('6');
+    expect(logo.find('.dm-ray').attributes('d')).toBe('M52 3.3V1.1');
+    expect(logo.find('.dm-eye-open').attributes('rx')).toBe('3');
+    expect(logo.find('.dm-stars').exists()).toBe(false);
+    expect(logo.find('.dm-glint').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('draws Operations as two meshing cogs, each its own element to turn', async () => {
+    const wrapper = await mountSignedIn();
+    const icon = wrapper.find('.dm-nav-icon--operations');
+    expect(icon.find('.ni-cog-big').exists()).toBe(true);
+    expect(icon.find('.ni-cog-small').exists()).toBe(true);
+    expect(icon.find('.ni-gear').exists()).toBe(false);
+    wrapper.unmount();
+  });
 });

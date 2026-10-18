@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { useRoute } from 'vue-router';
 import { mdiAccountCogOutline, mdiLogout, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
+import { api } from './api';
 import { signOut } from './auth';
 import { getConfig } from './config';
 import { useDiscoveryBadge } from './stores/discovery';
@@ -44,6 +45,13 @@ const roleText = computed(() => `Role: ${session.role}${session.loaded && sessio
 onMounted(() => {
   if (signedIn.value) void badge.refresh();
 });
+
+// The manager's own version (the release's, from the public /health), read once when signed in; nothing while unknown.
+const version = ref('');
+watch(signedIn, (yes) => {
+  if (!yes || version.value) return;
+  api<{ version?: string }>('/health').then((h) => { version.value = h.version ?? ''; }, () => { version.value = ''; });
+}, { immediate: true });
 
 // The versions to update to, next to Update: read when the user is known as an administrator, then every 30 minutes (the
 // Update page also gives each state it loads).
@@ -95,6 +103,7 @@ function toggleTheme() {
             <div class="dm-me__role">{{ roleText }}</div>
           </div>
         </div>
+        <div v-if="version" class="dm-version">Dormeto manager {{ version }}</div>
       </template>
     </v-navigation-drawer>
     <v-app-bar flat border="b" density="comfortable" class="dm-bar">
@@ -139,5 +148,6 @@ function toggleTheme() {
 .dm-me__avatar { background: linear-gradient(155deg, #4589ca, #034b80); color: #fff; font-size: 0.72rem; font-weight: 600; }
 .dm-me__who { min-width: 0; }
 .dm-me__email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.82rem; font-weight: 500; }
+.dm-version { margin: -4px 12px 12px; padding: 0 12px; font: 500 0.62rem/1.4 var(--dm-mono); letter-spacing: 0.08em; opacity: 0.5; }
 .dm-me__role { font: 500 0.62rem/1.4 var(--dm-mono); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }
 </style>

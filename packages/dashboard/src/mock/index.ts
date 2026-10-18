@@ -54,6 +54,7 @@ export async function mockApi(path: string, init: RequestInit = {}): Promise<unk
 
 function route(d: Demo, method: string, parts: string[], q: URLSearchParams, body: Body, now: number): unknown {
   const [resource, a, b, action] = parts;
+  if (method === 'GET' && resource === 'health' && !a) return { status: 'ok', version: 'demo' };
   if (method === 'GET' && resource === 'me' && !a) return { ...d.me, groups: ['dmt-admin'] };
   if (resource === 'preferences' && !a) {
     if (method === 'GET') return d.preferences;
