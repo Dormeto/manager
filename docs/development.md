@@ -9,7 +9,7 @@ Building, testing and running the manager in a development environment, and rele
 | `dev` | `https://app.dev.dormeto.com` | `https://auth.app.dev.dormeto.com` | `dmt-dev` |
 
 Roles come from the Cognito groups: `dmt-viewer` (read), `dmt-operator` (nap, wake), `dmt-admin` (users, audit).
-Users are invited by administrators; the first administrators are listed in `env/<env>.local.tfvars` (not committed).
+Users are invited by administrators; the first administrators are set in the install's settings (`dev/install.json` in the install bucket, `--var` changes them).
 
 ## Usage
 
@@ -19,15 +19,10 @@ Requirements: Node.js ≥ 24, Terraform 1.16.5 (tfenv reads `.terraform-version`
 ```bash
 npm install
 npm test && npm run typecheck
-npm run build                                   # API, discovery and operations bundles, dashboard (published by Terraform)
+npm run build                                   # API, discovery and operations bundles, dashboard (the release assembles them)
 (cd ../router && npm run package)               # the router bundle the manager installs (sibling repository)
 npm run artifacts                               # dist/artifacts: the module's layout, as a release carries it
-cd infra/terraform/platform
-echo 'admin_emails = ["you@example.com"]' > env/dev.local.tfvars
-tfenv exec init -backend-config=env/dev.backend.hcl
-tfenv exec plan -var-file=env/dev.tfvars -var-file=env/dev.local.tfvars -out=dev.tfplan
-tfenv exec apply dev.tfplan
-cd ../../.. && node scripts/smoke.mjs --env dev  # API checks as the smoke user
+node scripts/smoke.mjs --env dev                 # API checks as the smoke user
 npm run dev -w @dormeto/manager-dashboard       # local dashboard on http://localhost:5173 against the dev API
 npm run dev:mock -w @dormeto/manager-dashboard  # the dashboard with demo data, no sign-in (development only)
 # its organization is generated: http://localhost:5173/?demo=acme,workloads=60,routers=5 (or VITE_MOCK_SCENARIO), see src/mock/scenario.ts
@@ -45,6 +40,35 @@ node scripts/screenshots.mjs --env dev --width 1280 --height 800 --scale 2 --for
 
 While SES is in the sandbox, an invited address must be a verified SES identity: inviting from the dashboard creates
 the identity (AWS sends a verification email), and the administrator resends the invitation once it is verified.
+
+## Deploy dev
+
+Dev's manager is a CLI install since 2026-10-18 (adopted from the former Terraform configuration): its resources are
+managed by the install's CodeBuild project `dmt-dev-install`, its state is `s3://dmt-install-121014831971-eu-west-1/dev/manager.tfstate`
+and its settings are `dev/install.json` there. It is updated with the CLI or its dashboard, never with Terraform from
+this repository.
+
+A local build: a clean tree, a version newer than the one running, then the install from the release directory (the
+settings come from the install's `install.json`; `--var` changes them). The plan is read, then confirmed (or
+`dormeto install apply` without a terminal):
+
+```bash
+node scripts/release/release.mjs --version <x.y.z-dev.N> --out <dir>
+dormeto install --profile kloudy-dormeto-prd --region eu-west-1 --env dev --release <dir>/<version>
+```
+
+A published release: from dev's dashboard (Administration, Update), or
+`dormeto install --profile kloudy-dormeto-prd --region eu-west-1 --env dev --version <v>`.
+
+The certificate stays in `infra/terraform/platform` (`certificate_arn` output, given to the install): plan with `-out`,
+read it, apply the saved plan. It only renews with ACM. Never apply an old checkout's platform configuration that still
+holds the manager module.
+
+```bash
+cd infra/terraform/platform
+tfenv exec init -backend-config=env/dev.backend.hcl
+tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
+```
 
 ## Release
 

@@ -7,7 +7,7 @@ Terraform modules of `infra/terraform/modules`, published with each release, and
 
 - `access`, in each member account: `DmtDiscoveryRole`, `DmtCommandRole` and `DmtRouterBoundary`, trusted by the manager
   roles of every environment listed in `envs` (several environments may share an account's roles). In the manager's own
-  account the platform stack creates them (`create_organization_roles`); a second environment of that account sets it to
+  account the manager install creates them (`create_organization_roles`); a second environment of that account sets it to
   `false` and is listed in the first one's `organization_role_envs`.
 - `organization`, in the management account: the Organizations delegation policy.
 

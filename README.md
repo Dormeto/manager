@@ -177,7 +177,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | `packages/fleet` | The routers' events: workload states, history, savings and prices, the idle window replay |
 | `infra/terraform/modules/manager` | The manager module (what a release installs): DynamoDB, the Lambdas, HTTP API + JWT authorizer, Step Functions, EventBridge, Cognito, CloudFront + S3, optional custom domain and SES |
 | `infra/terraform/modules/access`, `organization` | The organization roles of an account, the delegation policy of the management account |
-| `infra/terraform/platform` | Dev: the manager module with the local build, its certificate and DNS |
+| `infra/terraform/platform` | Dev's certificate and its DNS validation (the dev manager itself is a CLI install) |
 | `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots), `release/` (the module's artifacts from the builds, a release and its publication) |
 
 The manager never reads the router tables or the workload resources itself: each router controller answers the `list`,
