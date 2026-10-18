@@ -120,17 +120,26 @@ export interface Identity {
   email: string;
   groups: string[];
   role: Role;
+  amr: string[] | null; // how this session signed in (the ID token's amr); null when the token has none
 }
 
-// The JWT authorizer flattens arrays: "[dmt-admin dmt-viewer]".
+// A session is multi-factor when it signed in with a passkey (user verification) or with two factors.
+const MULTI_FACTOR = ['mfa', 'swk', 'hwk'];
+export const mfaSession = (identity: Identity): boolean | null => identity.amr && identity.amr.some((m) => MULTI_FACTOR.includes(m));
+
+// The JWT authorizer flattens arrays: "[dmt-admin dmt-viewer]", "[pwd otp mfa]".
 export function identityOf(event: ApiEvent): Identity | null {
   const claims = event.requestContext.authorizer?.jwt?.claims;
   if (!claims?.sub) return null;
   const groups = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
+  const amr = claims.amr === undefined || claims.amr === '' ? null : claims.amr.replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   const role = groups.map((g) => GROUPS[g]).filter((r): r is Role => r !== undefined)
     .reduce<Role>((best, r) => (RANK[r] > RANK[best] ? r : best), 'viewer');
-  return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role };
+  return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role, amr };
 }
+
+const signInMethod = (identity: Identity): 'passkey' | 'app' | 'password' | null =>
+  !identity.amr ? null : identity.amr.some((m) => m === 'swk' || m === 'hwk') ? 'passkey' : identity.amr.some((m) => m === 'otp' || m === 'mfa') ? 'app' : 'password';
 
 const reply = (statusCode: number, body?: unknown): ApiResponse => ({
   statusCode,
@@ -193,7 +202,8 @@ export interface ApiOptions {
     subscriptions(): Promise<{ topicArn: string; subscriptions: { protocol: string; endpoint: string; pending: boolean }[] }>;
   };
   // The MFA policy (R6c) and whether a user has an authenticator app (Cognito AdminGetUser).
-  mfa?: { mode: MfaMode; enabled(username: string): Promise<boolean> };
+  // passkeys: whether the pool offers them (the module's PASSKEYS).
+  mfa?: { mode: MfaMode; passkeys?: boolean; enabled(username: string): Promise<boolean> };
   // The manager's IP lists (R6b): its catalog, and what the list function last did for each list (status.json).
   ipLists?: {
     catalogUrl: string;
@@ -375,14 +385,15 @@ export function createApi({
     const role = identity.role;
     const required = mfaRequired(role);
     // Cognito unable to say (throttled, the user gone): the MFA is unknown, so the rights it gives are not given.
-    const enabled = mfa && (required || isMe)
+    // A session that says how it signed in (amr) decides by itself; the authenticator is read for /api/me only.
+    const enabled = mfa && ((required && mfaSession(identity) === null) || isMe)
       ? await mfaOf(identity, fresh).catch((err: Error) => {
         console.error(JSON.stringify({ level: 'error', event: 'MfaUnknown', user: identity.username, error: err.message }));
         return null;
       })
       : null;
     let effective: Role | null = role;
-    if (required && !enabled) effective = mfa!.mode === 'required' ? null : 'viewer';
+    if (required && !(mfaSession(identity) ?? enabled)) effective = mfa!.mode === 'required' ? null : 'viewer';
     claimed.set(identity, { role, enabled: enabled ?? null, effective });
     if (effective === null && !isMe) throw new HttpError(403, 'mfa_required', 'two-step verification required: set it up from your Account page');
     identity.role = effective ?? 'viewer';
@@ -392,7 +403,8 @@ export function createApi({
     return {
       email: identity.email, groups: identity.groups, role: c.role, effectiveRole: c.effective,
       // enabled: null when Cognito could not say.
-      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: mfaRequired(c.role) } } : {}),
+      // method: how this session signed in; null for a token without amr.
+      ...(mfa ? { mfa: { mode: mfa.mode, enabled: c.enabled, required: mfaRequired(c.role), method: signInMethod(identity), passkeys: mfa.passkeys ?? false } } : {}),
     };
   }
 

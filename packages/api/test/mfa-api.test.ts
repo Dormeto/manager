@@ -3,7 +3,7 @@ import { createApi, type ApiEvent, type AuditEntry, type MfaMode, type UsersServ
 
 // The MFA policy (R6c): administrators and operators without MFA act as viewers under `operators`; nobody without MFA
 // passes `required` but to read who they are.
-function setup(mode: MfaMode, enrolled: Set<string> = new Set(), failing = false) {
+function setup(mode: MfaMode, enrolled: Set<string> = new Set(), failing = false, passkeys = false) {
   let now = 0;
   const reads: string[] = [];
   const audit: AuditEntry[] = [];
@@ -19,14 +19,15 @@ function setup(mode: MfaMode, enrolled: Set<string> = new Set(), failing = false
   const api = createApi({
     routers: [], invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
     now: () => now, newId: () => 'id', version: '0.4.0', users,
-    mfa: { mode, async enabled(username) { reads.push(username); if (failing) throw new Error('TooManyRequestsException'); return enrolled.has(username); } },
+    mfa: { mode, passkeys, async enabled(username) { reads.push(username); if (failing) throw new Error('TooManyRequestsException'); return enrolled.has(username); } },
   });
   return { api, reads, audit, resets, enrolled, advance: (ms: number) => { now += ms; } };
 }
 
-const event = (method: string, path: string, groups: string, query?: Record<string, string>): ApiEvent => ({
+// amr: the ID token's sign-in methods, flattened by the authorizer ("[pwd otp mfa]"); absent for a token that has none.
+const event = (method: string, path: string, groups: string, query?: Record<string, string>, amr?: string): ApiEvent => ({
   rawPath: path, queryStringParameters: query,
-  requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: 's-1', 'cognito:username': 'u-1', email: 'admin@example.com', 'cognito:groups': `[${groups}]` } } } },
+  requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: 's-1', 'cognito:username': 'u-1', email: 'admin@example.com', 'cognito:groups': `[${groups}]`, ...(amr === undefined ? {} : { amr }) } } } },
 });
 const json = (res: { body?: string }) => JSON.parse(res.body ?? 'null');
 
@@ -34,7 +35,7 @@ describe('MFA policy', () => {
   it('operators: an administrator without MFA acts as a viewer, and may read who they are', async () => {
     const s = setup('operators');
     expect(json(await s.api(event('GET', '/api/me', 'dmt-admin')))).toEqual({
-      email: 'admin@example.com', groups: ['dmt-admin'], role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true },
+      email: 'admin@example.com', groups: ['dmt-admin'], role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true, method: null, passkeys: false },
     });
     expect((await s.api(event('GET', '/api/users', 'dmt-admin'))).statusCode).toBe(403);
     expect((await s.api(event('GET', '/api/routers', 'dmt-admin'))).statusCode).toBe(200);
@@ -58,13 +59,13 @@ describe('MFA policy', () => {
     expect(refused.statusCode).toBe(403);
     expect(json(refused)).toEqual({ error: 'mfa_required', message: 'two-step verification required: set it up from your Account page' });
     const me = json(await s.api(event('GET', '/api/me', 'dmt-viewer')));
-    expect([me.effectiveRole, me.mfa]).toEqual([null, { mode: 'required', enabled: false, required: true }]);
+    expect([me.effectiveRole, me.mfa]).toEqual([null, { mode: 'required', enabled: false, required: true, method: null, passkeys: false }]);
   });
 
   it('optional: the role as given, MFA or not', async () => {
     const s = setup('optional');
     expect((await s.api(event('GET', '/api/users', 'dmt-admin'))).statusCode).toBe(200);
-    expect(json(await s.api(event('GET', '/api/me', 'dmt-admin'))).mfa).toEqual({ mode: 'optional', enabled: false, required: false });
+    expect(json(await s.api(event('GET', '/api/me', 'dmt-admin'))).mfa).toEqual({ mode: 'optional', enabled: false, required: false, method: null, passkeys: false });
   });
 
   it('caches what Cognito says: 5 minutes when MFA is on, 30 seconds when off; fresh reads again', async () => {
@@ -100,7 +101,7 @@ describe('MFA policy', () => {
     expect((await s.api(event('GET', '/api/routers', 'dmt-admin'))).statusCode).toBe(200);
     expect((await s.api(event('GET', '/api/users', 'dmt-admin'))).statusCode).toBe(403);
     const me = json(await s.api(event('GET', '/api/me', 'dmt-admin')));
-    expect([me.effectiveRole, me.mfa]).toEqual(['viewer', { mode: 'operators', enabled: null, required: true }]);
+    expect([me.effectiveRole, me.mfa]).toEqual(['viewer', { mode: 'operators', enabled: null, required: true, method: null, passkeys: false }]);
     const optional = setup('optional', new Set(), true);
     expect(json(await optional.api(event('GET', '/api/me', 'dmt-admin'))).effectiveRole).toBe('admin');
     const required = setup('required', new Set(), true);
@@ -120,3 +121,55 @@ describe('MFA policy', () => {
     expect((await required.api(event('GET', '/api/routers', 'dmt-viewer'))).statusCode).toBe(200);
   });
 });
+
+// Passkeys: the ID token's amr says how this session signed in; where it is present it decides, else the enrollment does.
+describe('MFA policy with passkeys (amr)', () => {
+  const rights = async (s: ReturnType<typeof setup>, amr?: string, groups = 'dmt-operator') => json(await s.api(event('GET', '/api/me', groups, undefined, amr))).effectiveRole;
+
+  it('operators: a passkey session (swk or hwk) or a two-factor one (mfa) keeps the rights, without being enrolled', async () => {
+    for (const amr of ['[swk]', '[hwk]', '[pwd otp mfa]', 'swk', '[pwd hwk]']) {
+      expect([amr, await rights(setup('operators'), amr)]).toEqual([amr, 'operator']);
+    }
+  });
+
+  it('operators: a password-only session is a viewer even with the authenticator app enrolled; the session decides', async () => {
+    const s = setup('operators', new Set(['u-1']));
+    expect(await rights(s, '[pwd]')).toBe('viewer');
+    expect((await s.api(event('GET', '/api/routers', 'dmt-operator', undefined, '[pwd]'))).statusCode).toBe(200);
+    const me = json(await s.api(event('GET', '/api/me', 'dmt-operator', undefined, '[pwd]')));
+    expect(me.mfa).toMatchObject({ enabled: true, method: 'password' });
+  });
+
+  it('a token with an empty amr is a password session; one without amr behaves as before', async () => {
+    expect(await rights(setup('operators', new Set(['u-1'])), '[]')).toBe('viewer');
+    expect(await rights(setup('operators', new Set(['u-1'])))).toBe('operator');
+    expect(await rights(setup('operators'))).toBe('viewer');
+  });
+
+  it('a request with amr does not read the authenticator, unless it is /api/me', async () => {
+    const s = setup('operators');
+    expect((await s.api(event('GET', '/api/routers', 'dmt-operator', undefined, '[swk]'))).statusCode).toBe(200);
+    expect(s.reads).toEqual([]);
+    await rights(s, '[swk]');
+    expect(s.reads).toEqual(['u-1']);
+  });
+
+  it('a passkey session passes required mode; a password one is refused', async () => {
+    expect((await setup('required').api(event('GET', '/api/routers', 'dmt-viewer', undefined, '[swk]'))).statusCode).toBe(200);
+    expect((await setup('required', new Set(['u-1'])).api(event('GET', '/api/routers', 'dmt-viewer', undefined, '[pwd]'))).statusCode).toBe(403);
+  });
+
+  it('optional: the role as given for every session', async () => {
+    expect(await rights(setup('optional'), '[pwd]', 'dmt-admin')).toBe('admin');
+  });
+
+  it('me tells how the session signed in, and whether passkeys are offered', async () => {
+    const method = async (amr?: string) => json(await setup('operators', new Set(), false, true).api(event('GET', '/api/me', 'dmt-operator', undefined, amr))).mfa;
+    expect(await method('[swk]')).toMatchObject({ method: 'passkey', passkeys: true });
+    expect(await method('[hwk]')).toMatchObject({ method: 'passkey' });
+    expect(await method('[pwd otp mfa]')).toMatchObject({ method: 'app' });
+    expect(await method('[pwd]')).toMatchObject({ method: 'password' });
+    expect(await method()).toMatchObject({ method: null, passkeys: true });
+  });
+});
+

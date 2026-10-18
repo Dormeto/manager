@@ -262,7 +262,7 @@ export const handler = createApi({
   install: { env: process.env.ENV ?? '', region: process.env.AWS_REGION ?? '' },
   update,
   // Under required, an authenticator set up at sign-in (managed login) is turned on in the user's settings.
-  mfa: { mode: mfaMode satisfies MfaMode, enabled: (username) => users.mfaEnabled(username, { activate: mfaMode === 'required' }) },
+  mfa: { mode: mfaMode satisfies MfaMode, passkeys: process.env.PASSKEYS === 'true', enabled: (username) => users.mfaEnabled(username, { activate: mfaMode === 'required' }) },
   preferences,
   discovery,
   operations: process.env.OPERATIONS ? operations : undefined,
