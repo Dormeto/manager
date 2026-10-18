@@ -1,4 +1,4 @@
-// Calls of the signed-in user to the Cognito user pools API (MFA set-up, R6c), authorized with their access token: no
+// Calls of the signed-in user to the Cognito user pools API (MFA set-up, R6c; passkeys), authorized with their access token: no
 // SDK, the JSON protocol over fetch (the CSP allows cognito-idp in the user pool's region).
 import { getConfig } from './config';
 import { DEMO, demo } from './mock/enabled';

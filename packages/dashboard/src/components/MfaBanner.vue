@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Rights waiting for two-step verification (R6c): the MFA policy lowers them until the user sets up an authenticator app.
+// Rights waiting for two-step verification (R6c): the MFA policy lowers them until the user sets up an authenticator app
+// or, where passkeys are offered, signs in with a passkey.
 import { mdiShieldKeyOutline } from '@mdi/js';
 import { useSession } from '../stores/session';
 
@@ -10,7 +11,7 @@ const session = useSession();
   <v-alert v-if="session.waitingForMfa" type="warning" variant="tonal" class="mb-4 dm-notice">
     <template #prepend><span class="dm-notice__icon"><v-icon :icon="mdiShieldKeyOutline" size="20" /></span></template>
     Set up two-step verification to use your {{ session.role }} rights<template v-if="session.effectiveRole === null"> (nothing is shown until then)</template>:
-    <router-link to="/account">your Account page</router-link>.
+    <template v-if="session.mfa?.passkeys">set up an authenticator app or add a passkey on </template><router-link to="/account">your Account page</router-link>.
   </v-alert>
 </template>
 

@@ -200,6 +200,9 @@ export function mockUser(): User {
 }
 
 // The user's own calls to Cognito (two-step verification set-up, R6c): they succeed, and /api/me then tells.
+// The demo user's passkeys.
+let passkeys = [{ CredentialId: 'demo-1', FriendlyCredentialName: 'Laptop', AuthenticatorAttachment: 'platform', CreatedAt: Math.floor(Date.now() / 1000) - 12 * 86400 }];
+
 export async function mockCognito(target: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   await latency(200, 400);
   const d = state();
@@ -216,6 +219,11 @@ export async function mockCognito(target: string, body: Record<string, unknown>)
       return { Status: 'SUCCESS' };
     case 'SetUserMFAPreference':
       setMfa(Boolean((body.SoftwareTokenMfaSettings as { Enabled?: boolean } | undefined)?.Enabled));
+      return {};
+    case 'ListWebAuthnCredentials':
+      return { Credentials: passkeys };
+    case 'DeleteWebAuthnCredential':
+      passkeys = passkeys.filter((c) => c.CredentialId !== body.CredentialId);
       return {};
     default:
       throw new Error(`demo data: Cognito ${target} is not answered (src/mock)`);

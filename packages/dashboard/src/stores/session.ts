@@ -9,7 +9,9 @@ export interface Me {
   role: Role;
   effectiveRole?: Role | null;
   // enabled: null when Cognito could not say.
-  mfa?: { mode: 'optional' | 'operators' | 'required'; enabled: boolean | null; required: boolean };
+  mfa?: { mode: 'optional' | 'operators' | 'required'; enabled: boolean | null; required: boolean;
+    // method: how this session signed in (null: the token does not say); passkeys: the pool offers them.
+    method?: 'passkey' | 'app' | 'password' | null; passkeys?: boolean };
 }
 
 export const useSession = defineStore('session', {

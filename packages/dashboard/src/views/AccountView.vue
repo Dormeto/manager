@@ -1,13 +1,14 @@
 <script setup lang="ts">
-// The signed-in user's account (R6c): their role, and two-step verification with an authenticator app (TOTP), set up
-// with their access token directly with Cognito.
-import { computed, onMounted, ref } from 'vue';
+// The signed-in user's account (R6c): their role, two-step verification with an authenticator app (TOTP) and their
+// passkeys, set up with their access token directly with Cognito.
+import { computed, onMounted, ref, watch } from 'vue';
 import QRCode from 'qrcode';
-import { mdiShieldOffOutline } from '@mdi/js';
+import { mdiKeyOutline, mdiShieldOffOutline } from '@mdi/js';
 import { api } from '../api';
 import { accessToken } from '../auth';
 import { cognito } from '../cognito';
 import { getConfig } from '../config';
+import { relative } from '../format';
 import { useSession, type Me } from '../stores/session';
 import DmLogo from '../components/DmLogo.vue';
 
@@ -25,6 +26,17 @@ const status = computed(() => {
   if (session.mfa?.required) return `Two-step verification is off: your ${session.role} rights wait for it (viewer until then).`;
   return 'Two-step verification is off.';
 });
+
+// Passkeys (ListWebAuthnCredentials): CreatedAt in epoch seconds; AuthenticatorAttachment platform = this device.
+interface Passkey { id: string; name: string; kind: string; createdAt: string }
+const passkeys = ref<Passkey[]>([]);
+const removing = ref<Passkey | null>(null);
+// Managed login's registration page (after a recent sign-in there), which returns to this page.
+const addUrl = computed(() => {
+  const { authDomain, clientId } = getConfig();
+  return `https://${authDomain}/passkeys/add?client_id=${clientId}&redirect_uri=${encodeURIComponent(`${window.location.origin}/account`)}`;
+});
+const SIGNED_IN = { passkey: 'with a passkey', app: 'with the authenticator app', password: 'with a password only' };
 
 async function token(): Promise<string> {
   const t = await accessToken();
@@ -62,6 +74,26 @@ const verify = () => step(async () => {
   secret.value = '';
   code.value = '';
   session.applyMe(await api<Me>('/me?fresh=1'));
+});
+
+async function loadPasskeys() {
+  if (!session.mfa?.passkeys) return;
+  await step(async () => {
+    const { Credentials = [] } = await cognito<{ Credentials?: { CredentialId: string; FriendlyCredentialName?: string; AuthenticatorAttachment?: string; CreatedAt?: number }[] }>(
+      'ListWebAuthnCredentials', { AccessToken: await token(), MaxResults: 20 });
+    passkeys.value = Credentials.map((c) => ({
+      id: c.CredentialId, name: c.FriendlyCredentialName ?? 'Passkey', kind: c.AuthenticatorAttachment === 'cross-platform' ? 'Security key' : 'This device',
+      createdAt: c.CreatedAt ? new Date(c.CreatedAt * 1000).toISOString() : '',
+    }));
+  });
+}
+watch(() => session.mfa?.passkeys, loadPasskeys, { immediate: true });
+
+const removePasskey = () => step(async () => {
+  const target = removing.value!;
+  removing.value = null;
+  await cognito('DeleteWebAuthnCredential', { AccessToken: await token(), CredentialId: target.id });
+  passkeys.value = passkeys.value.filter((p) => p.id !== target.id);
 });
 
 // The MFA as Cognito says now: the API caches it (a reset from Users would otherwise show minutes later).
@@ -146,6 +178,35 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
         <v-btn v-if="session.mfa?.enabled && session.mfa.mode === 'optional'" variant="text" :loading="busy" @click="turnOff">Turn off</v-btn>
       </v-card-actions>
     </v-card>
+    <v-card v-if="session.mfa?.passkeys" title="Passkeys" class="dm-passkeys mt-4">
+      <v-card-text>
+        <p class="mb-3">Sign in with a fingerprint, a face, a PIN or a security key instead of a password; a passkey counts as two-step verification.</p>
+        <v-list v-if="passkeys.length" lines="two" class="dm-passkeys__list">
+          <v-list-item v-for="p in passkeys" :key="p.id" :prepend-icon="mdiKeyOutline" :title="p.name" :subtitle="`${p.kind}${p.createdAt ? `, added ${relative(p.createdAt)}` : ''}`">
+            <template #append><v-btn variant="text" color="error" :aria-label="`Remove ${p.name}`" @click="removing = p">Remove</v-btn></template>
+          </v-list-item>
+        </v-list>
+        <p v-else class="text-medium-emphasis">No passkey yet.</p>
+        <v-alert v-if="session.mfa.enabled" type="warning" variant="tonal" density="compact" class="mt-4">
+          <div>With an authenticator app on, you cannot sign in with a passkey. Turn the app off to use your passkeys.</div>
+          <v-btn v-if="passkeys.length" variant="text" class="mt-2" :loading="busy" @click="turnOff">Turn off the app</v-btn>
+        </v-alert>
+        <p v-if="session.mfa.method" class="dm-passkeys__session text-medium-emphasis mt-4">This session: signed in {{ SIGNED_IN[session.mfa.method] }}.</p>
+      </v-card-text>
+      <v-card-actions class="dm-mfa__actions">
+        <v-btn color="primary" variant="flat" :href="addUrl">Add a passkey</v-btn>
+      </v-card-actions>
+    </v-card>
+    <v-dialog :model-value="removing !== null" max-width="460" @update:model-value="removing = null">
+      <v-card :title="`Remove the passkey ${removing?.name}?`" class="dm-dialog">
+        <v-card-text>You can no longer sign in with it on that device or key.</v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="removing = null">Cancel</v-btn>
+          <v-btn color="error" variant="flat" @click="removePasskey">Remove</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 

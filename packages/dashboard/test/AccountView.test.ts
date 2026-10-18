@@ -7,35 +7,42 @@ import AccountView from '../src/views/AccountView.vue';
 import { useSession } from '../src/stores/session';
 
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+Object.defineProperty(window, 'visualViewport', {
+  configurable: true,
+  value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
+});
 const calls: [string, Record<string, unknown>][] = [];
 const me: { value: Record<string, unknown> } = { value: {} };
 const scopeless = { value: false };
+const credentials: { value: Record<string, unknown>[] } = { value: [] };
 let refreshed = 0;
 vi.mock('../src/cognito', () => ({
   cognito: vi.fn(async (target: string, body: Record<string, unknown>) => {
     calls.push([target, body]);
     if (target === 'AssociateSoftwareToken' && scopeless.value) throw new Error('Access Token does not have required scopes');
     if (target === 'AssociateSoftwareToken') return { SecretCode: 'JBSWY3DPEHPK3PXP' };
+    if (target === 'ListWebAuthnCredentials') return { Credentials: credentials.value };
+    if (target === 'DeleteWebAuthnCredential') { credentials.value = credentials.value.filter((c) => c.CredentialId !== body.CredentialId); return {}; }
     if (target === 'VerifySoftwareToken' && body.UserCode !== '123456') throw new Error('Invalid code received for user');
     return {};
   }),
 }));
 vi.mock('../src/auth', () => ({ accessToken: async () => 'access-token' }));
-vi.mock('../src/config', () => ({ getConfig: () => ({ env: 'dev' }) }));
+vi.mock('../src/config', () => ({ getConfig: () => ({ env: 'dev', clientId: 'client-1', authDomain: 'auth.example.com' }) }));
 vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { if (path === '/me?fresh=1') refreshed += 1; return me.value; }) }));
 
-async function mountView(mode: 'optional' | 'operators' | 'required', enabled: boolean, role = 'admin') {
+async function mountView(mode: 'optional' | 'operators' | 'required', enabled: boolean, role = 'admin', extra: Record<string, unknown> = {}) {
   setActivePinia(createPinia());
-  me.value = { email: 'ops@example.com', groups: [`dmt-${role}`], role, effectiveRole: enabled ? role : 'viewer', mfa: { mode, enabled, required: mode !== 'optional' } };
+  me.value = { email: 'ops@example.com', groups: [`dmt-${role}`], role, effectiveRole: enabled ? role : 'viewer', mfa: { mode, enabled, required: mode !== 'optional', ...extra } };
   const session = useSession();
   session.applyMe(me.value as never);
-  const wrapper = mount(AccountView, { global: { plugins: [createVuetify({ components })] } });
+  const wrapper = mount(AccountView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
   await flushPromises();
   return wrapper;
 }
 const button = (wrapper: Awaited<ReturnType<typeof mountView>>, text: string) => wrapper.findAll('button').find((b) => b.text().includes(text))!;
 
-beforeEach(() => { calls.length = 0; refreshed = 0; scopeless.value = false; });
+beforeEach(() => { credentials.value = []; document.body.innerHTML = ''; calls.length = 0; refreshed = 0; scopeless.value = false; });
 
 describe('Account', () => {
   it('sets up an authenticator app: secret and QR code, a code verified, TOTP preferred, rights read again', async () => {
@@ -92,3 +99,65 @@ describe('Account', () => {
     expect(refreshed).toBe(1);
   });
 });
+
+describe('Account, passkeys', () => {
+  const laptop = { CredentialId: 'cred-1', FriendlyCredentialName: 'MacBook', AuthenticatorAttachment: 'platform', CreatedAt: 1760000000 };
+  const key = { CredentialId: 'cred-2', FriendlyCredentialName: 'YubiKey 5', AuthenticatorAttachment: 'cross-platform', CreatedAt: 1761000000 };
+
+  it('has no Passkeys card where the pool offers none', async () => {
+    const wrapper = await mountView('operators', false);
+    expect(wrapper.text()).not.toContain('Passkeys');
+    expect(calls.map(([t]) => t)).not.toContain('ListWebAuthnCredentials');
+  });
+
+  it('lists the passkeys: name and kind (this device, or a security key)', async () => {
+    credentials.value = [laptop, key];
+    const wrapper = await mountView('operators', false, 'admin', { passkeys: true });
+    expect(calls[0]).toEqual(['ListWebAuthnCredentials', { AccessToken: 'access-token', MaxResults: 20 }]);
+    const text = wrapper.text();
+    expect(text).toContain('Passkeys');
+    expect(text).toContain('MacBook');
+    expect(text).toContain('This device');
+    expect(text).toContain('YubiKey 5');
+    expect(text).toContain('Security key');
+  });
+
+  it('adds a passkey through managed login, which returns to the Account page', async () => {
+    const wrapper = await mountView('operators', false, 'admin', { passkeys: true });
+    const add = wrapper.findAll('a').find((a) => a.text().includes('Add a passkey'))!;
+    expect(add.attributes('href')).toBe(`https://auth.example.com/passkeys/add?client_id=client-1&redirect_uri=${encodeURIComponent(`${window.location.origin}/account`)}`);
+  });
+
+  it('removes a passkey after confirmation', async () => {
+    credentials.value = [laptop, key];
+    const wrapper = await mountView('operators', false, 'admin', { passkeys: true });
+    await wrapper.findAll('button').find((b) => b.text().includes('Remove') && b.attributes('aria-label')?.includes('MacBook'))!.trigger('click');
+    await flushPromises();
+    expect(calls.map(([t]) => t)).not.toContain('DeleteWebAuthnCredential');
+    expect(document.body.textContent).toContain('Remove the passkey MacBook?');
+    ([...document.querySelectorAll('.v-overlay-container button')].find((b) => b.textContent?.trim() === 'Remove') as HTMLElement).click();
+    await flushPromises();
+    expect(calls).toContainEqual(['DeleteWebAuthnCredential', { AccessToken: 'access-token', CredentialId: 'cred-1' }]);
+    expect(wrapper.text()).not.toContain('MacBook');
+    expect(wrapper.text()).toContain('YubiKey 5');
+  });
+
+  it('warns that the authenticator app prevents signing in with a passkey, and offers to turn it off', async () => {
+    credentials.value = [laptop];
+    const wrapper = await mountView('operators', true, 'admin', { passkeys: true });
+    expect(wrapper.text()).toContain('With an authenticator app on, you cannot sign in with a passkey. Turn the app off to use your passkeys');
+    await button(wrapper, 'Turn off the app').trigger('click');
+    await flushPromises();
+    expect(calls).toContainEqual(['SetUserMFAPreference', { AccessToken: 'access-token', SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } }]);
+    const without = await mountView('operators', false, 'admin', { passkeys: true });
+    expect(without.text()).not.toContain('you cannot sign in with a passkey');
+  });
+
+  it('says how this session signed in', async () => {
+    for (const [method, line] of [['passkey', 'signed in with a passkey'], ['app', 'signed in with the authenticator app'], ['password', 'signed in with a password only']]) {
+      expect((await mountView('operators', false, 'admin', { passkeys: true, method })).text()).toContain(`This session: ${line}`);
+    }
+    expect((await mountView('operators', false, 'admin', { passkeys: true, method: null })).text()).not.toContain('This session');
+  });
+});
+

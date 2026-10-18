@@ -21,6 +21,13 @@ describe('MfaBanner', () => {
     expect(wrapper.find('a').attributes('href')).toBe('/account');
   });
 
+  it('offers a passkey beside the authenticator app where passkeys are offered', () => {
+    const wrapper = mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true, passkeys: true } });
+    expect(wrapper.text()).toContain('set up an authenticator app or add a passkey');
+    expect(wrapper.find('a').attributes('href')).toBe('/account');
+    expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: true } }).text()).not.toContain('passkey');
+  });
+
   it('says nothing once MFA is on, or where the policy does not require it', () => {
     expect(mountBanner({ email: 'a@example.com', role: 'admin', effectiveRole: 'admin', mfa: { mode: 'operators', enabled: true, required: true } }).text()).toBe('');
     expect(mountBanner({ email: 'a@example.com', role: 'viewer', effectiveRole: 'viewer', mfa: { mode: 'operators', enabled: false, required: false } }).text()).toBe('');

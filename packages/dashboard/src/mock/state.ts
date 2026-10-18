@@ -432,7 +432,7 @@ function build(now: number): Demo {
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {
     t0: now,
-    me: { email: ME, role: 'admin', effectiveRole: 'admin', mfa: { mode: 'optional', enabled: true, required: false } },
+    me: { email: ME, role: 'admin', effectiveRole: 'admin', mfa: { mode: 'optional', enabled: true, required: false, method: 'app', passkeys: true } },
     preferences: { refreshSeconds: 10 },
     updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
