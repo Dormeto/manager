@@ -42,15 +42,21 @@ const subtitle = (v: { published: string | null; router: string | null; staged?:
 let timer: ReturnType<typeof setTimeout> | undefined;
 let stopped = false;
 
+// Overlapping reads (a poll, a refresh after a request): only the newest one counts.
+let loadSeq = 0;
+
 async function load() {
+  const seq = ++loadSeq;
   try {
     const next = await api<UpdateState | NotInstalled>('/update');
+    if (seq !== loadSeq) return;
     current.value = next;
     firstVersion.value ??= next.version;
     failingSince.value = null;
     notAnswering.value = false;
     error.value = '';
   } catch (err) {
+    if (seq !== loadSeq) return;
     // Kept as last shown; said only once it lasts (the API is being replaced).
     if (current.value === null) error.value = (err as Error).message;
     else {
@@ -105,15 +111,19 @@ async function send(path: string, body: object, label: string) {
   try {
     await api<Pending>(path, { method: 'POST', body: JSON.stringify(body) });
     notice.value = { type: 'success', text: label };
-    await refresh();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
+  }
+  try {
+    // After a refusal too (409 busy): the buttons follow the state, not what the page last knew.
+    await refresh();
   } finally {
     sending.value = false;
   }
 }
 
 const prepare = () => send('/update/plan', { version: target.value }, `Preparing the update to ${target.value}.`);
+const planMismatch = computed(() => plan.value !== null && target.value !== null && target.value !== plan.value.version);
 const confirm = () => send('/update/apply', { planBuild: plan.value!.build }, `Applying the update to ${plan.value!.version}.`);
 const reload = () => location.reload();
 
@@ -258,9 +268,12 @@ onBeforeUnmount(() => {
         </v-card-text>
       </v-card>
 
+      <p v-if="plan && planMismatch" class="text-body-medium mb-3">
+        The plan was prepared for {{ plan.version }}: prepare {{ target }} to update to it, or pick {{ plan.version }} again.
+      </p>
       <div class="d-flex ga-2">
         <v-btn variant="tonal" color="primary" :disabled="!target || isBusy || sending" @click="prepare">Prepare</v-btn>
-        <v-btn variant="flat" color="primary" :disabled="!plan || isBusy || sending" @click="confirm">Confirm</v-btn>
+        <v-btn variant="flat" color="primary" :disabled="!plan || planMismatch || isBusy || sending" @click="confirm">Confirm{{ plan ? ` ${plan.version}` : '' }}</v-btn>
       </div>
     </template>
   </div>

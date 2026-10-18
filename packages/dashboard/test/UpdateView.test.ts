@@ -43,7 +43,7 @@ const mountView = async () => {
   wrapper = mount(UpdateView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
   await flushPromises();
 };
-const button = (label: string) => wrapper.findAll('button').find((b) => b.text().trim() === label)!;
+const button = (label: string) => wrapper.findAll('button').find((b) => b.text().trim() === label || b.text().trim().startsWith(`${label} `))!;
 const select = async (version: string) => {
   wrapper.findComponent({ name: 'VSelect' }).vm.$emit('update:modelValue', version);
   await flushPromises();
@@ -124,6 +124,62 @@ describe('Update', () => {
     await mountView();
     expect(wrapper.text()).toContain('This plan changes nothing.');
     expect(button('Confirm').attributes('disabled')).toBeUndefined();
+  });
+
+  it('ties Confirm to its plan: named by the plan\'s version, disabled when another version is picked', async () => {
+    h.answer = (path) => (path.startsWith('/update/changes') ? sections : state({
+      plan: { build: 'dmt-dev-install:p1', version: '0.13.0', summary: { add: 1, change: 0, destroy: 0, replaced: [], destroyed: [] } },
+    }));
+    await mountView();
+    expect(button('Confirm').text()).toBe('Confirm 0.13.0');
+    await select('0.12.0');
+    expect(button('Confirm').attributes('disabled')).toBeDefined();
+    expect(wrapper.text()).toContain('The plan was prepared for 0.13.0: prepare 0.12.0 to update to it, or pick 0.13.0 again.');
+    await select('0.13.0');
+    expect(button('Confirm').attributes('disabled')).toBeUndefined();
+    expect(wrapper.text()).not.toContain('The plan was prepared for');
+  });
+
+  it('refreshes the state after a refused request, and shows the API\'s message', async () => {
+    let calls = 0;
+    h.answer = (path, init) => {
+      if (init?.method === 'POST') throw new Error('an update is already running');
+      if (path.startsWith('/update/changes')) return sections;
+      calls += 1;
+      return calls === 1 ? state() : running();
+    };
+    await mountView();
+    await select('0.13.0');
+    expect(button('Prepare').attributes('disabled')).toBeUndefined();
+    await button('Prepare').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('an update is already running');
+    expect(calls).toBe(2);
+    expect(button('Prepare').attributes('disabled')).toBeDefined();
+  });
+
+  it('drops an older answer landing after a newer one', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const slow: Array<(v: unknown) => void> = [];
+    let n = 0;
+    h.answer = (path, init) => {
+      if (path.startsWith('/update/changes')) return sections;
+      if (init?.method === 'POST') throw new Error('refused');
+      n += 1;
+      if (n === 1) return state();
+      if (n === 2) return new Promise((resolve) => slow.push(resolve));
+      return state({ version: '0.12.5' });
+    };
+    await mountView();
+    await select('0.13.0');
+    await vi.advanceTimersByTimeAsync(60_000); // the poll whose answer is slow
+    await button('Prepare').trigger('click'); // refused, then read again: the newer answer
+    await flushPromises();
+    expect(wrapper.text()).toContain('The manager now runs 0.12.5.');
+    slow[0]!(state({ version: '0.99.0' }));
+    await flushPromises();
+    expect(wrapper.text()).toContain('0.12.5');
+    expect(wrapper.text()).not.toContain('0.99.0');
   });
 
   it('disables both buttons while a build runs, and lists its steps', async () => {
