@@ -7,7 +7,7 @@ import {
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
-import { builtInGrants, effective, type Grant } from './access.js';
+import { builtInGrants, can, effective, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
@@ -45,6 +45,8 @@ export interface AuditEntry {
   action: string;
   target: string;
   result: string;
+  groups?: string[]; // the caller's custom groups
+  reason?: string; // why a refused action was refused
 }
 
 export interface Audit {
@@ -374,6 +376,37 @@ export function createApi({
     throw new HttpError(403, 'forbidden', `${role} role required`);
   };
 
+  // Tag-driven access (R11): what the caller's grants allow on a workload with these tags. A router before 0.30.0 sends
+  // none: such a workload has {} and only a grant with no tags matches it.
+  const tagsOf = (w: object | null | undefined): Record<string, string> => {
+    const tags = (w as { tags?: unknown } | null | undefined)?.tags;
+    return tags && typeof tags === 'object' && !Array.isArray(tags) ? tags as Record<string, string> : {};
+  };
+  // The caller's grants give the permission on every workload (the built-in roles'), whatever the tags: nothing to look up.
+  const everyWorkload = (identity: Identity, permission: Permission) => can(identity.grants, undefined, permission);
+  const withAccess = <T extends object>(identity: Identity, w: T) => ({
+    ...w, tags: tagsOf(w), can: { wake: can(identity.grants, tagsOf(w), 'wake'), nap: can(identity.grants, tagsOf(w), 'nap') },
+  });
+  const workloadKey = (account: string, region: string, id: string) => `${account}#${region}#${id}`;
+  // A refused workload action is audited, with its reason, before the 403.
+  async function refuse(identity: Identity, action: string, target: string, reason: string): Promise<never> {
+    await audit.write({ id: newId(), at: new Date(now()).toISOString(), who: identity.email, role: identity.role, action, target, result: 'refused', groups: identity.groups, reason });
+    throw new HttpError(403, 'forbidden', reason);
+  }
+  async function permit(identity: Identity, action: string, target: string, tags: Record<string, string> | undefined, permission: Permission) {
+    if (can(identity.grants, tags, permission)) return;
+    let reason = `${permission} permission required on this workload`;
+    // A built-in role says as before what it lacks (also the two-step verification its rights wait for).
+    if (claimed.get(identity)?.role !== 'member') {
+      try {
+        need(identity, 'operator');
+      } catch (err) {
+        reason = (err as Error).message;
+      }
+    }
+    await refuse(identity, action, target, reason);
+  }
+
   // The MFA policy (R6c): what Cognito says of each user's authenticator, cached per instance (5 minutes when set up, 30
   // seconds when not, so that a user who just set it up gets their rights soon; /api/me?fresh=1 reads it again).
   const mfaCache = new Map<string, { enabled: boolean; at: number }>();
@@ -428,7 +461,7 @@ export function createApi({
   // Mutating call: always audited, with its result or its error.
   // `run` may name the target it found (a plan's version), else the one given is kept.
   async function audited(identity: Identity, action: string, target: string, run: () => Promise<{ result: string; response: ApiResponse; target?: string }>) {
-    const entry = { id: newId(), at: new Date(now()).toISOString(), who: identity.email, role: identity.role, action, target };
+    const entry = { id: newId(), at: new Date(now()).toISOString(), who: identity.email, role: identity.role, action, target, groups: identity.groups };
     try {
       const { result, response, target: found } = await run();
       await audit.write({ ...entry, ...(found ? { target: found } : {}), result });
@@ -650,6 +683,7 @@ export function createApi({
     };
   }
 
+  // What the caller reads of every workload the routers report or list, with their tags and what they can do.
   async function listAll(identity: Identity) {
     const { summaries, workloads } = await reports();
     const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
@@ -771,8 +805,9 @@ export function createApi({
     return { payload, text };
   }
 
-  async function pauseRoute(identity: Identity, event: ApiEvent, router: Router, action: string, workloadId?: string) {
-    need(identity, 'operator');
+  async function pauseRoute(identity: Identity, event: ApiEvent, router: Router, action: string, workloadId?: string, allow?: () => Promise<void>) {
+    if (allow) await allow();
+    else need(identity, 'operator');
     const target = workloadId ? `${router.name}/${workloadId}` : router.name;
     const prefix = workloadId ? '' : 'router-';
     if (action === 'pause') {
@@ -788,11 +823,19 @@ export function createApi({
     });
   }
 
+  const memberRoute = (method: string, [resource, a, b, action, extra]: string[]): boolean => {
+    if (resource === 'preferences') return !a && (method === 'GET' || method === 'PUT');
+    if (extra !== undefined) return false;
+    if (method === 'GET') return resource === 'workloads' && (!a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window')));
+    return method === 'POST' && resource === 'workloads' && !!a && !!b && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '');
+  };
+
   async function route(method: string, parts: string[], identity: Identity, event: ApiEvent): Promise<ApiResponse> {
     const [resource, a, b, action] = parts;
     if (method === 'GET' && resource === 'me' && !a) return reply(200, me(identity));
-    // A member has none of the fleet routes (those of their workloads come with the grants' enforcement).
-    if (identity.role === 'member' && !(resource === 'preferences' && !a && (method === 'GET' || method === 'PUT'))) throw new HttpError(403, 'forbidden', 'viewer role required');
+    // A member reaches their preferences and the routes of workloads, each filtered by
+    // their grants below: none of the fleet's other routes.
+    if (identity.role === 'member' && !memberRoute(method, parts)) throw new HttpError(403, 'forbidden', 'viewer role required');
 
     if (resource === 'preferences' && !a && preferences) {
       if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });
@@ -910,13 +953,16 @@ export function createApi({
 
     if (method === 'GET' && resource === 'workloads' && a === 'states' && !b) {
       const { rows } = await listAll(identity);
-      return reply(200, await allStates(rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') }))));
+      return reply(200, await allStates(rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') })
+        && can(identity.grants, tagsOf(w), 'read'))));
     }
 
     if (method === 'GET' && resource === 'workloads' && !a) {
       const q = event.queryStringParameters ?? {};
       const { rows, errors, routerRows } = await listAll(identity);
-      const seen = rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') }));
+      // Only what the caller reads, before any count: the counts match what is seen.
+      const seen = rows.filter((w) => visible(identity, { account: w.account as string | undefined, region: String(w.region ?? routers.find((r) => r.name === w.router)?.region ?? '') })
+        && can(identity.grants, tagsOf(w), 'read')).map((w): Record<string, unknown> => withAccess(identity, w));
       // Counts and 7-day totals of what the caller sees, whatever the filters (the Overview).
       const byState: Record<string, number> = {};
       const stats7d = { wakes: 0, ignored: 0, deferred: 0 };
@@ -950,12 +996,24 @@ export function createApi({
         return { ...w, ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}), ...states };
       })) : listed;
       const cursor = start + limit < matching.length ? Buffer.from(String(start + limit)).toString('base64url') : null;
-      return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors, ...(q.routers === '1' ? { routers: routerRows() } : {}) });
+      // The routers' rows and errors are the built-in roles'.
+      const builtIn = RANK[identity.role] >= RANK.viewer;
+      return reply(200, { workloads: page, total: matching.length, byState, stats7d, cursor, errors: builtIn ? errors : [], ...(builtIn && q.routers === '1' ? { routers: routerRows() } : {}) });
     }
 
     if (resource === 'workloads' && a && b) {
       const router = routerOf(a, identity);
       const id = workloadId(b);
+      // Its summary (tags included) when the caller's grants do not cover every workload: read once.
+      let summaryKept: WorkloadSummary | null | undefined;
+      const summaryNow = async () => {
+        if (summaryKept === undefined) summaryKept = fleet ? await fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null;
+        return summaryKept;
+      };
+      // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
+      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? ''));
+      if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, tagsOf(await summaryNow()), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
+      const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : tagsOf(await summaryNow()), permission);
       // Its state history over the last days (R8), from the manager's store: never the router.
       if (method === 'GET' && action === 'history' && !parts[4]) {
         const days = Number(event.queryStringParameters?.days ?? 7);
@@ -1021,14 +1079,15 @@ export function createApi({
           statesOf(accountOfRouter(router), router.region, id, summary),
           discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
         ]);
+        const access = withAccess(identity, { tags: summary?.tags ?? (status as { tags?: unknown } | null)?.tags });
         return reply(200, {
           // Its account and region: the ARNs of its backends and targets.
-          ...(status as object), ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
+          ...(status as object), tags: access.tags, can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
         });
       }
       if (method === 'POST' && action === 'nap' && !parts[4]) {
-        need(identity, 'operator');
+        await allow('nap', 'nap');
         return audited(identity, 'nap', `${router.name}/${id}`, async () => {
           // The router refuses at once a nap it would skip (paused, not awake); an older router naps asynchronously.
           let answer: { requested?: boolean; reason?: string } | null;
@@ -1043,7 +1102,7 @@ export function createApi({
           return { result: 'requested', response: reply(202, { accepted: true }) };
         });
       }
-      if (method === 'POST' && (action === 'pause' || action === 'resume') && !parts[4]) return pauseRoute(identity, event, router, action, id);
+      if (method === 'POST' && (action === 'pause' || action === 'resume') && !parts[4]) return pauseRoute(identity, event, router, action, id, () => allow(action, 'nap'));
       if (method === 'POST' && action === 'rename' && !parts[4]) {
         need(identity, 'operator');
         const name = nameOf(bodyOf(event).name, { required: true })!;
@@ -1060,7 +1119,7 @@ export function createApi({
         });
       }
       if (method === 'POST' && action === 'wake' && !parts[4]) {
-        need(identity, 'operator');
+        await allow('wake', 'wake');
         return audited(identity, 'wake', `${router.name}/${id}`, async () => {
           const result = await invoke(router, { action: 'force-wake', workloadId: id, by: identity.email }) as { state?: string };
           return { result: result?.state ?? 'done', response: reply(200, result) };

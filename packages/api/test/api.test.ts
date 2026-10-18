@@ -63,7 +63,7 @@ describe('workloads', () => {
     const res = await api(event('GET', '/api/workloads'));
     expect(res.statusCode).toBe(200);
     expect(json(res)).toEqual({
-      workloads: [{ router: 'dmt-dev', region: 'eu-west-1', workloadId: 'demo', state: 'AWAKE' }], total: 1, byState: { AWAKE: 1 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 }, cursor: null,
+      workloads: [{ router: 'dmt-dev', region: 'eu-west-1', workloadId: 'demo', state: 'AWAKE', tags: {}, can: { wake: false, nap: false } }], total: 1, byState: { AWAKE: 1 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 }, cursor: null,
       errors: [{ router: 'dmt-test', message: 'router unreachable' }],
     });
   });
@@ -86,7 +86,7 @@ describe('workloads', () => {
     const calls: unknown[] = [];
     const { api } = setup(async (router, payload) => { calls.push([router.name, payload]); return { workloadId: 'demo', state: 'ASLEEP' }; });
     const res = await api(event('GET', '/api/workloads/dmt-dev/demo'));
-    expect(json(res)).toEqual({ workloadId: 'demo', state: 'ASLEEP', url: null, region: 'eu-west-1' });
+    expect(json(res)).toEqual({ workloadId: 'demo', state: 'ASLEEP', url: null, region: 'eu-west-1', tags: {}, can: { wake: false, nap: false } });
     expect(calls).toEqual([['dmt-dev', { action: 'status', workloadId: 'demo' }]]);
   });
 
@@ -109,7 +109,8 @@ describe('actions', () => {
     const { api, audit } = setup(async () => ({}));
     expect((await api(event('POST', '/api/workloads/dmt-dev/demo/nap', 'dmt-viewer'))).statusCode).toBe(403);
     expect((await api(event('POST', '/api/workloads/dmt-dev/demo/wake'))).statusCode).toBe(403);
-    expect(audit).toEqual([]);
+    // The refusals are audited, with their reason.
+    expect(audit.map((e) => [e.action, e.result, e.reason])).toEqual([['nap', 'refused', 'operator role required'], ['wake', 'refused', 'operator role required']]);
   });
 
   it('nap is requested asynchronously from a router older than 0.16, and audited', async () => {
@@ -122,7 +123,7 @@ describe('actions', () => {
     const res = await api(event('POST', '/api/workloads/dmt-dev/demo/nap', 'dmt-operator'));
     expect(res.statusCode).toBe(202);
     expect(calls).toEqual([[{ action: 'request-nap', workloadId: 'demo', by: 'ops@example.com' }, undefined], [{ action: 'nap', workloadId: 'demo' }, { async: true }]]);
-    expect(audit).toEqual([{ id: 'id-1', at: '2026-10-04T12:00:00.000Z', who: 'ops@example.com', role: 'operator', action: 'nap', target: 'dmt-dev/demo', result: 'requested' }]);
+    expect(audit).toEqual([{ id: 'id-1', at: '2026-10-04T12:00:00.000Z', who: 'ops@example.com', role: 'operator', action: 'nap', target: 'dmt-dev/demo', result: 'requested', groups: [] }]);
   });
 
   it('wake forces the wake, records who asked and is audited', async () => {

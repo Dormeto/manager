@@ -106,7 +106,7 @@ describe('pause and resume', () => {
     const res = await api(event('POST', '/api/routers/dmt-dev/pause', 'dmt-operator', { reason: ' change freeze ', until, keepAsleep: true }));
     expect(res.statusCode).toBe(200);
     expect(calls.at(-1)!.slice(0, 2)).toEqual(['dmt-dev', { action: 'pause', by: 'ops@example.com', reason: 'change freeze', until, keepAsleep: true }]);
-    expect(audit).toEqual([{ id: 'id-1', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'router-pause', target: 'dmt-dev', result: `change freeze; until ${until}; keep asleep` }]);
+    expect(audit).toEqual([{ id: 'id-1', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'router-pause', target: 'dmt-dev', groups: [], result: `change freeze; until ${until}; keep asleep` }]);
   });
 
   it('pauses a workload and records the workloads woken; resumes it', async () => {

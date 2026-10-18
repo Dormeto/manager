@@ -86,7 +86,7 @@ describe('exclusions', () => {
     const stored = await store.getCandidate(TG);
     expect([stored!.status, stored!.statusReason]).toEqual(['pending-offboarding', 'excluded: manual exclusion by ops@example.com: migration']);
     expect((await store.getCandidate('free'))!.status).toBe('pending-onboarding');
-    expect(audit).toEqual([{ id: 'x2', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'exclude', target: 'target group dmt-dev-asg-app', result: `migration; until ${expiresAt}; operation op1` }]);
+    expect(audit).toEqual([{ id: 'x2', at: new Date(NOW).toISOString(), who: 'ops@example.com', role: 'operator', action: 'exclude', target: 'target group dmt-dev-asg-app', groups: [], result: `migration; until ${expiresAt}; operation op1` }]);
   });
 
   it('an exclusion whose pause operation cannot start is not kept: its candidates come back and the call fails', async () => {
