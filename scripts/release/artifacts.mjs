@@ -3,7 +3,7 @@
 // reads (its artifacts_dir), assembled from the manager's builds and the router bundle of the pinned version (package.json
 // dormeto.router). Dev plans
 // platform from it; the release archive carries it.
-//   manifest.json                       { version, router }
+//   manifest.json                       { version, router } (the release's version, else the manager's package.json)
 //   lambda/<api|discovery|operations|fleet>.zip (index.mjs), lambda/access-check.zip (check.mjs), lambda/watchdog.zip
 //                                       (watchdog.mjs), lambda/savings.zip (savings.mjs): ready to upload, so
 //                                       that nothing is written at plan time (a plan applied elsewhere works)
@@ -42,7 +42,7 @@ export function demoIn(dist) {
     || (/\.(m?js|html|css|json|map)$/.test(file) && DEMO_MARKERS.some((marker) => readFileSync(join(dist, file), 'utf8').includes(marker)))).sort();
 }
 
-export function assembleArtifacts({ manager, router, out }) {
+export function assembleArtifacts({ manager, router, out, version: releaseVersion = version(manager) }) {
   // The router bundle of the version the manager pins (package.json dormeto.router), never another checkout's.
   const routerVersion = version(router);
   const pinned = JSON.parse(readFileSync(join(manager, 'package.json'), 'utf8')).dormeto?.router;
@@ -74,7 +74,7 @@ export function assembleArtifacts({ manager, router, out }) {
     mkdirSync(dirname(join(out, target)), { recursive: true });
     cpSync(source, join(out, target), { recursive: true });
   }
-  writeFileSync(join(out, 'manifest.json'), `${JSON.stringify({ version: version(manager), router: routerVersion })}\n`);
+  writeFileSync(join(out, 'manifest.json'), `${JSON.stringify({ version: releaseVersion, router: routerVersion })}\n`);
   return list(out).sort();
 }
 

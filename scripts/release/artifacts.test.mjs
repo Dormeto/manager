@@ -28,6 +28,14 @@ test('assembles the layout the manager module reads, with the versions in the ma
   assert.equal(readFileSync(join(repos.out, 'router/router.zip'), 'utf8'), 'zip');
 });
 
+test('the manifest names the given version; without one, the manager package version', () => {
+  const repos = fakeRepos();
+  assembleArtifacts({ ...repos, version: '9.9.9-dev.1' });
+  assert.equal(JSON.parse(readFileSync(join(repos.out, 'manifest.json'), 'utf8')).version, '9.9.9-dev.1');
+  assembleArtifacts(repos);
+  assert.equal(JSON.parse(readFileSync(join(repos.out, 'manifest.json'), 'utf8')).version, '0.2.0');
+});
+
 test('a missing build output stops with its path', () => {
   const repos = fakeRepos({ without: ['manager/packages/operations/dist/check.mjs'] });
   assert.throws(() => assembleArtifacts(repos), /missing build output: .*packages\/operations\/dist\/check\.mjs/);

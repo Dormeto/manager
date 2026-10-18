@@ -69,7 +69,7 @@ export function buildRelease({ manager, router, modules, out, version, allowUnre
   if (!existsSync(kubernetes)) throw new Error(`missing build output: ${kubernetes} (the router checkout at the pinned version)`);
   const stage = mkdtempSync(join(tmpdir(), 'dmt-release-stage-'));
   // The manager archive: modules/manager with its artifacts beside, and the access module it uses (../access).
-  assembleArtifacts({ manager, router, out: join(stage, 'manager/modules/manager/artifacts') });
+  assembleArtifacts({ manager, router, version, out: join(stage, 'manager/modules/manager/artifacts') });
   // The functions' bundles are zipped in the release: checked from the builds.
   assertNoAccountValues(manager, ['api', 'discovery', 'operations', 'fleet'].flatMap((p) => files(join(manager, 'packages', p, 'dist')).map((f) => join('packages', p, 'dist', f))));
   copyModule(join(modules, 'manager'), join(stage, 'manager/modules/manager'));

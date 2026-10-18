@@ -218,3 +218,11 @@ test('--versions writes only versions.json for a published version, and refuses 
   await assert.rejects(resumeVersions({ s3: none, bucket: 'releases', version: '0.12.0', router: '0.29.0', minCli: '0.2.0', now: () => NOW }), /0\.12\.0 is not published/);
   assert.equal(none.puts.length, 0);
 });
+
+test("a release's manifest names the release's version, not the package's (a local --version release)", () => {
+  const repos = fakeRepos({ with: { 'manager/CHANGELOG.md': UNRELEASED } });
+  const local = buildRelease({ ...repos, modules: MODULES, version: '0.12.0-dev.1', allowUnreleased: true });
+  const zip = join(local.dir, 'terraform-aws-dormeto-0.12.0-dev.1.zip');
+  const manifest = JSON.parse(execFileSync('unzip', ['-p', zip, 'modules/manager/artifacts/manifest.json'], { encoding: 'utf8' }));
+  assert.deepEqual(manifest, { version: '0.12.0-dev.1', router: '0.22.6' });
+});
