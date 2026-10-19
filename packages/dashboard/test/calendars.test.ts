@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PALETTE, colorFor, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar } from '../src/calendars';
+import { PALETTE, colorFor, contrast, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar } from '../src/calendars';
 
 const paris: Calendar = {
   key: 'r/a', name: 'Shop', color: '#112233', state: 'ASLEEP', maintenanceDue: '2026-10-21T10:00:00.000Z',
@@ -10,6 +10,7 @@ const paris: Calendar = {
   ] },
 };
 const day = Date.UTC(2026, 9, 21);
+const DARK_SURFACE = '#0d1422';
 
 describe('palette', () => {
   it('repeats past its end and picks the first free slot', () => {
@@ -17,6 +18,16 @@ describe('palette', () => {
     expect(colorFor(PALETTE.length)).toBe(PALETTE[0]);
     expect(freeColor([0, 1, 3])).toBe(2);
     expect(freeColor(PALETTE.map((_, i) => i))).toBe(PALETTE.length);
+  });
+});
+
+describe('palette contrast', () => {
+  it('reads with white text as a fill, and as an outlined text on each theme', () => {
+    for (const c of PALETTE) expect(contrast(c, '#ffffff'), c).toBeGreaterThanOrEqual(4.5);
+    for (const c of ['#112233', ...PALETTE]) {
+      expect(contrast(eventsFor([{ ...paris, color: c }], day, day + 86_400_000, 'Europe/Paris', true).find((e) => e.extendedProps.kind === 'nap')!.textColor, DARK_SURFACE), c).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(eventsFor([{ ...paris, color: c }], day, day + 86_400_000, 'Europe/Paris', false).find((e) => e.extendedProps.kind === 'nap')!.textColor, '#ffffff'), c).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
 

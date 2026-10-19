@@ -7,8 +7,32 @@ export const MAX_CALENDARS = 20;
 export const MIN_ROUTER = '0.31.0';
 export const NEEDS_ROUTER = `router ${MIN_ROUTER} needed`;
 
-// Twelve distinct hues, readable as a fill with white text and as an outline on both themes.
-export const PALETTE = ['#1a73e8', '#d93025', '#188038', '#e37400', '#9334e6', '#00838f', '#c2185b', '#5d4037', '#455a64', '#6a8b00', '#e8710a', '#3949ab'] as const;
+// Twelve distinct hues, each at least 4.5:1 against white (a fill with white text, an outline on the light theme).
+export const PALETTE = ['#1a73e8', '#d93025', '#188038', '#a85500', '#9334e6', '#00838f', '#c2185b', '#5d4037', '#455a64', '#4e6b00', '#b34700', '#3949ab'] as const;
+// The surfaces the outlined text sits on (the themes' cards).
+const LIGHT_SURFACE = '#ffffff';
+const DARK_SURFACE = '#0d1422';
+
+const channels = (hex: string): [number, number, number] => { const n = parseInt(hex.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const luminance = (hex: string): number => {
+  const [r, g, b] = channels(hex).map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+// The WCAG contrast ratio of two #rrggbb colors.
+export function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
+// The color itself when it reads on the surface, else mixed toward white (dark surface) or black until it does.
+export function readableOn(color: string, surface: string): string {
+  const target = luminance(surface) < 0.5 ? 255 : 0;
+  const base = channels(color);
+  for (let t = 0; t <= 1.0001; t += 0.05) {
+    const out = `#${base.map((v) => Math.round(v + (target - v) * t).toString(16).padStart(2, '0')).join('')}`;
+    if (contrast(out, surface) >= 4.5) return out;
+  }
+  return target ? '#ffffff' : '#000000';
+}
 export const colorFor = (index: number): string => PALETTE[((index % PALETTE.length) + PALETTE.length) % PALETTE.length]!;
 // The first palette slot no enabled calendar uses (past twelve, the slots repeat).
 export function freeColor(used: number[]): number {
@@ -73,9 +97,10 @@ export interface CalendarEvent {
 const clock = (t: number, timeZone: string, day = true) => new Intl.DateTimeFormat('en-GB', { timeZone, ...(day ? { weekday: 'short' as const } : {}), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(t)).replace(',', '');
 
 // The events of the calendars in [from, to): a window's occurrence is "<workload> · Awake" filled, or "· Nap (wake: header)"
-// outlined; a maximum nap's maintenance due time of an asleep workload is a short marker. The tooltip gives the times in the
+// outlined (its text readable on the theme's surface); a maximum nap's maintenance due time of an asleep workload is a short marker. The tooltip gives the times in the
 // schedule's own zone when it is not the browser's.
-export function eventsFor(calendars: Calendar[], from: number, to: number, here: string = browserZone()): CalendarEvent[] {
+export function eventsFor(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false): CalendarEvent[] {
+  const surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
   const out: CalendarEvent[] = [];
   for (const c of calendars) {
     const s = c.schedule;
@@ -88,7 +113,7 @@ export function eventsFor(calendars: Calendar[], from: number, to: number, here:
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
         classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake'],
-        backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? c.color : '#ffffff',
+        backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
         extendedProps: { key: c.key, kind: o.kind, window: o.window, tip: `${title}${there}` },
       });
     }
