@@ -27,7 +27,7 @@ export interface OperationsApi {
 export interface ApiEvent {
   rawPath: string;
   queryStringParameters?: Record<string, string>;
-  requestContext: { http: { method: string }; authorizer?: { jwt?: { claims?: Record<string, string> } } };
+  requestContext: { http: { method: string }; authorizer?: { jwt?: { claims?: Record<string, string> }; iam?: { userArn?: string; userId?: string; accountId?: string } } };
   body?: string;
 }
 
@@ -134,6 +134,7 @@ export interface Identity {
   role: Role;
   grants: Grant[]; // what the user may do: their role's and their groups' grants, read only without the MFA the policy requires
   amr: string[] | null; // how this session signed in (the ID token's amr); null when the token has none
+  via?: 'iam'; // a caller authorized by AWS_IAM on /iam/*: an administrator, outside the MFA policy
 }
 
 // A session is multi-factor when it signed in with a passkey (user verification) or with two factors.
@@ -151,6 +152,13 @@ export function identityOf(event: ApiEvent): Identity | null {
     .reduce<Role>((best, r) => (RANK[r] > RANK[best] ? r : best), 'member');
   const groups = all.filter((g) => !g.startsWith('dmt-'));
   return { sub: claims.sub, username: claims['cognito:username'] ?? claims.sub, email: claims.email ?? claims['cognito:username'] ?? claims.sub, groups, role, grants: builtInGrants(role), amr };
+}
+
+// A SigV4 caller of /iam/*: the IAM policy that allows execute-api:Invoke is the authorization, so it acts as an administrator.
+export function iamIdentityOf(event: ApiEvent): Identity | null {
+  const iam = event.requestContext.authorizer?.iam;
+  if (!iam?.userArn) return null;
+  return { sub: iam.userId ?? iam.userArn, username: iam.userArn, email: iam.userArn, groups: [], role: 'admin', grants: builtInGrants('admin'), amr: null, via: 'iam' };
 }
 
 // 'app' only for two factors (otp and mfa): a session that stopped at the password is 'password'.
@@ -1922,13 +1930,15 @@ export function createApi({
 
   return async function handler(event: ApiEvent): Promise<ApiResponse> {
     const method = event.requestContext.http.method;
-    const parts = event.rawPath.replace(/^\/api\/?/, '').split('/').filter(Boolean);
+    // The prefix decides where the identity comes from, and neither path falls back to the other's.
+    const viaIam = /^\/iam(\/|$)/.test(event.rawPath);
+    const parts = event.rawPath.replace(viaIam ? /^\/iam\/?/ : /^\/api\/?/, '').split('/').filter(Boolean);
     try {
       if (method === 'GET' && parts.length === 1 && parts[0] === 'health') return reply(200, { status: 'ok', version });
-      const identity = identityOf(event);
+      const identity = viaIam ? iamIdentityOf(event) : identityOf(event);
       if (!identity) throw new HttpError(401, 'unauthorized', 'sign in required');
       const isMe = method === 'GET' && parts.length === 1 && parts[0] === 'me';
-      await applyMfa(identity, isMe, isMe && event.queryStringParameters?.fresh === '1');
+      if (identity.via !== 'iam') await applyMfa(identity, isMe, isMe && event.queryStringParameters?.fresh === '1');
       await refreshRouters();
       return await route(method, parts, identity, event);
     } catch (err) {
