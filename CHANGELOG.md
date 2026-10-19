@@ -13,6 +13,8 @@ CLI script, of the same release).
   outlined, and a marker shows the maintenance wake of a maximum nap. Dragging over a range, or the New window button,
   creates a weekly window for one workload the user may edit, saved through `PUT …/schedule`; clicking a window opens
   the workload's Schedule dialog. The view reads each enabled workload's schedule, so routers before 0.31.0 show none.
+- The Schedule dialog, on the workload page and from the calendar, has "Clear schedule" (confirmed), and removing
+  every window with no maximum nap clears the schedule.
 
 ## 0.16.0 — 2026-10-19
 
