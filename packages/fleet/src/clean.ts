@@ -157,6 +157,8 @@ export function workloadOf(w: unknown): Json | null {
     fallbacks: fallbacksOf(w.fallbacks),
     updatedAt: time(w.updatedAt),
     pendingWake: w.pendingWake === true,
+    // A schedule is set (routers 0.31.0).
+    scheduled: w.scheduled === true ? true : undefined,
     backends: backendsOf(w.backends),
     pauses: pausesOf(w.pauses),
     stats7d: numbers(w.stats7d, new Set(['wakes', 'ignored', 'deferred'])) ?? null,

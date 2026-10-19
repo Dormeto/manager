@@ -206,6 +206,13 @@ describe('fleet', () => {
     expect(await s.ids()).toEqual(['a', 'b']);
   });
 
+  it('keeps `scheduled` when a router reports it true (routers 0.31.0), and nothing otherwise', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { scheduled: true }), workload('b', 'AWAKE', { scheduled: 'yes' }), workload('c', 'AWAKE')]));
+    const [a, b, c] = await s.store.listWorkloads();
+    expect([a!.scheduled, 'scheduled' in b!, 'scheduled' in c!]).toEqual([true, false, false]);
+  });
+
   it('keeps the kinds of a workload\'s backends a router names (routers 0.23.3), the known ones only, once each', async () => {
     const s = setup();
     await s.ingest(checked(T1, [

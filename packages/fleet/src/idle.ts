@@ -36,8 +36,11 @@ export function windowsFor(current: number): number[] {
   return [...new Set([...IDLE_WINDOWS, current])].sort((a, b) => a - b);
 }
 
-// A router's check period from its schedule: rate(n minutes) or rate(n hours), 5 minutes otherwise.
+// A router's check period from its schedule: rate(n minutes), rate(n hours) or cron(0/n * * * ? *) (routers 0.31.0),
+// 5 minutes otherwise.
 export function checkMinutesOf(schedule: string | null): number {
+  const cron = /^cron\(0\/(\d+) \* \* \* \? \*\)$/.exec(schedule ?? '');
+  if (cron) return Number(cron[1]);
   const rate = /rate\((\d+) (minute|minutes|hour|hours)\)/.exec(schedule ?? '');
   return rate ? Number(rate[1]) * (rate[2]!.startsWith('hour') ? 60 : 1) : 5;
 }

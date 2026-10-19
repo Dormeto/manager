@@ -124,7 +124,7 @@ describe('the recommended window', () => {
 
   it('the router\'s check period from its schedule', () => {
     expect([checkMinutesOf('rate(5 minutes)'), checkMinutesOf('rate(1 minute)'), checkMinutesOf('rate(1 hour)'), checkMinutesOf('rate(2 hours)')]).toEqual([5, 1, 60, 120]);
-    expect([checkMinutesOf('cron(0/5 * * * ? *)'), checkMinutesOf(null)]).toEqual([5, 5]);
+    expect([checkMinutesOf('cron(0/5 * * * ? *)'), checkMinutesOf('cron(0/10 * * * ? *)'), checkMinutesOf(null)]).toEqual([5, 10, 5]);
   });
 });
 

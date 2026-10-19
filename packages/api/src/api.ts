@@ -975,6 +975,7 @@ export function createApi({
       if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window'));
       return (resource === 'savings' || resource === 'alerts') ? !a : resource === 'operations' && !b;
     }
+    if (resource === 'workloads' && !!a && !!b && action === 'schedule') return method === 'PUT' || method === 'DELETE';
     return method === 'POST' && resource === 'workloads' && !!a && !!b && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '');
   };
 
@@ -1203,7 +1204,7 @@ export function createApi({
         throw err;
       }));
       // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
-      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? ''));
+      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
       if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, await tagsNow(), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
       const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : await tagsNow(), permission);
       // Its state history over the last days (R8), from the manager's store: never the router.
@@ -1328,6 +1329,31 @@ export function createApi({
           } catch (err) {
             if (unknownAction(err, 'tag')) throw new HttpError(409, 'conflict', `router ${router.name} too old to set tags, upgrade it to 0.30.0 or later`);
             if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);
+            if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
+            throw err;
+          }
+        });
+      }
+      // A weekly schedule of awake and nap windows (routers 0.31.0): whoever may both wake and nap the workload; the
+      // router checks it and names what is wrong, which is a 400 here.
+      if ((method === 'PUT' || method === 'DELETE') && action === 'schedule' && !parts[4]) {
+        const clearing = method === 'DELETE';
+        const name = clearing ? 'schedule-clear' : 'schedule';
+        await allow(name, 'wake');
+        await allow(name, 'nap');
+        const schedule = clearing ? undefined : bodyOf(event);
+        return audited(identity, name, `${router.name}/${id}`, async () => {
+          try {
+            if (clearing) {
+              const result = await invoke(router, { action: 'clear-schedule', workloadId: id, by: identity.email }) as { cleared?: boolean };
+              return { result: result?.cleared ? 'cleared' : 'none set', response: reply(200, result) };
+            }
+            const result = await invoke(router, { action: 'schedule', workloadId: id, schedule, by: identity.email }) as { problems?: string[] };
+            if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
+            const windows = Array.isArray(schedule!.windows) ? schedule!.windows.length : 0;
+            return { result: `${windows} windows, ${String(schedule!.timeZone ?? '').slice(0, 64)}`, response: reply(200, result) };
+          } catch (err) {
+            if (unknownAction(err, clearing ? 'clear-schedule' : 'schedule')) throw new HttpError(409, 'conflict', `router ${router.name} too old for schedules, upgrade the router to 0.31.0 or later`);
             if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
             throw err;
           }
