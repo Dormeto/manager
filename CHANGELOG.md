@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.16.0 — 2026-10-19
+
+Router 0.31.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 Upgrade the routers to 0.31.0 for schedules (a router before 0.31.0 answers a schedule change with a 409 and reports
 none; its check stays on `rate(5 minutes)` until upgraded). Routers the manager installs or upgrades get the check on
