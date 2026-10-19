@@ -1472,7 +1472,7 @@ export function createApi({
       }
     }
 
-    throw new HttpError(404, 'not_found', `no route for ${method} /api/${parts.join('/')}`);
+    throw new HttpError(404, 'not_found', `no route for ${method} /${identity.via === 'iam' ? 'iam' : 'api'}/${parts.join('/')}`);
   }
 
   // The custom groups named in a request: an array of existing groups, once each.
@@ -1937,6 +1937,8 @@ export function createApi({
       if (method === 'GET' && parts.length === 1 && parts[0] === 'health') return reply(200, { status: 'ok', version });
       const identity = viaIam ? iamIdentityOf(event) : identityOf(event);
       if (!identity) throw new HttpError(401, 'unauthorized', 'sign in required');
+      // The route's IAM policy is the gate; a caller outside the manager's account is refused here as well.
+      if (identity.via === 'iam' && managerAccount && event.requestContext.authorizer?.iam?.accountId !== managerAccount) throw new HttpError(401, 'unauthorized', 'sign in required');
       const isMe = method === 'GET' && parts.length === 1 && parts[0] === 'me';
       if (identity.via !== 'iam') await applyMfa(identity, isMe, isMe && event.queryStringParameters?.fresh === '1');
       await refreshRouters();

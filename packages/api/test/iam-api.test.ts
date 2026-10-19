@@ -11,13 +11,13 @@ const installed: InstalledRouter = {
   version: '0.18.0', build: 'b', installedBy: 'admin@example.com', installedAt: '2026-10-05T11:00:00.000Z',
 };
 
-function setup(mfa: 'required' | null = null) {
+function setup(mfa: 'required' | null = null, managerAccount: string | null = MANAGER) {
   const audit: AuditEntry[] = [];
   const created: [string, Record<string, unknown>, string][] = [];
   const state = { mfaReads: 0 };
   const api = createApi({
     routers: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: MANAGER }],
-    managerAccount: MANAGER, invoke: async () => ({}),
+    ...(managerAccount ? { managerAccount } : {}), invoke: async () => ({}),
     audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
     now: () => NOW, newId: () => 'id-1', version: '0.15.0', routerVersion: '0.18.0',
     operations: {
@@ -29,15 +29,15 @@ function setup(mfa: 'required' | null = null) {
   return { api, audit, created, state };
 }
 
-const iam = (method: string, path: string, body?: unknown, userArn: string | undefined = ARN): ApiEvent => ({
-  rawPath: path, requestContext: { http: { method }, authorizer: { iam: { ...(userArn ? { userArn } : {}), userId: 'AIDAX', accountId: MANAGER } } },
+const iam = (method: string, path: string, body?: unknown, who: { userArn?: string | null; accountId?: string } = {}): ApiEvent => ({
+  rawPath: path, requestContext: { http: { method }, authorizer: { iam: { ...(who.userArn === null ? {} : { userArn: who.userArn ?? ARN }), userId: 'AIDAX', accountId: who.accountId ?? MANAGER } } },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 const jwt = (method: string, path: string, groups = 'dmt-admin'): ApiEvent => ({
   rawPath: path, requestContext: { http: { method }, authorizer: { jwt: { claims: { sub: 'u-1', email: 'a@example.com', 'cognito:groups': `[${groups}]` } } } },
 });
 const both = (method: string, path: string): ApiEvent => ({
-  rawPath: path, requestContext: { http: { method }, authorizer: { iam: { userArn: ARN, userId: 'AIDAX' }, jwt: { claims: { sub: 'u-1', email: 'a@example.com', 'cognito:groups': '[dmt-admin]' } } } },
+  rawPath: path, requestContext: { http: { method }, authorizer: { iam: { userArn: ARN, userId: 'AIDAX', accountId: MANAGER }, jwt: { claims: { sub: 'u-1', email: 'a@example.com', 'cognito:groups': '[dmt-admin]' } } } },
 });
 
 describe('iamIdentityOf', () => {
@@ -47,7 +47,7 @@ describe('iamIdentityOf', () => {
     expect(id.grants).toEqual([{ tags: {}, permissions: ['read', 'wake', 'nap'] }]);
   });
   it('is null without an ARN or with JWT claims only', () => {
-    expect(iamIdentityOf(iam('GET', '/iam/routers', undefined, ''))).toBeNull();
+    expect(iamIdentityOf(iam('GET', '/iam/routers', undefined, { userArn: null }))).toBeNull();
     expect(iamIdentityOf(jwt('GET', '/iam/routers'))).toBeNull();
   });
 });
@@ -91,5 +91,25 @@ describe('/iam routes', () => {
     expect(res.statusCode).toBe(202);
     expect(created).toEqual([['upgrade-router', { account: MANAGER, region: 'eu-west-3' }, ARN]]);
     expect(audit.at(-1)).toMatchObject({ who: ARN, role: 'admin' });
+  });
+
+  it('does not take /iamx for an IAM path, nor /iam/api/... for an /api one', async () => {
+    const { api } = setup();
+    expect((await api(iam('GET', '/iamx/audit'))).statusCode).toBe(401);
+    expect((await api(iam('GET', '/iam/api/audit'))).statusCode).toBe(404);
+  });
+
+  it('names the prefix requested in the unknown route message', async () => {
+    const { api } = setup();
+    expect(JSON.parse((await api(iam('GET', '/iam/nope'))).body!).message).toBe('no route for GET /iam/nope');
+    expect(JSON.parse((await api(jwt('GET', '/api/nope'))).body!).message).toBe('no route for GET /api/nope');
+  });
+
+  it('refuses a caller from another account when the manager\'s is known, and lets any when it is not', async () => {
+    const { api } = setup();
+    const res = await api(iam('GET', '/iam/audit', undefined, { accountId: '999999999999' }));
+    expect([res.statusCode, JSON.parse(res.body!).error]).toEqual([401, 'unauthorized']);
+    expect((await api(iam('GET', '/iam/audit', undefined, { accountId: MANAGER }))).statusCode).toBe(200);
+    expect((await setup(null, null).api(iam('GET', '/iam/audit', undefined, { accountId: '999999999999' }))).statusCode).toBe(200);
   });
 });
