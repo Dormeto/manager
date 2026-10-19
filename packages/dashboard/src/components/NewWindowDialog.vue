@@ -116,7 +116,8 @@ function save() {
             <v-select v-model="endTime" data-test="nw-end" :items="TIMES" label="To" density="compact" hide-details class="dm-time" @update:model-value="edit" />
           </div>
           <div data-test="nw-summary" class="mb-3">
-            <div><span class="text-medium-emphasis">Repeats every</span> <strong data-test="nw-repeats">{{ repeats }}</strong> <span v-if="length" data-test="nw-length" class="text-medium-emphasis">{{ length }}</span></div>
+            <div v-if="!days.length" data-test="nw-days-hint" class="text-medium-emphasis">Choose at least one day.</div>
+            <div v-else><span class="text-medium-emphasis">Repeats every</span> <strong data-test="nw-repeats">{{ repeats }}</strong> <span v-if="length" data-test="nw-length" class="text-medium-emphasis">{{ length }}</span></div>
             <div><span class="text-medium-emphasis">Time zone</span> <strong data-test="nw-zone">{{ zone }}</strong><span v-if="chosen && !chosen.schedule?.timeZone" class="text-medium-emphasis"> (a first schedule: your browser's zone)</span></div>
           </div>
           <v-alert v-if="clockChange" data-test="nw-clock" type="info" variant="tonal" density="compact" class="mb-3" :text="clockChange" />

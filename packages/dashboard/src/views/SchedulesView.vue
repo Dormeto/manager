@@ -49,6 +49,8 @@ const fc = () => calendar.value?.getApi();
 const rows = ref<WorkloadSummary[]>([]);
 const versions = reactive<Record<string, string | null | undefined>>({});
 const listError = ref('');
+// The routers that did not answer the list: their workloads are missing from it, not gone.
+const routerErrors = ref<{ router: string; message: string }[]>([]);
 const listing = ref(false);
 const panelRows = computed<PanelRow[]>(() => rows.value.map((w) => ({
   key: calendarKey(w.router, w.workloadId), id: w.workloadId, router: w.router, name: w.name ?? w.workloadId, ...(w.scheduled !== undefined ? { scheduled: w.scheduled } : {}),
@@ -65,16 +67,22 @@ const statuses = computed(() => Object.fromEntries(Object.entries(reads).map(([k
 const message = ref('');
 const pathOf = (key: string) => { const i = key.indexOf('/'); return `/workloads/${encodeURIComponent(key.slice(0, i))}/${encodeURIComponent(key.slice(i + 1))}`; };
 
+const routerOf = (key: string) => key.slice(0, key.indexOf('/'));
+// Only the latest read of a key lands: the calendar may be unticked, or unticked and ticked again, while an earlier read is in flight.
+const sequence: Record<string, number> = {};
 async function readOne(key: string) {
   const had = reads[key];
+  const mine = (sequence[key] = (sequence[key] ?? 0) + 1);
   reads[key] = { status: 'loading', ...(had?.data ? { data: had.data } : {}) };
-  // The calendar may be unticked while its read is in flight: the answer is then dropped.
-  const stillEnabled = () => enabled.value.some((e) => e.key === key);
+  const latest = () => sequence[key] === mine && enabled.value.some((e) => e.key === key);
   try {
     const data = await api<WorkloadStatus>(pathOf(key));
-    if (stillEnabled()) reads[key] = { status: data.schedule === undefined ? 'unsupported' : 'ok', data };
+    if (!latest()) return;
+    // A member's list has no routers block: the workload's own answer tells its router's version.
+    if (data.router?.version) versions[routerOf(key)] = data.router.version;
+    reads[key] = { status: data.schedule === undefined ? 'unsupported' : 'ok', data };
   } catch {
-    if (stillEnabled()) reads[key] = { status: 'failed', ...(had?.data ? { data: had.data } : {}) };
+    if (latest()) reads[key] = { status: 'failed', ...(had?.data ? { data: had.data } : {}) };
   }
 }
 // A queue of 4 reads at a time; one that fails does not stop the others.
@@ -116,18 +124,21 @@ async function loadList() {
     // At most 50 pages, and none that adds no new workload (a server that ignores the offset).
     const all: WorkloadSummary[] = [];
     const seen = new Set<string>();
+    const failed = new Map<string, { router: string; message: string }>();
     incomplete.value = false;
     for (let page = 0; ; page++) {
       if (page >= MAX_PAGES) { incomplete.value = true; break; }
-      const result = await api<{ workloads: WorkloadSummary[]; total?: number; routers?: { name: string; version?: string | null }[] }>(`/workloads?${new URLSearchParams({ limit: String(PAGE), offset: String(all.length), routers: '1' })}`);
+      const result = await api<{ workloads: WorkloadSummary[]; total?: number; errors?: { router: string; message: string }[]; routers?: { name: string; version?: string | null }[] }>(`/workloads?${new URLSearchParams({ limit: String(PAGE), offset: String(all.length), routers: '1' })}`);
       const fresh = result.workloads.filter((w) => !seen.has(calendarKey(w.router, w.workloadId)));
       for (const w of fresh) seen.add(calendarKey(w.router, w.workloadId));
       all.push(...fresh);
       for (const r of result.routers ?? []) versions[r.name] = r.version;
+      for (const e of result.errors ?? []) failed.set(e.router, e);
       if (!fresh.length) { incomplete.value = all.length < (result.total ?? 0); break; }
       if (all.length >= (result.total ?? all.length)) break;
     }
     rows.value = all;
+    routerErrors.value = [...failed.values()];
     listError.value = '';
   } catch (err) {
     listError.value = (err as Error).message;
@@ -141,10 +152,11 @@ async function refresh() {
 }
 onMounted(async () => {
   await loadList();
-  // A calendar whose workload is gone from the list is dropped; the list failing leaves the saved ones as they are.
+  // A calendar whose workload is gone from the list is dropped; the list failing, or its router not answering, leaves the saved ones as they are.
   if (!listError.value) {
     const known = new Set(rows.value.map((w) => calendarKey(w.router, w.workloadId)));
-    enabled.value = enabled.value.filter((e) => known.has(e.key));
+    const silent = new Set(routerErrors.value.map((e) => e.router));
+    enabled.value = enabled.value.filter((e) => known.has(e.key) || silent.has(routerOf(e.key)));
   }
   await readMany(enabled.value.map((e) => e.key));
 });
@@ -199,6 +211,22 @@ async function saveSchedule(schedule: Schedule) {
     await api(`${pathOf(key)}/schedule`, { method: 'PUT', body: JSON.stringify(schedule) });
     dialogOpen.value = false;
     persist({ last: key });
+    await readOne(key);
+  } catch (err) {
+    dialogError.value = (err as Error).message;
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function clearSchedule() {
+  const key = dialogKey.value;
+  if (!key) return;
+  saving.value = true;
+  dialogError.value = '';
+  try {
+    await api(`${pathOf(key)}/schedule`, { method: 'DELETE' });
+    dialogOpen.value = false;
     await readOne(key);
   } catch (err) {
     dialogError.value = (err as Error).message;
@@ -294,6 +322,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     </div>
   </div>
   <v-alert v-if="listError" type="error" class="mb-4" :text="listError" />
+  <v-alert v-for="e in routerErrors" :key="e.router" data-test="router-error" type="warning" variant="tonal" density="compact" class="mb-4" :title="`Router ${e.router} unreachable`" :text="`${e.message} Its workloads are missing from the panel; the calendars you enabled stay.`" />
   <v-alert v-if="incomplete" data-test="list-incomplete" type="warning" variant="tonal" density="compact" class="mb-4" text="The list of workloads is incomplete: some may be missing from the panel." />
   <v-alert v-if="smAndDown" data-test="touch-hint" type="info" variant="tonal" density="compact" class="mb-4" text="Touch and hold, then drag, to create a window — or use New window." />
   <v-alert v-if="notice" data-test="select-notice" type="warning" variant="tonal" closable class="mb-4" :text="notice" @click:close="notice = ''" />
@@ -332,7 +361,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     </v-card>
   </div>
   <NewWindowDialog v-model="newOpen" :candidates="editable" :selection="newSelection" :last="last" :error="newError" :saving="newSaving" @submit="saveNew" />
-  <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" />
+  <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
 </template>
 
 <style scoped>

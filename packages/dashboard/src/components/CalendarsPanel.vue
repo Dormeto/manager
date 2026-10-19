@@ -35,14 +35,14 @@ const swatch = (key: string) => (key in props.enabled ? colorFor(props.enabled[k
     <div v-else-if="!shown.length" class="text-medium-emphasis py-4">{{ scheduledOnly && !search.trim() ? 'No workload has a schedule yet: turn off "Scheduled only" to choose one.' : 'No workload matches.' }}</div>
     <ul :key="redraw" class="dm-panel__list">
       <li v-for="r in shown" :key="r.key" :data-test="`calendar-${r.key}`" class="dm-panel__row">
-        <v-checkbox :model-value="r.key in enabled" :disabled="!r.supported" density="compact" hide-details :aria-label="`Show ${r.name}`" @update:model-value="toggle(r)">
+        <v-checkbox :model-value="r.key in enabled" :disabled="!r.supported && !(r.key in enabled)" density="compact" hide-details :aria-label="`Show ${r.name}`" @update:model-value="toggle(r)">
           <template #label>
             <span class="dm-panel__label">
               <span data-test="swatch" class="dm-panel__swatch" :style="{ background: swatch(r.key), borderColor: r.key in enabled ? swatch(r.key) : 'currentColor' }" />
               <span class="dm-panel__name">
                 <span class="dm-panel__title">{{ r.name }}</span>
                 <span class="dm-panel__sub mono">{{ r.router }}<template v-if="r.name !== r.id"> · {{ r.id }}</template></span>
-                <span v-if="!r.supported" class="dm-panel__sub">{{ NEEDS_ROUTER }}</span>
+                <span v-if="!r.supported || status[r.key] === 'unsupported'" data-test="needs-router" class="dm-panel__sub">{{ NEEDS_ROUTER }}</span>
               </span>
             </span>
           </template>

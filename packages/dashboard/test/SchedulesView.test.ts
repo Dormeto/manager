@@ -36,6 +36,7 @@ const h = vi.hoisted(() => ({
   routers: [] as Record<string, unknown>[],
   status: {} as Record<string, unknown>,
   fail: new Set<string>(),
+  errors: [] as { router: string; message: string }[],
   // Reads held until released, with how many are in flight at most.
   hold: null as null | Promise<void>,
   active: 0,
@@ -47,7 +48,7 @@ vi.mock('../src/api', () => ({
     if (path.startsWith('/workloads?')) {
       const q = new URLSearchParams(path.slice('/workloads?'.length));
       const [limit, offset] = [Number(q.get('limit') ?? 50), Number(q.get('offset') ?? 0)];
-      return { workloads: h.list.slice(offset, offset + limit), total: h.list.length, errors: [], routers: h.routers };
+      return { workloads: h.list.slice(offset, offset + limit), total: h.list.length, errors: h.errors, routers: h.routers };
     }
     if (h.hold && !init.method) {
       h.active++;
@@ -90,7 +91,7 @@ const enable = async (w: VueWrapper, key: string) => {
 };
 const eventTitles = (w: VueWrapper) => w.findAll('.fc-event').map((e) => e.text());
 
-beforeEach(() => { h.calls.length = 0; h.fail.clear(); h.hold = null; h.active = 0; h.peak = 0; seed(); window.localStorage.clear(); });
+beforeEach(() => { h.calls.length = 0; h.fail.clear(); h.errors = []; h.hold = null; h.active = 0; h.peak = 0; seed(); window.localStorage.clear(); });
 afterEach(() => { mounted.splice(0).forEach((w) => w.unmount()); document.body.innerHTML = ''; });
 
 describe('Schedules view: the calendars panel', () => {
@@ -147,6 +148,59 @@ describe('Schedules view: the calendars panel', () => {
     second.wrapper.unmount();
     const other = await open('?view=week&date=2026-10-21', 1440, 'someone@example.com');
     expect(other.wrapper.findAll('[data-test^="calendar-"] input').filter((i) => (i.element as HTMLInputElement).checked)).toHaveLength(0);
+  });
+
+  it('keeps the enabled calendars of a router that failed to list, drops those gone from a router that listed, and shows the error', async () => {
+    saveSaved('ops@example.com', { enabled: [{ key: 'dmt-dev/a', color: 0 }, { key: 'down/x', color: 1 }, { key: 'dmt-dev/gone', color: 2 }] });
+    h.errors = [{ router: 'down', message: 'timed out' }];
+    const { wrapper } = await open();
+    const keys = () => (wrapper.findComponent(SchedulesView).vm as unknown as { enabled: { key: string }[] }).enabled.map((e) => e.key);
+    expect(keys()).toEqual(['dmt-dev/a', 'down/x']);
+    expect(wrapper.find('[data-test="router-error"]').text()).toContain('down');
+    expect(wrapper.find('[data-test="router-error"]').text()).toContain('timed out');
+    expect(JSON.parse(window.localStorage.getItem('dm-schedules:ops@example.com')!).enabled.map((e: { key: string }) => e.key)).toContain('down/x');
+  });
+
+  it('says "router 0.31.0 needed" for a workload whose own answer has no schedule, when the list gave no router versions', async () => {
+    h.list = [row('old', 'd', 'Legacy', { scheduled: undefined })];
+    h.routers = [];
+    h.status = { '/workloads/old/d': { name: 'Legacy', state: 'AWAKE', router: { version: '0.30.2' }, can: { wake: true, nap: true } } };
+    const { wrapper } = await open();
+    await wrapper.find('[data-test="scheduled-only"] input').setValue(false);
+    expect(wrapper.find('[data-test="calendar-old/d"]').text()).not.toContain('router 0.31.0 needed');
+    await enable(wrapper, 'old/d');
+    expect(wrapper.find('[data-test="calendar-old/d"]').text()).toContain('router 0.31.0 needed');
+    // Still unticked from the panel.
+    expect(wrapper.find('[data-test="calendar-old/d"] input').attributes('disabled')).toBeUndefined();
+  });
+
+  it('keeps only the latest read of a calendar unticked and ticked again while the first was in flight', async () => {
+    const api = (await import('../src/api')).api as unknown as ReturnType<typeof vi.fn>;
+    const impl = api.getMockImplementation()! as (p: string, i?: RequestInit) => Promise<unknown>;
+    let first = true;
+    let release!: () => void;
+    const slow = new Promise<void>((r) => { release = r; });
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === '/workloads/dmt-dev/a' && !init?.method) {
+        if (first) { first = false; await slow; return status('Stale', shopSchedule); }
+        return status('Fresh', shopSchedule);
+      }
+      return impl(path, init);
+    });
+    try {
+      const { wrapper } = await open();
+      const vm = () => wrapper.findComponent(SchedulesView).vm as unknown as { reads: Record<string, { data?: { name: string } }> };
+      await wrapper.find('[data-test="calendar-dmt-dev/a"] input').setValue(true);
+      await wrapper.find('[data-test="calendar-dmt-dev/a"] input').setValue(false);
+      await wrapper.find('[data-test="calendar-dmt-dev/a"] input').setValue(true);
+      await flushPromises();
+      expect(vm().reads['dmt-dev/a']!.data!.name).toBe('Fresh');
+      release();
+      await flushPromises();
+      expect(vm().reads['dmt-dev/a']!.data!.name).toBe('Fresh');
+    } finally {
+      api.mockImplementation(impl);
+    }
   });
 
   it('shows a lock on a workload the user may not edit', async () => {
@@ -520,6 +574,133 @@ describe('Schedules view: creating a window', () => {
     } finally {
       api.mockImplementation(impl);
     }
+  });
+
+  it('sends the whole schedule it read: the exceptions and the maximum nap kept, the windows normalized, no by, at or next', async () => {
+    const full = {
+      timeZone: 'Europe/Paris',
+      windows: [{ kind: 'awake', days: ['fri', 'mon'], start: '08:00', end: '19:00', by: 'x' }, { kind: 'nap', days: ['sat'], start: '20:00', end: '23:00' }],
+      exceptions: ['2026-12-25'], maxNapDays: 7, by: 'ops@example.com', at: '2026-10-01T00:00:00.000Z',
+    } as unknown as Schedule;
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', full), next: [{ at: '2026-10-20T06:00:00.000Z', kind: 'awake-start', window: 0 }] };
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    await click('[data-test="nw-save"]');
+    const sent = JSON.parse(puts()[0]!.body!);
+    expect(sent).toEqual({
+      timeZone: 'Europe/Paris',
+      windows: [{ kind: 'awake', days: ['mon', 'fri'], start: '08:00', end: '19:00' }, { kind: 'nap', days: ['sat'], start: '20:00', end: '23:00', wake: 'never' }, { kind: 'awake', days: ['mon'], start: '08:00', end: '10:00' }],
+      exceptions: ['2026-12-25'], maxNapDays: 7,
+    });
+    expect(Object.keys(sent)).toEqual(['timeZone', 'windows', 'exceptions', 'maxNapDays']);
+  });
+
+  it('saves what the dialog read when it opened, not a later read of the workload', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', days: ['sun'], start: '01:00', end: '02:00' }] });
+    await wrapper.find('[data-test="refresh"]').trigger('click');
+    await flushPromises();
+    expect(dialog(wrapper).props('candidates')[0]!.schedule!.windows).toHaveLength(1);
+    await click('[data-test="nw-save"]');
+    expect(JSON.parse(puts()[0]!.body!).windows).toEqual([...shopSchedule.windows!, { kind: 'awake', days: ['mon'], start: '08:00', end: '10:00' }]);
+  });
+
+  it('keeps the days edited alone when the workload is changed', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await enable(wrapper, 'dmt-dev/b');
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/a');
+    await flushPromises();
+    await click('[data-test="nw-day-tue"]');
+    await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/b');
+    await flushPromises();
+    expect(text('[data-test="nw-repeats"]')).toContain('Mon, Tue');
+  });
+
+  it('says why Save is disabled when every day is off, and shows no empty "Repeats every"', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    await click('[data-test="nw-day-mon"]');
+    expect(body().querySelector('[data-test="nw-repeats"]')).toBeNull();
+    expect(text('[data-test="nw-days-hint"]')).toBe('Choose at least one day.');
+    expect((body().querySelector('[data-test="nw-save"]') as HTMLButtonElement).disabled).toBe(true);
+    await click('[data-test="nw-day-wed"]');
+    expect(text('[data-test="nw-repeats"]')).toBe('Wed');
+    expect(body().querySelector('[data-test="nw-days-hint"]')).toBeNull();
+  });
+
+  it('does not offer a calendar whose last read failed', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await enable(wrapper, 'dmt-dev/b');
+    h.fail.add('/workloads/dmt-dev/b');
+    await wrapper.find('[data-test="refresh"]').trigger('click');
+    await flushPromises();
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    expect(dialog(wrapper).props('candidates').map((c: { key: string }) => c.key)).toEqual(['dmt-dev/a']);
+  });
+
+  it('does not offer a calendar that is being read again', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await enable(wrapper, 'dmt-dev/b');
+    let release!: () => void;
+    h.hold = new Promise<void>((r) => { release = r; });
+    await wrapper.find('[data-test="refresh"]').trigger('click');
+    await vi.waitFor(() => expect(h.active).toBe(2));
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    expect(dialog(wrapper).props('candidates')).toEqual([]);
+    release();
+    await flushPromises();
+  });
+
+  it('stops at 50 pages of a list that always has new rows, and says it is incomplete', async () => {
+    const api = (await import('../src/api')).api as unknown as ReturnType<typeof vi.fn>;
+    const impl = api.getMockImplementation()! as (p: string, i?: RequestInit) => Promise<unknown>;
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith('/workloads?')) {
+        h.calls.push({ path, method: 'GET' });
+        const offset = Number(new URLSearchParams(path.split('?')[1]).get('offset'));
+        return { workloads: [row('dmt-dev', `n${offset}`, `N${offset}`)], total: 1_000_000, errors: [], routers: h.routers };
+      }
+      return impl(path, init);
+    });
+    try {
+      const { wrapper } = await open();
+      expect(h.calls.filter((c) => c.path.startsWith('/workloads?'))).toHaveLength(50);
+      expect(wrapper.find('[data-test="list-incomplete"]').exists()).toBe(true);
+    } finally {
+      api.mockImplementation(impl);
+    }
+  });
+
+  it('clears a schedule from its dialog: DELETE, then the workload is read again', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await wrapper.find('.fc-event.dm-ev--awake').trigger('click');
+    await flushPromises();
+    h.calls.length = 0;
+    wrapper.findComponent(ScheduleDialog).vm.$emit('clear');
+    await flushPromises();
+    expect(h.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['DELETE /workloads/dmt-dev/a/schedule', 'GET /workloads/dmt-dev/a']);
+    expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(false);
+  });
+
+  it('keeps the dialog open and shows the refusal when clearing fails', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await wrapper.find('.fc-event.dm-ev--awake').trigger('click');
+    await flushPromises();
+    h.fail.add('/workloads/dmt-dev/a/schedule');
+    wrapper.findComponent(ScheduleDialog).vm.$emit('clear');
+    await flushPromises();
+    expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(true);
+    expect(wrapper.findComponent(ScheduleDialog).props('error')).toBe('boom');
   });
 
   it('hints at touch and hold at phone width only', async () => {

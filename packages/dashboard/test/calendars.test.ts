@@ -51,6 +51,8 @@ describe('saved calendars', () => {
     expect(loadSaved('u3')).toEqual({ enabled: [] });
     window.localStorage.setItem('dm-schedules:u4', JSON.stringify({ enabled: [{ key: 3 }, { key: 'x/y', color: 1 }] }));
     expect(loadSaved('u4').enabled).toEqual([{ key: 'x/y', color: 1 }]);
+    saveSaved('u5', { enabled: Array.from({ length: 25 }, (_, i) => ({ key: `r/${i}`, color: i % 12 })) });
+    expect(loadSaved('u5').enabled.map((e) => e.key)).toEqual(Array.from({ length: 20 }, (_, i) => `r/${i}`));
   });
 });
 
