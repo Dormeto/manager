@@ -147,18 +147,29 @@ describe('a selection as a window', () => {
     expect(longer).toEqual({ problem: expect.stringContaining('at most 24 hours') });
     expect((longer as { problem: string }).problem).toContain('month view');
     expect(windowFromSelection(new Date('2026-10-19T00:00:00+02:00'), new Date('2026-10-21T00:00:00+02:00'), 'Europe/Paris')).toHaveProperty('problem');
-    // A day in Paris the weekend Paris falls back is 25 hours of New York's clock: refused, the zone named.
-    const shifted = windowFromSelection(new Date('2026-10-24T00:00:00+02:00'), new Date('2026-10-25T00:00:00+01:00'), 'America/New_York');
-    expect(shifted).toEqual({ problem: expect.stringContaining('America/New_York') });
+    // The day Paris falls back, 24 hours of Paris's clock (25 elapsed) are 25 hours of New York's: refused there only.
+    const [sunday, monday] = [new Date('2026-10-25T00:00:00+02:00'), new Date('2026-10-26T00:00:00+01:00')];
+    expect(windowFromSelection(sunday, monday, 'Europe/Paris')).toEqual({ days: ['sun'], start: '00:00', end: '00:00' });
+    expect(windowFromSelection(sunday, monday, 'America/New_York')).toEqual({ problem: expect.stringContaining('25 hours on the clock of America/New_York') });
   });
 
   it('an empty, reversed or too short selection, and an unknown zone, are refused', () => {
     const t = new Date('2026-10-19T08:00:00+02:00');
     expect(windowFromSelection(t, t, 'Europe/Paris')).toHaveProperty('problem');
     expect(windowFromSelection(t, new Date(t.getTime() - HOUR), 'Europe/Paris')).toHaveProperty('problem');
-    expect(windowFromSelection(t, new Date(t.getTime() + 2 * 60_000), 'Europe/Paris')).toHaveProperty('problem');
+    expect(windowFromSelection(t, new Date(t.getTime() + 2 * 60_000), 'Europe/Paris')).toEqual({ problem: expect.stringContaining('at least 5 minutes') });
     expect(windowFromSelection(t, new Date(t.getTime() + HOUR), 'Nowhere/Land')).toHaveProperty('problem');
+    // A UTC offset is not a zone name (the router refuses it).
+    expect(windowFromSelection(t, new Date(t.getTime() + HOUR), '+01:00')).toHaveProperty('problem');
     expect(windowFromSelection(new Date(Number.NaN), t, 'Europe/Paris')).toHaveProperty('problem');
+  });
+
+  it('a selection that the zone\'s repeated hour makes end before (or where) it starts on its clock is refused', () => {
+    const backwards = { problem: expect.stringContaining('On the clock of Europe/Paris, this selection does not end after it starts (a clock change)') };
+    // 02:30 summer time to 02:15 winter time: 45 minutes, backwards on the clock.
+    expect(windowFromSelection(new Date('2026-10-25T02:30:00+02:00'), new Date('2026-10-25T02:15:00+01:00'), 'Europe/Paris')).toEqual(backwards);
+    // 02:30 to the second 02:30: an hour, nothing on the clock.
+    expect(windowFromSelection(new Date('2026-10-25T02:30:00+02:00'), new Date('2026-10-25T02:30:00+01:00'), 'Europe/Paris')).toEqual(backwards);
   });
 
   it('rounds each time to the nearest 5 minutes (a tie rounds up), the weekday after rounding', () => {

@@ -38,13 +38,15 @@ export function eventText(e: NextEvent, timeZone: string): string {
   return `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute} · ${EVENTS[e.kind]}`;
 }
 
-// The canonical form of a zone Intl accepts in any case ("europe/paris" is "Europe/Paris"), null when it knows none: the
-// router and the dashboard then read the same name.
+// The canonical form of a zone Intl accepts in any case ("europe/paris" is "Europe/Paris"), null when it knows none:
+// the router and the dashboard then read the same name. Intl also takes UTC offsets (+01:00, -05:00), resolved with a
+// leading sign: not zone names, and the router refuses them (UTC and Etc/GMT+5 are names).
 export function canonicalZone(zone: string | null | undefined): string | null {
   const z = String(zone ?? '').trim();
-  if (!z) return null;
+  if (!z || /^[+-]/.test(z)) return null;
   try {
-    return new Intl.DateTimeFormat('en', { timeZone: z }).resolvedOptions().timeZone;
+    const name = new Intl.DateTimeFormat('en', { timeZone: z }).resolvedOptions().timeZone;
+    return /^[+-]/.test(name) ? null : name;
   } catch {
     return null;
   }
@@ -72,7 +74,7 @@ export function scheduleBody(s: Schedule, maxNap: string): Schedule {
 
 // What the form refuses before sending (the router refuses the rest, in its words).
 export function formProblem(s: Schedule, maxNap: string): string {
-  if (s.windows?.length && !canonicalZone(s.timeZone)) return 'timeZone: not a time zone Intl knows (for example Europe/Paris)';
+  if (s.windows?.length && !canonicalZone(s.timeZone)) return 'timeZone: an IANA time zone name, such as Europe/Paris, not a UTC offset';
   const empty = (s.windows ?? []).findIndex((w) => !w.days.length);
   if (empty >= 0) return `windows[${empty}].days: pick at least one day`;
   const max = maxNap.trim();

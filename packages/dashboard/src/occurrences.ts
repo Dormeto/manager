@@ -70,8 +70,8 @@ function instantOf(day: number, minutes: number, timeZone: string): number {
 interface PlanWindow { window: number; kind: 'awake' | 'nap'; days: Set<Day>; start: number; end: number; wake?: 'never' | 'header' }
 interface Plan { timeZone: string; exceptions: Set<string>; windows: PlanWindow[] }
 
-// A schedule's windows ready for arithmetic, or null when it has none (or a zone Intl does not know). A window the router
-// would refuse (a time off the 5-minute step) is left out; the others keep their index.
+// A schedule's windows ready for arithmetic, or null when it has none (or a zone Intl does not know). A window the
+// router would refuse (a time off the 5-minute step) is left out; the others keep their index.
 function prepare(s: Schedule): Plan | null {
   if (!s?.timeZone || !s.windows?.length || !canonicalZone(s.timeZone)) return null;
   const windows: PlanWindow[] = [];
@@ -114,10 +114,10 @@ export function occurrencesIn(s: Schedule, from: number, to: number): Occurrence
 }
 
 // A selection of the calendar (instants) as a weekly window in `timeZone`: the local weekday of its start, its times on
-// that zone's clock rounded to the nearest 5 minutes (a tie rounds up; the weekday is the rounded start's). Its length is
-// measured on that clock, so a day selected over a clock change stays 24 hours: exactly 24 hours is a 24-hour window
+// that zone's clock rounded to the nearest 5 minutes (a tie rounds up; the weekday is the rounded start's). Its length
+// is measured on that clock, so a day selected over a clock change stays 24 hours: exactly 24 hours is a 24-hour window
 // (start = end), a local end on the next day an overnight one (end before start), and more than 24 hours is refused (a
-// weekly window cannot hold it).
+// weekly window cannot hold it), as is a selection that a repeated hour makes end before it starts on that clock.
 export function windowFromSelection(start: Date, end: Date, timeZone: string): { days: Day[]; start: string; end: string } | { problem: string } {
   if (!canonicalZone(timeZone)) return { problem: `Not a time zone: ${timeZone}` };
   const [from, to] = [start.getTime(), end.getTime()];
@@ -125,6 +125,10 @@ export function windowFromSelection(start: Date, end: Date, timeZone: string): {
   // Minutes of the zone's clock since 1970-01-01 00:00, on the 5-minute step.
   const clock = (t: number): number => Math.round((t + offsetAt(t, timeZone)) / (STEP * MINUTE)) * STEP;
   const [a, b] = [clock(from), clock(to)];
+  // Rounded, a range of 5 minutes or more is 5 minutes or more on the clock, unless a repeated hour turns it back.
+  if (b < a || (b === a && to - from >= STEP * MINUTE)) {
+    return { problem: `On the clock of ${timeZone}, this selection does not end after it starts (a clock change): select another range.` };
+  }
   if (b - a < STEP) return { problem: `A window lasts at least ${STEP} minutes on the clock of ${timeZone}: select a longer range.` };
   if (b - a > 1440) {
     const hours = Math.round(((b - a) / 60) * 100) / 100;

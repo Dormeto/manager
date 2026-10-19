@@ -1,9 +1,10 @@
-// The port held to the router (R12): occurrencesIn against lambda/src/lib/schedule.mjs's occurrenceAt, for seeded random
-// valid schedules (overnight and 24-hour windows, exceptions) in zones with clock changes (Lord Howe's half hour) and a
-// quarter-hour offset (Kathmandu), at random instants near the changes and at every occurrence's and every router
-// event's boundary, and the starts and ends against its nextEvents. Reads the router's checkout beside the manager's (as scripts/parity/product.mjs does), skipped when
-// it is absent. A failure names the seed (PARITY_SEED overrides it), the schedule and the instant. In Node's environment:
-// jsdom's goes through Vite's client transform, which serves no file outside the manager's workspace.
+// The port held to the router (R12): occurrencesIn against lambda/src/lib/schedule.mjs's occurrenceAt, for seeded
+// random valid schedules (overnight and 24-hour windows, exceptions) in zones with clock changes (Lord Howe's half
+// hour) and a quarter-hour offset (Kathmandu), at random instants near the changes and at every occurrence's and every
+// router event's boundary, and the starts and ends against its nextEvents. Reads the router's checkout beside the
+// manager's (as scripts/parity/product.mjs does), skipped when it is absent. A failure names the seed (PARITY_SEED
+// overrides it), the schedule and the instant. In Node's environment: jsdom's goes through Vite's client transform,
+// which serves no file outside the manager's workspace.
 // @vitest-environment node
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -169,7 +170,8 @@ if (!router) {
       }
       console.info(`occurrences parity (seed ${SEED}): ${JSON.stringify(counts)}`);
       expect(mismatches.slice(0, 5), `${mismatches.length} mismatches, the first 5 shown`).toEqual([]);
-      // Not vacuous: overnight and 24-hour windows, exceptions, instants inside occurrences and within an hour of a change.
+      // Not vacuous: overnight and 24-hour windows, exceptions, instants inside occurrences and within an hour of a
+      // change.
       expect(counts.schedules).toBe(SCHEDULES);
       for (const key of ['overnight', 'allDay', 'exceptions', 'edges', 'inside', 'nearChange'] as const) expect(counts[key], key).toBeGreaterThan(100);
     }, 120_000);

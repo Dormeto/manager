@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalZone, daysText, eventText, hoursText, scheduleBody, TIMES, type Schedule } from '../src/schedule';
+import { canonicalZone, daysText, eventText, formProblem, hoursText, scheduleBody, TIMES, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { causeText } from '../src/history';
 
 describe('schedule formatting', () => {
@@ -30,6 +30,16 @@ describe('schedule formatting', () => {
     expect(canonicalZone(' Europe/Paris ')).toBe('Europe/Paris');
     expect(canonicalZone('Nowhere/Land')).toBeNull();
     expect(canonicalZone('')).toBeNull();
+  });
+
+  it('refuses a UTC offset as the router does (IANA names only); UTC and Etc/GMT±N are names', () => {
+    for (const offset of ['+01:00', '-05:00', '+0100', ' -03:30 ']) expect(canonicalZone(offset), offset).toBeNull();
+    expect(canonicalZone('UTC')).toBe('UTC');
+    expect(canonicalZone('Etc/GMT+5')).toBe('Etc/GMT+5');
+    expect(canonicalZone('etc/gmt-3')).toBe('Etc/GMT-3');
+    const windows: ScheduleWindow[] = [{ kind: 'awake', days: ['mon'], start: '08:00', end: '19:00' }];
+    expect(formProblem({ timeZone: '+01:00', windows }, '')).toBe('timeZone: an IANA time zone name, such as Europe/Paris, not a UTC offset');
+    expect(formProblem({ timeZone: 'Etc/GMT+5', windows }, '')).toBe('');
   });
 
   it('offers times in 5-minute steps', () => {
