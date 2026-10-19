@@ -105,10 +105,13 @@ async function saveSchedule(schedule: Schedule) {
 async function clearSchedule() {
   try {
     await api(`${path.value}/schedule`, { method: 'DELETE' });
+    scheduleOpen.value = false;
     notice.value = { type: 'success', text: 'Schedule cleared.' };
     await run();
   } catch (err) {
-    notice.value = { type: 'error', text: (err as Error).message };
+    // From the dialog, the refusal stays in it; from the card, it is a notice.
+    if (scheduleOpen.value) scheduleError.value = (err as Error).message;
+    else notice.value = { type: 'error', text: (err as Error).message };
   }
 }
 
@@ -536,7 +539,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </v-card>
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
-  <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :name="title" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" />
+  <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :name="title" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
   <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" @submit="setTags" />
 </template>
 

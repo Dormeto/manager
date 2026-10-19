@@ -6,7 +6,7 @@ import { mdiCalendarClock, mdiDeleteOutline } from '@mdi/js';
 import { DAYS, TIMES, browserZone, dayLabel, formProblem, newWindow, scheduleBody, type Schedule, type ScheduleWindow } from '../schedule';
 
 const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; error?: string; saving?: boolean }>();
-const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule] }>();
+const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule]; clear: [] }>();
 const windows = ref<ScheduleWindow[]>([]);
 const timeZone = ref('');
 const exceptions = ref<string[]>([]);
@@ -29,6 +29,9 @@ const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: wind
 const problem = computed(() => formProblem(form.value, maxNap.value));
 const add = (kind: 'awake' | 'nap') => windows.value.push(newWindow(kind));
 const setKind = (w: ScheduleWindow, kind: 'awake' | 'nap') => { w.kind = kind; if (kind === 'nap') w.wake ??= 'never'; };
+// With no window and no maximum nap left, saving would be refused: what the user means is to clear the schedule.
+const clearing = computed(() => Boolean(props.schedule) && !windows.value.length && !maxNap.value.trim());
+const confirmClear = ref(false);
 const submit = () => emit('submit', scheduleBody(form.value, maxNap.value));
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 function commitTyped() {
@@ -75,11 +78,23 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
         <v-alert v-if="error" data-test="schedule-error" type="error" variant="tonal" density="compact" class="mt-3" :text="error" />
       </v-card-text>
       <v-card-actions class="px-4 pb-4">
+        <v-btn v-if="schedule && !clearing" data-test="dialog-clear" variant="text" color="error" :disabled="saving" @click="confirmClear = true">Clear schedule</v-btn>
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" :disabled="Boolean(problem) || Boolean(badDate) || saving" @click="submit">Save</v-btn>
+        <v-btn v-if="clearing" data-test="dialog-clear" color="error" variant="flat" :disabled="saving" @click="confirmClear = true">Clear schedule</v-btn>
+        <v-btn v-else color="primary" variant="flat" :disabled="Boolean(problem) || Boolean(badDate) || saving" @click="submit">Save</v-btn>
       </v-card-actions>
     </v-card>
+    <v-dialog v-model="confirmClear" max-width="440">
+      <v-card title="Clear the schedule?">
+        <v-card-text class="text-medium-emphasis">The workload follows its idle window alone again: no awake or nap window, no maximum nap. The changes made here are dropped.</v-card-text>
+        <v-card-actions class="px-4 pb-4">
+          <v-spacer />
+          <v-btn variant="text" @click="confirmClear = false">Cancel</v-btn>
+          <v-btn color="error" variant="flat" @click="confirmClear = false; emit('clear')">Clear</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-dialog>
 </template>
 

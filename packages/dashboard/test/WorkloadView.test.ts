@@ -347,6 +347,35 @@ describe('Workload view', () => {
     current = status;
   });
 
+  it('clears the schedule from its dialog: DELETE, the dialog closes, a refresh; a refusal stays in the dialog (R12)', async () => {
+    current = { ...status, can: { wake: true, nap: true }, schedule: { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', days: ['mon'], start: '08:00', end: '19:00' }] }, next: [], maintenanceDue: null };
+    const calls: [string, RequestInit | undefined][] = [];
+    let fail = true;
+    vi.mocked(api).mockImplementation((async (path: string, init?: RequestInit) => {
+      calls.push([path, init]);
+      if (init?.method === 'DELETE') { if (fail) throw new Error('the router is busy'); return { cleared: true }; }
+      return structuredClone(current);
+    }) as never);
+    const wrapper = await mountView('operator');
+    await wrapper.find('[data-test="edit-schedule"]').trigger('click');
+    await flushPromises();
+    const click = (label: string) => ([...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === label) as HTMLElement).click();
+    click('Clear schedule');
+    await flushPromises();
+    click('Clear');
+    await flushPromises();
+    expect(document.querySelector('.v-dialog')!.textContent).toContain('the router is busy');
+    fail = false;
+    const before = calls.length;
+    click('Clear');
+    await flushPromises();
+    expect(calls.filter(([, init]) => init?.method === 'DELETE').map(([p]) => p)).toEqual(['/workloads/dmtr-dev/5cdfbf844b925bf8/schedule', '/workloads/dmtr-dev/5cdfbf844b925bf8/schedule']);
+    expect(calls.slice(before).some(([p, init]) => p === '/workloads/dmtr-dev/5cdfbf844b925bf8' && !init?.method)).toBe(true);
+    expect(wrapper.text()).toContain('Schedule cleared');
+    wrapper.unmount();
+    current = status;
+  });
+
   it('shows a 409 (a router before 0.31.0) in the dialog (R12)', async () => {
     current = { ...status, can: { wake: true, nap: true }, schedule: null, next: [], maintenanceDue: null };
     vi.mocked(api).mockImplementation((async (_path: string, init?: RequestInit) => {
