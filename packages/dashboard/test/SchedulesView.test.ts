@@ -730,14 +730,19 @@ describe('Schedules view: creating a window', () => {
 });
 
 describe('SchedulesView styles', () => {
-  it('overrides the FullCalendar icon font (the CSP refuses its data: font) and wraps month titles', async () => {
+  it('overrides the FullCalendar icon font (the CSP refuses its data: font), keeps titles on one line, caps the stacking and themes the popover', async () => {
     const { readFileSync } = await import('node:fs');
     const { resolve } = await import('node:path');
     const src = readFileSync(resolve(process.cwd(), 'src/views/SchedulesView.vue'), 'utf8');
     expect(src).toMatch(/:deep\(\.fc-icon\)\s*\{\s*font-family:\s*inherit\s*!important/);
     expect(src).not.toMatch(/font-family:\s*fcicons/);
     for (const c of ['fc-icon-x', 'fc-icon-chevron-left', 'fc-icon-chevron-right']) expect(src).toContain(`:deep(.${c}::before)`);
-    expect(src).toMatch(/\.dm-ev__body--grid\s*\{[^}]*white-space:\s*normal/);
+    expect(src).not.toMatch(/white-space:\s*normal/);
+    expect(src).toMatch(/text-overflow:\s*ellipsis/);
+    expect(src).toMatch(/--fc-page-bg-color:\s*rgb\(var\(--v-theme-surface\)\)/);
+    expect(src).toMatch(/:deep\(\.fc-popover\)\s*\{[^}]*box-shadow/);
+    expect(src).toContain('eventMaxStack: 3');
+    expect(src).toMatch(/dayGridMonth:\s*\{\s*eventDisplay:\s*'list-item',\s*dayMaxEvents:\s*true/);
     expect(src).toMatch(/\.dm-past\)\s*\{\s*opacity/);
   });
 });

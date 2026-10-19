@@ -303,8 +303,11 @@ const options = computed<CalendarOptions>(() => ({
   headerToolbar: false, timeZone: 'local', firstDay: 1, nowIndicator: true, allDaySlot: false, selectable: true, selectMirror: true, select,
   slotDuration: '00:30:00', snapDuration: '00:15:00', // 15-minute steps in the time grids
   scrollTime: '07:00:00', slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
-  eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false }, dayMaxEvents: 4, height: smAndDown.value ? 'auto' : 'calc(100vh - 250px)',
-  views: { workWeek: { type: 'timeGrid', duration: { weeks: 1 }, weekends: false } },
+  eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false }, eventMaxStack: 3, height: smAndDown.value ? 'auto' : 'calc(100vh - 250px)',
+  views: {
+    workWeek: { type: 'timeGrid', duration: { weeks: 1 }, weekends: false },
+    dayGridMonth: { eventDisplay: 'list-item', dayMaxEvents: true }, // a dot, the start time and the title on the start day: no bars across days
+  },
   events: events.value, datesSet, eventClick, eventDidMount,
 }));
 
@@ -376,9 +379,10 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 /* FullCalendar in the Vuetify theme. */
 .dm-sched__calendar :deep(.fc) {
   --fc-border-color: rgba(var(--v-border-color), var(--v-border-opacity));
-  --fc-page-bg-color: transparent;
-  --fc-neutral-bg-color: rgba(var(--v-theme-on-surface), 0.04);
+  --fc-page-bg-color: rgb(var(--v-theme-surface));
+  --fc-neutral-bg-color: rgb(var(--v-theme-surface));
   --fc-today-bg-color: rgba(var(--v-theme-primary), 0.07);
+  --fc-more-link-bg-color: rgba(var(--v-theme-on-surface), 0.16);
   --fc-now-indicator-color: rgb(var(--v-theme-error));
   --fc-event-border-color: transparent;
   font-size: 0.82rem;
@@ -400,8 +404,13 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 .dm-sched__calendar :deep(.fc-icon-plus-square::before) { content: '+'; }
 .dm-sched__calendar :deep(.fc-event:focus-visible) { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 1px; }
 .dm-ev__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; padding: 1px 4px; overflow: hidden; line-height: 1.25; }
-.dm-ev__body--grid { flex-wrap: nowrap; align-items: flex-start; white-space: normal; overflow-wrap: anywhere; }
-.dm-ev__body--grid .fc-event-title { white-space: normal; }
+.dm-ev__body--grid { flex-wrap: nowrap; align-items: baseline; padding: 0 4px; }
+.dm-ev__body > span:not(.dm-ev__moon) { max-width: 100%; min-width: 0; overflow: hidden; overflow-wrap: normal; word-break: normal; white-space: nowrap; text-overflow: ellipsis; }
+.dm-ev__body--grid .fc-event-time { flex: none; }
+.dm-sched__calendar :deep(.fc-daygrid-dot-event) { border-width: 0; border-radius: 4px; }
+.dm-sched__calendar :deep(.fc-daygrid-dot-event .fc-event-main) { min-width: 0; overflow: hidden; }
+.dm-sched__calendar :deep(.fc-popover) { background: rgb(var(--v-theme-surface)); border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); overflow: hidden; }
+.dm-sched__calendar :deep(.fc-popover-header) { background: rgba(var(--v-theme-on-surface), 0.06); }
 .dm-ev__moon { align-self: center; }
 .dm-ev__body .fc-event-time { font-weight: 600; }
 
