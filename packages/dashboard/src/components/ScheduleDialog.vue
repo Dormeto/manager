@@ -10,6 +10,8 @@ const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule] }>
 const windows = ref<ScheduleWindow[]>([]);
 const timeZone = ref('');
 const exceptions = ref<string[]>([]);
+// What is typed in the exceptions field and not yet committed with Enter: kept on blur when it is a date.
+const typed = ref<string | null>('');
 const maxNap = ref('');
 const zones = (() => {
   try { return Intl.supportedValuesOf('timeZone'); } catch { return []; }
@@ -21,13 +23,19 @@ watch(() => props.modelValue, (open) => {
   timeZone.value = s?.timeZone || browserZone();
   exceptions.value = [...(s?.exceptions ?? [])];
   maxNap.value = s?.maxNapDays ? String(s.maxNapDays) : '';
-});
+  typed.value = '';
+}, { immediate: true });
 const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: windows.value, exceptions: exceptions.value }));
 const problem = computed(() => formProblem(form.value, maxNap.value));
 const add = (kind: 'awake' | 'nap') => windows.value.push(newWindow(kind));
 const setKind = (w: ScheduleWindow, kind: 'awake' | 'nap') => { w.kind = kind; if (kind === 'nap') w.wake ??= 'never'; };
 const submit = () => emit('submit', scheduleBody(form.value, maxNap.value));
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+function commitTyped() {
+  const t = (typed.value ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t) && !exceptions.value.includes(t)) exceptions.value = [...exceptions.value, t];
+  typed.value = '';
+}
 const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
 </script>
 
@@ -61,7 +69,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
           <v-btn variant="tonal" size="small" @click="add('awake')">Add awake window</v-btn>
           <v-btn variant="tonal" size="small" @click="add('nap')">Add nap window</v-btn>
         </div>
-        <v-combobox v-model="exceptions" label="Dates without a window (YYYY-MM-DD)" multiple chips closable-chips density="compact" :items="[]" :hint="badDate ? `${badDate} is not a date as YYYY-MM-DD` : 'A window that starts on one of these dates does not apply.'" persistent-hint :error="Boolean(badDate)" />
+        <v-combobox v-model="exceptions" v-model:search="typed" @blur="commitTyped" label="Dates without a window (YYYY-MM-DD)" multiple chips closable-chips density="compact" :items="[]" :hint="badDate ? `${badDate} is not a date as YYYY-MM-DD` : 'A window that starts on one of these dates does not apply.'" persistent-hint :error="Boolean(badDate)" />
         <v-text-field v-model="maxNap" label="Maximum nap (days, 1 to 60)" density="compact" type="number" min="1" max="60" class="mt-3" hint="Past it, the workload wakes for maintenance, then naps again. Blank for none." persistent-hint />
         <v-alert v-if="problem && windows.length + Number(Boolean(maxNap)) > 0" type="warning" variant="tonal" density="compact" class="mt-3" :text="problem" />
         <v-alert v-if="error" data-test="schedule-error" type="error" variant="tonal" density="compact" class="mt-3" :text="error" />

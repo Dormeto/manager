@@ -329,6 +329,44 @@ describe('Workload view', () => {
     current = status;
   });
 
+  it('clears the schedule after the confirmation: DELETE, then a refresh (R12)', async () => {
+    current = { ...status, can: { wake: true, nap: true }, schedule: { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', days: ['mon'], start: '08:00', end: '19:00' }] }, next: [], maintenanceDue: null };
+    const calls: [string, RequestInit | undefined][] = [];
+    vi.mocked(api).mockImplementation((async (path: string, init?: RequestInit) => { calls.push([path, init]); return init?.method === 'DELETE' ? { cleared: true } : structuredClone(current); }) as never);
+    const wrapper = await mountView('operator');
+    await wrapper.find('[data-test="clear-schedule"]').trigger('click');
+    await flushPromises();
+    const before = calls.length;
+    ([...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === 'Clear') as HTMLElement).click();
+    await flushPromises();
+    const del = calls.find(([, init]) => init?.method === 'DELETE')!;
+    expect(del[0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/schedule');
+    expect(calls.slice(before).some(([p, init]) => p === '/workloads/dmtr-dev/5cdfbf844b925bf8' && !init?.method)).toBe(true);
+    expect(wrapper.text()).toContain('Schedule cleared');
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('shows a 409 (a router before 0.31.0) in the dialog (R12)', async () => {
+    current = { ...status, can: { wake: true, nap: true }, schedule: null, next: [], maintenanceDue: null };
+    vi.mocked(api).mockImplementation((async (_path: string, init?: RequestInit) => {
+      if (init?.method === 'PUT') throw new Error('upgrade the router to 0.31.0 or later');
+      return structuredClone(current);
+    }) as never);
+    const wrapper = await mountView('operator');
+    await wrapper.find('[data-test="edit-schedule"]').trigger('click');
+    await flushPromises();
+    const dialog = () => document.querySelector('.v-dialog')!;
+    const click = (label: string) => ([...dialog().querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLElement).click();
+    click('Add awake window');
+    await flushPromises();
+    click('Save');
+    await flushPromises();
+    expect(dialog().textContent).toContain('upgrade the router to 0.31.0 or later');
+    wrapper.unmount();
+    current = status;
+  });
+
   it('lets an administrator edit the tags of a manager workload, sending the rows as an object', async () => {
     current = { ...status, source: 'manager', tags: { team: 'payments' } };
     const calls: [string, RequestInit | undefined][] = [];

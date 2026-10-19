@@ -131,4 +131,28 @@ describe('ScheduleDialog', () => {
     expect(dialogOf().textContent).toContain('windows[1].end: overlaps windows[0]');
     wrapper.unmount();
   });
+
+  it('survives a cleared time zone: it says the zone is required and cannot save', async () => {
+    const wrapper = mount(ScheduleDialog, { props: { modelValue: true, schedule, name: 'demo', error: '' }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    wrapper.findComponent({ name: 'VCombobox' }).vm.$emit('update:modelValue', null);
+    await flushPromises();
+    expect(dialogOf().textContent).toContain('timeZone');
+    expect((([...dialogOf().querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save')) as HTMLButtonElement).disabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('keeps an exception date typed but not committed with Enter, when the field loses focus', async () => {
+    const wrapper = mount(ScheduleDialog, { props: { modelValue: true, schedule, name: 'demo', error: '' }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    const box = wrapper.findAllComponents({ name: 'VCombobox' })[1]!;
+    box.vm.$emit('update:search', '2026-12-31');
+    await flushPromises();
+    box.vm.$emit('blur');
+    await flushPromises();
+    click('Save');
+    await flushPromises();
+    expect((wrapper.emitted('submit')![0]![0] as Schedule).exceptions).toEqual(['2026-12-25', '2026-12-31']);
+    wrapper.unmount();
+  });
 });

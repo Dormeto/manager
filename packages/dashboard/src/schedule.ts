@@ -40,8 +40,8 @@ export function eventText(e: NextEvent, timeZone: string): string {
 
 // The canonical form of a zone Intl accepts in any case ("europe/paris" is "Europe/Paris"), null when it knows none: the
 // router and the dashboard then read the same name.
-export function canonicalZone(zone: string): string | null {
-  const z = zone.trim();
+export function canonicalZone(zone: string | null | undefined): string | null {
+  const z = String(zone ?? '').trim();
   if (!z) return null;
   try {
     return new Intl.DateTimeFormat('en', { timeZone: z }).resolvedOptions().timeZone;
@@ -60,7 +60,7 @@ export const newWindow = (kind: 'awake' | 'nap' = 'awake'): ScheduleWindow => ({
 // exceptions and the maximum nap only when set. `maxNap` is the form field (blank for none).
 export function scheduleBody(s: Schedule, maxNap: string): Schedule {
   const windows = s.windows.map((w) => ({ kind: w.kind, days: DAYS.filter((d) => w.days.includes(d)), start: w.start, end: w.end, ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}) }));
-  const zone = canonicalZone(s.timeZone) ?? s.timeZone.trim();
+  const zone = canonicalZone(s.timeZone) ?? String(s.timeZone ?? '').trim();
   const max = maxNap.trim();
   return {
     ...(windows.length ? { timeZone: zone } : {}),
