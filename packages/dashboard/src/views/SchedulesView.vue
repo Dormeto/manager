@@ -306,7 +306,9 @@ const options = computed<CalendarOptions>(() => ({
   eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false }, eventMaxStack: 3, height: smAndDown.value ? 'auto' : 'calc(100vh - 250px)',
   views: {
     workWeek: { type: 'timeGrid', duration: { weeks: 1 }, weekends: false },
-    dayGridMonth: { eventDisplay: 'list-item', dayMaxEvents: true }, // a dot, the start time and the title on the start day: no bars across days
+    // A dot, the start time and the title on the start day: no bars across days; a window ending before noon (a night's
+    // nap) is not shown again at 00:00 on the next day.
+    dayGridMonth: { eventDisplay: 'list-item', dayMaxEvents: true, nextDayThreshold: '12:00' },
   },
   events: events.value, datesSet, eventClick, eventDidMount,
 }));

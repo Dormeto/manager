@@ -743,6 +743,8 @@ describe('SchedulesView styles', () => {
     expect(src).toMatch(/:deep\(\.fc-popover\)\s*\{[^}]*box-shadow/);
     expect(src).toContain('eventMaxStack: 3');
     expect(src).toMatch(/dayGridMonth:\s*\{\s*eventDisplay:\s*'list-item',\s*dayMaxEvents:\s*true/);
+    // A night's nap (20:00–07:00) shows on its start day only, not again at 00:00 on the next day.
+    expect(src).toMatch(/dayGridMonth:\s*\{[^}]*nextDayThreshold:\s*'12:00'/);
     expect(src).toMatch(/\.dm-past\)\s*\{\s*opacity/);
   });
 });
