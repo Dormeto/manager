@@ -4,26 +4,29 @@
 // with GET /workloads/{router}/{id} (4 at a time, on enabling and on refresh, never polled), each with its own state, and its
 // occurrences are expanded for the visible range by occurrences.ts.
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useDisplay } from 'vuetify';
+import { useDisplay, useTheme } from 'vuetify';
 import { useRoute, useRouter } from 'vue-router';
 import FullCalendar from '@fullcalendar/vue3';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { CalendarOptions, DatesSetArg, EventClickArg, EventContentArg, EventMountArg } from '@fullcalendar/core';
+import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventContentArg, EventMountArg } from '@fullcalendar/core';
 import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
 import { api } from '../api';
 import { MAX_CALENDARS, calendarKey, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
-import type { Schedule } from '../schedule';
+import { DAYS, browserZone, type Day, type Schedule } from '../schedule';
+import { windowFromSelection } from '../occurrences';
 import type { WorkloadStatus, WorkloadSummary } from '../types';
 import { useSession } from '../stores/session';
 import CalendarsPanel from '../components/CalendarsPanel.vue';
 import ScheduleDialog from '../components/ScheduleDialog.vue';
+import NewWindowDialog, { type Candidate, type Selection } from '../components/NewWindowDialog.vue';
 
 const session = useSession();
 const route = useRoute();
 const router = useRouter();
 const { smAndDown } = useDisplay();
+const theme = useTheme();
 
 // The views, as the address names them and as FullCalendar does.
 const VIEWS = { day: 'timeGridDay', work: 'workWeek', week: 'timeGridWeek', month: 'dayGridMonth' } as const;
@@ -65,11 +68,13 @@ const pathOf = (key: string) => { const i = key.indexOf('/'); return `/workloads
 async function readOne(key: string) {
   const had = reads[key];
   reads[key] = { status: 'loading', ...(had?.data ? { data: had.data } : {}) };
+  // The calendar may be unticked while its read is in flight: the answer is then dropped.
+  const stillEnabled = () => enabled.value.some((e) => e.key === key);
   try {
     const data = await api<WorkloadStatus>(pathOf(key));
-    reads[key] = { status: data.schedule === undefined ? 'unsupported' : 'ok', data };
+    if (stillEnabled()) reads[key] = { status: data.schedule === undefined ? 'unsupported' : 'ok', data };
   } catch {
-    reads[key] = { status: 'failed', ...(had?.data ? { data: had.data } : {}) };
+    if (stillEnabled()) reads[key] = { status: 'failed', ...(had?.data ? { data: had.data } : {}) };
   }
 }
 // A queue of 4 reads at a time; one that fails does not stop the others.
@@ -101,12 +106,19 @@ function toggle(key: string) {
   void readOne(key);
 }
 
+const PAGE = 1000;
 async function loadList() {
   listing.value = true;
   try {
-    const result = await api<{ workloads: WorkloadSummary[]; routers?: { name: string; version?: string | null }[] }>(`/workloads?${new URLSearchParams({ limit: '1000', routers: '1' })}`);
-    rows.value = result.workloads;
-    for (const r of result.routers ?? []) versions[r.name] = r.version;
+    // Pages of 1000 until the total is read (the routers' versions come with each).
+    const all: WorkloadSummary[] = [];
+    for (;;) {
+      const result = await api<{ workloads: WorkloadSummary[]; total?: number; routers?: { name: string; version?: string | null }[] }>(`/workloads?${new URLSearchParams({ limit: String(PAGE), offset: String(all.length), routers: '1' })}`);
+      all.push(...result.workloads);
+      for (const r of result.routers ?? []) versions[r.name] = r.version;
+      if (!result.workloads.length || all.length >= (result.total ?? all.length)) break;
+    }
+    rows.value = all;
     listError.value = '';
   } catch (err) {
     listError.value = (err as Error).message;
@@ -135,7 +147,7 @@ const calendars = computed<Calendar[]>(() => enabled.value.flatMap((e) => {
   if (!data) return [];
   return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next }];
 }));
-const events = computed(() => (range.value ? eventsFor(calendars.value, range.value.from, range.value.to) : []));
+const events = computed(() => (range.value ? eventsFor(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark) : []));
 
 const dateText = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 function datesSet(arg: DatesSetArg) {
@@ -161,7 +173,8 @@ const canEdit = (key: string) => {
 function eventClick(arg: EventClickArg) {
   const key = arg.event.extendedProps.key as string;
   if (!canEdit(key)) {
-    void router.push(`/workloads/${key}`);
+    const i = key.indexOf('/');
+    void router.push({ name: 'workload', params: { router: key.slice(0, i), id: key.slice(i + 1) } });
     return;
   }
   dialogKey.value = key;
@@ -185,16 +198,74 @@ async function saveSchedule(schedule: Schedule) {
   }
 }
 
+// A new window: a selection of the calendar, or the New window button, opens the dialog for the workloads the user may edit.
+const newOpen = ref(false);
+const newSelection = ref<Selection | null>(null);
+const newError = ref('');
+const newSaving = ref(false);
+const notice = ref('');
+const last = ref(saved.last);
+const editable = computed<Candidate[]>(() => enabled.value.flatMap((e) => {
+  const r = reads[e.key];
+  const can = r?.data?.can;
+  if (r?.status !== 'ok' || !r.data || !(can?.wake && can.nap)) return [];
+  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ?? null }];
+}));
+function openNew(selection: Selection) {
+  notice.value = '';
+  newError.value = '';
+  newSelection.value = selection;
+  newOpen.value = true;
+}
+const WEEKDAYS: Day[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+function select(arg: DateSelectArg) {
+  if (arg.view.type === 'dayGridMonth') {
+    const days = new Set<Day>();
+    for (const d = new Date(arg.start); d < arg.end && days.size < 7; d.setDate(d.getDate() + 1)) days.add(WEEKDAYS[d.getDay()]!);
+    openNew({ start: arg.start, end: arg.end, month: true, days: DAYS.filter((d) => days.has(d)) });
+    return;
+  }
+  // The browser's clock decides here (a day of 25 hours is 24 on the clock); the dialog checks the workload's zone.
+  const placed = windowFromSelection(arg.start, arg.end, browserZone());
+  if ('problem' in placed) {
+    notice.value = placed.problem;
+    fc()?.unselect();
+    return;
+  }
+  openNew({ start: arg.start, end: arg.end, month: false });
+}
+function newWindowButton() {
+  const start = new Date();
+  start.setHours(start.getHours() + 1, 0, 0, 0);
+  openNew({ start, end: new Date(start.getTime() + 3_600_000), month: false });
+}
+async function saveNew(arg: { key: string; schedule: Schedule }) {
+  newSaving.value = true;
+  newError.value = '';
+  try {
+    await api(`${pathOf(arg.key)}/schedule`, { method: 'PUT', body: JSON.stringify(arg.schedule) });
+    newOpen.value = false;
+    last.value = arg.key;
+    persist({ last: arg.key });
+    await readOne(arg.key);
+  } catch (err) {
+    newError.value = (err as Error).message;
+  } finally {
+    newSaving.value = false;
+  }
+}
+watch(newOpen, (open) => { if (!open) fc()?.unselect(); });
+
 function eventDidMount(arg: EventMountArg) {
   arg.el.title = String(arg.event.extendedProps.tip ?? arg.event.title);
 }
 
-// Selection (D3) comes next: `selectable` is off here and the options are one object so that it can be added.
 const options = computed<CalendarOptions>(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
   initialView, ...(queryDate ? { initialDate: queryDate } : {}),
-  headerToolbar: false, timeZone: 'local', firstDay: 1, nowIndicator: true, allDaySlot: false, selectable: false,
-  slotDuration: '00:30:00', snapDuration: '00:15:00', scrollTime: '07:00:00', slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+  headerToolbar: false, timeZone: 'local', firstDay: 1, nowIndicator: true, allDaySlot: false, selectable: true, selectMirror: true, select,
+  slotDuration: '00:30:00', snapDuration: '00:15:00', // 15-minute steps in the time grids
+   scrollTime: '07:00:00', slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
   eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false }, dayMaxEvents: 4, height: smAndDown.value ? 'auto' : 'calc(100vh - 250px)',
   views: { workWeek: { type: 'timeGrid', duration: { weeks: 1 }, weekends: false } },
   events: events.value, datesSet, eventClick, eventDidMount,
@@ -214,6 +285,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     </div>
   </div>
   <v-alert v-if="listError" type="error" class="mb-4" :text="listError" />
+  <v-alert v-if="notice" data-test="select-notice" type="warning" variant="tonal" closable class="mb-4" :text="notice" @click:close="notice = ''" />
   <div class="dm-sched">
     <v-card v-if="!smAndDown" class="dm-sched__panel pa-4">
       <CalendarsPanel :rows="panelRows" :enabled="enabledColors" :status="statuses" :message="message" :loading="listing" @toggle="toggle" />
@@ -229,7 +301,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
         <h2 data-test="title" class="dm-sched__title" aria-live="polite">{{ title }}</h2>
         <v-spacer />
         <v-btn v-if="smAndDown" data-test="panel-toggle" :prepend-icon="mdiFormatListChecks" variant="tonal" size="small" @click="drawer = !drawer">Calendars</v-btn>
-        <v-btn data-test="new-window" :prepend-icon="mdiCalendarPlus" variant="tonal" size="small" color="primary" disabled title="Select a range on the calendar">New window</v-btn>
+        <v-btn data-test="new-window" :prepend-icon="mdiCalendarPlus" variant="tonal" size="small" color="primary" title="Or drag over the calendar" @click="newWindowButton">New window</v-btn>
         <v-btn data-test="refresh" :icon="mdiRefresh" variant="text" size="small" aria-label="Refresh" :loading="listing" @click="refresh" />
         <v-btn-toggle :model-value="view" mandatory density="compact" variant="outlined" divided class="dm-sched__views" @update:model-value="show($event)">
           <v-btn v-for="(label, v) in VIEW_LABELS" :key="v" :data-test="`view-${v}`" :value="v" size="small">{{ label }}</v-btn>
@@ -248,6 +320,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
       </div>
     </v-card>
   </div>
+  <NewWindowDialog v-model="newOpen" :candidates="editable" :selection="newSelection" :last="last" :error="newError" :saving="newSaving" @submit="saveNew" />
   <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" />
 </template>
 
