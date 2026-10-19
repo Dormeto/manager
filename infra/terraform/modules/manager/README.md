@@ -65,7 +65,8 @@ MFA policy; the audit and the operations name its ARN.
 }
 ```
 
-`GET` alone is enough for `dormeto routers list` and `dormeto workloads list`:
+`GET` alone is enough for `dormeto routers list` and `dormeto workloads list`, but it still reads everything an
+administrator reads through the `/iam/*` routes: the users and their emails, the audit, the update state:
 
 ```json
 {
@@ -78,5 +79,12 @@ MFA policy; the audit and the operations name its ARN.
 }
 ```
 
-The region, account id and API id in these examples are placeholders: take them from the `api_iam_arn` output. The
+The region, account id and API id in these examples are placeholders: take them from the `api_iam_arn` output. A manager
+installed with the CLI has no Terraform outputs at hand: find the API id by the API's name, then build the ARN with it:
+
+```sh
+aws apigatewayv2 get-apis --query "Items[?Name=='dmt-<env>-manager-api'].ApiId" --output text
+```
+
+ The
 dashboard and its users are unchanged (`/api/*`, Cognito).
