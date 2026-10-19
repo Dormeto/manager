@@ -81,7 +81,7 @@ describe('ScheduleCard', () => {
     }
   });
 
-    it('asks before clearing', async () => {
+  it('asks before clearing', async () => {
     const wrapper = mountCard({});
     await wrapper.find('[data-test="clear-schedule"]').trigger('click');
     await flushPromises();
@@ -159,7 +159,9 @@ describe('ScheduleDialog', () => {
     const wrapper = mount(ScheduleDialog, { props: { modelValue: true, schedule: only, name: 'demo', error: '' }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
     await flushPromises();
     expect(dialogOf().querySelectorAll('[data-test="window"]')).toHaveLength(0);
-    expect((dialogOf().querySelector('input[type="number"], [data-test="max-nap"] input') as HTMLInputElement | null)?.value ?? '7').toBe('7');
+    const input = dialogOf().querySelector('input[type="number"], [data-test="max-nap"] input') as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    expect(input!.value).toBe('7');
     wrapper.unmount();
   });
 
