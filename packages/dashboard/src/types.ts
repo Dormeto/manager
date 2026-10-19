@@ -19,6 +19,7 @@ export interface Pause {
 }
 
 import type { Failure, Fallback } from './failures';
+import type { NextEvent, Schedule } from './schedule';
 import type { Energy, FleetEnergy } from './energy';
 
 export interface WorkloadSummary {
@@ -29,6 +30,7 @@ export interface WorkloadSummary {
   // R11: Dormeto's own tags (absent for routers before 0.30.0) and what the caller's grants allow.
   tags?: Record<string, string>;
   can?: { wake: boolean; nap: boolean };
+  scheduled?: boolean; // R12: has a schedule (routers 0.31.0 and later)
   state: string;
   url: string | null;
   wakeMode: string;
@@ -128,6 +130,9 @@ export interface WorkloadStatus {
   name?: string; // routers 0.20.0 and later
   tags?: Record<string, string>; // R11: absent for routers before 0.30.0
   can?: { wake: boolean; nap: boolean }; // R11: what the caller's grants allow
+  schedule?: Schedule | null; // R12: absent for routers before 0.31.0, null when none
+  next?: NextEvent[];
+  maintenanceDue?: string | null;
   url?: string | null; // from its summary (manager 0.2 and later)
   router: { version: string; build: string };
   state: string;

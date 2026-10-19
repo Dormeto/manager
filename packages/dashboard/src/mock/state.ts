@@ -3,6 +3,7 @@
 // what they start finishes over time, as the routers and the workflow would.
 import type { Candidate, DiscoveryConfig, LintFinding, RunRecord, Status } from '@dormeto/discovery/types';
 import type { Failure } from '../failures';
+import type { Schedule } from '../schedule';
 import type { Me } from '../stores/session';
 import type { ClusterCheck, Exclusion, HistoryEntry, OperationType, Pause, Rule, SavingsSettings, Settings, StoppedItem } from '../types';
 import {
@@ -47,6 +48,7 @@ export interface DemoWorkload {
   wakeMode: 'any' | 'browser';
   source: 'terraform' | 'manager';
   tags: Record<string, string>; // R11: Dormeto's own tags
+  schedule: Schedule | null; // R12
   settings: Settings;
   backends: BackendSpec[];
   items: { item: StoppedItem; hourly: number }[];
@@ -225,6 +227,17 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
   };
 }
 
+// R12: a schedule some demo workloads have: awake in office hours, napping at night and on Saturdays.
+const OFFICE_HOURS: Schedule = {
+  timeZone: 'Europe/Paris',
+  windows: [
+    { kind: 'awake', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:30', end: '19:00' },
+    { kind: 'nap', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '20:00', end: '07:00', wake: 'header' },
+    { kind: 'nap', days: ['sat'], start: '00:00', end: '00:00', wake: 'never' },
+  ],
+  exceptions: ['2026-12-25'], maxNapDays: 7, by: 'ops@dormeto.example', at: '2026-10-01T09:00:00.000Z',
+};
+
 // R11: the demo's teams, whose workloads the groups below pick by their team tag.
 const TEAMS = ['payments', 'platform', 'data', 'web'];
 
@@ -236,6 +249,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   return {
     workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
     tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
+    schedule: seed % 4 === 0 ? OFFICE_HOURS : null,
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
     wakeMs: ((time.wake[0] + time.wake[1]) / 2) * SECOND, napMs: time.nap, state: 'ASLEEP', entries: [], bursts: [], pauses: [],
     failure: null, consecutiveFailures: 0, nextAttemptAt: null, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null,
@@ -678,7 +692,7 @@ export function onboardedWorkload(d: Demo, c: Candidate, router: DemoRouter, inp
     wakeMode: input.settings?.wakeMode === 'browser' ? 'browser' : 'any', source: 'manager', hosts: c.hosts.length ? c.hosts : [`${name}.${ORG.scenario.domain}`],
   });
   return Object.assign(w, {
-    name, tags: { ...(input.tags ?? {}) }, itemsKnown: false, state: 'AWAKE' as State, entries: [{ from: null, to: 'AWAKE', at: iso(at) }], awakeSince: at, updatedAt: at, activeUntil: at + 4 * MINUTE,
+    name, tags: { ...(input.tags ?? {}) }, schedule: null, itemsKnown: false, state: 'AWAKE' as State, entries: [{ from: null, to: 'AWAKE', at: iso(at) }], awakeSince: at, updatedAt: at, activeUntil: at + 4 * MINUTE,
     targetGroupArn: c.targetGroupArn ?? w.targetGroupArn, loadBalancerArn: c.loadBalancerArn, ruleArns: c.rules.map((x) => x.id), priority: Number(c.priority) || w.priority,
     idleHours7d: c.idleHours7d, requests7d: c.requests7d,
   });

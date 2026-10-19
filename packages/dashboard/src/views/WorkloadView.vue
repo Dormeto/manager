@@ -22,6 +22,9 @@ import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import IdleWindowCard from '../components/IdleWindowCard.vue';
+import ScheduleCard from '../components/ScheduleCard.vue';
+import ScheduleDialog from '../components/ScheduleDialog.vue';
+import type { Schedule } from '../schedule';
 import DmLogo from '../components/DmLogo.vue';
 import DmLoader from '../components/DmLoader.vue';
 import { stateSince } from '../state';
@@ -44,6 +47,9 @@ const pauseOpen = ref(false);
 const excludeOpen = ref(false);
 const renameOpen = ref(false);
 const tagsOpen = ref(false);
+const scheduleOpen = ref(false);
+const scheduleError = ref('');
+const savingSchedule = ref(false);
 // R11: what the caller's grants allow on this workload; an API before the tags (no `can`) leaves it to the role.
 const canWake = computed(() => status.value?.can?.wake ?? session.canOperate);
 const canNap = computed(() => status.value?.can?.nap ?? session.canOperate);
@@ -73,6 +79,33 @@ async function setTags(next: Tags) {
   try {
     await api(`${path.value}/tags`, { method: 'PUT', body: JSON.stringify({ tags: next }) });
     notice.value = { type: 'success', text: 'Tags saved.' };
+    await run();
+  } catch (err) {
+    notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
+// R12: the schedule needs both permissions; the router's refusals (a 400 with its problems) stay in the dialog.
+const canSchedule = computed(() => canWake.value && canNap.value);
+async function saveSchedule(schedule: Schedule) {
+  savingSchedule.value = true;
+  scheduleError.value = '';
+  try {
+    await api(`${path.value}/schedule`, { method: 'PUT', body: JSON.stringify(schedule) });
+    scheduleOpen.value = false;
+    notice.value = { type: 'success', text: 'Schedule saved.' };
+    await run();
+  } catch (err) {
+    scheduleError.value = (err as Error).message;
+  } finally {
+    savingSchedule.value = false;
+  }
+}
+
+async function clearSchedule() {
+  try {
+    await api(`${path.value}/schedule`, { method: 'DELETE' });
+    notice.value = { type: 'success', text: 'Schedule cleared.' };
     await run();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -383,6 +416,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
       </v-card>
       <HistoryCard :router="router" :id="id" :now="now" />
+      <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
       <IdleWindowCard :router="router" :id="id" />
     </div>
 
@@ -502,6 +536,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </v-card>
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
+  <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :name="title" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" />
   <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" @submit="setTags" />
 </template>
 

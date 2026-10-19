@@ -10,6 +10,7 @@ import {
   changeDismissal, createExclusion, groupsAction, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
   setTags, workloadAction,
 } from './actions';
+import { clearSchedule, scheduleView, setSchedule } from './schedule';
 import { AVAILABLE } from './fixtures';
 import { ME } from './org';
 import { updateChanges, updateRequest, updateState } from './update';
@@ -94,7 +95,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (method === 'GET' && a === 'states' && !b) return fleetStates(d, now);
     if (method === 'GET' && !a) return workloads(d, q, now);
     if (a && b && !parts[4]) {
-      if (method === 'GET' && !action) return workloadStatus(d, workloadOf(d, a, b), now);
+      if (method === 'GET' && !action) { const w = workloadOf(d, a, b); return { ...workloadStatus(d, w, now), ...scheduleView(w, now) }; }
       if (method === 'GET' && action === 'history') {
         const days = Number(q.get('days') ?? 7);
         if (!Number.isInteger(days) || days < 1 || days > 31) fail(400, 'bad_request', 'days must be a whole number from 1 to 31');
@@ -102,6 +103,8 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
       }
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
       if (method === 'PUT' && action === 'tags') return setTags(d, a, b, body);
+      if (method === 'PUT' && action === 'schedule') return setSchedule(d, a, b, body, now);
+      if (method === 'DELETE' && action === 'schedule') return clearSchedule(d, a, b);
       if (method === 'POST' && action) return workloadAction(d, a, b, action, body, now);
     }
   }

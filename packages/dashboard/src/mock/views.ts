@@ -178,7 +178,7 @@ export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = fals
   const total = countsOf(w, now - 7 * DAY, now);
   const costs = states ? costsOf(d, w, now) : null;
   return {
-    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode,
+    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(w.schedule ? { scheduled: true } : {}), state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode,
     wakeCount: w.wakeCount, awakeSince: w.awakeSince === null ? null : iso(w.awakeSince), wakeStartedAt: w.wakeStartedAt === null ? null : iso(w.wakeStartedAt),
     failedAt: w.failedAt === null ? null : iso(w.failedAt), failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: w.nextAttemptAt === null ? null : iso(w.nextAttemptAt), fallbacks: [], updatedAt: w.updatedAt === null ? null : iso(w.updatedAt),

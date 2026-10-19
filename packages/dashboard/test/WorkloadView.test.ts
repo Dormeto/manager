@@ -283,6 +283,52 @@ describe('Workload view', () => {
     current = status;
   });
 
+  it('shows its Schedule card after its history, with the schedule and next events from the API (R12)', async () => {
+    current = { ...status, can: { wake: true, nap: true }, schedule: { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', days: ['mon', 'tue'], start: '08:00', end: '19:00' }] }, next: [{ at: '2026-10-20T06:00:00.000Z', kind: 'awake-start', window: 0 }], maintenanceDue: null };
+    const wrapper = await mountView('operator');
+    expect(wrapper.find('[data-test="schedule-card"]').text()).toContain('Mon, Tue');
+    expect(wrapper.find('[data-test="edit-schedule"]').exists()).toBe(true);
+    wrapper.unmount();
+    current = { ...status, can: { wake: true, nap: false }, schedule: null, next: [], maintenanceDue: null };
+    const member = await mountView('member');
+    expect(member.find('[data-test="edit-schedule"]').exists()).toBe(false);
+    member.unmount();
+    current = status;
+  });
+
+  it('puts the schedule, keeps the dialog open with the 400 text, then closes on success (R12)', async () => {
+    current = { ...status, can: { wake: true, nap: true }, schedule: null, next: [], maintenanceDue: null };
+    const calls: [string, RequestInit | undefined][] = [];
+    let fail = true;
+    vi.mocked(api).mockImplementation((async (path: string, init?: RequestInit) => {
+      calls.push([path, init]);
+      if (init?.method === 'PUT') {
+        if (fail) throw new Error('windows[0].end: overlaps windows[1]');
+        return { schedule: {}, next: [], maintenanceDue: null };
+      }
+      return structuredClone(current);
+    }) as never);
+    const wrapper = await mountView('operator');
+    await wrapper.find('[data-test="edit-schedule"]').trigger('click');
+    await flushPromises();
+    const dialog = () => document.querySelector('.v-dialog')!;
+    const click = (label: string) => ([...dialog().querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLElement).click();
+    click('Add awake window');
+    await flushPromises();
+    click('Save');
+    await flushPromises();
+    const put = calls.find(([, init]) => init?.method === 'PUT')!;
+    expect(put[0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/schedule');
+    expect(JSON.parse(put[1]!.body as string).windows).toEqual([{ kind: 'awake', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:00', end: '19:00' }]);
+    expect(dialog().textContent).toContain('windows[0].end: overlaps windows[1]');
+    fail = false;
+    click('Save');
+    await flushPromises();
+    expect(wrapper.text()).toContain('Schedule saved');
+    wrapper.unmount();
+    current = status;
+  });
+
   it('lets an administrator edit the tags of a manager workload, sending the rows as an object', async () => {
     current = { ...status, source: 'manager', tags: { team: 'payments' } };
     const calls: [string, RequestInit | undefined][] = [];

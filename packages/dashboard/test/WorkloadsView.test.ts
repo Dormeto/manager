@@ -148,6 +148,17 @@ describe('Workloads view', () => {
     return wrapper;
   };
 
+  it('marks a scheduled workload with a calendar icon beside its name (R12)', async () => {
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [{ ...SHOP, scheduled: true }, { ...SHOP, workloadId: 'b1', name: 'Plain' }], total: 2, errors: [] }; }) as never);
+    const wrapper = await mountList();
+    const rows = wrapper.findAll('tbody tr');
+    expect(rows[0]!.find('[data-test="scheduled"]').exists()).toBe(true);
+    expect(rows[0]!.find('[data-test="scheduled"]').attributes('aria-label')).toBe('Has a schedule');
+    expect(rows[1]!.find('[data-test="scheduled"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('shows each workload\'s tags as chips in a Tags column, none for a router before 0.30.0', async () => {
     const { api } = await import('../src/api');
     vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [{ ...SHOP, tags: { team: 'payments', env: 'staging' } }, { ...SHOP, workloadId: 'b1', name: 'Old' }], total: 2, errors: [] }; }) as never);

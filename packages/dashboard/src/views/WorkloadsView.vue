@@ -3,7 +3,7 @@ import { useNow } from '../now';
 import { useDisplay } from 'vuetify';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { mdiMagnify, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
+import { mdiCalendarClock, mdiMagnify, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { checkHealth, relative, usd } from '../format';
@@ -207,6 +207,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       <template #[`item.name`]="{ item }">
         <div class="dm-wl">
           <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link>
+          <v-icon v-if="item.scheduled" data-test="scheduled" :icon="mdiCalendarClock" size="16" class="ml-1 text-medium-emphasis" title="Has a schedule" aria-label="Has a schedule" />
           <div v-if="item.name" class="dm-wl__id mono">{{ item.workloadId }}</div>
         </div>
       </template>

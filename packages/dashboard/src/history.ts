@@ -77,6 +77,8 @@ const CAUSES: Record<string, string> = {
   'nap-stuck': 'the nap stopped (its invocation ended)',
   'invoke-failed': 'the controller could not be invoked',
   'failed-released': 'released after its idle window (the wake had failed)',
+  schedule: 'a scheduled window',
+  maintenance: 'the maximum nap (a maintenance wake)',
   recovered: 'recovered, seen at a check',
   'external-start': 'started outside Dormeto',
   'external-stop': 'stopped outside Dormeto',
