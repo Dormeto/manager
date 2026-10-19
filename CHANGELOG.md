@@ -5,6 +5,22 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+Upgrade the routers to 0.31.0 for schedules (a router before 0.31.0 answers a schedule change with a 409 and reports
+none; its check stays on `rate(5 minutes)` until upgraded).
+
+- Workload schedules (R12): weekly awake and nap windows in a time zone, exception dates (dates the weekly windows skip),
+  and a maximum nap (1 to 60 days) after which the workload is woken for maintenance. The router applies them at its
+  check, now on the clock's 5-minute marks (`cron(0/5 * * * ? *)`). Set and cleared from the Schedule card of the
+  workload's page (an Edit dialog with window rows, weekday chips, 5-minute times and the zone, defaulting to the
+  browser's), or with `PUT` and `DELETE /api/workloads/{router}/{id}/schedule` (and the same under `/iam/`), allowed to
+  whoever may both wake and nap the workload and audited as `schedule` and `schedule-clear`; the router's problems come
+  back as a 400. The workload's status carries `schedule`, the next events and the maintenance due date; workload rows
+  carry `scheduled`.
+- The timeline names the new causes, `schedule` and `maintenance`, and the Workloads list shows a calendar icon on
+  scheduled workloads.
+
 ## 0.15.0 — 2026-10-19
 
 Router 0.30.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
