@@ -86,5 +86,4 @@ installed with the CLI has no Terraform outputs at hand: find the API id by the 
 aws apigatewayv2 get-apis --query "Items[?Name=='dmt-<env>-manager-api'].ApiId" --output text
 ```
 
- The
-dashboard and its users are unchanged (`/api/*`, Cognito).
+The dashboard and its users are unchanged (`/api/*`, Cognito).
