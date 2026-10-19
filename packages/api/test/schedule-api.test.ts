@@ -33,7 +33,7 @@ function setup(invoke?: Invoke) {
 }
 const event = (method: string, path: string, groups: string, body?: unknown): ApiEvent => ({
   rawPath: path, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  requestContext: { http: { method }, authorizer: { jwt: { claims: { email: 'ops@example.com', sub: 'u-1', 'cognito:groups': `[${groups}]` } } } },
+  requestContext: { http: { method }, authorizer: { jwt: { claims: { email: `${groups || 'none'}@example.com`, sub: 'u-1', 'cognito:groups': `[${groups}]` } } } },
 });
 const iam = (method: string, path: string, body?: unknown): ApiEvent => ({
   rawPath: path, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -47,8 +47,8 @@ describe('PUT /api/workloads/:router/:id/schedule', () => {
     const s = setup();
     const res = await s.api(event('PUT', PUT, 'dmt-operator', SCHEDULE));
     expect([res.statusCode, json(res)]).toEqual([200, ANSWER]);
-    expect(s.calls).toEqual([{ action: 'schedule', workloadId: 'pay', schedule: SCHEDULE, by: 'ops@example.com' }]);
-    expect(s.audit.at(-1)).toMatchObject({ action: 'schedule', target: 'dmt-dev/pay', who: 'ops@example.com' });
+    expect(s.calls).toEqual([{ action: 'schedule', workloadId: 'pay', schedule: SCHEDULE, by: 'dmt-operator@example.com' }]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'schedule', target: 'dmt-dev/pay', who: 'dmt-operator@example.com' });
   });
 
   it('answers 400 with the router\'s problems joined by "; ", audited with them', async () => {
@@ -72,7 +72,8 @@ describe('PUT /api/workloads/:router/:id/schedule', () => {
     const s = setup();
     const res = await s.api(event('PUT', PUT, 'dmt-viewer', SCHEDULE));
     expect(res.statusCode).toBe(403);
-    expect(s.calls).toEqual([]);
+    // Like a wake or a nap, the refusal reads the workload's tags first (status); nothing is written.
+    expect(s.calls.map((c) => c.action)).not.toContain('schedule');
     expect(s.audit.at(-1)).toMatchObject({ action: 'schedule', target: 'dmt-dev/pay', result: 'refused' });
   });
 
@@ -98,7 +99,7 @@ describe('DELETE /api/workloads/:router/:id/schedule', () => {
     const s = setup();
     const res = await s.api(event('DELETE', PUT, 'dmt-operator'));
     expect([res.statusCode, json(res)]).toEqual([200, { cleared: true }]);
-    expect(s.calls).toEqual([{ action: 'clear-schedule', workloadId: 'pay', by: 'ops@example.com' }]);
+    expect(s.calls).toEqual([{ action: 'clear-schedule', workloadId: 'pay', by: 'dmt-operator@example.com' }]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'schedule-clear', target: 'dmt-dev/pay', result: 'cleared' });
   });
 
