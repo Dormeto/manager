@@ -8,7 +8,8 @@ CLI script, of the same release).
 ## Unreleased
 
 Upgrade the routers to 0.31.0 for schedules (a router before 0.31.0 answers a schedule change with a 409 and reports
-none; its check stays on `rate(5 minutes)` until upgraded).
+none; its check stays on `rate(5 minutes)` until upgraded). Routers the manager installs or upgrades get the check on
+the clock's 5-minute marks, and the dashboard reads `cron(0/N * * * ? *)` check schedules.
 
 - Workload schedules (R12): weekly awake and nap windows in a time zone, exception dates (dates the weekly windows skip),
   and a maximum nap (1 to 60 days) after which the workload is woken for maintenance. The router applies them at its

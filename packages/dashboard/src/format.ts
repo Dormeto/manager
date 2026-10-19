@@ -119,8 +119,11 @@ export function ruleText(conditions: Record<string, unknown>): string {
 // Health of the automatic naps: the router's idle check must have run within 3 periods of its schedule.
 export function checkHealth(router: { checkSchedule?: string | null; lastScheduledCheckAt?: string | null }, now = Date.now()) {
   if (!router.lastScheduledCheckAt) return { late: true, text: 'no scheduled idle check recorded' };
-  const rate = /rate\((\d+) (minute|minutes|hour|hours)\)/.exec(router.checkSchedule ?? '');
-  const periodMs = rate ? Number(rate[1]) * (rate[2]!.startsWith('hour') ? 3_600_000 : 60_000) : 5 * 60_000;
+  // rate(n minutes), rate(n hours) or cron(0/n * * * ? *) (routers 0.31.0), 5 minutes otherwise (as the fleet's checkMinutesOf).
+  const schedule = router.checkSchedule ?? '';
+  const cron = /^cron\(0\/(\d+) \* \* \* \? \*\)$/.exec(schedule);
+  const rate = /rate\((\d+) (minute|minutes|hour|hours)\)/.exec(schedule);
+  const periodMs = cron ? Number(cron[1]) * 60_000 : rate ? Number(rate[1]) * (rate[2]!.startsWith('hour') ? 3_600_000 : 60_000) : 5 * 60_000;
   const late = now - Date.parse(router.lastScheduledCheckAt) > 3 * periodMs;
   const ago = relative(router.lastScheduledCheckAt, now);
   return { late, text: late ? `idle check late: last run ${ago}` : `idle check ${ago}` };

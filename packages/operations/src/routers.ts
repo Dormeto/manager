@@ -3,6 +3,10 @@
 import type { RouterRef } from './engine.js';
 import type { Records } from './records.js';
 
+// The check of the routers the manager installs or upgrades: every 5 minutes on the clock's marks (routers 0.31.0), so a
+// schedule's times are met exactly.
+export const CHECK_SCHEDULE = 'cron(0/5 * * * ? *)';
+
 export interface TerraformRouter {
   name: string;
   region: string;

@@ -14,7 +14,7 @@ import {
 } from './state';
 import { DAY, HOUR, MINUTE, SECOND, day, hash, hex, iso, lastCheck, round } from './util';
 
-const CHECK_SCHEDULE = 'rate(5 minutes)';
+const CHECK_SCHEDULE = 'cron(0/5 * * * ? *)';
 const ALWAYS = { kind: 'always' } as const;
 
 // --- Routers -----------------------------------------------------------------------------------------------------------

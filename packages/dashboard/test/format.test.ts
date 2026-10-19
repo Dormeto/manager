@@ -38,6 +38,11 @@ describe('checkHealth', () => {
     expect(checkHealth({ checkSchedule: 'rate(1 hour)', lastScheduledCheckAt: '2026-10-04T10:30:00Z' }, now).late).toBe(false);
     expect(checkHealth({ checkSchedule: null, lastScheduledCheckAt: null }, now)).toEqual({ late: true, text: 'no scheduled idle check recorded' });
   });
+  it('reads the clock-aligned cron schedule (routers 0.31.0) as its period in minutes', () => {
+    expect(checkHealth({ checkSchedule: 'cron(0/5 * * * ? *)', lastScheduledCheckAt: '2026-10-04T11:55:00Z' }, now)).toEqual({ late: false, text: 'idle check 5 min ago' });
+    expect(checkHealth({ checkSchedule: 'cron(0/5 * * * ? *)', lastScheduledCheckAt: '2026-10-04T11:40:00Z' }, now).late).toBe(true);
+    expect(checkHealth({ checkSchedule: 'cron(0/10 * * * ? *)', lastScheduledCheckAt: '2026-10-04T11:35:00Z' }, now).late).toBe(false);
+  });
 });
 
 describe('refreshLabel', () => {
