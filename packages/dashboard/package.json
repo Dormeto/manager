@@ -24,6 +24,11 @@
   },
   "dependencies": {
     "@dormeto/discovery": "*",
+    "@fullcalendar/core": "6.1.21",
+    "@fullcalendar/daygrid": "6.1.21",
+    "@fullcalendar/interaction": "6.1.21",
+    "@fullcalendar/timegrid": "6.1.21",
+    "@fullcalendar/vue3": "6.1.21",
     "@mdi/js": "^7.4.47",
     "flag-icons": "^7.5.0",
     "oidc-client-ts": "^3.5.0",

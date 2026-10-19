@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The navigation's own icons: drawn for Dormeto (a line in the text's color, one part in the sun's), each with a small
 // motion when its item is pointed at or active (styled in style.css, .dm-nav-icon).
-defineProps<{ name: 'overview' | 'workloads' | 'routers' | 'discovery' | 'operations' | 'users' | 'audit' | 'update' }>();
+defineProps<{ name: 'overview' | 'workloads' | 'schedules' | 'routers' | 'discovery' | 'operations' | 'users' | 'audit' | 'update' }>();
 </script>
 
 <template>
@@ -20,6 +20,11 @@ defineProps<{ name: 'overview' | 'workloads' | 'routers' | 'discovery' | 'operat
       <circle class="ni-accent ni-led ni-led2" cx="17.5" cy="12" r="1.1" />
       <circle class="ni-accent ni-led ni-led3" cx="17.5" cy="18" r="1.1" />
       <path class="ni-line" d="M6.5 6h5M6.5 12h5M6.5 18h5" />
+    </template>
+    <template v-else-if="name === 'schedules'">
+      <rect class="ni-line" x="3" y="4.5" width="18" height="16" rx="2.5" />
+      <path class="ni-line" d="M3 9.5h18M8 2.8v3.4M16 2.8v3.4" />
+      <rect class="ni-accent ni-tile" x="7" y="12.5" width="6" height="4.5" rx="1.2" />
     </template>
     <template v-else-if="name === 'routers'">
       <path class="ni-line ni-route" d="M6.2 12H9c1.8 0 2.8-.9 3.6-2.4l1-1.9c.7-1.3 1.6-2 3-2h.4M9 12c1.8 0 2.8.9 3.6 2.4l1 1.9c.7 1.3 1.6 2 3 2h.4" />

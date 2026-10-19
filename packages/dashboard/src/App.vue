@@ -31,9 +31,9 @@ const item = (title: string, to: string, icon: NavItem['icon'], count?: number, 
 const pendingLabel = (n: number) => `${n} pending onboardings or offboardings`;
 const updatesLabel = (n: number) => (n === 1 ? '1 update available' : `${n} updates available`);
 // The fleet, the organization, the people: the views in three groups.
-// A member (R11) sees Overview and Workloads: the routers, discovery and operations are the built-in roles'.
+// A member (R11) sees Overview, Workloads and Schedules: the routers, discovery and operations are the built-in roles'.
 const groups = computed<{ title: string; items: NavItem[] }[]>(() => [
-  { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), ...(session.isMember ? [] : [item('Routers', '/routers', 'routers')])] },
+  { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), item('Schedules', '/schedules', 'schedules'), ...(session.isMember ? [] : [item('Routers', '/routers', 'routers')])] },
   ...(session.isMember ? [] : [{ title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending, pendingLabel), item('Operations', '/operations', 'operations')] }]),
   ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update', updates.count, updatesLabel)] }] : []),
 ]);

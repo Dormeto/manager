@@ -68,6 +68,15 @@ describe('App', () => {
     allowed.unmount();
   });
 
+  it('offers Schedules under Fleet, right after Workloads, to every role, with its own icon', async () => {
+    const admin = await mountSignedIn({ email: 'ops.com', role: 'admin', effectiveRole: 'admin' });
+    const titles = admin.findAll('.dm-nav-item').map((i) => i.text());
+    expect(titles.indexOf('Schedules')).toBe(titles.indexOf('Workloads') + 1);
+    expect(admin.findAll('.dm-nav-item')[titles.indexOf('Schedules')]!.attributes('href')).toBe('/schedules');
+    expect(admin.find('.dm-nav-icon--schedules').exists()).toBe(true);
+    admin.unmount();
+  });
+
   it('offers the Update page to an administrator, after Audit, and not to an operator', async () => {
     const admin = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
     const titles = admin.findAll('.dm-nav-item').map((i) => i.text());
@@ -171,14 +180,14 @@ describe('App', () => {
   });
 
   // R11: a member (no built-in role) sees workloads by their groups' grants only.
-  it('shows a member Overview and Workloads only: no Routers, Discovery, Operations or administration (R11)', async () => {
+  it('shows a member Overview, Workloads and Schedules only: no Routers, Discovery, Operations or administration (R11)', async () => {
     const member = await mountSignedIn({ email: 'dev@example.com', role: 'member', effectiveRole: 'member' });
-    expect(member.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads']);
+    expect(member.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads', 'Schedules']);
     // The fleet's other reads are none of theirs: the API would refuse them.
     expect(h.calls).not.toContain('/discovery');
     member.unmount();
     const viewer = await mountSignedIn({ email: 'v@example.com', role: 'viewer', effectiveRole: 'viewer' });
-    expect(viewer.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads', 'Routers', 'Discovery', 'Operations']);
+    expect(viewer.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads', 'Schedules', 'Routers', 'Discovery', 'Operations']);
     viewer.unmount();
   });
 
@@ -187,7 +196,7 @@ describe('App', () => {
     expect(wrapper.findAll('.dm-nav-item').map((i) => i.text())).toContain('Routers');
     useSession().applyMe({ email: 'ops@example.com', role: 'member', effectiveRole: 'member' });
     await flushPromises();
-    expect(wrapper.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads']);
+    expect(wrapper.findAll('.dm-nav-item').map((i) => i.text())).toEqual(['Overview', 'Workloads', 'Schedules']);
     wrapper.unmount();
   });
 });

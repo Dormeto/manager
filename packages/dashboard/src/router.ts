@@ -10,6 +10,7 @@ export const router = createRouter({
     { path: '/', name: 'overview', component: () => import('./views/OverviewView.vue') },
     { path: '/workloads', name: 'workloads', component: () => import('./views/WorkloadsView.vue') },
     { path: '/workloads/:router/:id', name: 'workload', component: () => import('./views/WorkloadView.vue'), props: true },
+    { path: '/schedules', name: 'schedules', component: () => import('./views/SchedulesView.vue') },
     { path: '/routers', name: 'routers', component: () => import('./views/RoutersView.vue'), meta: { fleet: true } },
     { path: '/routers/:name', name: 'router', component: () => import('./views/RouterView.vue'), props: true, meta: { fleet: true } },
     { path: '/operations', name: 'operations', component: () => import('./views/OperationsView.vue'), meta: { fleet: true } },

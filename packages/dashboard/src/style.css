@@ -180,6 +180,8 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
   box-shadow: inset 0 0 0 1px rgba(var(--v-theme-primary), 0.3), 0 8px 20px -10px rgba(var(--v-theme-secondary), 0.6); }
 .dm-nav-item:hover:not(.v-list-item--active) .dm-nav-well { background: rgba(var(--v-theme-on-surface), 0.05); }
 /* Each its motion. */
+.dm-nav-icon--schedules .ni-tile { transform-box: fill-box; transform-origin: center; transition: transform 0.45s var(--dm-spring); }
+.dm-nav-item:hover .dm-nav-icon--schedules .ni-tile { transform: translate(6px, 2px) scale(1.1); }
 .dm-nav-icon--overview .ni-tile { transform-box: fill-box; transform-origin: center; transition: transform 0.45s var(--dm-spring); }
 .dm-nav-item:hover .dm-nav-icon--overview .ni-tile { transform: scale(1.18) rotate(8deg); }
 .dm-nav-item:hover .ni-led, .dm-nav-item.v-list-item--active .ni-led { animation: ni-blink 1.6s steps(1) infinite; }
