@@ -1938,7 +1938,9 @@ export function createApi({
       const identity = viaIam ? iamIdentityOf(event) : identityOf(event);
       if (!identity) throw new HttpError(401, 'unauthorized', 'sign in required');
       // The route's IAM policy is the gate; a caller outside the manager's account is refused here as well.
-      if (identity.via === 'iam' && managerAccount && event.requestContext.authorizer?.iam?.accountId !== managerAccount) throw new HttpError(401, 'unauthorized', 'sign in required');
+      if (identity.via === 'iam' && managerAccount && event.requestContext.authorizer?.iam?.accountId !== managerAccount) {
+        throw new HttpError(401, 'unauthorized', 'IAM callers must belong to the manager\'s account');
+      }
       const isMe = method === 'GET' && parts.length === 1 && parts[0] === 'me';
       if (identity.via !== 'iam') await applyMfa(identity, isMe, isMe && event.queryStringParameters?.fresh === '1');
       await refreshRouters();

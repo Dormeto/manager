@@ -109,6 +109,9 @@ describe('/iam routes', () => {
     const { api } = setup();
     const res = await api(iam('GET', '/iam/audit', undefined, { accountId: '999999999999' }));
     expect([res.statusCode, JSON.parse(res.body!).error]).toEqual([401, 'unauthorized']);
+    expect(JSON.parse(res.body!).message).toBe('IAM callers must belong to the manager\'s account');
+    expect(res.body).not.toContain('999999999999');
+    expect(res.body).not.toContain(MANAGER);
     expect((await api(iam('GET', '/iam/audit', undefined, { accountId: MANAGER }))).statusCode).toBe(200);
     expect((await setup(null, null).api(iam('GET', '/iam/audit', undefined, { accountId: '999999999999' }))).statusCode).toBe(200);
   });
