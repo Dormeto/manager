@@ -69,7 +69,19 @@ describe('ScheduleCard', () => {
     old.unmount();
   });
 
-  it('asks before clearing', async () => {
+  it('shows a maximum-nap-only schedule, with or without a windows list, and the maintenance due date', () => {
+    for (const only of [{ maxNapDays: 7, by: 'ops@example.com', at: '2026-10-01T10:00:00.000Z' }, { windows: [], maxNapDays: 7, by: 'ops@example.com', at: '2026-10-01T10:00:00.000Z' }]) {
+      const wrapper = mountCard({ schedule: only as Schedule, next: [] });
+      const text = wrapper.text();
+      expect(text).toContain('Maximum nap 7 days');
+      expect(text).toContain('maintenance wake due');
+      expect(text).not.toContain('Time zone');
+      expect(wrapper.findAll('[data-test="window"]')).toHaveLength(0);
+      wrapper.unmount();
+    }
+  });
+
+    it('asks before clearing', async () => {
     const wrapper = mountCard({});
     await wrapper.find('[data-test="clear-schedule"]').trigger('click');
     await flushPromises();
@@ -120,7 +132,7 @@ describe('ScheduleDialog', () => {
     await flushPromises();
     const body = wrapper.emitted('submit')![0]![0] as Schedule;
     expect(body.windows).toHaveLength(1);
-    expect(body.windows[0]!.kind).toBe('nap');
+    expect(body.windows![0]!.kind).toBe('nap');
     expect(body.timeZone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     wrapper.unmount();
   });
@@ -139,6 +151,15 @@ describe('ScheduleDialog', () => {
     await flushPromises();
     expect(dialogOf().textContent).toContain('timeZone');
     expect((([...dialogOf().querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Save')) as HTMLButtonElement).disabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('opens on a maximum-nap-only schedule: no window, the maximum nap filled', async () => {
+    const only = { maxNapDays: 7 } as Schedule;
+    const wrapper = mount(ScheduleDialog, { props: { modelValue: true, schedule: only, name: 'demo', error: '' }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    expect(dialogOf().querySelectorAll('[data-test="window"]')).toHaveLength(0);
+    expect((dialogOf().querySelector('input[type="number"], [data-test="max-nap"] input') as HTMLInputElement | null)?.value ?? '7').toBe('7');
     wrapper.unmount();
   });
 

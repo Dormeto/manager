@@ -31,7 +31,7 @@ function offset(zone: string, t: number): number {
 
 // The window boundaries of the next 8 days (the first 5), the local times read in the schedule's zone.
 export function nextEvents(s: Schedule, now: number): NextEvent[] {
-  if (!s.windows.length) return [];
+  if (!s.windows?.length) return [];
   const events: (NextEvent & { t: number })[] = [];
   const [y, mo, dd] = new Intl.DateTimeFormat('en-CA', { timeZone: s.timeZone }).format(new Date(now)).split('-').map(Number);
   const today = Date.UTC(y!, mo! - 1, dd!);
@@ -40,7 +40,7 @@ export function nextEvents(s: Schedule, now: number): NextEvent[] {
     const guess = day + h! * 3_600_000 + m! * 60_000;
     return guess - offset(s.timeZone, guess - offset(s.timeZone, guess));
   };
-  s.windows.forEach((w, i) => {
+  (s.windows ?? []).forEach((w, i) => {
     for (let k = -1; k <= 8; k++) {
       const day = today + k * DAY;
       if (!w.days.includes(DAYS[(new Date(day).getUTCDay() + 6) % 7]!)) continue;
@@ -71,7 +71,7 @@ export function setSchedule(d: Demo, router: string, id: string, body: Body, now
   return audited(d, 'schedule', `${router}/${id}`, () => {
     const timeZone = canonicalZone(String(body.timeZone ?? ''));
     w.schedule = { ...(body as unknown as Schedule), ...(timeZone ? { timeZone } : {}), by: d.me.email, at: iso(now) };
-    return { result: `${w.schedule.windows.length} windows`, response: scheduleView(w, now) };
+    return { result: `${w.schedule.windows?.length ?? 0} windows`, response: scheduleView(w, now) };
   });
 }
 

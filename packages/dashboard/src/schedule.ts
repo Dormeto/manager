@@ -1,7 +1,7 @@
 // Schedules (R12): weekly awake and nap windows of a workload, as the dashboard writes and reads them.
 export type Day = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
 export interface ScheduleWindow { kind: 'awake' | 'nap'; days: Day[]; start: string; end: string; wake?: 'never' | 'header' }
-export interface Schedule { timeZone: string; windows: ScheduleWindow[]; exceptions?: string[]; maxNapDays?: number; by?: string; at?: string }
+export interface Schedule { timeZone: string; windows?: ScheduleWindow[]; exceptions?: string[]; maxNapDays?: number; by?: string; at?: string }
 export interface NextEvent { at: string; kind: 'awake-start' | 'awake-end' | 'nap-start' | 'nap-end'; window: number }
 export interface ScheduleView { schedule: Schedule | null; next: NextEvent[]; maintenanceDue: string | null }
 
@@ -59,7 +59,7 @@ export const newWindow = (kind: 'awake' | 'nap' = 'awake'): ScheduleWindow => ({
 // The body of the PUT: the zone in its canonical form (none without windows), the wake mode of nap windows only, the
 // exceptions and the maximum nap only when set. `maxNap` is the form field (blank for none).
 export function scheduleBody(s: Schedule, maxNap: string): Schedule {
-  const windows = s.windows.map((w) => ({ kind: w.kind, days: DAYS.filter((d) => w.days.includes(d)), start: w.start, end: w.end, ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}) }));
+  const windows = (s.windows ?? []).map((w) => ({ kind: w.kind, days: DAYS.filter((d) => w.days.includes(d)), start: w.start, end: w.end, ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}) }));
   const zone = canonicalZone(s.timeZone) ?? String(s.timeZone ?? '').trim();
   const max = maxNap.trim();
   return {
@@ -72,11 +72,11 @@ export function scheduleBody(s: Schedule, maxNap: string): Schedule {
 
 // What the form refuses before sending (the router refuses the rest, in its words).
 export function formProblem(s: Schedule, maxNap: string): string {
-  if (s.windows.length && !canonicalZone(s.timeZone)) return 'timeZone: not a time zone Intl knows (for example Europe/Paris)';
-  const empty = s.windows.findIndex((w) => !w.days.length);
+  if (s.windows?.length && !canonicalZone(s.timeZone)) return 'timeZone: not a time zone Intl knows (for example Europe/Paris)';
+  const empty = (s.windows ?? []).findIndex((w) => !w.days.length);
   if (empty >= 0) return `windows[${empty}].days: pick at least one day`;
   const max = maxNap.trim();
   if (max && !(Number.isInteger(Number(max)) && Number(max) >= 1 && Number(max) <= 60)) return 'maxNapDays: a whole number from 1 to 60';
-  if (!s.windows.length && !max) return 'Add a window or set a maximum nap';
+  if (!s.windows?.length && !max) return 'Add a window or set a maximum nap';
   return '';
 }

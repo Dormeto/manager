@@ -3,7 +3,7 @@
 // and the next events. Edited with the wake and nap permissions (both).
 import { computed, ref } from 'vue';
 import { mdiCalendarClock, mdiPencilOutline } from '@mdi/js';
-import { daysText, eventText, hoursText, type NextEvent, type Schedule } from '../schedule';
+import { daysText, eventText, hoursText, type NextEvent, type Schedule, type ScheduleWindow } from '../schedule';
 import { relative } from '../format';
 
 // schedule: undefined when the router does not report schedules (before 0.31.0), null when it has none.
@@ -11,7 +11,7 @@ const props = defineProps<{ schedule: Schedule | null | undefined; next?: NextEv
 const emit = defineEmits<{ edit: []; clear: [] }>();
 const confirm = ref(false);
 const zone = computed(() => props.schedule?.timeZone ?? '');
-const wakeText = (w: Schedule['windows'][number]) => (w.kind === 'nap' ? (w.wake === 'header' ? 'wakes with the header' : 'no wake') : '');
+const wakeText = (w: ScheduleWindow) => (w.kind === 'nap' ? (w.wake === 'header' ? 'wakes with the header' : 'no wake') : '');
 </script>
 
 <template>
@@ -25,8 +25,8 @@ const wakeText = (w: Schedule['windows'][number]) => (w.kind === 'nap' ? (w.wake
     <v-card-text v-else-if="!schedule" class="text-medium-emphasis">No schedule: the workload naps when idle and wakes on requests, at any hour.</v-card-text>
     <template v-else>
       <v-card-text class="pb-0">
-        <div v-if="schedule.windows.length" class="text-body-medium mb-2">Time zone <strong>{{ zone }}</strong></div>
-        <div v-for="(w, i) in schedule.windows" :key="i" data-test="window" class="d-flex flex-wrap align-center ga-2 py-1 text-body-medium">
+        <div v-if="schedule.windows?.length" class="text-body-medium mb-2">Time zone <strong>{{ zone }}</strong></div>
+        <div v-for="(w, i) in schedule.windows ?? []" :key="i" data-test="window" class="d-flex flex-wrap align-center ga-2 py-1 text-body-medium">
           <v-chip :color="w.kind === 'awake' ? 'success' : 'info'" variant="tonal" label size="small">{{ w.kind === 'awake' ? 'Awake' : 'Nap' }}</v-chip>
           <span>{{ daysText(w.days) }}</span>
           <span class="dm-num">{{ hoursText(w) }}</span>
