@@ -56,6 +56,15 @@ describe('saved calendars', () => {
   });
 });
 
+describe('eventsFor past occurrences', () => {
+  it('marks the occurrences that ended before now as dm-past', () => {
+    const wed = eventsFor([paris], day, day + 86_400_000, 'Europe/Paris', false, day + 12 * 3_600_000).filter((e) => e.extendedProps.kind === 'awake');
+    expect(wed).toHaveLength(1);
+    expect(wed[0]!.classNames).not.toContain('dm-past');
+    expect(eventsFor([paris], day, day + 86_400_000, 'Europe/Paris', false, day + 20 * 3_600_000).find((e) => e.extendedProps.kind === 'awake')!.classNames).toContain('dm-past');
+  });
+});
+
 describe('eventsFor', () => {
   const events = eventsFor([paris], day, day + 2 * 86_400_000, 'Europe/Paris');
   it('fills awake windows and outlines naps, with their titles', () => {

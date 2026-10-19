@@ -98,8 +98,8 @@ const clock = (t: number, timeZone: string, day = true) => new Intl.DateTimeForm
 
 // The events of the calendars in [from, to): a window's occurrence is "<workload> · Awake" filled, or "· Nap (wake: header)"
 // outlined (its text readable on the theme's surface); a maximum nap's maintenance due time of an asleep workload is a short marker. The tooltip gives the times in the
-// schedule's own zone when it is not the browser's.
-export function eventsFor(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false): CalendarEvent[] {
+// schedule's own zone when it is not the browser's. An occurrence that ended before `now` carries `dm-past` (drawn dimmed).
+export function eventsFor(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false, now: number = Date.now()): CalendarEvent[] {
   const surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
   const out: CalendarEvent[] = [];
   for (const c of calendars) {
@@ -112,7 +112,7 @@ export function eventsFor(calendars: Calendar[], from: number, to: number, here:
       const there = s.timeZone && s.timeZone !== here ? ` — ${clock(o.start, s.timeZone)}–${clock(o.end, s.timeZone, false)} ${s.timeZone}` : '';
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
-        classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake'],
+        classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake', ...(o.end < now ? ['dm-past'] : [])],
         backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
         extendedProps: { key: c.key, kind: o.kind, window: o.window, tip: `${title}${there}` },
       });

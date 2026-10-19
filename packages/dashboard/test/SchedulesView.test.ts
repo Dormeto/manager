@@ -728,3 +728,16 @@ describe('Schedules view: creating a window', () => {
     expect(sel.end.getTime() - sel.start.getTime()).toBe(3_600_000);
   });
 });
+
+describe('SchedulesView styles', () => {
+  it('overrides the FullCalendar icon font (the CSP refuses its data: font) and wraps month titles', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const src = readFileSync(resolve(process.cwd(), 'src/views/SchedulesView.vue'), 'utf8');
+    expect(src).toMatch(/:deep\(\.fc-icon\)\s*\{\s*font-family:\s*inherit\s*!important/);
+    expect(src).not.toMatch(/font-family:\s*fcicons/);
+    for (const c of ['fc-icon-x', 'fc-icon-chevron-left', 'fc-icon-chevron-right']) expect(src).toContain(`:deep(.${c}::before)`);
+    expect(src).toMatch(/\.dm-ev__body--grid\s*\{[^}]*white-space:\s*normal/);
+    expect(src).toMatch(/\.dm-past\)\s*\{\s*opacity/);
+  });
+});

@@ -168,7 +168,7 @@ const calendars = computed<Calendar[]>(() => enabled.value.flatMap((e) => {
   if (!data) return [];
   return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next }];
 }));
-const events = computed(() => (range.value ? eventsFor(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark) : []));
+const events = computed(() => (range.value ? eventsFor(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark, Date.now()) : []));
 
 const dateText = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 function datesSet(arg: DatesSetArg) {
@@ -388,9 +388,20 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 .dm-sched__calendar :deep(.fc-event) { cursor: pointer; border-width: 2px; border-radius: 6px; }
 .dm-sched__calendar :deep(.fc-event.dm-ev--nap) { border-style: solid; background: transparent; }
 .dm-sched__calendar :deep(.fc-event.dm-ev--maintenance) { border-style: dashed; }
+.dm-sched__calendar :deep(.fc-event.dm-past) { opacity: 0.45; }
+/* FullCalendar's icon font is a data: URI the content security policy (font-src 'self') refuses: no icon uses it, text glyphs instead. */
+.dm-sched__calendar :deep(.fc-icon) { font-family: inherit !important; }
+.dm-sched__calendar :deep(.fc-icon-x::before) { content: '\00d7'; }
+.dm-sched__calendar :deep(.fc-icon-chevron-left::before) { content: '\2039'; }
+.dm-sched__calendar :deep(.fc-icon-chevron-right::before) { content: '\203a'; }
+.dm-sched__calendar :deep(.fc-icon-chevrons-left::before) { content: '\00ab'; }
+.dm-sched__calendar :deep(.fc-icon-chevrons-right::before) { content: '\00bb'; }
+.dm-sched__calendar :deep(.fc-icon-minus-square::before) { content: '\2212'; }
+.dm-sched__calendar :deep(.fc-icon-plus-square::before) { content: '+'; }
 .dm-sched__calendar :deep(.fc-event:focus-visible) { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 1px; }
 .dm-ev__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; padding: 1px 4px; overflow: hidden; line-height: 1.25; }
-.dm-ev__body--grid { flex-wrap: nowrap; white-space: nowrap; }
+.dm-ev__body--grid { flex-wrap: nowrap; align-items: flex-start; white-space: normal; overflow-wrap: anywhere; }
+.dm-ev__body--grid .fc-event-title { white-space: normal; }
 .dm-ev__moon { align-self: center; }
 .dm-ev__body .fc-event-time { font-weight: 600; }
 
