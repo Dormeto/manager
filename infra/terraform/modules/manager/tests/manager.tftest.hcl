@@ -115,6 +115,20 @@ run "event_driven_refresh" {
   }
 }
 
+run "the_cli_calls_iam_routes" {
+  command = plan
+
+  # The CLI signs its calls (SigV4): /iam/* is AWS_IAM, /api/* keeps the Cognito JWT.
+  assert {
+    condition     = aws_apigatewayv2_route.iam.route_key == "ANY /iam/{proxy+}" && aws_apigatewayv2_route.iam.authorization_type == "AWS_IAM" && aws_apigatewayv2_route.iam.authorizer_id == null
+    error_message = "ANY /iam/{proxy+} is authorized by AWS_IAM."
+  }
+  assert {
+    condition     = aws_apigatewayv2_route.api.route_key == "ANY /api/{proxy+}" && aws_apigatewayv2_route.api.authorization_type == "JWT"
+    error_message = "ANY /api/{proxy+} keeps the JWT authorizer."
+  }
+}
+
 run "the_smoke_user_is_named_at_plan_without_a_domain" {
   command = plan
   variables {

@@ -42,3 +42,25 @@ discovery run disconnect the accounts (Run now), then set `deletion_protection =
 The module carries the release's built artifacts (`artifacts/`): nothing is fetched at plan or apply time. The member
 accounts get their roles from the `dormeto-access` module or the AWS CLI procedure of the same release
 (https://dormeto.com/organization-access.html).
+
+## From the CLI
+
+The Dormeto CLI (`dormeto routers list|upgrade`, `dormeto workloads list`) calls the API on its `/iam/*` routes, signed
+with the caller's AWS credentials (SigV4). An HTTP API has no resource policy: the principals of the manager's account
+that an IAM policy allows `execute-api:Invoke` on the `api_iam_arn` output may call them, and no one else. Such a caller
+acts as an administrator, outside the MFA policy; the audit and the operations name its ARN. Allow the reading commands
+only with `GET`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "execute-api:Invoke",
+    "Resource": "arn:aws:execute-api:eu-west-1:111122223333:abcdef1234/*/GET/iam/*"
+  }]
+}
+```
+
+`api_iam_arn` is `arn:aws:execute-api:<region>:<account>:<api id>/*/*/iam/*`: every method, which `routers upgrade`
+needs (`POST`). The dashboard and its users are unchanged (`/api/*`, Cognito).

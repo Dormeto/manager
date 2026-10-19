@@ -20,6 +20,11 @@ output "api_endpoint" {
   value       = aws_apigatewayv2_api.api.api_endpoint
 }
 
+output "api_iam_arn" {
+  description = "The API's IAM routes (/iam/*), for the execute-api:Invoke policy of the Dormeto CLI's callers."
+  value       = "${aws_apigatewayv2_api.api.execution_arn}/*/*/iam/*"
+}
+
 output "version" {
   description = "The manager's version, and the router version it installs."
   value       = { manager = local.version, router = local.router_version }

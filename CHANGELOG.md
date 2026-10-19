@@ -5,6 +5,13 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- IAM routes for the CLI (`dormeto routers list|upgrade`, `dormeto workloads list`, CLI 0.4.0): `ANY /iam/{proxy+}`
+  (`AWS_IAM`) on the same API, handled as `/api/...` with an administrator identity named by the caller's ARN, outside the
+  MFA policy; a request without an IAM identity answers 401. Only the principals of the manager's account allowed
+  `execute-api:Invoke` on the new `api_iam_arn` output can call them. `/api/*` and its Cognito authorizer are unchanged.
+
 ## 0.14.0 — 2026-10-19
 
 Router 0.30.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
