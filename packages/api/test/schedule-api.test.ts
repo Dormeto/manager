@@ -10,7 +10,7 @@ const GROUPS = [
   { name: 'pausers', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake', 'nap'] }], updatedAt: null, updatedBy: null },
   { name: 'payers', description: '', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake'] }], updatedAt: null, updatedBy: null },
 ];
-const SCHEDULE = { timeZone: 'Europe/Paris', windows: [{ kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '24:00' }], exceptions: [], maxNapDays: 7 };
+const SCHEDULE = { timeZone: 'Europe/Paris', windows: [{ kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00' }], exceptions: [], maxNapDays: 7 };
 const ANSWER = { schedule: SCHEDULE, next: [{ at: '2026-10-24T22:00:00.000Z', kind: 'nap-start', window: 0 }], maintenanceDue: null };
 
 function setup(invoke?: Invoke) {
@@ -55,6 +55,14 @@ describe('PUT /api/workloads/:router/:id/schedule', () => {
     const s = setup(async () => ({ problems: ['windows[0].end: must be after start', 'maxNapDays: 1 to 60'] }));
     const res = await s.api(event('PUT', PUT, 'dmt-admin', SCHEDULE));
     expect([res.statusCode, json(res)]).toEqual([400, { error: 'bad_request', message: 'windows[0].end: must be after start; maxNapDays: 1 to 60' }]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'schedule', target: 'dmt-dev/pay', result: expect.stringContaining('error:') });
+  });
+
+  it('audits a schedule without windows as its maximum nap, not as "0 windows"', async () => {
+    const s = setup();
+    const res = await s.api(event('PUT', PUT, 'dmt-operator', { maxNapDays: 7 }));
+    expect(res.statusCode).toBe(200);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'schedule', result: 'maximum nap 7 days' });
   });
 
   it('answers 409 asking to upgrade the router to 0.31.0 when it does not know the action', async () => {

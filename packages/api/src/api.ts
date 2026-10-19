@@ -1351,7 +1351,9 @@ export function createApi({
             const result = await invoke(router, { action: 'schedule', workloadId: id, schedule, by: identity.email }) as { problems?: string[] };
             if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
             const windows = Array.isArray(schedule!.windows) ? schedule!.windows.length : 0;
-            return { result: `${windows} windows, ${String(schedule!.timeZone ?? '').slice(0, 64)}`, response: reply(200, result) };
+            const maxNap = Number((schedule as { maxNapDays?: unknown }).maxNapDays);
+            const text = windows ? `${windows} windows, ${String(schedule!.timeZone ?? '').slice(0, 64)}` : `maximum nap ${Number.isFinite(maxNap) ? maxNap : '?'} days`;
+            return { result: text, response: reply(200, result) };
           } catch (err) {
             if (unknownAction(err, clearing ? 'clear-schedule' : 'schedule')) throw new HttpError(409, 'conflict', `router ${router.name} too old for schedules, upgrade the router to 0.31.0 or later`);
             if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
