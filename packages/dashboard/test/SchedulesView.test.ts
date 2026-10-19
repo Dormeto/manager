@@ -314,9 +314,11 @@ describe('Schedules view: the calendar', () => {
     h.list = [row('dmt-dev', 'a b', 'Shop', { can: { wake: true, nap: false } })];
     h.status = { '/workloads/dmt-dev/a%20b': { ...status('Shop', shopSchedule), can: { wake: true, nap: false } } };
     const { wrapper, router } = await open();
+    const push = vi.spyOn(router, 'push');
     await enable(wrapper, 'dmt-dev/a b');
     await wrapper.find('.fc-event.dm-ev--awake').trigger('click');
     await flushPromises();
+    expect(push).toHaveBeenCalledWith({ name: 'workload', params: { router: 'dmt-dev', id: 'a b' } });
     await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('workload'));
     expect(router.currentRoute.value.fullPath).toBe('/workloads/dmt-dev/a%20b');
   });
@@ -341,6 +343,8 @@ const dialog = (w: VueWrapper) => w.findComponent(NewWindowDialog);
 const body = () => document.body;
 const text = (sel: string) => body().querySelector(sel)?.textContent?.trim();
 const click = async (sel: string) => { (body().querySelector(sel) as HTMLElement).click(); await flushPromises(); };
+const field = (w: VueWrapper, name: string) => dialog(w).findComponent(`[data-test="${name}"]`) as unknown as { props(n: string): unknown; vm: { $emit(...a: unknown[]): void } };
+const times = (w: VueWrapper) => `${field(w, 'nw-start').props('modelValue')}–${field(w, 'nw-end').props('modelValue')}`;
 const puts = () => h.calls.filter((c) => c.method === 'PUT');
 
 describe('Schedules view: creating a window', () => {
@@ -350,7 +354,7 @@ describe('Schedules view: creating a window', () => {
     await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
     expect(dialog(wrapper).props('modelValue')).toBe(true);
     expect(text('[data-test="nw-repeats"]')).toBe('Mon');
-    expect(text('[data-test="nw-times"]')).toBe('08:00–10:00');
+    expect(times(wrapper)).toBe('08:00–10:00');
     expect(text('[data-test="nw-zone"]')).toContain('Europe/Paris');
     expect(text('[data-test="nw-replace-note"]')).toContain('replaces the workload\'s schedule');
     await click('[data-test="nw-save"]');
@@ -367,7 +371,7 @@ describe('Schedules view: creating a window', () => {
     await enable(wrapper, 'dmt-dev/a');
     await select(wrapper, at('2026-10-19', '23:30'), at('2026-10-19', '23:45'));
     await click('[data-test="nw-kind"] button[value="nap"]');
-    await dialog(wrapper).findAllComponents({ name: 'VSelect' })[1]!.vm.$emit('update:modelValue', 'header');
+    await field(wrapper, 'nw-wake').vm.$emit('update:modelValue', 'header');
     await flushPromises();
     await click('[data-test="nw-save"]');
     expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'nap', days: ['mon'], start: '23:30', end: '23:45', wake: 'header' });
@@ -377,7 +381,8 @@ describe('Schedules view: creating a window', () => {
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');
     await select(wrapper, at('2026-10-19', '22:00'), at('2026-10-20', '06:00'));
-    expect(text('[data-test="nw-times"]')).toContain('22:00–06:00');
+    expect(times(wrapper)).toBe('22:00–06:00');
+    expect(text('[data-test="nw-length"]')).toBe('(next day)');
     await click('[data-test="nw-save"]');
     expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', days: ['mon'], start: '22:00', end: '06:00' });
   });
@@ -441,7 +446,7 @@ describe('Schedules view: creating a window', () => {
     await select(wrapper, at('2026-10-20', '02:00'), at('2026-10-20', '04:00'));
     expect(text('[data-test="nw-zone"]')).toContain('America/New_York');
     expect(text('[data-test="nw-repeats"]')).toBe('Mon');
-    expect(text('[data-test="nw-times"]')).toBe('20:00–22:00');
+    expect(times(wrapper)).toBe('20:00–22:00');
     await click('[data-test="nw-save"]');
     expect(puts()[0]!.path).toBe('/workloads/dmt-dev/b/schedule');
     expect(JSON.parse(puts()[0]!.body!)).toEqual({ timeZone: 'America/New_York', windows: [...blogSchedule.windows!, { kind: 'awake', days: ['mon'], start: '20:00', end: '22:00' }] });
@@ -454,27 +459,75 @@ describe('Schedules view: creating a window', () => {
     await select(wrapper, at('2026-10-20', '02:00'), at('2026-10-20', '04:00'));
     expect(text('[data-test="nw-save"]')).toBe('Save');
     expect((body().querySelector('[data-test="nw-save"]') as HTMLButtonElement).disabled).toBe(true);
-    await dialog(wrapper).findAllComponents({ name: 'VSelect' })[0]!.vm.$emit('update:modelValue', 'dmt-dev/a');
+    await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/a');
     await flushPromises();
-    expect(text('[data-test="nw-times"]')).toBe('02:00–04:00');
-    await dialog(wrapper).findAllComponents({ name: 'VSelect' })[0]!.vm.$emit('update:modelValue', 'dmt-dev/b');
+    expect(times(wrapper)).toBe('02:00–04:00');
+    await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/b');
     await flushPromises();
-    expect(text('[data-test="nw-times"]')).toBe('20:00–22:00');
+    expect(times(wrapper)).toBe('20:00–22:00');
   });
 
   it('says when a repeated hour moves the window from the selected instants', async () => {
-    // FullCalendar reads the repeated 02:30 of a clock change as its first one, so the dialog is given the second directly.
+    // FullCalendar (local time) reads a repeated hour as its first instance: a real drag cannot reach the second 02:30, so the dialog is given its instants directly.
     const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates: [{ key: 'r/a', name: 'Shop', schedule: shopSchedule }], selection: { start: new Date('2026-10-25T01:30:00Z'), end: new Date('2026-10-25T03:00:00Z'), month: false } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
     mounted.push(wrapper);
     await flushPromises();
     // The clocks of Paris go back on Sun 25 Oct at 03:00: this 02:30 is the second; the weekly window starts at the first.
-    expect(text('[data-test="nw-clock"]')).toBe('On Sun 25 Oct the clock change moves it to 02:30 CEST–04:00 CET (Europe/Paris).');
+    expect(text('[data-test="nw-clock"]')).toBe('On Sun 25 Oct the clock change moves this window to 02:30–04:00 (Europe/Paris).');
     wrapper.unmount();
     mounted.length = 0;
     const plain = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates: [{ key: 'r/a', name: 'Shop', schedule: shopSchedule }], selection: { start: at('2026-10-21', '08:00'), end: at('2026-10-21', '10:00'), month: false } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
     mounted.push(plain);
     await flushPromises();
     expect(body().querySelector('[data-test="nw-clock"]')).toBeNull();
+  });
+
+  it('saves the days and times edited in the dialog, and keeps them when the workload changes', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await enable(wrapper, 'dmt-dev/b');
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/a');
+    await flushPromises();
+    await click('[data-test="nw-day-tue"]');
+    await field(wrapper, 'nw-start').vm.$emit('update:modelValue', '09:15');
+    await field(wrapper, 'nw-end').vm.$emit('update:modelValue', '09:15');
+    await flushPromises();
+    expect(text('[data-test="nw-length"]')).toBe('24 hours');
+    expect(text('[data-test="nw-repeats"]')).toContain('Mon, Tue');
+    await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/b');
+    await flushPromises();
+    expect(times(wrapper)).toBe('09:15–09:15');
+    expect(text('[data-test="nw-zone"]')).toContain('America/New_York');
+    await click('[data-test="nw-save"]');
+    expect(puts()[0]!.path).toBe('/workloads/dmt-dev/b/schedule');
+    expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', days: ['mon', 'tue'], start: '09:15', end: '09:15' });
+  });
+
+  it('stops reading the list when the server ignores the offset, and says the list is incomplete', async () => {
+    h.list = Array.from({ length: 3 }, (_, i) => row('dmt-dev', `w${i}`, `W${i}`));
+    const api = (await import('../src/api')).api as unknown as ReturnType<typeof vi.fn>;
+    const impl = api.getMockImplementation()! as (p: string, i?: RequestInit) => Promise<unknown>;
+    api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith('/workloads?')) { h.calls.push({ path, method: 'GET' }); return { workloads: h.list.slice(0, 2), total: 5000, errors: [], routers: h.routers }; }
+      return impl(path, init);
+    });
+    try {
+      const { wrapper } = await open();
+      expect(h.calls.filter((c) => c.path.startsWith('/workloads?'))).toHaveLength(2);
+      expect(wrapper.findAll('[data-test^="calendar-"]')).toHaveLength(2);
+      expect(wrapper.find('[data-test="list-incomplete"]').exists()).toBe(true);
+    } finally {
+      api.mockImplementation(impl);
+    }
+  });
+
+  it('hints at touch and hold at phone width only', async () => {
+    const wide = await open();
+    expect(wide.wrapper.find('[data-test="touch-hint"]').exists()).toBe(false);
+    wide.wrapper.unmount();
+    const { wrapper } = await open('?view=week&date=2026-10-21', 420);
+    expect(wrapper.find('[data-test="touch-hint"]').text()).toContain('Touch and hold');
   });
 
   it('opens from the New window button with the next hour of today', async () => {

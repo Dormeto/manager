@@ -7,7 +7,7 @@ import { computed, ref, watch } from 'vue';
 import { mdiCalendarPlus } from '@mdi/js';
 import { useDisplay } from 'vuetify';
 import { allDayWindow, occurrencesIn, windowFromSelection } from '../occurrences';
-import { browserZone, dayLabel, daysText, scheduleBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
+import { DAYS, TIMES, browserZone, dayLabel, daysText, scheduleBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
 
 export interface Candidate { key: string; name: string; schedule: Schedule | null }
 export interface Selection { start: Date; end: Date; month: boolean; days?: Day[] }
@@ -21,14 +21,18 @@ const options = ref<Candidate[]>([]);
 const key = ref<string | null>(null);
 const kind = ref<'awake' | 'nap'>('awake');
 const wake = ref<'never' | 'header'>('never');
-watch(() => props.modelValue, (open) => {
-  if (!open) return;
-  options.value = props.candidates.map((c) => ({ ...c, schedule: c.schedule ? JSON.parse(JSON.stringify(c.schedule)) as Schedule : null }));
-  key.value = options.value.some((c) => c.key === props.last) ? props.last! : options.value.length === 1 ? options.value[0]!.key : null;
-  kind.value = props.selection?.month ? 'nap' : 'awake';
-  wake.value = 'never';
-}, { immediate: true });
-
+// The days and times, from the selection until the user edits them (then they are kept when the workload changes).
+const days = ref<Day[]>([]);
+const startTime = ref('08:00');
+const endTime = ref('09:00');
+const edited = ref(false);
+const fill = () => {
+  const p = placed.value;
+  if ('problem' in p) { days.value = []; return; }
+  days.value = [...p.days];
+  startTime.value = p.start;
+  endTime.value = p.end;
+};
 const chosen = computed(() => options.value.find((c) => c.key === key.value) ?? null);
 const zone = computed(() => chosen.value?.schedule?.timeZone || browserZone());
 const placed = computed(() => {
@@ -37,38 +41,43 @@ const placed = computed(() => {
   if (s.month) return allDayWindow(s.days ?? []);
   return windowFromSelection(s.start, s.end, zone.value);
 });
-const problem = computed(() => ('problem' in placed.value ? placed.value.problem : ''));
+const problem = computed(() => (!edited.value && 'problem' in placed.value ? placed.value.problem : ''));
 const window_ = computed<ScheduleWindow | null>(() => {
-  const p = placed.value;
-  if ('problem' in p) return null;
-  return { kind: kind.value, days: p.days, start: p.start, end: p.end, ...(kind.value === 'nap' ? { wake: wake.value } : {}) };
+  if (!days.value.length || problem.value) return null;
+  return { kind: kind.value, days: DAYS.filter((d) => days.value.includes(d)), start: startTime.value, end: endTime.value, ...(kind.value === 'nap' ? { wake: wake.value } : {}) };
 });
+
+const edit = () => { edited.value = true; };
+watch(() => props.modelValue, (open) => {
+  if (!open) return;
+  options.value = props.candidates.map((c) => ({ ...c, schedule: c.schedule ? JSON.parse(JSON.stringify(c.schedule)) as Schedule : null }));
+  key.value = options.value.some((c) => c.key === props.last) ? props.last! : options.value.length === 1 ? options.value[0]!.key : null;
+  kind.value = props.selection?.month ? 'nap' : 'awake';
+  wake.value = 'never';
+  edited.value = false;
+  fill();
+}, { immediate: true });
+watch(key, () => { if (!edited.value) fill(); });
+
 
 // A repeated or skipped hour on the selected day: the weekly window, read on that day, is not the instants selected.
 const here = browserZone();
-const hhmm = (t: number) => new Intl.DateTimeFormat('en-GB', { timeZone: here, hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }).format(new Date(t));
+const hhmm = (t: number) => new Intl.DateTimeFormat('en-GB', { timeZone: here, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(t));
 const clockChange = computed(() => {
   const s = props.selection;
   const w = window_.value;
-  if (!s || s.month || !w) return '';
+  if (!s || s.month || !w || edited.value) return '';
   const [from, to] = [s.start.getTime(), s.end.getTime()];
   const found = occurrencesIn({ timeZone: zone.value, windows: [w] }, from, to);
   if (found.some((o) => o.start === from && o.end === to)) return '';
   const o = found[0];
   if (!o) return '';
   const date = new Intl.DateTimeFormat('en-GB', { timeZone: here, weekday: 'short', day: 'numeric', month: 'short' }).format(s.start);
-  return `On ${date} the clock change moves it to ${hhmm(o.start)}–${hhmm(o.end)} (${here}).`;
+  return `On ${date} the clock change moves this window to ${hhmm(o.start)}–${hhmm(o.end)} (${here}).`;
 });
 
-const repeats = computed(() => {
-  const p = placed.value;
-  return 'problem' in p ? '' : p.days.length === 1 ? dayLabel(p.days[0]!) : daysText(p.days);
-});
-const times = computed(() => {
-  const p = placed.value;
-  if ('problem' in p) return '';
-  return p.start === p.end ? 'all day (24 hours)' : `${p.start}–${p.end}${p.end < p.start ? ' (ends the next day)' : ''}`;
-});
+const repeats = computed(() => (days.value.length === 1 ? dayLabel(days.value[0]!) : daysText(days.value)));
+const length = computed(() => (startTime.value === endTime.value ? '24 hours' : endTime.value < startTime.value ? '(next day)' : ''));
 
 const canSave = computed(() => Boolean(chosen.value && window_.value && !props.saving));
 function save() {
@@ -99,9 +108,15 @@ function save() {
           </v-btn-toggle>
           <v-select v-if="kind === 'nap'" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
           <v-alert v-if="problem" data-test="nw-problem" type="warning" variant="tonal" density="compact" class="mb-3" :text="problem" />
-          <div v-else data-test="nw-summary" class="mb-3">
-            <div><span class="text-medium-emphasis">Repeats every</span> <strong data-test="nw-repeats">{{ repeats }}</strong></div>
-            <div><span class="text-medium-emphasis">Hours</span> <strong data-test="nw-times">{{ times }}</strong></div>
+          <v-chip-group v-model="days" data-test="nw-days" multiple aria-label="Days" class="mb-2" @update:model-value="edit">
+            <v-chip v-for="d in DAYS" :key="d" :value="d" :data-test="`nw-day-${d}`" filter size="small" variant="outlined">{{ dayLabel(d) }}</v-chip>
+          </v-chip-group>
+          <div class="d-flex flex-wrap ga-3 mb-2">
+            <v-select v-model="startTime" data-test="nw-start" :items="TIMES" label="From" density="compact" hide-details class="dm-time" @update:model-value="edit" />
+            <v-select v-model="endTime" data-test="nw-end" :items="TIMES" label="To" density="compact" hide-details class="dm-time" @update:model-value="edit" />
+          </div>
+          <div data-test="nw-summary" class="mb-3">
+            <div><span class="text-medium-emphasis">Repeats every</span> <strong data-test="nw-repeats">{{ repeats }}</strong> <span v-if="length" data-test="nw-length" class="text-medium-emphasis">{{ length }}</span></div>
             <div><span class="text-medium-emphasis">Time zone</span> <strong data-test="nw-zone">{{ zone }}</strong><span v-if="chosen && !chosen.schedule?.timeZone" class="text-medium-emphasis"> (a first schedule: your browser's zone)</span></div>
           </div>
           <v-alert v-if="clockChange" data-test="nw-clock" type="info" variant="tonal" density="compact" class="mb-3" :text="clockChange" />
@@ -117,3 +132,7 @@ function save() {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+.dm-time { max-width: 130px; }
+</style>

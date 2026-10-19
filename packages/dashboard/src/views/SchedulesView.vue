@@ -107,16 +107,25 @@ function toggle(key: string) {
 }
 
 const PAGE = 1000;
+const MAX_PAGES = 50;
+const incomplete = ref(false);
 async function loadList() {
   listing.value = true;
   try {
     // Pages of 1000 until the total is read (the routers' versions come with each).
+    // At most 50 pages, and none that adds no new workload (a server that ignores the offset).
     const all: WorkloadSummary[] = [];
-    for (;;) {
+    const seen = new Set<string>();
+    incomplete.value = false;
+    for (let page = 0; ; page++) {
+      if (page >= MAX_PAGES) { incomplete.value = true; break; }
       const result = await api<{ workloads: WorkloadSummary[]; total?: number; routers?: { name: string; version?: string | null }[] }>(`/workloads?${new URLSearchParams({ limit: String(PAGE), offset: String(all.length), routers: '1' })}`);
-      all.push(...result.workloads);
+      const fresh = result.workloads.filter((w) => !seen.has(calendarKey(w.router, w.workloadId)));
+      for (const w of fresh) seen.add(calendarKey(w.router, w.workloadId));
+      all.push(...fresh);
       for (const r of result.routers ?? []) versions[r.name] = r.version;
-      if (!result.workloads.length || all.length >= (result.total ?? all.length)) break;
+      if (!fresh.length) { incomplete.value = all.length < (result.total ?? 0); break; }
+      if (all.length >= (result.total ?? all.length)) break;
     }
     rows.value = all;
     listError.value = '';
@@ -265,7 +274,7 @@ const options = computed<CalendarOptions>(() => ({
   initialView, ...(queryDate ? { initialDate: queryDate } : {}),
   headerToolbar: false, timeZone: 'local', firstDay: 1, nowIndicator: true, allDaySlot: false, selectable: true, selectMirror: true, select,
   slotDuration: '00:30:00', snapDuration: '00:15:00', // 15-minute steps in the time grids
-   scrollTime: '07:00:00', slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+  scrollTime: '07:00:00', slotLabelFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
   eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false }, dayMaxEvents: 4, height: smAndDown.value ? 'auto' : 'calc(100vh - 250px)',
   views: { workWeek: { type: 'timeGrid', duration: { weeks: 1 }, weekends: false } },
   events: events.value, datesSet, eventClick, eventDidMount,
@@ -285,6 +294,8 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     </div>
   </div>
   <v-alert v-if="listError" type="error" class="mb-4" :text="listError" />
+  <v-alert v-if="incomplete" data-test="list-incomplete" type="warning" variant="tonal" density="compact" class="mb-4" text="The list of workloads is incomplete: some may be missing from the panel." />
+  <v-alert v-if="smAndDown" data-test="touch-hint" type="info" variant="tonal" density="compact" class="mb-4" text="Touch and hold, then drag, to create a window — or use New window." />
   <v-alert v-if="notice" data-test="select-notice" type="warning" variant="tonal" closable class="mb-4" :text="notice" @click:close="notice = ''" />
   <div class="dm-sched">
     <v-card v-if="!smAndDown" class="dm-sched__panel pa-4">
