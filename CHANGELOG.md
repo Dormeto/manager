@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.17.0 — 2026-10-20
+
+Router 0.31.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 - Schedules view in the dashboard (the Schedules item under Fleet): the windows of enabled workloads as Day, Work week,
   Week and Month calendars. A calendars panel lists workloads with a search and a "Scheduled only" filter; up to 20 can
