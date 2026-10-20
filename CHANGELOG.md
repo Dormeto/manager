@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.17.1 — 2026-10-20
+
+Router 0.31.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 - The Pause dialog said a paused workload "is napped while paused": it now says it is not napped, and, for a router,
   that none of its workloads is napped.
