@@ -3,7 +3,7 @@
 // what they start finishes over time, as the routers and the workflow would.
 import type { Candidate, DiscoveryConfig, LintFinding, RunRecord, Status } from '@dormeto/discovery/types';
 import type { Failure } from '../failures';
-import type { Schedule } from '../schedule';
+import type { Day, Schedule } from '../schedule';
 import type { Me } from '../stores/session';
 import type { ClusterCheck, Exclusion, HistoryEntry, OperationType, Pause, Rule, SavingsSettings, Settings, StoppedItem } from '../types';
 import {
@@ -227,16 +227,48 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
   };
 }
 
-// R12: a schedule some demo workloads have: awake in office hours, napping at night and on Saturdays.
-const OFFICE_HOURS: Schedule = {
-  timeZone: 'Europe/Paris',
-  windows: [
-    { kind: 'awake', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:30', end: '19:00' },
-    { kind: 'nap', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '20:00', end: '07:00', wake: 'header' },
+// R12: the schedules some demo workloads have, of different shapes (office hours of different lengths, nights asleep with and
+// without the wake header, weekends asleep, holidays, a maximum nap only), given in turn to every other workload of the scenario (build).
+const WEEK: Day[] = ['mon', 'tue', 'wed', 'thu', 'fri'];
+const BY = { by: 'ops@dormeto.example', at: '2026-10-01T09:00:00.000Z' };
+const dateIn = (days: number) => new Date(Date.now() + days * DAY).toISOString().slice(0, 10);
+const SCHEDULES: (() => Schedule)[] = [
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', days: WEEK, start: '08:00', end: '18:00' },
+    { kind: 'nap', days: WEEK, start: '20:00', end: '07:00', wake: 'header' },
+    { kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00' },
+  ], maxNapDays: 7, ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', days: WEEK, start: '07:30', end: '20:00' },
+    { kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00', wake: 'never' },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', days: WEEK, start: '09:00', end: '17:30' },
+    { kind: 'nap', days: WEEK, start: '19:00', end: '08:00', wake: 'never' },
+  ], maxNapDays: 10, ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'nap', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], start: '22:00', end: '06:00', wake: 'header' },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'nap', days: WEEK, start: '21:00', end: '07:00', wake: 'never' },
+    { kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00', wake: 'header' },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', days: WEEK, start: '08:30', end: '19:00' },
+    { kind: 'nap', days: WEEK, start: '20:00', end: '07:00', wake: 'header' },
+  ], exceptions: [dateIn(2), dateIn(9)], maxNapDays: 7, ...BY }),
+  () => ({ maxNapDays: 14, timeZone: 'Europe/Paris', ...BY }),
+  () => ({ timeZone: 'America/New_York', windows: [
+    { kind: 'awake', days: WEEK, start: '09:00', end: '18:00' },
+    { kind: 'nap', days: WEEK, start: '19:30', end: '08:00', wake: 'header' },
     { kind: 'nap', days: ['sat'], start: '00:00', end: '00:00', wake: 'never' },
-  ],
-  exceptions: ['2026-12-25'], maxNapDays: 7, by: 'ops@dormeto.example', at: '2026-10-01T09:00:00.000Z',
-};
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', days: ['mon', 'tue', 'wed', 'thu'], start: '08:00', end: '19:30' },
+    { kind: 'awake', days: ['fri'], start: '08:00', end: '16:00' },
+    { kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00', wake: 'never' },
+  ], ...BY }),
+];
 
 // R11: the demo's teams, whose workloads the groups below pick by their team tag.
 const TEAMS = ['payments', 'platform', 'data', 'web'];
@@ -249,7 +281,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   return {
     workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
     tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
-    schedule: seed % 4 === 0 ? OFFICE_HOURS : null,
+    schedule: null,
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
     wakeMs: ((time.wake[0] + time.wake[1]) / 2) * SECOND, napMs: time.nap, state: 'ASLEEP', entries: [], bursts: [], pauses: [],
     failure: null, consecutiveFailures: 0, nextAttemptAt: null, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null,
@@ -450,6 +482,7 @@ export function matches(e: StoredExclusion, c: { account: string; targetGroupArn
 function build(now: number): Demo {
   const routers = ORG.routers.map((r) => makeRouter(r, now));
   const workloads = ORG.workloads.map((spec) => buildWorkload(spec, routers.find((r) => r.name === spec.router)!, now));
+  workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {
     t0: now,
