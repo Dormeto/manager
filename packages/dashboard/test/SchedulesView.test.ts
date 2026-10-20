@@ -536,6 +536,13 @@ describe('Schedules view: creating a window', () => {
     expect(body().querySelector('[data-test="nw-clock"]')).toBeNull();
   });
 
+  it('keeps top padding on the dialog body so the workload field\'s floating label is not clipped', async () => {
+    const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates: [{ key: 'r/a', name: 'Shop', schedule: shopSchedule }], selection: { start: at('2026-10-21', '08:00'), end: at('2026-10-21', '10:00'), month: false } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    mounted.push(wrapper);
+    await flushPromises();
+    expect(body().querySelector('[data-test="nw-body"]')?.classList.contains('pt-3')).toBe(true);
+  });
+
   it('saves the days and times edited in the dialog, and keeps them when the workload changes', async () => {
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');

@@ -98,7 +98,8 @@ function save() {
   <v-dialog :model-value="modelValue" max-width="560" :fullscreen="smAndDown" scrollable @update:model-value="emit('update:modelValue', $event)">
     <v-card title="New window">
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiCalendarPlus" size="20" /></v-avatar></template>
-      <v-card-text>
+      <!-- pt-3: the card text scrolls (overflow clips), and the first field's floating label sits above its box -->
+      <v-card-text class="pt-3" data-test="nw-body">
         <v-alert v-if="!options.length" data-test="nw-none" type="info" variant="tonal" density="compact" text="No enabled calendar may be edited: enable the calendar of a workload you may wake and nap, then try again." />
         <template v-else>
           <v-select v-model="key" data-test="nw-workload" :items="options" item-title="name" item-value="key" label="Workload" density="compact" />
