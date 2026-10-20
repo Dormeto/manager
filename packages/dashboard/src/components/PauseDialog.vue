@@ -30,7 +30,7 @@ function submit() {
     <v-card :title="`Pause ${subject}`">
       <template #prepend><v-avatar color="secondary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiPauseCircleOutline" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-5 text-medium-emphasis">{{ router ? 'No workload of this router' : 'This workload' }} is napped while paused. Requests still wake; the instrumentation stays, so resuming is immediate.</p>
+        <p class="mb-5 text-medium-emphasis">{{ router ? 'No workload of this router is napped' : 'This workload is not napped' }} while paused. Requests still wake; the instrumentation stays, so resuming is immediate.</p>
         <v-text-field v-model="reason" label="Reason" placeholder="Incident, migration, change freeze, load test…" maxlength="256" counter autofocus />
         <v-select v-model="choice" :items="UNTIL_CHOICES" label="Resume automatically" />
         <v-text-field v-if="choice === 'date'" v-model="date" type="datetime-local" label="Resume at (local time)" />
