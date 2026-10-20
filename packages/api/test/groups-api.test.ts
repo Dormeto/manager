@@ -195,7 +195,7 @@ describe('users: members and groups', () => {
   it('makes a user a member', async () => {
     const s = setup();
     expect((await s.api(event('PUT', '/api/users/a%40example.com/role', 'dmt-admin', { role: 'member' }))).statusCode).toBe(200);
-    expect(s.calls).toEqual([['role', 'a@example.com', 'member']]);
+    expect(s.calls).toEqual([['list'], ['role', 'a@example.com', 'member']]);
     expect((await s.api(event('PUT', '/api/users/a%40example.com/role', 'dmt-admin', { role: 'root' }))).statusCode).toBe(400);
   });
 

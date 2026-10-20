@@ -1465,6 +1465,13 @@ export function createApi({
       const notSelf = () => {
         if (email === identity.email.toLowerCase()) throw new HttpError(409, 'conflict', 'you cannot change your own account');
       };
+      // Nor does anybody, an IAM caller included, leave the manager with no enabled administrator.
+      const notLastAdmin = async () => {
+        const all = await users.list();
+        if (all.some((u) => u.email.toLowerCase() === email && u.role === 'admin' && u.enabled) && !all.some((u) => u.email.toLowerCase() !== email && u.role === 'admin' && u.enabled)) {
+          throw new HttpError(409, 'conflict', 'the last administrator: give the admin role to another user first');
+        }
+      };
       if (method === 'POST' && b === 'mfa' && action === 'reset') {
         notSelf();
         return audited(identity, 'mfa-reset', email, async () => {
@@ -1486,6 +1493,7 @@ export function createApi({
       if (method === 'PUT' && b === 'role' && !action) {
         notSelf();
         const role = roleIn(bodyOf(event));
+        if (role !== 'admin') await notLastAdmin();
         return audited(identity, 'role', email, async () => {
           await users.setRole(email, role);
           return { result: role, response: reply(200, { email, role }) };
@@ -1493,6 +1501,7 @@ export function createApi({
       }
       if (method === 'POST' && (b === 'disable' || b === 'enable') && !action) {
         notSelf();
+        if (b === 'disable') await notLastAdmin();
         return audited(identity, b, email, async () => {
           await users.setEnabled(email, b === 'enable');
           return { result: 'done', response: reply(200, { email, enabled: b === 'enable' }) };

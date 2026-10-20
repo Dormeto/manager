@@ -17,6 +17,10 @@ A user's role comes from their Cognito groups; the highest one wins.
 A user in no built-in group is a **member**. The built-in roles' rights are unchanged: existing users in a built-in group see no
 difference.
 
+The manager always keeps an enabled administrator: demoting or disabling the last one is refused with a 409 ("the last
+administrator: give the admin role to another user first"), for every caller, including one signed with AWS credentials,
+which is never "yourself". Give the admin role to another user first.
+
 **Upgrading to 0.14.0:** before 0.14.0 a user in no built-in group was a viewer; they are now a member and see nothing until
 a group grants them access. Users invited through the dashboard always have a built-in group, so only users created by hand
 in Cognito are concerned: add them to `dmt-viewer`, or to a custom group.
