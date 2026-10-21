@@ -19,7 +19,10 @@ difference.
 
 The manager always keeps an enabled administrator: demoting or disabling the last one is refused with a 409 ("the last
 administrator: give the admin role to another user first"), for every caller, including one signed with AWS credentials,
-which is never "yourself". Give the admin role to another user first.
+which is never "yourself". Give the admin role to another user first. An administrator invited who has not signed in yet
+counts as another enabled administrator: while such an invitation is pending, the last administrator who has signed in can
+be demoted or disabled (by a caller signed with AWS credentials, since nobody changes their own account), and the
+invitation may expire unused. Such a caller can give the admin role back.
 
 **Upgrading to 0.14.0:** before 0.14.0 a user in no built-in group was a viewer; they are now a member and see nothing until
 a group grants them access. Users invited through the dashboard always have a built-in group, so only users created by hand
