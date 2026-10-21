@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.18.0 — 2026-10-21
+
+Router 0.31.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 - The last enabled administrator can no longer be demoted or disabled: the API answers 409 "the last administrator: give
   the admin role to another user first", whoever asks. A caller signed with AWS credentials
