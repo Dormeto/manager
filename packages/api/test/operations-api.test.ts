@@ -102,6 +102,17 @@ describe('operations', () => {
     expect(created).toHaveLength(1);
   });
 
+  it('passes a boolean hibernate with the onboarding settings and refuses another value', async () => {
+    const { api, created } = setup();
+    const ok = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, settings: { hibernate: false } }));
+    expect(ok.statusCode).toBe(202);
+    expect(created.at(-1)![1]).toMatchObject({ settings: { hibernate: false } });
+    const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, settings: { hibernate: 'x' } }));
+    expect(res.statusCode).toBe(400);
+    expect(json(res).message).toBe('settings: hibernate must be true or false');
+    expect(created).toHaveLength(1);
+  });
+
   it('a second operation on the same target answers 409 with the running one', async () => {
     const { api } = setup({ conflict: 'op0' });
     const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, workloadId: 'paris' }));

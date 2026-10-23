@@ -22,7 +22,7 @@ import { createEngine, createRecords } from '@dormeto/operations';
 import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
-import { readJson } from './s3-json.js';
+import { readJson, writeJson } from './s3-json.js';
 import { absent, createUpdate, fetchText, missingStream, type Build, type Pending } from './update.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
@@ -180,6 +180,11 @@ const ipLists = listsBucket ? {
   catalog: () => readJson<{ lists?: { name: string; url: string; action: string; refreshHours: number }[] }>(s3, listsBucket, 'catalog.json'),
   status: () => readJson<{ lists?: [] }>(s3, listsBucket, 'status.json'),
 } : undefined;
+// The settings every router reads from the same bucket (EC2 hibernation §3): Terraform never writes this object.
+const globalSettings = listsBucket ? {
+  read: () => readJson<Record<string, unknown>>(s3, listsBucket, 'settings.json'),
+  write: (doc: Record<string, unknown>) => writeJson(s3, listsBucket, 'settings.json', doc),
+} : undefined;
 
 // The manager's self-update (only for an install made with the CLI, which gives the API its install bucket): requests go
 // to the install bucket, its builds and their logs are read, and the pending request and an operation per request are
@@ -284,4 +289,5 @@ export const handler = createApi({
   routerVersion: process.env.ROUTER_VERSION,
   alerts,
   ipLists,
+  globalSettings,
 });

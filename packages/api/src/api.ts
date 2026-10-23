@@ -243,6 +243,9 @@ export interface ApiOptions {
     catalog(): Promise<{ lists?: { name: string; url: string; action: string; refreshHours: number }[] } | null>;
     status(): Promise<{ lists?: (ListStatusLine & { dropped?: number })[] } | null>;
   };
+  // The manager's settings for every router (settings.json of the lists bucket): read and rewritten whole, so the keys
+  // this API does not know survive. Without it, the defaults are answered and nothing can be set.
+  globalSettings?: { read(): Promise<Record<string, unknown> | null>; write(doc: Record<string, unknown>): Promise<void> };
 }
 
 // An alert endpoint as administrators see it: an address reduced to its first letter and domain, an ARN to its name.
@@ -370,9 +373,17 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
   if (retry !== undefined && (!Number.isInteger(retry) || (retry as number) < 10 || (retry as number) > 600)) {
     throw new HttpError(400, 'bad_request', 'settings: failedRetrySeconds must be a whole number from 10 to 600');
   }
+  if (settings?.hibernate !== undefined && typeof settings.hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'settings: hibernate must be true or false');
 }
+// The body of a hibernation setting of a router or a workload: true, false, or null to inherit.
+function hibernateOf(body: Record<string, unknown>): boolean | null {
+  const h = body.hibernate;
+  if (h !== true && h !== false && h !== null) throw new HttpError(400, 'bad_request', 'hibernate must be true, false or null');
+  return h;
+}
+const hibernateText = (h: boolean | null) => `hibernate ${h === null ? 'inherit' : h ? 'on' : 'off'}`;
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
   fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -441,6 +452,14 @@ export function createApi({
     everyWorkload(identity, 'read') || (id !== undefined && can(identity.grants, index.get(workloadKey(account ?? '', region ?? '', id)), 'read'));
   // A refused workload action is audited, with its reason, before the 403: once a minute per user, action and target on
   // this instance (a loop of refused calls must not fill the audit); the others are logged.
+  // `need`, with the refusal audited (the settings that reach every router or workload).
+  async function needAudited(identity: Identity, role: Role, action: string, target: string) {
+    try {
+      need(identity, role);
+    } catch (err) {
+      await refuse(identity, action, target, (err as Error).message);
+    }
+  }
   const refusals = new Map<string, number>();
   const REFUSAL_AUDIT_MS = 60_000;
   async function refuse(identity: Identity, action: string, target: string, reason: string): Promise<never> {
@@ -895,6 +914,20 @@ export function createApi({
       throw err;
     }
   }
+  // The settings action of the router (0.32.0): its problems are a 400, an older router a 409, the router's refusals as
+  // the workload routes give them.
+  async function settingsCall(router: Router, payload: Record<string, unknown>, by: string) {
+    try {
+      const result = await invoke(router, { action: 'settings', ...payload, by }) as { problems?: string[] } | null;
+      if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
+      return result;
+    } catch (err) {
+      if (unknownAction(err, 'settings')) throw new HttpError(409, 'conflict', 'upgrade the router to 0.32.0');
+      if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);
+      if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
+      throw err;
+    }
+  }
   const where = (router: Router) => ({
     name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}),
     ...(router.clusters ? { clusters: router.clusters } : {}),
@@ -972,6 +1005,7 @@ export function createApi({
     if (resource === 'preferences') return !a && (method === 'GET' || method === 'PUT');
     if (extra !== undefined) return false;
     if (method === 'GET') {
+      if (resource === 'settings') return a === 'workloads' && !b;
       if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window'));
       return (resource === 'savings' || resource === 'alerts') ? !a : resource === 'operations' && !b;
     }
@@ -1023,6 +1057,30 @@ export function createApi({
           const done = { ...published, ...attempted };
           return { name, url, action, refreshHours, ...Object.fromEntries(Object.entries(done).filter(([, v]) => v !== undefined)) };
         }),
+      });
+    }
+
+    // The hibernation default of every router (EC2 hibernation §3): everyone reads it, administrators set it.
+    if (resource === 'settings' && a === 'workloads' && !b && (method === 'GET' || method === 'PUT')) {
+      const shown = (doc: Record<string, unknown> | null) => {
+        const hibernate = (doc?.workloads as { hibernate?: unknown } | undefined)?.hibernate;
+        return {
+          hibernate: typeof hibernate === 'boolean' ? hibernate : true,
+          updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
+        };
+      };
+      if (method === 'GET') return reply(200, shown(globalSettings ? await globalSettings.read() : null));
+      await needAudited(identity, 'admin', 'settings', 'workloads');
+      if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
+      const hibernate = bodyOf(event).hibernate;
+      if (typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
+      return audited(identity, 'settings', 'workloads', async () => {
+        // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
+        const doc = (await globalSettings.read()) ?? {};
+        const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
+        const updatedAt = new Date(now()).toISOString();
+        await globalSettings.write({ ...doc, workloads: { ...workloads, hibernate }, updatedAt, updatedBy: identity.email });
+        return { result: hibernate ? 'hibernate on' : 'hibernate off', response: reply(200, { hibernate, updatedAt, updatedBy: identity.email, note: 'routers apply it at their next check, within 5 minutes' }) };
       });
     }
 
@@ -1082,6 +1140,14 @@ export function createApi({
         return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}) });
       }
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
+      if (method === 'PUT' && b === 'settings' && !action) {
+        await needAudited(identity, 'admin', 'router-settings', router.name);
+        const hibernate = hibernateOf(bodyOf(event));
+        return audited(identity, 'router-settings', router.name, async () => {
+          const result = await settingsCall(router, { settings: { hibernate } }, identity.email);
+          return { result: hibernateText(hibernate), response: reply(200, result) };
+        });
+      }
     }
 
     // The fleet's estimated savings (R9): the daily job's summary, one read.
@@ -1309,6 +1375,14 @@ export function createApi({
             if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
             throw err;
           }
+        });
+      }
+      if (method === 'PUT' && action === 'settings' && !parts[4]) {
+        await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
+        const hibernate = hibernateOf(bodyOf(event));
+        return audited(identity, 'workload-settings', `${router.name}/${id}`, async () => {
+          const result = await settingsCall(router, { workloadId: id, settings: { hibernate } }, identity.email);
+          return { result: hibernateText(hibernate), response: reply(200, result) };
         });
       }
       if (method === 'PUT' && action === 'tags' && !parts[4]) {
