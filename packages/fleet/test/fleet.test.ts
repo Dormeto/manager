@@ -493,6 +493,25 @@ describe('state history (R8)', () => {
     expect((await history(s))[0]!.at).toBe(T1);
   });
 
+  it('keeps the instances a nap hibernated (router 0.32.0): valid ids only, at most 50', async () => {
+    const s = setup();
+    await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', hibernated: ['i-0123456789abcdef0', 'bad', 7] }));
+    expect((await history(s))[0]!.hibernated).toEqual(['i-0123456789abcdef0']);
+    const many = setup();
+    await many.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', hibernated: Array.from({ length: 60 }, (_, i) => `i-${String(i).padStart(8, '0')}`) }));
+    expect((await history(many))[0]!.hibernated).toHaveLength(50);
+    const none = setup();
+    await none.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', hibernated: 'i-0123456789abcdef0' }));
+    expect('hibernated' in (await history(none))[0]!).toBe(false);
+  });
+
+  it('keeps `hibernated` when a router reports it true (routers 0.32.0), and nothing otherwise', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP', { hibernated: true }), workload('b', 'ASLEEP', { hibernated: 'yes' }), workload('c', 'ASLEEP')]));
+    const [a, b, c] = await s.store.listWorkloads();
+    expect([a!.hibernated, 'hibernated' in b!, 'hibernated' in c!]).toEqual([true, false, false]);
+  });
+
   it('keeps what a nap stopped (router 0.27.0), its known kinds only (R9)', async () => {
     const s = setup();
     await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [

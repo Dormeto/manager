@@ -3,7 +3,7 @@
 import type { HistoryEntry } from './store.js';
 import type { StoppedItem } from './prices.js';
 
-export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[] }
+export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[]; hibernated?: string[] }
 export interface HistoryView {
   from: string;
   to: string;
@@ -19,11 +19,12 @@ export function historyView({ before, entries, from, to, now, initial }: { befor
   const start = Date.parse(from);
   const end = Math.max(start, Math.min(Date.parse(to), Date.parse(now)));
   const clamp = (at: string) => Math.min(Math.max(Date.parse(at), start), end);
-  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[] }[] = [];
+  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean; stopped?: StoppedItem[]; hibernated?: string[] }[] = [];
   // What the entry that began a phase says of it: its cause, who asked, how it is known, what its nap stopped.
   const details = (entry: HistoryEntry) => ({
     ...(entry.cause ? { cause: entry.cause } : {}), ...(entry.by ? { by: entry.by } : {}), ...(entry.inferred ? { inferred: true } : {}),
     ...(entry.from === null ? { first: true } : {}), ...(entry.stopped ? { stopped: entry.stopped } : {}),
+    ...(entry.hibernated ? { hibernated: entry.hibernated } : {}),
   });
   // The first phase: the entry before the period (its details too: review M4), else the initial state given.
   let current: (typeof phases)[number] = before ? { state: before.to, from: start, to: end, ...details({ ...before, from: before.from ?? '' }) } : { state: initial ?? 'UNKNOWN', from: start, to: end };

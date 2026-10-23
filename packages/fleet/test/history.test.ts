@@ -64,6 +64,12 @@ describe('history view', () => {
     expect(v.phases[1]).toMatchObject({ state: 'ASLEEP', stopped });
   });
 
+  it('an asleep phase carries the instances its nap hibernated (router 0.32.0)', () => {
+    const hibernated = ['i-0123456789abcdef0'];
+    const v = historyView({ before: e('AWAKE', -10), entries: [e('ASLEEP', 10, { hibernated })], from: t(0), to: t(60), now: t(60) });
+    expect(v.phases[1]).toMatchObject({ state: 'ASLEEP', hibernated });
+  });
+
   it('the first phase keeps what the entry before the period says: its cause, who, what it stopped (R9, review M4)', () => {
     const stopped = [{ kind: 'ec2' as const, type: 't3.medium', count: 1, os: 'Linux' }];
     const v = historyView({ before: e('ASLEEP', -100, { cause: 'idle', stopped }), entries: [], from: t(0), to: t(60), now: t(60) });

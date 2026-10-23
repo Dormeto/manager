@@ -118,6 +118,13 @@ function stoppedItemOf(v: unknown): Json | null {
 }
 export const stoppedOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(stoppedItemOf).filter((i): i is Json => i !== null) : undefined);
 
+// The instances a nap hibernated (routers 0.32.0): well-formed ids, at most 50; nothing when none is valid.
+export function hibernatedOf(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const ids = v.filter((i): i is string => typeof i === 'string' && INSTANCE_ID.test(i)).slice(0, 50);
+  return ids.length ? ids : undefined;
+}
+
 // What a state change event says of its transition, for the history (R8): what started it, its wake, the wake's
 // duration, the failure, who asked it from the manager.
 export function transitionOf(d: Json, at: string) {
@@ -129,6 +136,7 @@ export function transitionOf(d: Json, at: string) {
     failure: failureOf(d.failure, at),
     by: text(d.by, 320),
     stopped: stoppedOf(d.stopped),
+    hibernated: hibernatedOf(d.hibernated),
   });
 }
 
@@ -159,6 +167,8 @@ export function workloadOf(w: unknown): Json | null {
     pendingWake: w.pendingWake === true,
     // A schedule is set (routers 0.31.0).
     scheduled: w.scheduled === true ? true : undefined,
+    // Asleep with its instances hibernated (routers 0.32.0).
+    hibernated: w.hibernated === true ? true : undefined,
     backends: backendsOf(w.backends),
     pauses: pausesOf(w.pauses),
     stats7d: numbers(w.stats7d, new Set(['wakes', 'ignored', 'deferred'])) ?? null,

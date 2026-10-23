@@ -65,6 +65,7 @@ export interface HistoryEntry {
   by?: string; // who asked it from the manager
   inferred?: boolean;
   stopped?: StoppedItem[]; // what the nap stopped (ASLEEP, routers 0.27.0: R9)
+  hibernated?: string[]; // the instance ids the nap hibernated (ASLEEP, routers 0.32.0)
 }
 // The entries of a period read at most (a request's bound).
 export const HISTORY_MAX = 5000;
