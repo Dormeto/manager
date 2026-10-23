@@ -25,6 +25,7 @@ import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import IdleWindowCard from '../components/IdleWindowCard.vue';
+import RequestHeatmap from '../components/RequestHeatmap.vue';
 import ScheduleCard from '../components/ScheduleCard.vue';
 import ScheduleDialog from '../components/ScheduleDialog.vue';
 import type { Schedule } from '../schedule';
@@ -413,7 +414,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   <DescriptionCard class="mb-4" :description="description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
     @save="saveDescription" @clear="clearDescription" />
 
-  <!-- Two columns of cards, 16 px apart: the backends, history and idle window (wide content) on the left; the summary, rules,
+  <!-- Two columns of cards, 16 px apart: the backends, history, requests and idle window (wide content) on the left; the summary, rules,
        targets, filtering and settings (short ones) on the right, so both end at about the same height. -->
   <div v-if="status" class="dm-layout">
     <div v-if="status.recommendations.length" class="dm-stack dm-layout__wide">
@@ -474,6 +475,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
       </v-card>
       <HistoryCard :router="router" :id="id" :now="now" />
+      <RequestHeatmap :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
       <IdleWindowCard :router="router" :id="id" />
     </div>

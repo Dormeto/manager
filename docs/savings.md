@@ -63,5 +63,9 @@ What the manager prices for each nap, how it adds savings up, and how a workload
   `GetMetricData`): nothing more to apply in the member accounts. The answer is kept a day as `T#default` /
   `IDLE#<account>#<region>#<workloadId>` (TTL), or until the workload's idle window changes. A discovery run may take
   the function's reserved executions: the card then says to try again.
+- **Requests per hour:** the answer's `hours` (`{ from, counts }`: the replayed minutes added up per UTC hour from
+  `from`) draw the workload page's Requests card, GitHub style: a row per day and a column per hour in the viewer's time
+  zone, 7 or 14 days, greener with more requests. It is the same read, so it costs no other call; an answer kept from an
+  earlier manager has no `hours` until the next one.
 - **Changing the window:** the workload module's `idle_minutes`, or offboarding and onboarding again; not from the
   manager yet.

@@ -9,7 +9,7 @@ import type {
 } from '../types';
 import { ROUTER_RULES } from './fixtures';
 import { ACCOUNTS, ORG } from './org';
-import { historyView, replayWindows, timeIn } from './history';
+import { historyView, replayWindows, timeIn, type Burst } from './history';
 import {
   activeExclusions, ecsCluster, hasHibernation, hibernationOf, lastRequest, managerReadAt, operationStatus, pausesOf, routerIn, type Demo, type DemoOperation, type DemoRouter, type DemoWorkload,
 } from './state';
@@ -296,8 +296,23 @@ export function idleAdvice(d: Demo, w: DemoWorkload, now: number): IdleWindowAdv
   return {
     computedAt: iso(computedAt), from: iso(from), to: iso(to), current: w.settings.idleMinutes, recommended, checkMinutes: 5,
     wakeSeconds: median === null ? null : Math.round(median / SECOND), priced: hourly !== null, windows: rows,
-    actual: { wakes: actual, replayedWakes, noisy: replayedWakes > actual * 1.2 + 2 }, wakerTargetGroup: true,
+    actual: { wakes: actual, replayedWakes, noisy: replayedWakes > actual * 1.2 + 2 }, wakerTargetGroup: true, hours: requestHours(list, from, to),
   };
+}
+
+// The requests of the bursts per hour from `from` (each burst's spread over the hours it spans), as the API adds up
+// CloudWatch's minutes.
+function requestHours(list: Burst[], from: number, to: number): { from: string; counts: number[] } {
+  const counts: number[] = new Array(Math.ceil((to - from) / HOUR)).fill(0);
+  for (const b of list) {
+    const end = Math.max(b.end, b.start + 1);
+    for (let t = b.start; t < end; t = (Math.floor(t / HOUR) + 1) * HOUR) {
+      const i = Math.floor((t - from) / HOUR);
+      const share = (Math.min(end, (Math.floor(t / HOUR) + 1) * HOUR) - t) / (end - b.start);
+      if (i >= 0 && i < counts.length) counts[i] = (counts[i] ?? 0) + b.requests * share;
+    }
+  }
+  return { from: iso(from), counts: counts.map((n) => Math.round(n)) };
 }
 
 // All the workloads' bar (GET /workloads/states), from each one's figures.
