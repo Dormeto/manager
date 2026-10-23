@@ -5,7 +5,7 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import { baselineHours, checkMinutesOf, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
@@ -194,6 +194,11 @@ export interface ApiOptions {
     listGroups?(): Promise<Group[]>;
     // A workload's tags replaced at once, after a retag (false: not stored).
     putWorkloadTags?(account: string, region: string, id: string, tags: Record<string, string>): Promise<boolean>;
+    // Descriptions of routers and workloads (kept apart from the summaries).
+    getDescription?(key: DescriptionKey): Promise<Description | null>;
+    putDescription?(key: DescriptionKey, description: Description): Promise<void>;
+    deleteDescription?(key: DescriptionKey): Promise<boolean>;
+    listDescriptions?(kind: 'workload' | 'router'): Promise<Map<string, Description>>;
     putGroup?(group: Pick<Group, 'name' | 'description' | 'grants'> & { updatedBy: string }): Promise<void>;
     deleteGroup?(name: string): Promise<void>;
     // The state history (R8).
@@ -842,6 +847,40 @@ export function createApi({
     };
   }
 
+  // A description read for a detail answer, and the one line of each row of a list (one query per list). A failed read
+  // never fails the answer: the description is left out.
+  const descriptionOf = (key: DescriptionKey) => (fleet?.getDescription ? fleet.getDescription(key).catch(() => null) : Promise.resolve(null));
+  const summariesOf = async (kind: 'workload' | 'router') => {
+    const found = fleet?.listDescriptions ? await fleet.listDescriptions(kind).catch(() => new Map<string, Description>()) : new Map<string, Description>();
+    return (id: string) => {
+      const line = found.has(id) ? summaryOf(found.get(id)!.text) : '';
+      return line ? { summary: line } : {};
+    };
+  };
+  // PUT sets (an empty text clears) and DELETE clears a description: audited `description`, "set (N characters)" or "cleared".
+  // The caller has been checked for the role; `known` says whether what it describes exists.
+  function describeRoute(identity: Identity, event: ApiEvent, key: DescriptionKey, target: string, known: () => Promise<boolean>, missing: string) {
+    let text = '';
+    if (event.requestContext.http.method === 'PUT') {
+      const raw = bodyOf(event).text;
+      const problem = descriptionProblem(typeof raw === 'string' ? raw.replace(/\r\n/g, '\n') : raw);
+      if (problem) throw new HttpError(400, 'bad_request', problem);
+      text = (raw as string).replace(/\r\n/g, '\n').trim();
+    }
+    return audited(identity, 'description', target, async () => {
+      if (!fleet?.putDescription || !fleet.deleteDescription) throw new HttpError(404, 'not_found', 'no descriptions in this manager');
+      if (!text) {
+        // Clearing what does not exist is fine (idempotent); nothing is created either way.
+        await fleet.deleteDescription(key);
+        return { result: 'cleared', response: reply(200, { description: null }) };
+      }
+      if (!(await known())) throw new HttpError(404, 'not_found', missing);
+      const description = { text, by: identity.email, at: new Date(now()).toISOString() };
+      await fleet.putDescription(key, description);
+      return { result: `set (${[...text].length} characters)`, response: reply(200, { description }) };
+    });
+  }
+
   // What the caller reads of every workload the routers report or list, with their tags and what they can do.
   async function listAll(identity: Identity) {
     const { summaries, workloads } = await reports();
@@ -1118,13 +1157,15 @@ export function createApi({
         const op = running.find((o) => o.target.account === accountOfRouter(router) && o.target.region === router.region);
         return op ? { operation: { id: op.id, type: op.type } } : {};
       };
+      const lineOf = await summariesOf('router');
       const rows = shown.map((router) => {
         const summary = summaries.get(router);
+        const line = lineOf(`${accountOfRouter(router)}#${router.region}`);
         if (!summary) {
           const result = called[silent.indexOf(router)]!;
-          return { ...(result.status === 'fulfilled' ? result.value : { ...where(router), error: (result.reason as Error).message }), reporting: false, ...operationOf(router) };
+          return { ...(result.status === 'fulfilled' ? result.value : { ...where(router), error: (result.reason as Error).message }), reporting: false, ...operationOf(router), ...line };
         }
-        return { ...reportingRow(router, summary, workloads), ...operationOf(router) };
+        return { ...reportingRow(router, summary, workloads), ...operationOf(router), ...line };
       });
       return reply(200, { routers: rows, ...(routerVersion ? { available: { version: routerVersion } } : {}) });
     }
@@ -1137,7 +1178,13 @@ export function createApi({
         const configuration = router.source === 'manager' && details?.configuration
           ? Object.fromEntries(Object.entries(details.configuration).map(([k, v]) => [k, v && typeof v === 'object' ? { ...v, source: 'manager' } : v]))
           : details?.configuration;
-        return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}) });
+        const description = await descriptionOf({ kind: 'router', account: accountOfRouter(router), region: router.region });
+        return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}), description });
+      }
+      if ((method === 'PUT' || method === 'DELETE') && b === 'description' && !action) {
+        await needAudited(identity, 'admin', 'description', router.name);
+        // The router is one of the manager's (routerOf above).
+        return describeRoute(identity, event, { kind: 'router', account: accountOfRouter(router), region: router.region }, router.name, async () => true, `unknown router: ${a}`);
       }
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
       if (method === 'PUT' && b === 'settings' && !action) {
@@ -1216,7 +1263,13 @@ export function createApi({
       if (q.cursor) start = Number(Buffer.from(q.cursor, 'base64url').toString('utf8'));
       else if (q.offset) start = Number(q.offset);
       if (!Number.isInteger(start) || start < 0) throw new HttpError(400, 'bad_request', q.cursor ? 'invalid cursor' : 'invalid offset');
-      const listed = matching.slice(start, start + limit);
+      const slice = matching.slice(start, start + limit);
+      // The one line of each description, only for the rows the caller sees.
+      const lineOf = await summariesOf('workload');
+      const listed = slice.map((w): Record<string, unknown> => {
+        const router = routers.find((r) => r.name === w.router);
+        return { ...w, ...lineOf(`${String(w.account ?? (router ? accountOfRouter(router) : ''))}#${String(w.region ?? router?.region ?? '')}#${String(w.workloadId)}`) };
+      });
       // A page's idle hours and requests over 7 days, from each workload's discovery candidate (one per target group, found
       // by its ARN), and its time in each state over 7 days, from its history: when the Workloads view asks.
       const page = q.limit && (q.idle === '1' || q.states === '1') ? await Promise.all(listed.map(async (w) => {
@@ -1339,7 +1392,9 @@ export function createApi({
           discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
         ]);
         const access = withAccess(identity, (((await reportsNow()) ? summary : status) ?? {}) as object);
+        const description = await descriptionOf({ kind: 'workload', account: accountOfRouter(router), region: router.region, id });
         return reply(200, {
+          description,
           // Its account and region: the ARNs of its backends and targets.
           ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
@@ -1376,6 +1431,13 @@ export function createApi({
             throw err;
           }
         });
+      }
+      if ((method === 'PUT' || method === 'DELETE') && action === 'description' && !parts[4]) {
+        await needAudited(identity, 'operator', 'description', `${router.name}/${id}`);
+        const account = accountOfRouter(router);
+        // Known to the manager's fleet store (a workload its first check has not yet reached is not).
+        return describeRoute(identity, event, { kind: 'workload', account, region: router.region, id }, `${router.name}/${id}`,
+          async () => (await fleet?.getWorkload(account, router.region, id)) != null, `unknown workload: ${id}`);
       }
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
