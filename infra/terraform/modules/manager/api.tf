@@ -115,6 +115,13 @@ data "aws_iam_policy_document" "api" {
     resources = ["${aws_s3_bucket.lists.arn}/catalog.json", "${aws_s3_bucket.lists.arn}/status.json"]
   }
   statement {
+    # The hibernation default of every router (EC2 hibernation §3): administrators set it from the dashboard. Terraform
+    # never writes this object, so an apply never resets their choice.
+    sid       = "ListsSettings"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.lists.arn}/settings.json"]
+  }
+  statement {
     # A missing status.json answers NoSuchKey, not AccessDenied.
     sid       = "ListsListing"
     actions   = ["s3:ListBucket"]
