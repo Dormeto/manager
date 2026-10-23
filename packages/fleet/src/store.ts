@@ -104,6 +104,10 @@ export interface UpdateCheck { enabled: boolean; alert: boolean; updatedAt?: str
 export interface UpdateResult { checkedAt: string; running: string; latest: string | null; error?: string; notified?: string }
 
 // A custom group's grants (tags design §4), set by administrators (GROUP#<name>): the same shape as the API's grants.
+// A description of a router or a workload (its own item, never expiring: the summaries are rewritten and expire).
+export interface Description { text: string; by: string; at: string }
+export type DescriptionKey = { kind: 'workload'; account: string; region: string; id: string } | { kind: 'router'; account: string; region: string };
+
 export interface Group {
   name: string;
   description: string;
@@ -151,6 +155,7 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       return null;
     }
   };
+  const descriptionSk = (k: DescriptionKey) => (k.kind === 'workload' ? `WD#${k.account}#${k.region}#${k.id}` : `RD#${k.account}#${k.region}`);
   async function query(prefix: string): Promise<Item[]> {
     const items: Item[] = [];
     let start: Item | undefined;
@@ -224,6 +229,30 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
     },
     async listWorkloads(): Promise<WorkloadSummary[]> {
       return (await query('WS#')).map((i) => data<WorkloadSummary>(i)!).filter(Boolean);
+    },
+    // Descriptions (descriptions design §3): WD#<account>#<region>#<id> and RD#<account>#<region>, kept until cleared.
+    async getDescription(k: DescriptionKey): Promise<Description | null> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(descriptionSk(k)), ConsistentRead: true }));
+      return data<Description>(Item);
+    },
+    async putDescription(k: DescriptionKey, d: Description): Promise<void> {
+      await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key(descriptionSk(k)), data: { S: JSON.stringify({ text: d.text, by: d.by, at: d.at }) } } }));
+    },
+    // True when one existed.
+    async deleteDescription(k: DescriptionKey): Promise<boolean> {
+      const existed = (await this.getDescription(k)) !== null;
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(descriptionSk(k)) }));
+      return existed;
+    },
+    // Every description of a kind, one query, keyed <account>#<region>[#<id>].
+    async listDescriptions(kind: 'workload' | 'router'): Promise<Map<string, Description>> {
+      const prefix = kind === 'workload' ? 'WD#' : 'RD#';
+      const found = new Map<string, Description>();
+      for (const item of await query(prefix)) {
+        const d = data<Description>(item);
+        if (d) found.set(item.sk!.S!.slice(prefix.length), d);
+      }
+      return found;
     },
     // The failure index (R7b): WF#<account>#<region>#<workloadId>, written on failures only, read by the watchdog.
     async getFailure(account: string, region: string, id: string): Promise<{ entry: FailureEntry; version: number } | null> {
