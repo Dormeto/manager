@@ -4,8 +4,8 @@ export const DESCRIPTION_MAX = 4000;
 const SUMMARY_MAX = 120;
 
 // Line feed and tab are the only control characters kept (a lone carriage return is refused: the API turns \r\n into \n first).
-// eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/;
+// Any control character (C0, DEL, C1 such as U+009B) other than line feed and tab.
+const CONTROL = /[^\P{Cc}\n\t]/u;
 
 export function descriptionProblem(text: unknown): string | null {
   if (typeof text !== 'string') return 'text must be a string';

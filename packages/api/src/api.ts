@@ -848,8 +848,15 @@ export function createApi({
   }
 
   // A description read for a detail answer, and the one line of each row of a list (one query per list). A failed read
-  // never fails the answer: the description is left out.
-  const descriptionOf = (key: DescriptionKey) => (fleet?.getDescription ? fleet.getDescription(key).catch(() => null) : Promise.resolve(null));
+  // never fails the answer: the key is left out (undefined), since null means "no description".
+  const descriptionOf = async (key: DescriptionKey): Promise<{ description?: Description | null }> => {
+    if (!fleet?.getDescription) return { description: null };
+    try {
+      return { description: await fleet.getDescription(key) };
+    } catch {
+      return {};
+    }
+  };
   const summariesOf = async (kind: 'workload' | 'router') => {
     const found = fleet?.listDescriptions ? await fleet.listDescriptions(kind).catch(() => new Map<string, Description>()) : new Map<string, Description>();
     return (id: string) => {
@@ -1179,7 +1186,7 @@ export function createApi({
           ? Object.fromEntries(Object.entries(details.configuration).map(([k, v]) => [k, v && typeof v === 'object' ? { ...v, source: 'manager' } : v]))
           : details?.configuration;
         const description = await descriptionOf({ kind: 'router', account: accountOfRouter(router), region: router.region });
-        return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}), description });
+        return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}), ...description });
       }
       if ((method === 'PUT' || method === 'DELETE') && b === 'description' && !action) {
         await needAudited(identity, 'admin', 'description', router.name);
@@ -1394,7 +1401,7 @@ export function createApi({
         const access = withAccess(identity, (((await reportsNow()) ? summary : status) ?? {}) as object);
         const description = await descriptionOf({ kind: 'workload', account: accountOfRouter(router), region: router.region, id });
         return reply(200, {
-          description,
+          ...description,
           // Its account and region: the ARNs of its backends and targets.
           ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),

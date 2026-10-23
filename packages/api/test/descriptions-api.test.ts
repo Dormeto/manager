@@ -69,7 +69,7 @@ describe('a workload description', () => {
 
   it('refuses 4,001 characters, a control character and a body without a string text (400)', async () => {
     const s = await setup();
-    for (const body of [{ text: 'a'.repeat(4001) }, { text: 'bell\u0007' }, { text: 'lone\rcr' }, {}, { text: 12 }]) {
+    for (const body of [{ text: 'a'.repeat(4001) }, { text: 'bell\u0007' }, { text: 'lone\rcr' }, { text: 'csi\u009b' }, {}, { text: 12 }]) {
       expect([JSON.stringify(body).slice(0, 30), (await s.api(operator('PUT', W, body))).statusCode]).toEqual([JSON.stringify(body).slice(0, 30), 400]);
     }
     expect((await s.api(operator('PUT', W, { text: 'a'.repeat(4000) }))).statusCode).toBe(200);
@@ -161,6 +161,24 @@ describe('a router description', () => {
     await s.api(admin('PUT', R, { text: '**Dev router**\nmore' }));
     expect(json(await s.api(viewer('GET', '/api/routers/dmt-dev'))).description.text).toBe('**Dev router**\nmore');
     expect(json(await s.api(viewer('GET', '/api/routers'))).routers[0].summary).toBe('Dev router');
+  });
+});
+
+describe('a failing description read', () => {
+  it('leaves the description key out of the details (null means none) and still answers 200', async () => {
+    const api = createApi({
+      routers: ROUTERS, now: () => NOW, newId: () => 'id-1', version: '0.19.0', managerAccount: ACCOUNT,
+      audit: { write: async () => {}, list: async () => [] },
+      invoke: async (_r, payload) => (payload.action === 'router' ? { router: { name: 'dmt-dev' } } : { workloadId: 'shop', state: 'AWAKE' }),
+      fleet: {
+        listRouters: async () => [ROUTER_SUMMARY] as never, listWorkloads: async () => WORKLOADS as never,
+        getWorkload: async () => WORKLOADS[0] as never, getDescription: async () => { throw new Error('boom'); },
+      },
+    });
+    for (const path of ['/api/workloads/dmt-dev/shop', '/api/routers/dmt-dev']) {
+      const res = await api(viewer('GET', path));
+      expect([path, res.statusCode, 'description' in json(res)]).toEqual([path, 200, false]);
+    }
   });
 });
 

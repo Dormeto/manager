@@ -16,6 +16,8 @@ describe('descriptionProblem', () => {
     expect(descriptionProblem('a'.repeat(4001))).toBe('text must be at most 4000 characters');
     expect(descriptionProblem('bell\u0007')).toBe('text must not contain control characters other than line feed and tab');
     expect(descriptionProblem('lone\rreturn')).toBe('text must not contain control characters other than line feed and tab');
+    expect(descriptionProblem('csi\u009b')).toBe('text must not contain control characters other than line feed and tab');
+    expect(descriptionProblem('nel\u0085')).toBe('text must not contain control characters other than line feed and tab');
     expect(descriptionProblem('del\u007f')).toBe('text must not contain control characters other than line feed and tab');
   });
 });
