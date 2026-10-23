@@ -5,6 +5,31 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+Router 0.32.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
+
+- EC2 hibernation. A nap hibernates a standalone EC2 instance that was launched with hibernation, instead of stopping
+  it, so it wakes with its memory and processes as they were. It is on by default: an instance launched without
+  hibernation, or one AWS refuses to hibernate, is stopped as before, so no nap fails. The most specific setting wins:
+  the workload, then the router, then the manager's default (Routers › Workload defaults, on when never set). A
+  workload with fallback instance types does not hibernate unless its own setting says on, because a hibernated
+  instance cannot change type. A workload hibernated for 59 days is woken for maintenance, and the nap after that wake
+  stops the instance, since AWS keeps a hibernation 60 days at most. The workload's and the router's pages show the
+  setting, where it comes from and which instances can hibernate; the history shows "hibernated N instances". The
+  onboard dialog has a Hibernate choice (Inherit, On, Off). New API routes (and the same under `/iam/`):
+  `GET|PUT /api/settings/workloads` (administrators write), `PUT /api/routers/{router}/settings` (administrators) and
+  `PUT /api/workloads/{router}/{id}/settings` (operators and administrators; refused for a workload written by
+  Terraform, whose module has the `hibernate` variable). Upgrade the routers to 0.32.0; set Hibernate off in Routers ›
+  Workload defaults first if instances launched with hibernation must keep stopping. The manager's API role gains read
+  and write on `settings.json` of the lists bucket (the manager's own Terraform, applied by the update).
+- Descriptions of routers and workloads: an optional Markdown text (up to 4,000 characters) for people. Administrators
+  write a router's, operators and administrators a workload's. It shows in a Description card on the router's and the
+  workload's page and as one line under the name in the Routers and Workloads lists. `PUT|DELETE
+  /api/workloads/{router}/{id}/description` and `PUT|DELETE /api/routers/{router}/description` (and under `/iam/`).
+- Fix: a dashboard test no longer depends on the real date.
+
 ## 0.18.0 — 2026-10-21
 
 Router 0.31.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
