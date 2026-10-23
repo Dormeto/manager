@@ -44,7 +44,7 @@ vi.mock('../src/api', () => ({
     return {
       available: { version: '0.23.0' },
       routers: [
-        { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] },
+        { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, summary: 'Dev router of the shop team', workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] },
           ...(server.running ? { operation: { id: server.running, type: 'upgrade-router' } } : {}) },
         { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0,
           health: { status: 'warning', problems: [{ level: 'warning', text: DRIFT }] },
@@ -87,6 +87,15 @@ describe('Routers view', () => {
     server.running = null;
     server.ended = { status: 'succeeded' };
     document.body.innerHTML = '';
+  });
+
+  it('shows the description\'s first line, muted, under the name of a router that has one', async () => {
+    const wrapper = await mountView();
+    const line = rowOf(wrapper, 'dmtr-dev-eu-west-3').find('[data-test="summary"]');
+    expect(line.text()).toBe('Dev router of the shop team');
+    expect(line.attributes('title')).toBe('Dev router of the shop team');
+    expect(rowOf(wrapper, 'dmt-dev').find('[data-test="summary"]').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('links each router to its own view, as Workloads does; no row expands (user request)', async () => {

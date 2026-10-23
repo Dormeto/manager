@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { createVuetify } from 'vuetify';
@@ -7,6 +8,7 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import IdleWindowCard from '../src/components/IdleWindowCard.vue';
+import DescriptionCard from '../src/components/DescriptionCard.vue';
 import { useSession } from '../src/stores/session';
 import { api } from '../src/api';
 import StateBar from '../src/components/StateBar.vue';
@@ -22,7 +24,14 @@ const status = {
   stats: null, ipLists: [], wakeMode: 'any', wakeRules: [], noWakeRules: [],
 };
 let current: Record<string, unknown> = status;
-vi.mock('../src/api', () => ({ api: vi.fn(async () => structuredClone(current)) }));
+// The refusal of a description's PUT, when set.
+let descriptionRefusal = '';
+vi.mock('../src/api', () => ({
+  api: vi.fn(async (path: string, init?: RequestInit) => {
+    if (path.endsWith('/description') && descriptionRefusal) throw new Error(descriptionRefusal);
+    return structuredClone(current);
+  }),
+}));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 Object.defineProperty(window, 'visualViewport', {
   configurable: true,
@@ -581,6 +590,101 @@ describe('Workload view', () => {
       expect(awake.find('[data-test="hibernated"]').exists()).toBe(false);
       awake.unmount();
       current = status;
+    });
+  });
+
+  describe('the Description card', () => {
+    const DESCRIPTION = { text: '# Shop\n\nfront\nback\n\n1. one\n2. [wiki](https://wiki.example.com)', by: 'fab@example.com', at: minutesAgo(120) };
+    const card = (w: Awaited<ReturnType<typeof mountView>>) => w.find('[data-test="description-card"]');
+    const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
+    const isOpen = (w: Awaited<ReturnType<typeof mountView>>) => w.findComponent(DescriptionCard).findComponent({ name: 'VDialog' }).props('modelValue');
+    const writes = () => vi.mocked(api).mock.calls.filter(([path]) => path.endsWith('/description'));
+    // Earlier tests leave their dialogs in the document: start from an empty one.
+    // (and an api that answers `current`: earlier tests replaced the mock's implementation).
+    beforeEach(() => {
+      document.body.innerHTML = '';
+      vi.mocked(api).mockImplementation((async (path: string) => {
+        if (path.endsWith('/description') && descriptionRefusal) throw new Error(descriptionRefusal);
+        return structuredClone(current);
+      }) as never);
+    });
+    const done = () => { current = status; descriptionRefusal = ''; document.body.innerHTML = ''; };
+
+    it('draws the text with who wrote it and when; a viewer has no Edit', async () => {
+      current = { ...status, description: DESCRIPTION };
+      const w = await mountView('viewer');
+      expect(card(w).find('h4').text()).toBe('Shop');
+      expect(card(w).findAll('ol li').map((l) => l.text())).toEqual(['one', 'wiki']);
+      expect(card(w).find('[data-test="description-by"]').text()).toBe('— fab@example.com, 2 h ago');
+      expect(card(w).find('[data-test="edit-description"]').exists()).toBe(false);
+      w.unmount();
+      done();
+    });
+
+    it('says "No description"; operators and administrators may add one, viewers and members may not', async () => {
+      current = { ...status, description: null };
+      for (const role of ['operator', 'admin'] as const) {
+        const w = await mountView(role);
+        expect(card(w).text()).toContain('No description');
+        expect(card(w).get('[data-test="edit-description"]').text()).toBe('Add a description');
+        w.unmount();
+      }
+      for (const role of ['viewer', 'member'] as const) {
+        const w = await mountView(role);
+        expect(card(w).text()).toContain('No description');
+        expect(card(w).find('[data-test="edit-description"]').exists()).toBe(false);
+        w.unmount();
+      }
+      done();
+    });
+
+    it('shows nothing when the answer has no description key (a store error, or before 0.19.0)', async () => {
+      current = status;
+      const w = await mountView('operator');
+      expect(card(w).exists()).toBe(false);
+      expect(w.text()).not.toContain('Add a description');
+      w.unmount();
+      done();
+    });
+
+    it('PUTs the text; a 400 stays in the dialog, which stays open', async () => {
+      current = { ...status, description: DESCRIPTION };
+      const w = await mountView('operator');
+      await card(w).get('[data-test="edit-description"]').trigger('click');
+      await flushPromises();
+      const area = document.querySelector('[data-test="description-text"] textarea') as HTMLTextAreaElement;
+      area.value = 'The shop';
+      area.dispatchEvent(new Event('input'));
+      await nextTick();
+      vi.mocked(api).mockClear();
+      descriptionRefusal = 'text must be at most 4000 characters';
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]![0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/description');
+      expect(writes()[0]![1]).toMatchObject({ method: 'PUT' });
+      expect(JSON.parse(String(writes()[0]![1]!.body))).toEqual({ text: 'The shop' });
+      await vi.waitFor(() => expect(document.querySelector('[data-test="description-error"]')?.textContent).toContain('at most 4000 characters'));
+      expect(isOpen(w)).toBe(true);
+      w.unmount();
+      done();
+    });
+
+    it('Clear sends DELETE and closes the dialog', async () => {
+      current = { ...status, description: DESCRIPTION };
+      const w = await mountView('admin');
+      await card(w).get('[data-test="edit-description"]').trigger('click');
+      await flushPromises();
+      vi.mocked(api).mockClear();
+      current = { ...status, description: null };
+      dialogButton('Clear').click();
+      await flushPromises();
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]![1]).toMatchObject({ method: 'DELETE' });
+      expect(isOpen(w)).toBe(false);
+      expect(card(w).text()).toContain('No description');
+      w.unmount();
+      done();
     });
   });
 });

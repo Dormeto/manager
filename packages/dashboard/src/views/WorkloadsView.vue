@@ -208,6 +208,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         <div class="dm-wl">
           <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link>
           <v-icon v-if="item.scheduled" data-test="scheduled" :icon="mdiCalendarClock" size="16" class="ml-1 text-medium-emphasis" title="Has a schedule" aria-label="Has a schedule" />
+          <div v-if="item.summary" class="dm-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
           <div v-if="item.name" class="dm-wl__id mono">{{ item.workloadId }}</div>
         </div>
       </template>
@@ -275,6 +276,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-wl { min-width: 0; }
 .dm-wl__name { display: inline-block; font-weight: 600; letter-spacing: -0.01em; color: rgb(var(--v-theme-on-surface)); text-decoration: none; white-space: nowrap; transition: color 0.2s; }
 .dm-wl__name:hover { color: rgb(var(--v-theme-primary)); }
+.dm-summary { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 .dm-wl__id { margin-top: 1px; font-size: 0.7rem; letter-spacing: 0.02em; color: rgba(var(--v-theme-on-surface), 0.5); }
 .dm-link { color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); text-decoration: none; font-size: 0.84rem; transition: color 0.2s; }
 .dm-link:hover { color: rgb(var(--v-theme-primary)); }

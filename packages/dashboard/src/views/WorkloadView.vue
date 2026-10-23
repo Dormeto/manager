@@ -16,6 +16,7 @@ import ExcludeDialog from '../components/ExcludeDialog.vue';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import ResourceTooltip from '../components/ResourceTooltip.vue';
+import DescriptionCard from '../components/DescriptionCard.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import TagsDialog from '../components/TagsDialog.vue';
 import { tagsList, type Tags } from '../tags';
@@ -95,6 +96,24 @@ async function setHibernate(hibernate: boolean | null) {
     savingHibernate.value = false;
   }
 }
+
+// The description (manager 0.19.0): operators and administrators write it, as they rename; the refusal stays in the dialog.
+const savingDescription = ref(false);
+const descriptionError = ref('');
+async function writeDescription(call: { method: 'PUT'; body: string } | { method: 'DELETE' }) {
+  savingDescription.value = true;
+  descriptionError.value = '';
+  try {
+    await api(`${path.value}/description`, call);
+    await run();
+  } catch (err) {
+    descriptionError.value = (err as Error).message;
+  } finally {
+    savingDescription.value = false;
+  }
+}
+const saveDescription = (text: string) => writeDescription({ method: 'PUT', body: JSON.stringify({ text }) });
+const clearDescription = () => writeDescription({ method: 'DELETE' });
 
 async function setTags(next: Tags) {
   tagsOpen.value = false;
@@ -380,6 +399,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     {{ fallbackText }}: AWS had no capacity for their own types at the last wake; the next nap gives them back.
   </v-alert>
   <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
+  <DescriptionCard v-if="status" class="mb-4" :description="status.description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
+    @save="saveDescription" @clear="clearDescription" />
 
   <!-- Two columns of cards, 16 px apart: the backends, history and idle window (wide content) on the left; the summary, rules,
        targets, filtering and settings (short ones) on the right, so both end at about the same height. -->

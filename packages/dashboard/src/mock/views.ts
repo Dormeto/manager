@@ -1,5 +1,6 @@
 // The manager API's answers, computed from the demo model at each request (npm run dev:mock).
 import type { Candidate } from '@dormeto/discovery/types';
+import { summaryOf } from '@dormeto/fleet/description';
 import { addEnergy, savedEnergy } from '@dormeto/fleet/energy';
 import type { AccessReport } from '../access';
 import type {
@@ -54,7 +55,7 @@ export function routerRow(d: Demo, r: DemoRouter, now: number): RouterInfo {
     name: r.name, region: r.region, account: r.account, source: r.source, ...(r.clusters.length ? { clusters: r.clusters } : {}),
     version: r.version, build: r.build, workloads: list.length, checkSchedule: CHECK_SCHEDULE, lastScheduledCheckAt: iso(lastCheck(now)),
     health: { status: health.status, problems: health.problems }, pauses: r.pauses, workloadStates: byState(list), paused: pausedCount(r, list),
-    lastActivityAt: lastActivity(list), reporting: true, checkedAt: iso(lastCheck(now) + 4 * SECOND),
+    lastActivityAt: lastActivity(list), reporting: true, ...(r.description ? { summary: summaryOf(r.description.text) } : {}), checkedAt: iso(lastCheck(now) + 4 * SECOND),
     ...(running ? { operation: { id: running.id, type: running.type as 'install-router' | 'upgrade-router' | 'uninstall-router' } } : {}),
   };
 }
@@ -77,6 +78,7 @@ export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetail
       metrics: { value: r.metrics, source },
     },
     pauses: r.pauses,
+    description: r.description,
     ...(hasHibernation(r) ? {
       settings: { hibernate: r.hibernate, by: r.hibernateBy, at: r.hibernateAt === null ? null : iso(r.hibernateAt) },
       managerSettings: r.readsManager
@@ -184,7 +186,7 @@ export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = fals
   const total = countsOf(w, now - 7 * DAY, now);
   const costs = states ? costsOf(d, w, now) : null;
   return {
-    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(w.schedule ? { scheduled: true } : {}), ...(w.state === 'ASLEEP' && hibernationOf(d, w, now)?.instances?.some((i) => i.hibernated) ? { hibernated: true as const } : {}), state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode,
+    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(w.schedule ? { scheduled: true } : {}), ...(w.state === 'ASLEEP' && hibernationOf(d, w, now)?.instances?.some((i) => i.hibernated) ? { hibernated: true as const } : {}), state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode, ...(w.description ? { summary: summaryOf(w.description.text) } : {}),
     wakeCount: w.wakeCount, awakeSince: w.awakeSince === null ? null : iso(w.awakeSince), wakeStartedAt: w.wakeStartedAt === null ? null : iso(w.wakeStartedAt),
     failedAt: w.failedAt === null ? null : iso(w.failedAt), failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: w.nextAttemptAt === null ? null : iso(w.nextAttemptAt), fallbacks: [], updatedAt: w.updatedAt === null ? null : iso(w.updatedAt),
@@ -243,7 +245,7 @@ export function workloadStatus(d: Demo, w: DemoWorkload, now: number): WorkloadS
   const route = w.state === 'AWAKE' ? 'app' : 'waker';
   const today = Math.floor(now / DAY) * DAY;
   return {
-    workloadId: w.workloadId, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(hibernationOf(d, w, now) ? { hibernation: hibernationOf(d, w, now)! } : {}), ...(row.hibernated ? { hibernated: true as const } : {}), url: row.url, router: { version: router.version, build: router.build }, state: w.state, updatedAt: row.updatedAt,
+    workloadId: w.workloadId, name: w.name, description: w.description, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(hibernationOf(d, w, now) ? { hibernation: hibernationOf(d, w, now)! } : {}), ...(row.hibernated ? { hibernated: true as const } : {}), url: row.url, router: { version: router.version, build: router.build }, state: w.state, updatedAt: row.updatedAt,
     awakeSince: row.awakeSince, wakeStartedAt: row.wakeStartedAt, failedAt: row.failedAt, failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: row.nextAttemptAt ?? null, fallbacks: [], wakeCount: w.wakeCount, holders: w.state === 'WAKING' ? 1 : 0, pendingWake: w.pendingWake, pauses,
     targetGroupArn: w.targetGroupArn, source: w.source, account: w.account, region: w.region, states7d: row.states7d, costs: row.costs, energy: row.energy,

@@ -8,7 +8,7 @@ import { ApiError } from '../api';
 import { STATUSES } from '../discovery';
 import {
   changeDismissal, createExclusion, groupsAction, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
-  putWorkloadDefaults, setRouterSettings, setTags, setWorkloadSettings, workloadAction,
+  putWorkloadDefaults, setRouterDescription, setRouterSettings, setTags, setWorkloadDescription, setWorkloadSettings, workloadAction,
 } from './actions';
 import { clearSchedule, scheduleView, setSchedule } from './schedule';
 import { AVAILABLE } from './fixtures';
@@ -86,6 +86,8 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
       const router = routerOf(d, a);
       if (method === 'GET' && !b) return routerDetails(d, router, now);
       if (method === 'PUT' && b === 'settings') return setRouterSettings(d, router, body, now);
+      if (method === 'PUT' && b === 'description') return setRouterDescription(d, a, body, now);
+      if (method === 'DELETE' && b === 'description') return setRouterDescription(d, a, null, now);
       if (method === 'POST' && b === 'pause') return pauseRouter(d, router, body, now);
       if (method === 'POST' && b === 'resume') return resumeRouter(d, router, now);
     }
@@ -109,6 +111,8 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
       if (method === 'PUT' && action === 'settings') return setWorkloadSettings(d, a, b, body, now);
       if (method === 'PUT' && action === 'tags') return setTags(d, a, b, body);
+      if (method === 'PUT' && action === 'description') return setWorkloadDescription(d, a, b, body, now);
+      if (method === 'DELETE' && action === 'description') return setWorkloadDescription(d, a, b, null, now);
       if (method === 'PUT' && action === 'schedule') return setSchedule(d, a, b, body, now);
       if (method === 'DELETE' && action === 'schedule') return clearSchedule(d, a, b);
       if (method === 'POST' && action) return workloadAction(d, a, b, action, body, now);

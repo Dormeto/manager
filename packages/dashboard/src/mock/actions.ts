@@ -1,7 +1,8 @@
 // What the dashboard's actions change in the demo (npm run dev:mock), validated and audited as the API does.
 import type { Candidate, DiscoveryConfig } from '@dormeto/discovery/types';
-import type { Pause } from '../types';
+import type { DescriptionInfo, Pause } from '../types';
 import { AVAILABLE } from './fixtures';
+import { descriptionProblem } from '@dormeto/fleet/description';
 import { groupNameProblem, tagsProblem } from '../tags';
 import { grantRowsProblem } from '../groups';
 import { rowsOf } from '../tags';
@@ -140,7 +141,7 @@ const commandRole = (account: string) => {
 const newRouterName = (account: string, region: string) => `dmtr-${accountName(account)}-${region}`;
 const newRouter = (account: string, region: string, at: number): DemoRouter => ({
   name: newRouterName(account, region), account, region, source: 'manager', ...AVAILABLE, installedAt: at, metrics: false,
-  concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true,
+  concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null,
 });
 
 export function startOperation(d: Demo, body: Body, now: number) {
@@ -490,6 +491,28 @@ export function putSavingsSettings(d: Demo, body: Body, now: number) {
     d.savings = { compute: body.compute as number, databases: body.databases as number, updatedAt: iso(now), updatedBy: ME };
     return { result: `compute ${d.savings.compute}%, databases ${d.savings.databases}%`, response: { settings: d.savings } };
   });
+}
+
+// --- Descriptions (manager 0.19.0) ---------------------------------------------------------------------------------------
+// A text of at most 4,000 characters without control characters; \r\n kept as \n; empty after trimming clears.
+function descriptionIn(body: Body): string {
+  const text = typeof body.text === 'string' ? body.text.replace(/\r\n/g, '\n') : body.text;
+  const problem = descriptionProblem(text);
+  if (problem) fail(400, 'bad_request', problem);
+  return (text as string).trim();
+}
+function writeDescription(d: Demo, holder: { description: DescriptionInfo | null }, target: string, text: string | null, now: number) {
+  return audited(d, 'description', target, () => {
+    holder.description = text ? { text, by: d.me.email, at: iso(now) } : null;
+    return { result: text ? `set (${[...text].length} characters)` : 'cleared', response: { description: holder.description } };
+  });
+}
+export function setWorkloadDescription(d: Demo, router: string, id: string, body: Body | null, now: number) {
+  const w = workloadOf(d, router, id);
+  return writeDescription(d, w, `${router}/${id}`, body ? descriptionIn(body) || null : null, now);
+}
+export function setRouterDescription(d: Demo, router: string, body: Body | null, now: number) {
+  return writeDescription(d, routerOf(d, router), router, body ? descriptionIn(body) || null : null, now);
 }
 
 // --- Hibernation (router 0.32.0) -----------------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 // A router's own view (user request): its version, health, workloads, configuration with where each setting is changed,
 // and its actions, reached from the Routers list as a workload is from Workloads.
 import { nextTick } from 'vue';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -9,6 +9,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import RouterView from '../src/views/RouterView.vue';
+import DescriptionCard from '../src/components/DescriptionCard.vue';
 import { useSession } from '../src/stores/session';
 
 const INSTALLED = {
@@ -28,6 +29,9 @@ const HIBERNATION: { settings: { hibernate: boolean | null; by: string | null; a
 const calls: { path: string; init?: RequestInit }[] = [];
 let withHibernation = true;
 let failSave = false;
+// The description the manager answers with (undefined: none readable, the key absent) and the refusal of its PUT.
+let described: { text: string; by: string; at: string } | null | undefined;
+let descriptionRefusal = '';
 const TERRAFORM_DETAILS = {
   ...DETAILS,
   settings: { hibernate: null, by: null, at: null }, managerSettings: { url: null, hibernate: null, readAt: null, error: null },
@@ -37,13 +41,17 @@ const TERRAFORM_DETAILS = {
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
+    if (path.endsWith('/description')) {
+      if (descriptionRefusal) throw new Error(descriptionRefusal);
+      return { description: init?.method === 'DELETE' ? null : described };
+    }
     if (init?.method === 'PUT') {
       if (failSave) throw new Error('upgrade the router to 0.32.0');
       return {};
     }
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
-    if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), clusters: [
+    if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), ...(described === undefined ? {} : { description: described }), clusters: [
       { name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-legacy', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-lab', reachable: false, allowed: false, missing: [], reason: 'GET /apis: no connection within 3000 ms', checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
@@ -212,6 +220,94 @@ describe('Router view', () => {
       expect(row(admin).text()).toContain('upgrade the router to 0.32.0');
       admin.unmount();
       failSave = false;
+    });
+  });
+
+  describe('the Description card', () => {
+    const DESCRIPTION = { text: '# Dev\n\nfirst\nsecond\n\n- one\n- [wiki](https://wiki.example.com)', by: 'fab@example.com', at: minutesAgo(120) };
+    const card = (w: Awaited<ReturnType<typeof mountView>>) => w.find('[data-test="description-card"]');
+    const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
+    const isOpen = (w: Awaited<ReturnType<typeof mountView>>) => w.findComponent(DescriptionCard).findComponent({ name: 'VDialog' }).props('modelValue');
+    const writes = () => calls.filter((c) => c.path.endsWith('/description'));
+    // Earlier tests leave their dialogs in the document: start from an empty one.
+    beforeEach(() => { document.body.innerHTML = ''; });
+    const reset = () => { described = undefined; descriptionRefusal = ''; calls.length = 0; document.body.innerHTML = ''; };
+
+    it('draws the text with who wrote it and when, under the header', async () => {
+      described = DESCRIPTION;
+      const w = await mountView('dmtr-dev-eu-west-3', 'viewer');
+      expect(card(w).find('h4').text()).toBe('Dev');
+      expect(card(w).findAll('li').map((l) => l.text())).toEqual(['one', 'wiki']);
+      expect(card(w).find('a').attributes('rel')).toBe('noopener');
+      expect(card(w).find('[data-test="description-by"]').text()).toBe('— fab@example.com, 2 h ago');
+      expect(card(w).find('[data-test="edit-description"]').exists()).toBe(false);
+      w.unmount();
+      reset();
+    });
+
+    it('says "No description", with "Add a description" for an administrator only', async () => {
+      described = null;
+      const admin = await mountView('dmtr-dev-eu-west-3');
+      expect(card(admin).text()).toContain('No description');
+      expect(card(admin).get('[data-test="edit-description"]').text()).toBe('Add a description');
+      admin.unmount();
+      const viewer = await mountView('dmtr-dev-eu-west-3', 'viewer');
+      expect(card(viewer).text()).toContain('No description');
+      expect(card(viewer).find('[data-test="edit-description"]').exists()).toBe(false);
+      viewer.unmount();
+      reset();
+    });
+
+    it('shows nothing when the manager did not answer a description (a store error, or before 0.19.0)', async () => {
+      described = undefined;
+      const w = await mountView('dmtr-dev-eu-west-3');
+      expect(card(w).exists()).toBe(false);
+      expect(w.text()).not.toContain('Add a description');
+      expect(w.text()).not.toContain('No description');
+      w.unmount();
+      reset();
+    });
+
+    it('PUTs the text, and keeps the dialog open with the message on a refusal', async () => {
+      described = null;
+      const w = await mountView('dmtr-dev-eu-west-3');
+      await card(w).get('[data-test="edit-description"]').trigger('click');
+      await flushPromises();
+      const area = document.querySelector('[data-test="description-text"] textarea') as HTMLTextAreaElement;
+      area.value = 'The dev router';
+      area.dispatchEvent(new Event('input'));
+      await nextTick();
+      descriptionRefusal = 'text must not contain control characters other than line feed and tab';
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]).toMatchObject({ path: '/routers/dmtr-dev-eu-west-3/description', init: { method: 'PUT' } });
+      expect(JSON.parse(String(writes()[0]!.init!.body))).toEqual({ text: 'The dev router' });
+      await vi.waitFor(() => expect(document.querySelector('[data-test="description-error"]')?.textContent).toContain('control characters'));
+      expect(isOpen(w)).toBe(true);
+      descriptionRefusal = '';
+      described = { text: 'The dev router', by: 'fab@example.com', at: minutesAgo(0) };
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(isOpen(w)).toBe(false);
+      expect(card(w).text()).toContain('The dev router');
+      w.unmount();
+      reset();
+    });
+
+    it('Clear sends DELETE', async () => {
+      described = DESCRIPTION;
+      const w = await mountView('dmtr-dev-eu-west-3');
+      await card(w).get('[data-test="edit-description"]').trigger('click');
+      await flushPromises();
+      described = null;
+      dialogButton('Clear').click();
+      await flushPromises();
+      expect(writes()).toHaveLength(1);
+      expect(writes()[0]).toMatchObject({ path: '/routers/dmtr-dev-eu-west-3/description', init: { method: 'DELETE' } });
+      expect(card(w).text()).toContain('No description');
+      w.unmount();
+      reset();
     });
   });
 });

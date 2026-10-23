@@ -23,6 +23,9 @@ import type { NextEvent, Schedule } from './schedule';
 import type { Energy, FleetEnergy } from './energy';
 
 // EC2 hibernation (router 0.32.0 and later): the value a workload gets, from which level, and its instances.
+// A description (Markdown, up to 4,000 characters) of a router or a workload, with who wrote it and when (manager 0.19.0).
+export interface DescriptionInfo { text: string; by: string; at: string }
+
 export interface Hibernation {
   hibernate: boolean;
   from: 'workload' | 'fallback-types' | 'router' | 'manager' | 'default';
@@ -46,6 +49,7 @@ export interface WorkloadSummary {
   can?: { wake: boolean; nap: boolean };
   scheduled?: boolean; // R12: has a schedule (routers 0.31.0 and later)
   hibernated?: true; // asleep with hibernated instances (routers 0.32.0 and later)
+  summary?: string; // the description's first line (manager 0.19.0), when it has one
   state: string;
   url: string | null;
   wakeMode: string;
@@ -150,6 +154,7 @@ export interface WorkloadStatus {
   maintenanceDue?: string | null;
   hibernation?: Hibernation; // routers 0.32.0 and later
   hibernated?: true;
+  description?: DescriptionInfo | null; // manager 0.19.0: null when none, absent when it could not be read
   url?: string | null; // from its summary (manager 0.2 and later)
   router: { version: string; build: string };
   state: string;
@@ -253,6 +258,7 @@ export interface RouterInfo {
   paused?: number;
   lastActivityAt?: string | null;
   operation?: { id: string; type: RouterOperationType }; // the install, upgrade or uninstall running on it
+  summary?: string; // the description's first line (manager 0.19.0), when it has one
 }
 
 export type RouterOperationType = 'install-router' | 'upgrade-router' | 'uninstall-router';
@@ -282,6 +288,7 @@ export interface RouterDetails {
   };
   pauses: Pause[];
   settings?: { hibernate: boolean | null; by: string | null; at: string | null }; // routers 0.32.0 and later
+  description?: DescriptionInfo | null; // manager 0.19.0: null when none, absent when it could not be read
   managerSettings?: ManagerSettings;
   workloads: { total: number; byState: Record<string, number>; paused: number; lastActivityAt: string | null };
   health: {

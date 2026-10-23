@@ -5,7 +5,7 @@ import type { Candidate, DiscoveryConfig, LintFinding, RunRecord, Status } from 
 import type { Failure } from '../failures';
 import type { Day, Schedule } from '../schedule';
 import type { Me } from '../stores/session';
-import type { ClusterCheck, Exclusion, HistoryEntry, OperationType, Pause, Rule, SavingsSettings, Settings, StoppedItem } from '../types';
+import type { ClusterCheck, DescriptionInfo, Exclusion, HistoryEntry, OperationType, Pause, Rule, SavingsSettings, Settings, StoppedItem } from '../types';
 import {
   AVAILABLE, EC2_PRICES, PREVIOUS, FARGATE_PRICES, RDS_PRICES, TIME_ZONES, type BackendSpec, type CandidateSpec, type RouterSpec, type State, type WorkloadSpec,
 } from './fixtures';
@@ -41,6 +41,7 @@ export interface DemoRouter {
   hibernateBy: string | null;
   hibernateAt: number | null;
   readsManager: boolean;
+  description: DescriptionInfo | null; // Markdown, by people (manager 0.19.0)
 }
 
 export interface DemoWorkload {
@@ -55,6 +56,7 @@ export interface DemoWorkload {
   tags: Record<string, string>; // R11: Dormeto's own tags
   schedule: Schedule | null; // R12
   hibernate: boolean | null; // its own value (null: inherit)
+  description: DescriptionInfo | null;
   fallbackTypes: string[];
   settings: Settings;
   backends: BackendSpec[];
@@ -231,7 +233,7 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
     name: spec.name, account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
     clusters: (spec.clusters ?? []).map((name) => ({ name, reachable: true, allowed: true, missing: [], checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
-    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true,
+    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null,
   };
 }
 
@@ -289,7 +291,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   return {
     workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
     tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
-    schedule: null, hibernate: null, fallbackTypes: [],
+    schedule: null, hibernate: null, description: null, fallbackTypes: [],
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
     wakeMs: ((time.wake[0] + time.wake[1]) / 2) * SECOND, napMs: time.nap, state: 'ASLEEP', entries: [], bursts: [], pauses: [],
     failure: null, consecutiveFailures: 0, nextAttemptAt: null, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null,
@@ -499,10 +501,27 @@ function seedHibernation(routers: DemoRouter[], workloads: DemoWorkload[], now: 
   });
 }
 
+// A few descriptions with a heading, a list and a link, written by people: the first router and some workloads have one.
+function seedDescriptions(routers: DemoRouter[], workloads: DemoWorkload[], now: number): void {
+  const by = (i: number) => ['fab@example.com', 'ops@example.com'][i % 2]!;
+  routers[0]!.description = {
+    text: '# Production routers of the shop team\n\nOwned by **platform**. Escalate to the on-call:\n\n- page *platform-oncall* first\n- runbook: [router runbook](https://wiki.example.com/runbooks/router)',
+    by: by(0), at: iso(now - 9 * DAY),
+  };
+  workloads.forEach((w, i) => {
+    if (i % 4 !== 1) return;
+    w.description = {
+      text: `# ${w.name}\n\nStorefront for the **${w.tags.team ?? 'shop'}** team. Naps overnight.\n\n1. check the health page after a wake\n2. open [the dashboard](https://wiki.example.com/dashboards/${w.name})\n\n> Wakes on the first browser request.`,
+      by: by(i), at: iso(now - (i + 1) * DAY),
+    };
+  });
+}
+
 function build(now: number): Demo {
   const routers = ORG.routers.map((r) => makeRouter(r, now));
   const workloads = ORG.workloads.map((spec) => buildWorkload(spec, routers.find((r) => r.name === spec.router)!, now));
   seedHibernation(routers, workloads, now);
+  seedDescriptions(routers, workloads, now);
   workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {

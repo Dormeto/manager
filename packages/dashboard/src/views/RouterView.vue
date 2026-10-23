@@ -1,16 +1,18 @@
 <script setup lang="ts">
 // A router's own view, reached from Routers as a workload's is from Workloads: its version, health and alert, its
 // workloads by state, its pauses, its health figures and configuration (with where each setting is changed), its actions.
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { mdiAlertOctagonOutline, mdiAlertOutline, mdiArrowLeft, mdiArrowRight, mdiBellRingOutline, mdiCheckCircleOutline, mdiHeartPulse, mdiLanDisconnect, mdiPauseCircleOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { relative, stateColor } from '../format';
 import { healthColor, pauseLine } from '../pause';
 import { useNow } from '../now';
+import { useSession } from '../stores/session';
 import { terraformHelp, workloadsHelp } from '../router-actions';
 import { useRouterOperations } from '../router-operations';
 import type { Notice } from '../components/NoticeAlert.vue';
+import DescriptionCard from '../components/DescriptionCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import NoticeToast from '../components/NoticeToast.vue';
@@ -21,10 +23,11 @@ import RouterActions from '../components/RouterActions.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import RouterVersion from '../components/RouterVersion.vue';
 import TerraformChip from '../components/TerraformChip.vue';
-import type { AlarmInfo, AlertsInfo, RouterInfo } from '../types';
+import type { AlarmInfo, AlertsInfo, DescriptionInfo, RouterDetails as RouterDetailsInfo, RouterInfo } from '../types';
 
 const props = defineProps<{ name: string }>();
 const now = useNow();
+const session = useSession();
 const routers = ref<RouterInfo[]>([]);
 const available = ref<string | null>(null);
 const alarms = ref<AlarmInfo[]>([]);
@@ -44,6 +47,32 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   loaded.value = true;
   watch.refreshed(result.routers.filter((r) => r.name === props.name).flatMap((r) => (r.operation ? [{ ...r.operation, subject: r.name }] : [])));
 });
+// The description (manager 0.19.0) comes with the router's details; undefined when the manager could not read it. Administrators write it.
+const description = ref<DescriptionInfo | null | undefined>(undefined);
+const savingDescription = ref(false);
+const descriptionError = ref('');
+const descriptionPath = computed(() => `/routers/${encodeURIComponent(props.name)}/description`);
+onMounted(async () => {
+  try {
+    description.value = (await api<RouterDetailsInfo>(`/routers/${encodeURIComponent(props.name)}`)).description;
+  } catch {
+    // The router's own cards say what is wrong with the answer.
+  }
+});
+async function writeDescription(call: { method: 'PUT'; body: string } | { method: 'DELETE' }) {
+  savingDescription.value = true;
+  descriptionError.value = '';
+  try {
+    description.value = (await api<{ description: DescriptionInfo | null }>(descriptionPath.value, call)).description;
+  } catch (err) {
+    descriptionError.value = (err as Error).message;
+  } finally {
+    savingDescription.value = false;
+  }
+}
+const saveDescription = (text: string) => writeDescription({ method: 'PUT', body: JSON.stringify({ text }) });
+const clearDescription = () => writeDescription({ method: 'DELETE' });
+
 const { watch, operation, pause, resume, openWorkloads } = useRouterOperations(notice, () => run());
 
 // Presentation of the hero: the icon awake, its sun's rays turning while an operation runs; a sentence for its health.
@@ -142,6 +171,9 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
         </div>
       </v-card-text>
     </v-card>
+
+    <DescriptionCard class="mb-4" :description="description" :can-edit="session.isAdmin" :subject="router.name" :saving="savingDescription" :error="descriptionError"
+      @save="saveDescription" @clear="clearDescription" />
 
     <!-- The health, short, heads the first of RouterDetails' two columns (the figures beside it): no empty space under it. -->
     <div class="dm-sections">

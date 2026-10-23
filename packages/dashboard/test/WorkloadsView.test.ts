@@ -17,7 +17,7 @@ Object.defineProperty(window, 'visualViewport', {
   value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
 });
 const SHOP = {
-  router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop', account: '111122223333', region: 'eu-west-1', state: 'ASLEEP', url: null, wakeMode: 'browser',
+  router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop', summary: 'Storefront of the shop team', account: '111122223333', region: 'eu-west-1', state: 'ASLEEP', url: null, wakeMode: 'browser',
   wakeCount: 3, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null, pendingWake: false, backends: ['asg', 'rds-instance'],
   idleHours7d: 150, requests7d: 12, costs: { baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: null, savedShare: 0.8, items: [], saved: { usd: 0, hours: 0, unpricedHours: 0 } }, states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 500_000, AWAKE: 104_800 } },
 };
@@ -55,6 +55,19 @@ describe('Workloads view', () => {
     const headers = wrapper.findAll('thead th').map((th) => th.text());
     const link = wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Router')]!.find('a');
     expect([link.text(), link.attributes('href')]).toEqual(['dmt-dev', '/routers/dmt-dev']);
+    wrapper.unmount();
+  });
+
+  it('shows the description\'s first line, muted, under the name of a workload that has one', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+    await flushPromises();
+    const line = wrapper.find('tbody tr [data-test="summary"]');
+    expect(line.text()).toBe('Storefront of the shop team');
+    expect(line.attributes('title')).toBe('Storefront of the shop team');
     wrapper.unmount();
   });
 
