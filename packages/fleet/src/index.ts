@@ -3,5 +3,5 @@ export { createIngest, processRecords, type RouterEvent } from './ingest.js';
 export { historyView, type HistoryView, type Phase } from './history.js';
 export { createPriceBook, FARGATE_SPOT_SHARE, NO_DISCOUNTS, type Discounts, type PriceBook, type PricingPort, type SpotPort, type StoppedItem } from './prices.js';
 export { DORMETO_COST, baselineHours, savingsOf, type Baseline, type Savings } from './savings.js';
-export { IDLE_WINDOWS, checkMinutesOf, idleWindowAdvice, recommendWindow, replayIdle, windowsFor, type IdleWindowAdvice, type IdleWindowRow, type ReplayedWindow, type RequestMinutes } from './idle.js';
+export { IDLE_WINDOWS, checkMinutesOf, idleWindowAdvice, recommendWindow, replayIdle, requestHours, windowsFor, type IdleWindowAdvice, type IdleWindowRow, type ReplayedWindow, type RequestHours, type RequestMinutes } from './idle.js';
 export { DESCRIPTION_MAX, descriptionProblem, summaryOf } from './description.js';

@@ -17,6 +17,9 @@ export interface RequestMinutes { from: string; to: string; minutes: [number, nu
 export interface ReplayedWindow { minutes: number; asleep: { from: string; to: string }[]; wakes: number; wokeAt: string[] }
 // asleepHours: hours asleep a day (the replayed days' average).
 export interface IdleWindowRow { minutes: number; asleepHours: number; usdMonth: number | null; wakesPerDay: number; waitSecondsPerDay: number | null }
+// The requests per hour of the replayed period: counts[i] in the UTC hour from + i hours (the first and last hours only
+// in part), for the workload page's requests heatmap.
+export interface RequestHours { from: string; counts: number[] }
 export interface IdleWindowAdvice {
   computedAt: string;
   from: string;
@@ -29,6 +32,20 @@ export interface IdleWindowAdvice {
   windows: IdleWindowRow[];
   actual: { wakes: number; replayedWakes: number; noisy: boolean };
   wakerTargetGroup: boolean;
+  // Absent from an answer kept from before the manager computed it.
+  hours?: RequestHours;
+}
+
+// The request minutes added up per UTC hour, from the hour of the period's start to that of its end.
+export function requestHours(requests: RequestMinutes): RequestHours {
+  const from = Date.parse(requests.from);
+  const start = Math.floor(from / HOUR_MS) * HOUR_MS;
+  const counts: number[] = new Array(Math.max(0, Math.ceil((Date.parse(requests.to) - start) / HOUR_MS))).fill(0);
+  for (const [minute, n] of requests.minutes) {
+    const i = Math.floor((from - start + minute * MIN_MS) / HOUR_MS);
+    if (i >= 0 && i < counts.length) counts[i] = (counts[i] ?? 0) + n;
+  }
+  return { from: new Date(start).toISOString(), counts };
 }
 
 // The windows tried: the nine, and the current one when it is not among them.
@@ -157,6 +174,6 @@ export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs
     computedAt: new Date(now).toISOString(), from: requests.from, to: requests.to, current, recommended: recommendWindow(replayed), checkMinutes,
     wakeSeconds, priced, windows,
     actual: { wakes: actualWakes, replayedWakes, noisy: actualFrom !== null && replayedWakes > 1.5 * actualWakes && replayedWakes >= actualWakes + 3 },
-    wakerTargetGroup,
+    wakerTargetGroup, hours: requestHours(requests),
   };
 }
