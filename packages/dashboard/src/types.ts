@@ -22,6 +22,20 @@ import type { Failure, Fallback } from './failures';
 import type { NextEvent, Schedule } from './schedule';
 import type { Energy, FleetEnergy } from './energy';
 
+// EC2 hibernation (router 0.32.0 and later): the value a workload gets, from which level, and its instances.
+export interface Hibernation {
+  hibernate: boolean;
+  from: 'workload' | 'fallback-types' | 'router' | 'manager' | 'default';
+  workload: boolean | null;
+  router: boolean | null;
+  manager: { hibernate: boolean | null; readAt: string | null; error: string | null } | null;
+  instances: { id: string; configured: boolean; hibernated: boolean }[] | null;
+  freshBoot: boolean;
+}
+// What a router last read of the manager's settings (url null: it reads none).
+export interface ManagerSettings { url: string | null; hibernate: boolean | null; readAt: string | null; error: string | null }
+export interface WorkloadDefaults { hibernate: boolean; updatedAt: string | null; updatedBy: string | null }
+
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
@@ -31,6 +45,7 @@ export interface WorkloadSummary {
   tags?: Record<string, string>;
   can?: { wake: boolean; nap: boolean };
   scheduled?: boolean; // R12: has a schedule (routers 0.31.0 and later)
+  hibernated?: true; // asleep with hibernated instances (routers 0.32.0 and later)
   state: string;
   url: string | null;
   wakeMode: string;
@@ -133,6 +148,8 @@ export interface WorkloadStatus {
   schedule?: Schedule | null; // R12: absent for routers before 0.31.0, null when none
   next?: NextEvent[];
   maintenanceDue?: string | null;
+  hibernation?: Hibernation; // routers 0.32.0 and later
+  hibernated?: true;
   url?: string | null; // from its summary (manager 0.2 and later)
   router: { version: string; build: string };
   state: string;
@@ -264,6 +281,8 @@ export interface RouterDetails {
     metrics: Configured<boolean | null>;
   };
   pauses: Pause[];
+  settings?: { hibernate: boolean | null; by: string | null; at: string | null }; // routers 0.32.0 and later
+  managerSettings?: ManagerSettings;
   workloads: { total: number; byState: Record<string, number>; paused: number; lastActivityAt: string | null };
   health: {
     status: 'ok' | 'warning' | 'error';
@@ -332,6 +351,7 @@ export interface HistoryEntry {
   durationMs?: number;
   failure?: { kind: string; step: string; message: string };
   inferred?: boolean;
+  hibernated?: string[]; // the instances the nap hibernated (an ASLEEP entry)
 }
 export interface WorkloadHistory {
   from: string;

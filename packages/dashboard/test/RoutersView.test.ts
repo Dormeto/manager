@@ -28,6 +28,10 @@ vi.mock('../src/api', () => ({
         configuration: { checkSchedule: { value: 'rate(5 minutes)', source: 'terraform' }, metrics: { value: false, source: 'terraform' }, ipLists: { value: [], source: 'terraform' }, noWakeRules: { value: [], source: 'terraform' } },
       };
     }
+    if (path === '/settings/workloads') {
+      if (init?.method === 'PUT') return { ...JSON.parse(String(init.body)), updatedAt: new Date().toISOString(), updatedBy: 'ops@example.com', note: 'routers apply it at their next check, within 5 minutes' };
+      return { hibernate: true, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
+    }
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
       return {
@@ -57,10 +61,10 @@ Object.defineProperty(window, 'visualViewport', {
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mountView(path = '/routers') {
+async function mountView(path = '/routers', role: 'admin' | 'operator' = 'admin') {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useSession().role = 'admin';
+  useSession().role = role;
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/routers', component: RoutersView }, { path: '/operations', component: { render: () => null } },
     { path: '/workloads', component: { render: () => null } }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers/:name', component: { render: () => null } }] });
   await router.push(path);
@@ -259,5 +263,51 @@ describe('Routers view', () => {
     const wrapper = await mountView();
     expect(wrapper.find('#ip-lists').text()).toMatch(/ipsum.*defer.*12/);
     wrapper.unmount();
+  });
+
+  describe('the workload defaults card (hibernation)', () => {
+    const card = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="workload-defaults"]');
+    const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
+
+    it('shows the default, who changed it and when', async () => {
+      const wrapper = await mountView();
+      expect(card(wrapper).text()).toContain('Workload defaults');
+      expect(card(wrapper).text()).toContain('Hibernate');
+      expect(card(wrapper).text()).toContain('On');
+      expect(card(wrapper).text()).toContain('admin@example.com');
+      expect(card(wrapper).text()).toContain('3 h ago');
+      wrapper.unmount();
+    });
+
+    it('hides the switch from an operator', async () => {
+      const wrapper = await mountView('/routers', 'operator');
+      expect(card(wrapper).text()).toContain('On');
+      expect(card(wrapper).find('input[type="checkbox"]').exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it('asks first, naming what it affects, then sends the new value', async () => {
+      const wrapper = await mountView();
+      await card(wrapper).find('input[type="checkbox"]').setValue(false);
+      await flushPromises();
+      expect(calls.some((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')).toBe(false);
+      expect(document.body.textContent).toContain("instances launched with hibernation, in every router that reads the manager's settings, from their next check");
+      dialogButton('Turn off').click();
+      await flushPromises();
+      const put = calls.find((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')!;
+      expect(JSON.parse(String(put.init!.body))).toEqual({ hibernate: false });
+      wrapper.unmount();
+    });
+
+    it('keeps the value when the confirmation is cancelled', async () => {
+      const wrapper = await mountView();
+      await card(wrapper).find('input[type="checkbox"]').setValue(false);
+      await flushPromises();
+      dialogButton('Cancel').click();
+      await flushPromises();
+      expect(calls.some((c) => c.init?.method === 'PUT')).toBe(false);
+      expect((card(wrapper).find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true);
+      wrapper.unmount();
+    });
   });
 });

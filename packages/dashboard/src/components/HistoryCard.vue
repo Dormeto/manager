@@ -96,7 +96,7 @@ const LEGEND = STATE_ORDER;
             <tr v-for="t in transitions" :key="`${t.at}#${t.to}`" data-test="transition">
               <td class="text-no-wrap text-medium-emphasis dm-num">{{ when(t.at) }}</td>
               <td class="text-no-wrap"><span class="dm-change">{{ t.from ?? 'first seen' }} <span class="dm-change__arrow">→</span> <span :class="['swatch', 'mr-1', `bg-${stateColor(t.to)}`]" />{{ t.to }}</span></td>
-              <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
+              <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null, hibernated: t.hibernated }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
               <td class="text-no-wrap text-end dm-num">{{ t.durationMs ? duration(Math.round(t.durationMs / 1000)) : '' }}</td>
             </tr>
           </tbody>

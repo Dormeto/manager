@@ -484,4 +484,103 @@ describe('Workload view', () => {
     wrapper.unmount();
     current = status;
   });
+
+  describe('the Hibernate row (EC2 hibernation)', () => {
+    const hibernation = (over: Record<string, unknown> = {}) => ({
+      hibernate: true, from: 'router', workload: null, router: true, manager: { hibernate: true, readAt: minutesAgo(2), error: null },
+      instances: [{ id: 'i-0abc', configured: false, hibernated: false }, { id: 'i-0b', configured: true, hibernated: false }, { id: 'i-0c', configured: true, hibernated: false }],
+      freshBoot: false, ...over,
+    });
+    const row = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="hibernate"]');
+    const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
+    const puts = () => vi.mocked(api).mock.calls.filter(([, init]) => init?.method === 'PUT');
+
+    it('shows the line and which instances can hibernate', async () => {
+      current = { ...status, source: 'manager', hibernation: hibernation() };
+      const wrapper = await mountView('operator');
+      expect(row(wrapper).text()).toContain('On, from the router');
+      expect(row(wrapper).text()).toContain('2 of 3 instances were launched with hibernation; i-0abc is stopped instead');
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('leaves out the readiness line when the value is off', async () => {
+      current = { ...status, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'fallback-types' }) };
+      const wrapper = await mountView('admin');
+      expect(row(wrapper).text()).toContain('Off: the workload has fallback instance types');
+      expect(row(wrapper).text()).not.toContain('launched with hibernation');
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('shows nothing for a router before 0.32.0 (no hibernation in its answer)', async () => {
+      current = { ...status, source: 'manager' };
+      const wrapper = await mountView('admin');
+      expect(row(wrapper).exists()).toBe(false);
+      wrapper.unmount();
+    });
+
+    it("Inherit sends {hibernate: null}, Off sends false; the choice starts at the workload's own value", async () => {
+      current = { ...status, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'workload', workload: false }) };
+      const wrapper = await mountView('operator');
+      vi.mocked(api).mockClear();
+      await row(wrapper).find('[data-test="edit-hibernate"]').trigger('click');
+      await flushPromises();
+      expect((document.querySelector('.v-dialog input[type="radio"][value="off"]') as HTMLInputElement).checked).toBe(true);
+      (document.querySelector('.v-dialog input[type="radio"][value="inherit"]') as HTMLInputElement).click();
+      await flushPromises();
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(puts()).toHaveLength(1);
+      expect(puts()[0]![0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/settings');
+      expect(JSON.parse(String(puts()[0]![1]!.body))).toEqual({ hibernate: null });
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('sends false for Off', async () => {
+      current = { ...status, source: 'manager', hibernation: hibernation() };
+      const wrapper = await mountView('admin');
+      vi.mocked(api).mockClear();
+      await row(wrapper).find('[data-test="edit-hibernate"]').trigger('click');
+      await flushPromises();
+      (document.querySelector('.v-dialog input[type="radio"][value="off"]') as HTMLInputElement).click();
+      await flushPromises();
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(JSON.parse(String(puts()[0]![1]!.body))).toEqual({ hibernate: false });
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('has no Edit for a Terraform workload, which says where to set it', async () => {
+      current = { ...status, source: 'terraform', hibernation: hibernation() };
+      const wrapper = await mountView('admin');
+      expect(row(wrapper).find('[data-test="edit-hibernate"]').exists()).toBe(false);
+      expect(row(wrapper).text()).toContain('set hibernate in its workload module');
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('has no Edit for a viewer', async () => {
+      current = { ...status, source: 'manager', hibernation: hibernation() };
+      const wrapper = await mountView('viewer');
+      expect(row(wrapper).text()).toContain('On, from the router');
+      expect(row(wrapper).find('[data-test="edit-hibernate"]').exists()).toBe(false);
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('says hibernated beside the state while asleep with a hibernated instance', async () => {
+      current = { ...status, state: 'ASLEEP', source: 'manager', hibernation: hibernation({ instances: [{ id: 'i-0b', configured: true, hibernated: true }] }) };
+      const wrapper = await mountView('viewer');
+      expect(wrapper.find('[data-test="hibernated"]').text()).toBe('hibernated');
+      wrapper.unmount();
+      current = { ...status, state: 'AWAKE', hibernation: hibernation() };
+      const awake = await mountView('viewer');
+      expect(awake.find('[data-test="hibernated"]').exists()).toBe(false);
+      awake.unmount();
+      current = status;
+    });
+  });
 });

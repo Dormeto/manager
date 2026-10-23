@@ -12,6 +12,7 @@ import {
 } from './state';
 import { operationView } from './views';
 import { MINUTE, SECOND, iso } from './util';
+import { hibernationOf } from './state';
 
 type Body = Record<string, unknown>;
 const ACCOUNT = /^\d{12}$/;
@@ -139,7 +140,7 @@ const commandRole = (account: string) => {
 const newRouterName = (account: string, region: string) => `dmtr-${accountName(account)}-${region}`;
 const newRouter = (account: string, region: string, at: number): DemoRouter => ({
   name: newRouterName(account, region), account, region, source: 'manager', ...AVAILABLE, installedAt: at, metrics: false,
-  concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [],
+  concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true,
 });
 
 export function startOperation(d: Demo, body: Body, now: number) {
@@ -488,5 +489,42 @@ export function putSavingsSettings(d: Demo, body: Body, now: number) {
   return audited(d, 'savings-discounts', 'savings', () => {
     d.savings = { compute: body.compute as number, databases: body.databases as number, updatedAt: iso(now), updatedBy: ME };
     return { result: `compute ${d.savings.compute}%, databases ${d.savings.databases}%`, response: { settings: d.savings } };
+  });
+}
+
+// --- Hibernation (router 0.32.0) -----------------------------------------------------------------------------------------
+
+const hibernateIn = (body: Body, nullable: boolean): boolean | null => {
+  const v = body.hibernate;
+  if (typeof v === 'boolean' || (nullable && v === null)) return v;
+  return fail(400, 'bad_request', nullable ? 'hibernate must be true, false or null' : 'hibernate must be true or false');
+};
+
+// The manager's default for every workload (administrators; the routers read it at their next check).
+export function putWorkloadDefaults(d: Demo, body: Body, now: number) {
+  const hibernate = hibernateIn(body, false) as boolean;
+  return audited(d, 'settings', 'workloads', () => {
+    d.hibernation = { hibernate, updatedAt: iso(now), updatedBy: ME };
+    return { result: `hibernate ${hibernate ? 'on' : 'off'}`, response: { ...d.hibernation, note: 'routers apply it at their next check, within 5 minutes' } };
+  });
+}
+
+export function setRouterSettings(d: Demo, router: DemoRouter, body: Body, now: number) {
+  const hibernate = hibernateIn(body, true);
+  return audited(d, 'router-settings', router.name, () => {
+    router.hibernate = hibernate;
+    router.hibernateBy = hibernate === null ? null : ME;
+    router.hibernateAt = hibernate === null ? null : now;
+    return { result: `hibernate ${hibernate === null ? 'inherit' : hibernate ? 'on' : 'off'}`, response: { level: 'router', settings: { hibernate, by: router.hibernateBy, at: router.hibernateAt === null ? null : iso(router.hibernateAt) } } };
+  });
+}
+
+export function setWorkloadSettings(d: Demo, router: string, id: string, body: Body, now: number) {
+  const w = workloadOf(d, router, id);
+  const hibernate = hibernateIn(body, true);
+  return audited(d, 'workload-settings', `${router}/${id}`, () => {
+    if (w.source === 'terraform') fail(409, 'conflict', `workload ${id} was written by Terraform: set hibernate in its workload module`);
+    w.hibernate = hibernate;
+    return { result: `hibernate ${hibernate === null ? 'inherit' : hibernate ? 'on' : 'off'}`, response: { level: 'workload', settings: { hibernate }, hibernation: hibernationOf(d, w, now) } };
   });
 }

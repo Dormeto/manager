@@ -36,6 +36,11 @@ export interface DemoRouter {
   clusters: ClusterCheck[];
   ownLists: NonNullable<RouterSpec['ownLists']>;
   pauses: Pause[];
+  // EC2 hibernation (router 0.32.0): its own value (null: inherit), and whether it reads the manager's settings (a catalog).
+  hibernate: boolean | null;
+  hibernateBy: string | null;
+  hibernateAt: number | null;
+  readsManager: boolean;
 }
 
 export interface DemoWorkload {
@@ -49,6 +54,8 @@ export interface DemoWorkload {
   source: 'terraform' | 'manager';
   tags: Record<string, string>; // R11: Dormeto's own tags
   schedule: Schedule | null; // R12
+  hibernate: boolean | null; // its own value (null: inherit)
+  fallbackTypes: string[];
   settings: Settings;
   backends: BackendSpec[];
   items: { item: StoppedItem; hourly: number }[];
@@ -200,6 +207,7 @@ export interface Demo {
   preferences: { refreshSeconds: number; dismissedUpdate?: string };
   updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
+  hibernation: { hibernate: boolean; updatedAt: string | null; updatedBy: string | null }; // the manager's default for every workload
   routers: DemoRouter[];
   workloads: DemoWorkload[];
   candidates: Candidate[];
@@ -223,7 +231,7 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
     name: spec.name, account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
     clusters: (spec.clusters ?? []).map((name) => ({ name, reachable: true, allowed: true, missing: [], checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
-    ownLists: spec.ownLists ?? [], pauses: [],
+    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true,
   };
 }
 
@@ -281,7 +289,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   return {
     workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
     tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
-    schedule: null,
+    schedule: null, hibernate: null, fallbackTypes: [],
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
     wakeMs: ((time.wake[0] + time.wake[1]) / 2) * SECOND, napMs: time.nap, state: 'ASLEEP', entries: [], bursts: [], pauses: [],
     failure: null, consecutiveFailures: 0, nextAttemptAt: null, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null,
@@ -479,9 +487,25 @@ export function matches(e: StoredExclusion, c: { account: string; targetGroupArn
   return c.targetGroupArn === e.target.arn;
 }
 
+// Each place a workload's hibernation can come from, among the demo's routers and workloads: the second router sets Off, the
+// last reads no manager settings (built-in default), some workloads set a value of their own or have fallback instance types.
+function seedHibernation(routers: DemoRouter[], workloads: DemoWorkload[], now: number): void {
+  if (routers.length >= 3) {
+    routers[1]!.hibernate = false;
+    routers[1]!.hibernateBy = ORG.actors[0]!;
+    routers[1]!.hibernateAt = now - 2 * DAY;
+    routers.at(-1)!.readsManager = false;
+  }
+  workloads.forEach((w, i) => {
+    if (i % 9 === 2) w.hibernate = w.source === 'manager' ? false : true;
+    else if (i % 9 === 5 && w.source === 'manager') w.fallbackTypes = ['m6i.large', 'm5.large'];
+  });
+}
+
 function build(now: number): Demo {
   const routers = ORG.routers.map((r) => makeRouter(r, now));
   const workloads = ORG.workloads.map((spec) => buildWorkload(spec, routers.find((r) => r.name === spec.router)!, now));
+  seedHibernation(routers, workloads, now);
   workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {
@@ -490,6 +514,7 @@ function build(now: number): Demo {
     preferences: { refreshSeconds: 10 },
     updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
+    hibernation: { hibernate: true, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
     routers,
     workloads,
     candidates: [],
@@ -535,6 +560,10 @@ function build(now: number): Demo {
   }
 
   d.runs = [{ record: runRecord(d, lastRun, lastRun + 47 * SECOND, 'schedule'), finishAt: lastRun + 47 * SECOND }];
+  for (const w of workloads) {
+    const ids = hibernatedIds(d, w);
+    if (ids.length) for (const e of w.entries) if (e.from === 'NAPPING' && e.to === 'ASLEEP') e.hibernated = ids;
+  }
   seedOperations(d, now);
   seedAudit(d, now);
   return d;
@@ -932,3 +961,41 @@ export function audited<T>(d: Demo, action: string, target: string, run: () => {
     throw err;
   }
 }
+
+
+// --- Hibernation (router 0.32.0) -----------------------------------------------------------------------------------------
+
+export interface DemoHibernation {
+  hibernate: boolean;
+  from: 'workload' | 'fallback-types' | 'router' | 'manager' | 'default';
+  workload: boolean | null;
+  router: boolean | null;
+  manager: { hibernate: boolean; readAt: string; error: null } | null;
+  instances: { id: string; configured: boolean; hibernated: boolean }[] | null;
+  freshBoot: boolean;
+}
+
+// The router's last read of the manager's settings: a few minutes ago, whatever the administrators set.
+export const managerReadAt = (now: number): number => Math.floor((now - 7 * SECOND) / (5 * MINUTE)) * 5 * MINUTE + 7 * SECOND;
+
+// The order of the spec: the workload, its fallback types (off), the router, the manager, the built-in default (on).
+export function hibernationOf(d: Demo, w: DemoWorkload, now: number): DemoHibernation {
+  const router = d.routers.find((r) => r.name === w.router)!;
+  const manager = router.readsManager ? { hibernate: d.hibernation.hibernate, readAt: iso(managerReadAt(now)), error: null } : null;
+  const resolved: Pick<DemoHibernation, 'hibernate' | 'from'> = w.hibernate !== null ? { hibernate: w.hibernate, from: 'workload' }
+    : w.fallbackTypes.length ? { hibernate: false, from: 'fallback-types' }
+    : router.hibernate !== null ? { hibernate: router.hibernate, from: 'router' }
+    : manager ? { hibernate: manager.hibernate, from: 'manager' } : { hibernate: true, from: 'default' };
+  const ids = w.backends.flatMap((b) => (b.kind === 'instance' ? [w.instanceId] : b.kind === 'asg' ? Array.from({ length: b.count }, (_, i) => `i-0${hex(`asg:${w.name}:${i}`, 16)}`) : []));
+  // Some instances were not launched with hibernation: the demo has one in five of them.
+  const instances = ids.length
+    ? ids.map((id) => ({ id, configured: (w.seed + hash(id)) % 5 !== 0, hibernated: w.state === 'ASLEEP' && resolved.hibernate && (w.seed + hash(id)) % 5 !== 0 }))
+    : null;
+  return { ...resolved, workload: w.hibernate, router: router.hibernate, manager, instances, freshBoot: false };
+}
+
+// The instances a nap hibernates now: the configured ones, when the value is on.
+export const hibernatedIds = (d: Demo, w: DemoWorkload): string[] => {
+  const h = hibernationOf(d, w, Date.now());
+  return h.hibernate ? (h.instances ?? []).filter((i) => i.configured).map((i) => i.id) : [];
+};

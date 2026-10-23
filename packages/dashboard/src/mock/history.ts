@@ -130,8 +130,8 @@ export interface View {
 export function historyView(all: HistoryEntry[], fromMs: number, toMs: number): View {
   const before = [...all].reverse().find((e) => Date.parse(e.at) < fromMs) ?? null;
   const entries = all.filter((e) => Date.parse(e.at) >= fromMs && Date.parse(e.at) <= toMs);
-  const details = (e: HistoryEntry) => ({ ...(e.cause ? { cause: e.cause } : {}), ...(e.by ? { by: e.by } : {}), ...(e.inferred ? { inferred: true } : {}), ...(e.from === null ? { first: true } : {}) });
-  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean }[] = [];
+  const details = (e: HistoryEntry) => ({ ...(e.cause ? { cause: e.cause } : {}), ...(e.by ? { by: e.by } : {}), ...(e.inferred ? { inferred: true } : {}), ...(e.from === null ? { first: true } : {}), ...(e.hibernated ? { hibernated: e.hibernated } : {}) });
+  const phases: { state: string; from: number; to: number; cause?: string; by?: string; inferred?: boolean; first?: boolean; hibernated?: string[] }[] = [];
   let current: (typeof phases)[number] = before ? { state: before.to, from: fromMs, to: toMs, ...details(before) } : { state: 'UNKNOWN', from: fromMs, to: toMs };
   for (const e of entries) {
     if (e.to === current.state) continue;

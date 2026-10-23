@@ -5,6 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
+import { VSelect } from 'vuetify/components';
 import OnboardDialog from '../src/components/OnboardDialog.vue';
 
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -47,6 +48,23 @@ describe('OnboardDialog', () => {
       await flushPromises();
       expect(onboardButton().disabled, value).toBe(true);
     }
+    wrapper.unmount();
+  });
+
+  it('leaves hibernate out on Inherit and sends false on Off, true on On', async () => {
+    const wrapper = await openDialog();
+    const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Hibernate')!;
+    expect(select.props('modelValue')).toBe('inherit');
+    onboardButton().click();
+    expect((wrapper.emitted('submit')![0]![0] as { settings: Record<string, unknown> }).settings).not.toHaveProperty('hibernate');
+    select.vm.$emit('update:modelValue', 'off');
+    await flushPromises();
+    onboardButton().click();
+    expect((wrapper.emitted('submit')![1]![0] as { settings: Record<string, unknown> }).settings.hibernate).toBe(false);
+    select.vm.$emit('update:modelValue', 'on');
+    await flushPromises();
+    onboardButton().click();
+    expect((wrapper.emitted('submit')![2]![0] as { settings: Record<string, unknown> }).settings.hibernate).toBe(true);
     wrapper.unmount();
   });
 

@@ -22,6 +22,8 @@ const wakeMode = ref('any');
 const databases = ref('');
 // EC2 instances may start on another type when AWS has none of theirs (router 0.25.0); their own type back at the next nap.
 const fallbacks = ref('');
+// EC2 hibernation (router 0.32.0): inherit the default, or force On or Off for this workload.
+const hibernate = ref<'inherit' | 'on' | 'off'>('inherit');
 // R11: the workload's own tags (never AWS tags, nothing copied unless asked) that the groups' grants pick workloads by.
 const tagRows = ref<TagRow[]>([]);
 const copyNote = ref('');
@@ -43,6 +45,7 @@ watch(() => props.modelValue, (open) => {
   wakeMode.value = 'any';
   databases.value = '';
   fallbacks.value = '';
+  hibernate.value = 'inherit';
   tagRows.value = [];
   copyNote.value = '';
 });
@@ -61,7 +64,7 @@ const changes = computed(() => {
 
 function submit() {
   const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
-  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
+  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(!props.kubernetes && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
 }
 </script>
 
@@ -121,6 +124,9 @@ function submit() {
         <v-text-field v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
+        <v-select v-if="!kubernetes" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
+          :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
+          hint="EC2 instances launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On" />
         <template v-if="session.isAdmin">
         <div class="dm-eyebrow mt-6 mb-1">Tags</div>
         <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not AWS tags: the groups' grants pick workloads by them. Administrators can change them later.</p>

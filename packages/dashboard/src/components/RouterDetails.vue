@@ -2,29 +2,53 @@
 // Details of one router: health figures (Lambda, failure queues, IP lists) and its configuration with the source of each item.
 // Its sections are cards in two columns of the router view's grid, the parent's own card (its slot) first; .dm-wide spans both.
 import { computed, onMounted, ref } from 'vue';
-import { mdiChartTimelineVariant, mdiCogOutline, mdiKubernetes, mdiShieldSearch } from '@mdi/js';
+import { mdiChartTimelineVariant, mdiCogOutline, mdiKubernetes, mdiPencilOutline, mdiShieldSearch } from '@mdi/js';
 import { api } from '../api';
 import { concurrencyText, listSourceHref, relative, ruleText } from '../format';
 import { CLUSTER_ROLE } from '../kubernetes';
 import { useNow } from '../now';
 import { terraformSettingHelp } from '../router-actions';
+import { routerInheritText } from '../hibernation';
+import { useSession } from '../stores/session';
 import DmLoader from './DmLoader.vue';
+import HibernateDialog from './HibernateDialog.vue';
 import TerraformChip from './TerraformChip.vue';
 import type { RouterDetails } from '../types';
 
 // source: who installed the router, so where its configuration is changed.
 const props = defineProps<{ name: string; source?: 'terraform' | 'manager' }>();
 const now = useNow();
+const session = useSession();
 const details = ref<RouterDetails | null>(null);
 const error = ref('');
+const editOpen = ref(false);
+const saving = ref(false);
+const saveError = ref('');
+const path = computed(() => `/routers/${encodeURIComponent(props.name)}`);
 
-onMounted(async () => {
+async function load() {
   try {
-    details.value = await api<RouterDetails>(`/routers/${encodeURIComponent(props.name)}`);
+    details.value = await api<RouterDetails>(path.value);
   } catch (err) {
     error.value = (err as Error).message;
   }
-});
+}
+onMounted(load);
+
+// Hibernation of its workloads' instances, for the workloads that set none of their own (admins; routers 0.32.0 and later).
+async function saveHibernate(hibernate: boolean | null) {
+  saving.value = true;
+  saveError.value = '';
+  try {
+    await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate }) });
+    editOpen.value = false;
+    await load();
+  } catch (err) {
+    saveError.value = (err as Error).message;
+  } finally {
+    saving.value = false;
+  }
+}
 // Layout only: two columns that end at about the same height. The parent's card (the router's health, short) heads the
 // first; the figures table, the tall one, stands beside it with at most one short card under the health, else the
 // clusters and the IP lists share the second column.
@@ -131,6 +155,13 @@ const columns = computed<Section[][]>(() => {
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.checkSchedule.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
           <tr><th>Wake statistics metrics</th><td>{{ details.configuration.metrics.value === null ? '—' : details.configuration.metrics.value ? 'published' : 'off' }}</td>
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.metrics.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
+          <tr v-if="details.settings && details.managerSettings" data-test="hibernate"><th>Hibernate</th>
+            <td>
+              <template v-if="details.settings.hibernate === null">Inherit <span class="text-medium-emphasis">({{ routerInheritText(details.managerSettings, now) }})</span></template>
+              <template v-else>{{ details.settings.hibernate ? 'On' : 'Off' }}<span v-if="details.settings.by" class="text-medium-emphasis"> (set by {{ details.settings.by }}, {{ relative(details.settings.at, now) }})</span></template>
+              <div v-if="saveError" class="text-error text-body-small">{{ saveError }}</div>
+            </td>
+            <td class="dm-facts__src"><v-btn v-if="session.isAdmin" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="saveError = ''; editOpen = true">Edit</v-btn></td></tr>
           <tr><th>IP lists</th>
             <td>
               <div v-for="l in details.configuration.ipLists.value" :key="l.name" class="dm-facts__item">
@@ -156,6 +187,8 @@ const columns = computed<Section[][]>(() => {
         </tbody>
       </v-table>
     </v-card>
+    <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :subject="name" :current="details.settings.hibernate"
+      :inherit-text="routerInheritText(details.managerSettings, now)" :saving="saving" @submit="saveHibernate" />
   </template>
 </template>
 

@@ -19,16 +19,27 @@ const DETAILS = {
   health: { checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: null, lambda: { controller: { errors: 2, throttles: 0 } }, queues: { check: 0, controller: 0 }, concurrency: null, ipLists: [] },
   configuration: { checkSchedule: { value: 'rate(5 minutes)', source: 'manager' }, metrics: { value: false, source: 'manager' }, ipLists: { value: [], source: 'manager' }, noWakeRules: { value: [], source: 'manager' } },
 };
+// Routers 0.32.0 and later: the router's own hibernate setting and the manager's settings as it last read them.
+const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+const HIBERNATION: { settings: { hibernate: boolean | null; by: string | null; at: string | null }; managerSettings: Record<string, unknown> } = {
+  settings: { hibernate: null, by: null, at: null },
+  managerSettings: { url: 's3://b/settings.json', hibernate: true, readAt: minutesAgo(3), error: null },
+};
+const calls: { path: string; init?: RequestInit }[] = [];
+let withHibernation = true;
 const TERRAFORM_DETAILS = {
   ...DETAILS,
+  settings: { hibernate: null, by: null, at: null }, managerSettings: { url: null, hibernate: null, readAt: null, error: null },
   configuration: { checkSchedule: { value: 'rate(5 minutes)', source: 'terraform' }, metrics: { value: true, source: 'terraform' }, ipLists: { value: [], source: 'terraform' },
     ipListsCatalog: { value: { lists: [] }, source: 'manager' }, noWakeRules: { value: [], source: 'terraform' } },
 };
 vi.mock('../src/api', () => ({
-  api: vi.fn(async (path: string) => {
+  api: vi.fn(async (path: string, init?: RequestInit) => {
+    calls.push({ path, init });
+    if (init?.method === 'PUT') return {};
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
-    if (path.startsWith('/routers/')) return { ...DETAILS, clusters: [
+    if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), clusters: [
       { name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-legacy', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-lab', reachable: false, allowed: false, missing: [], reason: 'GET /apis: no connection within 3000 ms', checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
@@ -125,5 +136,65 @@ describe('Router view', () => {
     const wrapper = await mountView('nope');
     expect(wrapper.text()).toContain('Unknown router: nope');
     wrapper.unmount();
+  });
+
+  describe('the Hibernate row (EC2 hibernation)', () => {
+    const row = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="hibernate"]');
+    const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
+
+    it("shows Inherit with the manager's value as the router last read it, and when", async () => {
+      withHibernation = true;
+      const wrapper = await mountView('dmtr-dev-eu-west-3');
+      expect(row(wrapper).text()).toContain('Hibernate');
+      expect(row(wrapper).text()).toContain('Inherit');
+      expect(row(wrapper).text()).toContain('manager: On, read 3 min ago');
+      wrapper.unmount();
+    });
+
+    it('says built-in default for a router that reads no manager settings', async () => {
+      const wrapper = await mountView('dmt-dev');
+      expect(row(wrapper).text()).toContain('Inherit');
+      expect(row(wrapper).text()).toContain('built-in default: On');
+      wrapper.unmount();
+    });
+
+    it('shows nothing for a router before 0.32.0', async () => {
+      withHibernation = false;
+      const wrapper = await mountView('dmtr-dev-eu-west-3');
+      expect(row(wrapper).exists()).toBe(false);
+      wrapper.unmount();
+      withHibernation = true;
+    });
+
+    it('shows an explicit value with who set it', async () => {
+      const old = HIBERNATION.settings;
+      HIBERNATION.settings = { hibernate: false, by: 'ops@example.com', at: minutesAgo(90) };
+      const wrapper = await mountView('dmtr-dev-eu-west-3');
+      expect(row(wrapper).text()).toContain('Off');
+      expect(row(wrapper).text()).toContain('ops@example.com');
+      wrapper.unmount();
+      HIBERNATION.settings = old;
+    });
+
+    it('lets an administrator change it, Off sending {hibernate: false}; a viewer has no Edit', async () => {
+      const admin = await mountView('dmtr-dev-eu-west-3');
+      calls.length = 0;
+      await row(admin).find('[data-test="edit-hibernate"]').trigger('click');
+      await flushPromises();
+      const off = document.querySelector('.v-dialog input[type="radio"][value="off"]') as HTMLInputElement;
+      off.click();
+      await flushPromises();
+      dialogButton('Save').click();
+      await flushPromises();
+      const put = calls.find((c) => c.init?.method === 'PUT')!;
+      expect(put.path).toBe('/routers/dmtr-dev-eu-west-3/settings');
+      expect(JSON.parse(String(put.init!.body))).toEqual({ hibernate: false });
+      admin.unmount();
+      document.body.innerHTML = '';
+      const viewer = await mountView('dmtr-dev-eu-west-3', 'viewer');
+      expect(row(viewer).exists()).toBe(true);
+      expect(row(viewer).find('[data-test="edit-hibernate"]').exists()).toBe(false);
+      viewer.unmount();
+    });
   });
 });

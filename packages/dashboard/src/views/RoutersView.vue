@@ -20,6 +20,7 @@ import RouterActions from '../components/RouterActions.vue';
 import RouterVersion from '../components/RouterVersion.vue';
 import type { AlarmInfo, AlertsInfo, RouterInfo } from '../types';
 import IpListsPanel from '../components/IpListsPanel.vue';
+import WorkloadDefaultsCard from '../components/WorkloadDefaultsCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 
@@ -146,6 +147,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
       </template>
     </v-data-table>
   </v-card>
+  <WorkloadDefaultsCard @notice="notice = $event" />
   <IpListsPanel />
   <v-dialog v-model="installOpen" max-width="480">
     <v-card title="Install a router">

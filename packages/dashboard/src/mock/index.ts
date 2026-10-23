@@ -8,7 +8,7 @@ import { ApiError } from '../api';
 import { STATUSES } from '../discovery';
 import {
   changeDismissal, createExclusion, groupsAction, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
-  setTags, workloadAction,
+  putWorkloadDefaults, setRouterSettings, setTags, setWorkloadSettings, workloadAction,
 } from './actions';
 import { clearSchedule, scheduleView, setSchedule } from './schedule';
 import { AVAILABLE } from './fixtures';
@@ -62,6 +62,10 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (method === 'PUT') return putPreferences(d, body);
   }
   if (method === 'GET' && resource === 'ip-lists' && !a) return ipLists(now);
+  if (resource === 'settings' && a === 'workloads' && !b) {
+    if (method === 'GET') return d.hibernation;
+    if (method === 'PUT') return putWorkloadDefaults(d, body, now);
+  }
   if (method === 'GET' && resource === 'alerts' && !a) return alerts(d);
   if (method === 'GET' && resource === 'audit' && !a) return { entries: d.audit };
   if (resource === 'update') {
@@ -81,6 +85,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (a && !action) {
       const router = routerOf(d, a);
       if (method === 'GET' && !b) return routerDetails(d, router, now);
+      if (method === 'PUT' && b === 'settings') return setRouterSettings(d, router, body, now);
       if (method === 'POST' && b === 'pause') return pauseRouter(d, router, body, now);
       if (method === 'POST' && b === 'resume') return resumeRouter(d, router, now);
     }
@@ -102,6 +107,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
         return workloadHistory(d, workloadOf(d, a, b), days, now);
       }
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
+      if (method === 'PUT' && action === 'settings') return setWorkloadSettings(d, a, b, body, now);
       if (method === 'PUT' && action === 'tags') return setTags(d, a, b, body);
       if (method === 'PUT' && action === 'schedule') return setSchedule(d, a, b, body, now);
       if (method === 'DELETE' && action === 'schedule') return clearSchedule(d, a, b);

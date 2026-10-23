@@ -3,6 +3,8 @@ import { useNow } from '../now';
 import { computed, ref } from 'vue';
 import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
+import { hibernationLine, readinessLine } from '../hibernation';
+import HibernateDialog from '../components/HibernateDialog.vue';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
@@ -48,6 +50,8 @@ const excludeOpen = ref(false);
 const renameOpen = ref(false);
 const tagsOpen = ref(false);
 const scheduleOpen = ref(false);
+const hibernateOpen = ref(false);
+const savingHibernate = ref(false);
 const scheduleError = ref('');
 const savingSchedule = ref(false);
 // R11: what the caller's grants allow on this workload; an API before the tags (no `can`) leaves it to the role.
@@ -71,6 +75,24 @@ async function rename(name: string) {
     await run();
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
+  }
+}
+
+// Hibernation: operators and administrators change a manager workload's own value (null: inherit); the router's refusals
+// (a Terraform workload, a router before 0.32.0) come back as the notice.
+const hibernated = computed(() => status.value?.state === 'ASLEEP' && (status.value.hibernated === true || Boolean(status.value.hibernation?.instances?.some((i) => i.hibernated))));
+async function setHibernate(hibernate: boolean | null) {
+  savingHibernate.value = true;
+  try {
+    await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate }) });
+    hibernateOpen.value = false;
+    notice.value = { type: 'success', text: 'Hibernation saved: it applies from the next nap.' };
+    await run();
+  } catch (err) {
+    hibernateOpen.value = false;
+    notice.value = { type: 'error', text: (err as Error).message };
+  } finally {
+    savingHibernate.value = false;
   }
 }
 
@@ -297,6 +319,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         <div class="dm-hero__info">
         <div class="dm-hero__chips">
           <StateChip v-if="status" :state="status.state" :failure="status.failure" />
+          <v-chip v-if="hibernated" data-test="hibernated" size="small" variant="tonal" label>hibernated</v-chip>
           <PauseChip :pauses="pauses" />
           <span v-if="since" class="dm-hero__since">{{ since.label }} <strong>{{ since.when }}</strong></span>
           <a v-if="url" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
@@ -513,10 +536,20 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <v-spacer />
           <span class="text-medium-emphasis dm-version">Router {{ status.router.version }} ({{ status.router.build }})</span>
         </v-card-text>
+        <v-card-text v-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
+          <div class="d-flex flex-wrap align-center ga-2">
+            <span>Hibernate <strong>{{ hibernationLine(status.hibernation) }}</strong></span>
+            <v-spacer />
+            <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set hibernate in its workload module</span>
+            <v-btn v-else-if="session.canOperate && status.source === 'manager'" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="hibernateOpen = true">Edit</v-btn>
+          </div>
+          <div v-if="readinessLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ readinessLine(status.hibernation) }}</div>
+        </v-card-text>
       </v-card>
     </div>
   </div>
 
+  <HibernateDialog v-if="status?.hibernation" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
   <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">

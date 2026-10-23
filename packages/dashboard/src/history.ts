@@ -1,5 +1,5 @@
 // The state history on the workload view (R8): a row per local day of colored phases, and what started each phase.
-export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean }
+export interface Phase { state: string; from: string; to: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; hibernated?: string[] }
 export interface Segment { state: string; left: number; width: number; phase: Phase; merged: number }
 export interface DayRow { day: Date; segments: Segment[] }
 
@@ -84,8 +84,13 @@ const CAUSES: Record<string, string> = {
   'external-stop': 'stopped outside Dormeto',
 };
 
-// What started a phase, in words ('' when the history does not say).
-export function causeText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean }): string {
+// What started a phase, in words ('' when the history does not say); a nap that hibernated instances says how many.
+export function causeText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; hibernated?: string[] }): string {
+  const hibernated = p.state === 'ASLEEP' && p.hibernated?.length ? `hibernated ${p.hibernated.length} instance${p.hibernated.length === 1 ? '' : 's'}` : '';
+  return [startText(p), hibernated].filter(Boolean).join(', ');
+}
+
+function startText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean }): string {
   if (p.first) return 'first seen by the manager';
   if (p.inferred) return 'seen at a check (its event was lost)';
   if (!p.cause) return '';
