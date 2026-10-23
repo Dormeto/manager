@@ -66,7 +66,8 @@ describe('eventsFor past occurrences', () => {
 });
 
 describe('eventsFor', () => {
-  const events = eventsFor([paris], day, day + 2 * 86_400_000, 'Europe/Paris');
+  // A fixed clock before the fixtures, so nothing reads as past whatever the real date is.
+  const events = eventsFor([paris], day, day + 2 * 86_400_000, 'Europe/Paris', false, day - 86_400_000);
   it('fills awake windows and outlines naps, with their titles', () => {
     const by = Object.fromEntries(events.map((e) => [e.title, e]));
     expect(Object.keys(by)).toEqual(expect.arrayContaining(['Shop · Awake', 'Shop · Nap (wake: header)', 'Shop · Nap']));
