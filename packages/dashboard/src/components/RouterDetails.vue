@@ -44,6 +44,8 @@ async function saveHibernate(hibernate: boolean | null) {
     editOpen.value = false;
     await load();
   } catch (err) {
+    // The dialog closes so that the message, in the row, is not hidden under its scrim.
+    editOpen.value = false;
     saveError.value = (err as Error).message;
   } finally {
     saving.value = false;

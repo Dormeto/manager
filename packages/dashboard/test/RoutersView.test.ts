@@ -10,6 +10,7 @@ import RoutersView from '../src/views/RoutersView.vue';
 import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
+let failPut = false;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
@@ -29,6 +30,7 @@ vi.mock('../src/api', () => ({
       };
     }
     if (path === '/settings/workloads') {
+      if (init?.method === 'PUT' && failPut) throw new Error('settings.json: access denied');
       if (init?.method === 'PUT') return { ...JSON.parse(String(init.body)), updatedAt: new Date().toISOString(), updatedBy: 'ops@example.com', note: 'routers apply it at their next check, within 5 minutes' };
       return { hibernate: true, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
     }
@@ -307,6 +309,18 @@ describe('Routers view', () => {
       await flushPromises();
       expect(calls.some((c) => c.init?.method === 'PUT')).toBe(false);
       expect((card(wrapper).find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true);
+      wrapper.unmount();
+    });
+
+    it('puts the switch back on the stored value when the save fails', async () => {
+      failPut = true;
+      const wrapper = await mountView();
+      await card(wrapper).find('input[type="checkbox"]').setValue(false);
+      await flushPromises();
+      dialogButton('Turn off').click();
+      await flushPromises();
+      expect((card(wrapper).find('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true);
+      failPut = false;
       wrapper.unmount();
     });
   });

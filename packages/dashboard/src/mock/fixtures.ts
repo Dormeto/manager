@@ -7,8 +7,8 @@ import type { Rule } from '../types';
 export type KubernetesCandidate = NonNullable<NonNullable<Candidate['backend']>['kubernetes']>;
 
 // The router version the manager carries (an upgrade is offered below it), and the one before.
-export const AVAILABLE = { version: '0.31.0', build: '4f2a9c71d0e3' };
-export const PREVIOUS = { version: '0.30.0', build: 'b81e04d6a5c2' };
+export const AVAILABLE = { version: '0.32.0', build: '4f2a9c71d0e3' };
+export const PREVIOUS = { version: '0.31.0', build: 'b81e04d6a5c2' };
 
 export interface AccountSpec { id: string; name: string; ou: string; command: boolean }
 

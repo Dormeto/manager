@@ -487,15 +487,12 @@ export function matches(e: StoredExclusion, c: { account: string; targetGroupArn
   return c.targetGroupArn === e.target.arn;
 }
 
-// Each place a workload's hibernation can come from, among the demo's routers and workloads: the second router sets Off, the
-// last reads no manager settings (built-in default), some workloads set a value of their own or have fallback instance types.
+// Each place a workload's hibernation can come from, among the demo's routers and workloads: the first router reads no manager
+// settings (built-in default), the others read them; some workloads set a value of their own or have fallback instance types
+// (a router's own value is set from the dashboard).
 function seedHibernation(routers: DemoRouter[], workloads: DemoWorkload[], now: number): void {
-  if (routers.length >= 3) {
-    routers[1]!.hibernate = false;
-    routers[1]!.hibernateBy = ORG.actors[0]!;
-    routers[1]!.hibernateAt = now - 2 * DAY;
-    routers.at(-1)!.readsManager = false;
-  }
+  // The first router is written in Terraform without a catalog: it reads no manager settings.
+  routers[0]!.readsManager = false;
   workloads.forEach((w, i) => {
     if (i % 9 === 2) w.hibernate = w.source === 'manager' ? false : true;
     else if (i % 9 === 5 && w.source === 'manager') w.fallbackTypes = ['m6i.large', 'm5.large'];
@@ -979,14 +976,22 @@ export interface DemoHibernation {
 export const managerReadAt = (now: number): number => Math.floor((now - 7 * SECOND) / (5 * MINUTE)) * 5 * MINUTE + 7 * SECOND;
 
 // The order of the spec: the workload, its fallback types (off), the router, the manager, the built-in default (on).
-export function hibernationOf(d: Demo, w: DemoWorkload, now: number): DemoHibernation {
+// Routers before 0.32.0 know nothing of it.
+export const hasHibernation = (r: DemoRouter): boolean => {
+  const [major, minor] = r.version.split('.').map(Number);
+  return major! > 0 || minor! >= 32;
+};
+
+export function hibernationOf(d: Demo, w: DemoWorkload, now: number): DemoHibernation | null {
   const router = d.routers.find((r) => r.name === w.router)!;
+  if (!hasHibernation(router)) return null;
   const manager = router.readsManager ? { hibernate: d.hibernation.hibernate, readAt: iso(managerReadAt(now)), error: null } : null;
   const resolved: Pick<DemoHibernation, 'hibernate' | 'from'> = w.hibernate !== null ? { hibernate: w.hibernate, from: 'workload' }
     : w.fallbackTypes.length ? { hibernate: false, from: 'fallback-types' }
     : router.hibernate !== null ? { hibernate: router.hibernate, from: 'router' }
     : manager ? { hibernate: manager.hibernate, from: 'manager' } : { hibernate: true, from: 'default' };
-  const ids = w.backends.flatMap((b) => (b.kind === 'instance' ? [w.instanceId] : b.kind === 'asg' ? Array.from({ length: b.count }, (_, i) => `i-0${hex(`asg:${w.name}:${i}`, 16)}`) : []));
+  // Standalone instances only: an Auto Scaling group's are not hibernated.
+  const ids = w.backends.some((b) => b.kind === 'instance') ? [w.instanceId] : [];
   // Some instances were not launched with hibernation: the demo has one in five of them.
   const instances = ids.length
     ? ids.map((id) => ({ id, configured: (w.seed + hash(id)) % 5 !== 0, hibernated: w.state === 'ASLEEP' && resolved.hibernate && (w.seed + hash(id)) % 5 !== 0 }))
@@ -997,5 +1002,5 @@ export function hibernationOf(d: Demo, w: DemoWorkload, now: number): DemoHibern
 // The instances a nap hibernates now: the configured ones, when the value is on.
 export const hibernatedIds = (d: Demo, w: DemoWorkload): string[] => {
   const h = hibernationOf(d, w, Date.now());
-  return h.hibernate ? (h.instances ?? []).filter((i) => i.configured).map((i) => i.id) : [];
+  return h?.hibernate ? (h.instances ?? []).filter((i) => i.configured).map((i) => i.id) : [];
 };

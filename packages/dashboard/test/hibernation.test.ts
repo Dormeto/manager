@@ -28,6 +28,7 @@ describe('hibernation texts', () => {
     const on = (instances: { id: string; configured: boolean; hibernated: boolean }[] | null) => readinessLine({ hibernate: true, instances });
     const i = (id: string, configured: boolean) => ({ id, configured, hibernated: false });
     expect(on(null)).toBe('');
+    expect(on([])).toBe('');
     expect(on([i('i-0a', true), i('i-0b', true)])).toBe('Every instance was launched with hibernation');
     expect(on([i('i-0abc', false), i('i-0b', true), i('i-0c', true)])).toBe('2 of 3 instances were launched with hibernation; i-0abc is stopped instead');
     expect(on([i('i-0a', false), i('i-0b', false), i('i-0c', true)])).toBe('1 of 3 instances were launched with hibernation; i-0a, i-0b are stopped instead');
@@ -55,13 +56,36 @@ describe('hibernation in the history', () => {
 
 describe("the demo's hibernation answers", () => {
   const get = (path: string) => mockApi(path) as Promise<any>;
-  it('covers each place a workload value comes from', () => {
+  it('covers each place a workload value comes from (the router level once an administrator sets it)', async () => {
     const froms = new Set<string>();
-    for (const w of state().workloads) {
-      const s = workloadStatus(state(), w, Date.now());
-      if (s.hibernation) froms.add(s.hibernation.from);
-    }
+    const collect = () => { for (const w of state().workloads) { const h = workloadStatus(state(), w, Date.now()).hibernation; if (h) froms.add(h.from); } };
+    collect();
+    await mockApi(`/routers/${state().routers[1]!.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: false }) });
+    collect();
     expect([...froms].sort()).toEqual(['default', 'fallback-types', 'manager', 'router', 'workload']);
+    await mockApi(`/routers/${state().routers[1]!.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: null }) });
+  });
+
+  it('knows nothing of hibernation before router 0.32.0, and refuses to set it there', async () => {
+    const old = state().routers.find((r) => r.version.startsWith('0.31'))!;
+    const details = await get(`/routers/${old.name}`);
+    expect(details).not.toHaveProperty('settings');
+    expect(details).not.toHaveProperty('managerSettings');
+    const w = state().workloads.find((x) => x.router === old.name && x.source === 'manager')!;
+    expect(workloadStatus(state(), w, Date.now())).not.toHaveProperty('hibernation');
+    await expect(mockApi(`/routers/${old.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: false }) })).rejects.toMatchObject({ status: 409, message: 'upgrade the router to 0.32.0' });
+  });
+
+  it('puts the built-in default on a Terraform router without the manager catalog, and lists only standalone instances', async () => {
+    const first = state().routers[0]!;
+    expect(first.source).toBe('terraform');
+    const details = await get(`/routers/${first.name}`);
+    expect(details.managerSettings).toEqual({ url: null, hibernate: null, readAt: null, error: null });
+    expect(details.configuration).not.toHaveProperty('ipListsCatalog');
+    for (const w of state().workloads) {
+      const h = workloadStatus(state(), w, Date.now()).hibernation;
+      if (h && !w.backends.some((b) => b.kind === 'instance')) expect(h.instances).toBeNull();
+    }
   });
 
   it('answers the global setting and changes it', async () => {
@@ -75,14 +99,14 @@ describe("the demo's hibernation answers", () => {
   });
 
   it("carries a router's settings at the top level of its answer, and refuses a Terraform workload", async () => {
-    const router = state().routers[0]!;
+    const router = state().routers[1]!;
     const details = await get(`/routers/${router.name}`);
     expect(details.settings).toEqual({ hibernate: null, by: null, at: null });
     expect(details.managerSettings).toMatchObject({ url: expect.any(String), hibernate: true, error: null });
     await mockApi(`/routers/${router.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: false }) });
     expect((await get(`/routers/${router.name}`)).settings).toMatchObject({ hibernate: false, by: expect.any(String) });
     await mockApi(`/routers/${router.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: null }) });
-    const tf = state().workloads.find((w) => w.source === 'terraform')!;
+    const tf = state().workloads.find((w) => w.source === 'terraform' && !w.router.endsWith(state().routers.at(-1)!.name))!;
     await expect(mockApi(`/workloads/${tf.router}/${tf.workloadId}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: false }) }))
       .rejects.toMatchObject({ status: 409, message: `workload ${tf.workloadId} was written by Terraform: set hibernate in its workload module` });
   });

@@ -39,6 +39,7 @@ async function confirm() {
     defaults.value = saved;
     emit('notice', { type: 'success', text: `Hibernation is ${hibernate ? 'on' : 'off'} by default: ${saved.note}.` });
   } catch (err) {
+    switchKey.value += 1;
     emit('notice', { type: 'error', text: (err as Error).message });
   } finally {
     saving.value = false;

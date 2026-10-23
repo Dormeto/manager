@@ -12,7 +12,7 @@ import {
 } from './state';
 import { operationView } from './views';
 import { MINUTE, SECOND, iso } from './util';
-import { hibernationOf } from './state';
+import { hasHibernation, hibernationOf } from './state';
 
 type Body = Record<string, unknown>;
 const ACCOUNT = /^\d{12}$/;
@@ -512,6 +512,7 @@ export function putWorkloadDefaults(d: Demo, body: Body, now: number) {
 export function setRouterSettings(d: Demo, router: DemoRouter, body: Body, now: number) {
   const hibernate = hibernateIn(body, true);
   return audited(d, 'router-settings', router.name, () => {
+    if (!hasHibernation(router)) fail(409, 'conflict', 'upgrade the router to 0.32.0');
     router.hibernate = hibernate;
     router.hibernateBy = hibernate === null ? null : ME;
     router.hibernateAt = hibernate === null ? null : now;
@@ -523,6 +524,7 @@ export function setWorkloadSettings(d: Demo, router: string, id: string, body: B
   const w = workloadOf(d, router, id);
   const hibernate = hibernateIn(body, true);
   return audited(d, 'workload-settings', `${router}/${id}`, () => {
+    if (!hasHibernation(d.routers.find((r) => r.name === router)!)) fail(409, 'conflict', 'upgrade the router to 0.32.0');
     if (w.source === 'terraform') fail(409, 'conflict', `workload ${id} was written by Terraform: set hibernate in its workload module`);
     w.hibernate = hibernate;
     return { result: `hibernate ${hibernate === null ? 'inherit' : hibernate ? 'on' : 'off'}`, response: { level: 'workload', settings: { hibernate }, hibernation: hibernationOf(d, w, now) } };

@@ -24,7 +24,7 @@ export function hibernationLine(h: Pick<Hibernation, 'hibernate' | 'from'>): str
 // when the value is off (every instance is stopped then, so the line would mislead).
 export function readinessLine(h: Pick<Hibernation, 'hibernate' | 'instances'>): string {
   const { instances } = h;
-  if (!instances || !h.hibernate) return '';
+  if (!instances?.length || !h.hibernate) return '';
   const without = instances.filter((i) => !i.configured);
   if (!without.length) return 'Every instance was launched with hibernation';
   return `${instances.length - without.length} of ${instances.length} instances were launched with hibernation; ${without.map((i) => i.id).join(', ')} ${without.length === 1 ? 'is' : 'are'} stopped instead`;

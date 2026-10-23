@@ -27,6 +27,7 @@ const HIBERNATION: { settings: { hibernate: boolean | null; by: string | null; a
 };
 const calls: { path: string; init?: RequestInit }[] = [];
 let withHibernation = true;
+let failSave = false;
 const TERRAFORM_DETAILS = {
   ...DETAILS,
   settings: { hibernate: null, by: null, at: null }, managerSettings: { url: null, hibernate: null, readAt: null, error: null },
@@ -36,7 +37,10 @@ const TERRAFORM_DETAILS = {
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
-    if (init?.method === 'PUT') return {};
+    if (init?.method === 'PUT') {
+      if (failSave) throw new Error('upgrade the router to 0.32.0');
+      return {};
+    }
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
     if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), clusters: [
@@ -195,6 +199,19 @@ describe('Router view', () => {
       expect(row(viewer).exists()).toBe(true);
       expect(row(viewer).find('[data-test="edit-hibernate"]').exists()).toBe(false);
       viewer.unmount();
+    });
+
+    it('closes the dialog on a refusal and shows the API message in the row', async () => {
+      failSave = true;
+      const admin = await mountView('dmtr-dev-eu-west-3');
+      await row(admin).find('[data-test="edit-hibernate"]').trigger('click');
+      await flushPromises();
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(document.querySelector('.v-overlay--active')).toBeNull();
+      expect(row(admin).text()).toContain('upgrade the router to 0.32.0');
+      admin.unmount();
+      failSave = false;
     });
   });
 });
