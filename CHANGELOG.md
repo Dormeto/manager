@@ -5,7 +5,13 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.19.0 — 2026-10-24
+
+Router 0.33.0. Access: apply the access module (or the organization configuration) or the AWS CLI script of this release
+again in every member account, before upgrading its routers: DmtRouterBoundary gains the network-interface rights of the
+Kubernetes proxies' role, DmtCommandRole the EC2 rights for the proxies' security groups, the ingress rules on the EKS
+cluster security groups (tagged aws:eks:cluster-name) and the reading of the routers' functions' tags (lambda:ListTags),
+and DmtDiscoveryRole may invoke the proxies.
 
 - Private EKS endpoints. A cluster whose Kubernetes endpoint is private, or public but limited to some addresses with
   private access on, is now eligible: Dormeto reaches it through a small proxy function in the cluster's VPC, one per
