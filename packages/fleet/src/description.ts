@@ -16,14 +16,15 @@ export function descriptionProblem(text: unknown): string | null {
 }
 
 // The list's one line: the first non-empty line as plain text, its leading heading, quote, list and number markers
-// and the emphasis or code around it removed, cut with an ellipsis.
+// and the emphasis or code around it removed (one pair: not `**a** and **b**`), cut with an ellipsis.
 export function summaryOf(text: string): string {
   let line = text.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? '';
   for (let previous = ''; previous !== line;) {
     previous = line;
     line = line.replace(/^(#+\s*|>\s*|[-*+]\s+|\d+\.\s+)/, '').trim();
   }
-  line = line.replace(/^(\*\*|\*|`)(.+)\1$/, '$2');
+  const wrapped = /^(\*\*|\*|`)(.+)\1$/.exec(line);
+  if (wrapped && !wrapped[2]!.includes(wrapped[1]!)) line = wrapped[2]!;
   const chars = [...line];
   return chars.length > SUMMARY_MAX ? `${chars.slice(0, SUMMARY_MAX - 1).join('')}…` : line;
 }

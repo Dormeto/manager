@@ -34,6 +34,12 @@ describe('summaryOf', () => {
     expect(summaryOf('`code`')).toBe('code');
     expect(summaryOf('  \n  ')).toBe('');
   });
+  it('keeps a line whose first and last markers are not one pair', () => {
+    expect(summaryOf('**a** and **b**')).toBe('**a** and **b**');
+    expect(summaryOf('*a* and *b*')).toBe('*a* and *b*');
+    expect(summaryOf('`a` and `b`')).toBe('`a` and `b`');
+    expect(summaryOf('**a *b* c**')).toBe('a *b* c');
+  });
   it('is cut to 120 characters with an ellipsis', () => {
     const s = summaryOf('x'.repeat(200));
     expect(s).toHaveLength(120);
@@ -65,6 +71,14 @@ describe('the description items', () => {
     expect(await store.deleteDescription(workload)).toBe(true);
     expect(await store.deleteDescription(workload)).toBe(false);
     expect(await store.getDescription(workload)).toBeNull();
+  });
+
+  it('lists past a corrupt item (not JSON, or without a text)', async () => {
+    const { store, dynamo } = setup();
+    await store.putDescription(workload, d('shop'));
+    dynamo.items.set('WD#1210#eu-west-1#broken', { pk: { S: 'T#default' }, sk: { S: 'WD#1210#eu-west-1#broken' }, data: { S: '{"text": "cut' } });
+    dynamo.items.set('WD#1210#eu-west-1#empty', { pk: { S: 'T#default' }, sk: { S: 'WD#1210#eu-west-1#empty' }, data: { S: '{"by": "ops@example.com"}' } });
+    expect([...(await store.listDescriptions('workload')).entries()]).toEqual([['1210#eu-west-1#shop', d('shop')]]);
   });
 
   it('never expires, unlike the summaries', async () => {

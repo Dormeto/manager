@@ -155,6 +155,15 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       return null;
     }
   };
+  // A description item, null when corrupt (not JSON, or without a text): skipped by the list, as a corrupt group is.
+  const storedDescription = (item: Item): Description | null => {
+    try {
+      const d = data<Description>(item);
+      return d && typeof d.text === 'string' ? d : null;
+    } catch {
+      return null;
+    }
+  };
   const descriptionSk = (k: DescriptionKey) => (k.kind === 'workload' ? `WD#${k.account}#${k.region}#${k.id}` : `RD#${k.account}#${k.region}`);
   async function query(prefix: string): Promise<Item[]> {
     const items: Item[] = [];
@@ -249,7 +258,7 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       const prefix = kind === 'workload' ? 'WD#' : 'RD#';
       const found = new Map<string, Description>();
       for (const item of await query(prefix)) {
-        const d = data<Description>(item);
+        const d = storedDescription(item);
         if (d) found.set(item.sk!.S!.slice(prefix.length), d);
       }
       return found;
