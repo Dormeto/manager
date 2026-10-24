@@ -9,7 +9,7 @@ describe('the Kubernetes proxies\' ports', () => {
     const client = (service: string) => ({ async send(command: { constructor: { name: string }; input: unknown }) { sent.push([service, command.constructor.name, command.input]); return {}; } });
     const ports = kubeProxyClientPorts({ ec2: client('ec2'), lambda: client('lambda'), iam: client('iam'), logs: client('logs'), eks: client('eks') });
     const expected: Record<keyof KubeProxyPorts, string[]> = {
-      ec2: ['describeSecurityGroups', 'createSecurityGroup', 'authorizeSecurityGroupEgress', 'revokeSecurityGroupEgress', 'authorizeSecurityGroupIngress', 'revokeSecurityGroupIngress', 'deleteSecurityGroup', 'describeNetworkInterfaces'],
+      ec2: ['describeVpcs', 'describeSecurityGroups', 'createSecurityGroup', 'authorizeSecurityGroupEgress', 'revokeSecurityGroupEgress', 'authorizeSecurityGroupIngress', 'revokeSecurityGroupIngress', 'deleteSecurityGroup', 'describeNetworkInterfaces'],
       lambda: ['getFunctionConfiguration', 'createFunction', 'updateFunctionConfiguration', 'updateFunctionCode', 'deleteFunction'],
       iam: ['getRole', 'createRole', 'updateAssumeRolePolicy', 'getRolePolicy', 'putRolePolicy', 'listRolePolicies', 'deleteRolePolicy', 'deleteRole'],
       logs: ['describeLogGroups', 'createLogGroup', 'putRetentionPolicy', 'deleteLogGroup'],

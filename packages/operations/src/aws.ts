@@ -6,7 +6,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import {
   AuthorizeSecurityGroupEgressCommand, AuthorizeSecurityGroupIngressCommand, CreateSecurityGroupCommand, DeleteSecurityGroupCommand, DescribeNetworkInterfacesCommand, DescribeSecurityGroupsCommand,
-  EC2Client, RevokeSecurityGroupEgressCommand, RevokeSecurityGroupIngressCommand,
+  DescribeVpcsCommand, EC2Client, RevokeSecurityGroupEgressCommand, RevokeSecurityGroupIngressCommand,
 } from '@aws-sdk/client-ec2';
 import {
   CreateRoleCommand, DeleteRoleCommand, DeleteRolePolicyCommand, GetRoleCommand, GetRolePolicyCommand, IAMClient, ListRolePoliciesCommand, PutRolePolicyCommand, UpdateAssumeRolePolicyCommand,
@@ -88,7 +88,7 @@ export function eksPort(credentials: Credentials, region: string): EksPort {
 export function kubeProxyClientPorts(clients: Record<'ec2' | 'lambda' | 'iam' | 'logs' | 'eks', Send>): KubeProxyPorts {
   return {
     ec2: port(clients.ec2, {
-      describeSecurityGroups: DescribeSecurityGroupsCommand, createSecurityGroup: CreateSecurityGroupCommand, authorizeSecurityGroupEgress: AuthorizeSecurityGroupEgressCommand,
+      describeVpcs: DescribeVpcsCommand, describeSecurityGroups: DescribeSecurityGroupsCommand, createSecurityGroup: CreateSecurityGroupCommand, authorizeSecurityGroupEgress: AuthorizeSecurityGroupEgressCommand,
       revokeSecurityGroupEgress: RevokeSecurityGroupEgressCommand, authorizeSecurityGroupIngress: AuthorizeSecurityGroupIngressCommand, revokeSecurityGroupIngress: RevokeSecurityGroupIngressCommand,
       deleteSecurityGroup: DeleteSecurityGroupCommand, describeNetworkInterfaces: DescribeNetworkInterfacesCommand,
     }),

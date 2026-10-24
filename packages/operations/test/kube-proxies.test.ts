@@ -31,6 +31,10 @@ const LOG = `/aws/lambda/${FN}`;
 const TAGS = { 'dormeto:router': ROUTER, 'dormeto:role': 'kubernetes-proxy', 'dormeto:cluster': 'eks-demo' };
 const RECORD: ProxyRecord = { cluster: 'eks-demo', function: FN, role: ROLE, logGroup: LOG, securityGroupId: 'sg-0proxy000', clusterSecurityGroupId: 'sg-0cluster00', vpcId: 'vpc-0a1b2c3d' };
 const RULE_443 = { IpProtocol: 'tcp', FromPort: 443, ToPort: 443 };
+// The proxy's egress: TCP 443 to each IPv4 block of its VPC (the fake's vpc-0a1b2c3d: two associated, one disassociated).
+const toBlock = (CidrIp: string) => ({ ...RULE_443, CidrIp, Description: 'Kubernetes API of cluster eks-demo' });
+const EGRESS = [toBlock('10.0.0.0/16'), toBlock('100.64.0.0/16')];
+const iso = (ms: number) => new Date(ms).toISOString();
 const privateCluster = (name = 'eks-demo', over: Parameters<typeof cluster>[1] = {}) => cluster(name, { public: false, private: true, ...over });
 const ec2Error = (name: string, message: string) => Object.assign(new Error(message), { name });
 
@@ -77,14 +81,15 @@ function setup(clusters = [privateCluster()]) {
 }
 
 describe('the Kubernetes proxies step', () => {
-  it('gives a private cluster its proxy: a security group with only TCP 443 to the cluster group, the rule on that group, a role, a log group and the function', async () => {
+  it('gives a private cluster its proxy: a security group with only TCP 443 to its VPC\'s ranges, the rule on the cluster group, a role, a log group and the function', async () => {
     const s = setup();
     const result = await s.step();
     const { state } = s.account;
     const group = state.groups.get('sg-0proxy000')!;
     expect(group).toMatchObject({ GroupName: FN, VpcId: 'vpc-0a1b2c3d', Tags: TAGS });
-    // EC2 admits no apostrophe in a rule's description.
-    expect(group.egress).toEqual([{ ...RULE_443, GroupId: 'sg-0cluster00', Description: 'Kubernetes API of cluster eks-demo' }]);
+    // A rule naming the cluster security group would keep EKS from deleting that group with the cluster (spec section 4,
+    // ruling 15); EC2 admits no apostrophe in a rule's description.
+    expect(group.egress).toEqual(EGRESS);
     expect(group.ingress).toEqual([]);
     expect(state.groups.get('sg-0cluster00')!.ingress).toEqual([{ IpProtocol: '-1', GroupId: 'sg-0cluster00' }, { ...RULE_443, GroupId: 'sg-0proxy000', Description: `Dormeto Kubernetes proxy ${FN}` }]);
     const role = state.roles.get(ROLE)!;
@@ -162,11 +167,33 @@ describe('the Kubernetes proxies step', () => {
     Object.assign(s.clusters[0]!.resourcesVpcConfig, { endpointPublicAccess: true });
     await s.step();
     expect(s.account.state.functions.size).toBe(0);
+    // Its cluster deleted (its cluster security group with it), and a removal resumed after the proxy's group was deleted:
+    // no call on a group that is gone (a deleted group has no tag, and the policy allows these calls on tagged groups only).
+    const gone = setup();
+    await gone.step();
+    gone.clusters.splice(0, 1);
+    gone.account.state.groups.delete('sg-0cluster00');
+    await gone.step();
+    expect(gone.proxies()).toEqual([]);
+    const resumed = setup();
+    await resumed.step();
+    resumed.account.state.releaseReads = 0;
+    const deleteRole = resumed.account.ports.iam.deleteRole;
+    let throttled = false;
+    resumed.account.ports.iam.deleteRole = async (input: unknown) => {
+      if (throttled) return deleteRole(input);
+      throttled = true;
+      throw ec2Error('Throttling', 'Rate exceeded');
+    };
+    const failed = await removeKubernetesProxies(resumed.account.ports, resumed.proxies(), { now: resumed.now() }).catch((e: unknown) => e);
+    expect(resumed.account.state.groups.has('sg-0proxy000')).toBe(false);
+    expect(await removeKubernetesProxies(resumed.account.ports, proxiesOf(failed)!, { now: resumed.now() })).toMatchObject({ status: 'done', remaining: [] });
+    const calls = [...s.account.state.calls, ...gone.account.state.calls, ...resumed.account.state.calls];
     const key = ([action, resource, context]: [string, string, Record<string, string>?]) => JSON.stringify([action, resource, context ?? {}]);
     const listed = new Set(KUBE_PROXY_CALLS.map(key));
-    const made = new Set(s.account.state.calls.map(key));
+    const made = new Set(calls.map(key));
     expect(made.size).toBeGreaterThan(25);
-    for (const call of s.account.state.calls) {
+    for (const call of calls) {
       expect(listed.has(key(call)), `${key(call)} is in KUBE_PROXY_CALLS`).toBe(true);
       expect(allows(...call), `${key(call)} is allowed`).toBe(true);
     }
@@ -208,17 +235,30 @@ describe('the Kubernetes proxies step', () => {
     await s.step();
     s.clusters.splice(0, 1);
     s.account.state.groups.delete('sg-0cluster00');
+    // While Lambda holds its network interfaces, the step waits; the function's deletion is recorded with the proxy (the
+    // hour of waiting counts from it).
+    expect((await s.once()).outcomes).toEqual([
+      { cluster: 'open', status: 'skipped', detail: 'cluster open: reached directly' },
+      { cluster: 'eks-demo', status: 'pending', seconds: 30, changed: true, detail: expect.stringMatching(new RegExp(`^cluster eks-demo no longer exists: its proxy ${FN} deleted, waiting for Lambda to release its network interfaces \\(eni-0\\w+, eni-0\\w+\\)$`)) },
+    ]);
+    expect(s.proxies()).toEqual([{ ...RECORD, deletedAt: iso(s.now()) }]);
     const result = await s.step();
     expect(result).toEqual({
       outcomes: [{ cluster: 'open', status: 'skipped', detail: 'cluster open: reached directly' }, { cluster: 'eks-demo', status: 'done', detail: `cluster eks-demo no longer exists: its proxy ${FN} removed` }],
       proxies: [],
     });
     expect([...s.account.state.groups.keys()]).toEqual(['sg-0cluster-open']);
-    // While Lambda held its network interfaces, the step waited.
-    expect(s.runs.at(-2)).toEqual([
-      { cluster: 'open', status: 'skipped', detail: 'cluster open: reached directly' },
-      { cluster: 'eks-demo', status: 'pending', seconds: 30, changed: true, detail: expect.stringMatching(new RegExp(`^cluster eks-demo no longer exists: its proxy ${FN} deleted, waiting for Lambda to release its network interfaces \\(eni-0\\w+, eni-0\\w+\\)$`)) },
-    ]);
+  });
+
+  it('an existing proxy whose egress names the cluster security group (an earlier form), and a VPC with a new block: the egress follows the VPC, nothing else', async () => {
+    const s = setup();
+    await s.step();
+    s.account.state.groups.get('sg-0proxy000')!.egress = [{ ...RULE_443, GroupId: 'sg-0cluster00', Description: 'Kubernetes API of cluster eks-demo' }];
+    s.account.state.vpcs.get('vpc-0a1b2c3d')!.push({ CidrBlock: '10.2.0.0/16', State: 'associated' });
+    s.account.state.ops.length = 0;
+    await s.step();
+    expect(s.account.state.groups.get('sg-0proxy000')!.egress).toEqual([...EGRESS, toBlock('10.2.0.0/16')]);
+    expect(s.account.writes()).toEqual(['authorizeSecurityGroupEgress', 'revokeSecurityGroupEgress']);
   });
 
   it('a rule already there (InvalidPermission.Duplicate) is done, as a rule or group already gone at removal: the step runs again', async () => {
@@ -265,7 +305,7 @@ describe('the Kubernetes proxies step', () => {
     s.account.addClusterGroup(s.clusters[0]);
     expect((await s.step()).proxies).toEqual([{ ...RECORD, clusterSecurityGroupId: 'sg-0cluster01' }]);
     const { state } = s.account;
-    expect(state.groups.get('sg-0proxy000')!.egress).toEqual([{ ...RULE_443, GroupId: 'sg-0cluster01', Description: 'Kubernetes API of cluster eks-demo' }]);
+    expect(state.groups.get('sg-0proxy000')!.egress).toEqual(EGRESS);
     expect(state.groups.get('sg-0cluster01')!.ingress).toContainEqual({ ...RULE_443, GroupId: 'sg-0proxy000', Description: `Dormeto Kubernetes proxy ${FN}` });
     expect(state.functions.get(FN)!.config.Environment.Variables).toMatchObject({ DMT_ENDPOINT: 'https://EKSDEMO0A1C.gr7.eu-west-1.eks.amazonaws.com', DMT_CA: pem('eks-demo') });
   });
@@ -279,6 +319,7 @@ describe('the Kubernetes proxies step', () => {
     expect((await s.step()).proxies).toEqual([{ ...RECORD, securityGroupId: 'sg-0proxy001', clusterSecurityGroupId: 'sg-0cluster02', vpcId: 'vpc-0e5f6a7b' }]);
     expect(s.account.state.groups.has('sg-0proxy000')).toBe(false);
     expect(s.account.state.functions.get(FN)!.config.VpcConfig.SecurityGroupIds).toEqual(['sg-0proxy001']);
+    expect(s.account.state.groups.get('sg-0proxy001')!.egress).toEqual([toBlock('10.1.0.0/16')]);
   });
 
   it('names the function, its security group and its role by the rule the router shares (kube-proxy-names.json)', async () => {
@@ -298,24 +339,29 @@ describe('removing the Kubernetes proxies', () => {
     const s = setup();
     await s.step();
     s.account.state.releaseReads = 2;
-    const since = s.now();
+    const t0 = s.now();
     const ops: string[][] = [];
     const results = [];
+    let proxies = [RECORD];
     for (let i = 0; i < 4; i += 1) {
       s.account.state.ops.length = 0;
-      results.push(await removeKubernetesProxies(s.account.ports, i < 3 ? [RECORD] : [], { since, now: since + i * 30_000 }));
+      const result = await removeKubernetesProxies(s.account.ports, proxies, { now: t0 + i * 30_000 });
+      results.push(result);
+      proxies = result.remaining;
       ops.push([...s.account.state.ops]);
     }
     const held = new RegExp(`^cluster eks-demo: proxy ${FN} deleted, waiting for Lambda to release its network interfaces \\(eni-0\\w+, eni-0\\w+\\)$`);
+    const deleted = { ...RECORD, deletedAt: iso(t0) };
     expect(results.slice(0, 3)).toEqual([
-      { status: 'wait', remaining: [RECORD], detail: expect.stringMatching(held) },
-      { status: 'wait', remaining: [RECORD], detail: expect.stringMatching(held) },
+      { status: 'wait', remaining: [deleted], detail: expect.stringMatching(held) },
+      { status: 'wait', remaining: [deleted], detail: expect.stringMatching(held) },
       { status: 'done', remaining: [], detail: `cluster eks-demo: proxy ${FN} removed` },
     ]);
+    // The groups looked up before the calls on them (a group gone has no tag the policy could allow).
     expect(ops.slice(0, 3)).toEqual([
       ['deleteFunction', 'describeNetworkInterfaces'],
       ['deleteFunction', 'describeNetworkInterfaces'],
-      ['deleteFunction', 'describeNetworkInterfaces', 'revokeSecurityGroupIngress', 'deleteSecurityGroup', 'listRolePolicies', 'deleteRolePolicy', 'deleteRole', 'deleteLogGroup'],
+      ['deleteFunction', 'describeNetworkInterfaces', 'describeSecurityGroups', 'revokeSecurityGroupIngress', 'deleteSecurityGroup', 'listRolePolicies', 'deleteRolePolicy', 'deleteRole', 'deleteLogGroup'],
     ]);
     expect(results[3]).toEqual({ status: 'done', remaining: [], detail: 'no proxy' });
     const { state } = s.account;
@@ -323,24 +369,44 @@ describe('removing the Kubernetes proxies', () => {
     expect(state.groups.get('sg-0cluster00')!.ingress).toEqual([{ IpProtocol: '-1', GroupId: 'sg-0cluster00' }]);
   });
 
-  it('fails an hour after the removal started, naming the network interfaces Lambda still holds; a later removal finishes it', async () => {
+  it('fails an hour after the function\'s deletion (recorded with the proxy), naming the network interfaces Lambda still holds; a later removal finishes it', async () => {
     const s = setup();
     await s.step();
     s.account.state.held.add(FN);
-    const since = s.now();
-    expect((await removeKubernetesProxies(s.account.ports, [RECORD], { since, now: since + 59 * 60_000 })).status).toBe('wait');
-    const err = await removeKubernetesProxies(s.account.ports, [RECORD], { since, now: since + 61 * 60_000 }).catch((e: unknown) => e) as Error;
+    const t0 = s.now();
+    const deleted = { ...RECORD, deletedAt: iso(t0) };
+    const first = await removeKubernetesProxies(s.account.ports, [RECORD], { now: t0 });
+    expect(first).toMatchObject({ status: 'wait', remaining: [deleted] });
+    expect((await removeKubernetesProxies(s.account.ports, first.remaining, { now: t0 + 59 * 60_000 })).status).toBe('wait');
+    const err = await removeKubernetesProxies(s.account.ports, first.remaining, { now: t0 + 61 * 60_000 }).catch((e: unknown) => e) as Error;
     const ids = [...s.account.state.interfaces.keys()];
     expect(ids).toHaveLength(2);
     expect(err.message).toBe(`cluster eks-demo: Lambda still holds the network interfaces ${ids.join(', ')} of the proxy ${FN} an hour after its function was deleted`);
-    expect(proxiesOf(err)).toEqual([RECORD]);
+    expect(proxiesOf(err)).toEqual([deleted]);
+    // A new operation does not start the hour again.
+    const again = await removeKubernetesProxies(s.account.ports, proxiesOf(err)!, { now: t0 + 62 * 60_000 }).catch((e: unknown) => e) as Error;
+    expect(again.message).toBe(err.message);
     // Released since: the next operation removes what is left.
     s.account.state.held.clear();
-    const later = since + 2 * 60 * 60_000;
-    const results = [];
-    for (let i = 0; i < 3; i += 1) results.push(await removeKubernetesProxies(s.account.ports, proxiesOf(err)!, { since: later, now: later + i * 30_000 }));
-    expect(results.map((r) => r.status)).toEqual(['wait', 'done', 'done']);
+    s.account.state.interfaces.clear();
+    expect(await removeKubernetesProxies(s.account.ports, proxiesOf(again)!, { now: t0 + 2 * 60 * 60_000 })).toEqual({ status: 'done', remaining: [], detail: `cluster eks-demo: proxy ${FN} removed` });
     expect(s.account.state.groups.has('sg-0proxy000')).toBe(false);
+  });
+
+  it('counts each proxy\'s hour from its own function\'s deletion', async () => {
+    const s = setup([privateCluster(), privateCluster('eks-other')]);
+    await s.step();
+    const [demo, other] = s.proxies();
+    s.account.state.held.add(FN).add('dmtr-dev-kube-eks-other');
+    const t0 = s.now();
+    // eks-demo's function deleted by an earlier operation 50 minutes ago.
+    await s.account.ports.lambda.deleteFunction({ FunctionName: FN });
+    const earlier = { ...demo!, deletedAt: iso(t0 - 50 * 60_000) };
+    const first = await removeKubernetesProxies(s.account.ports, [earlier, other!], { now: t0 });
+    expect(first).toMatchObject({ status: 'wait', remaining: [earlier, { ...other!, deletedAt: iso(t0) }] });
+    const err = await removeKubernetesProxies(s.account.ports, first.remaining, { now: t0 + 11 * 60_000 }).catch((e: unknown) => e) as Error;
+    expect(err.message).toMatch(new RegExp(`^cluster eks-demo: Lambda still holds the network interfaces eni-0\\w+, eni-0\\w+ of the proxy ${FN} an hour after its function was deleted$`));
+    expect(proxiesOf(err)).toEqual(first.remaining);
   });
 
   it('removing several proxies keeps those still waiting, and a resumed removal finishes with them', async () => {
@@ -350,12 +416,12 @@ describe('removing the Kubernetes proxies', () => {
     expect([demo!.cluster, other!.cluster]).toEqual(['eks-demo', 'eks-other']);
     s.account.state.releaseReads = 0;
     s.account.state.held.add('dmtr-dev-kube-eks-other');
-    const since = s.now();
-    const first = await removeKubernetesProxies(s.account.ports, [demo!, other!], { since, now: since });
+    const t0 = s.now();
+    const first = await removeKubernetesProxies(s.account.ports, [demo!, other!], { now: t0 });
     expect(first).toMatchObject({ status: 'wait', remaining: [other] });
     expect(first.detail).toMatch(new RegExp(`^cluster eks-demo: proxy ${FN} removed; cluster eks-other: proxy dmtr-dev-kube-eks-other deleted, waiting for Lambda`));
     s.account.state.held.clear();
-    expect(await removeKubernetesProxies(s.account.ports, first.remaining, { since, now: since + 30_000 })).toEqual({ status: 'done', remaining: [], detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other removed' });
+    expect(await removeKubernetesProxies(s.account.ports, first.remaining, { now: t0 + 30_000 })).toEqual({ status: 'done', remaining: [], detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other removed' });
     expect([...s.account.state.groups.keys()].filter((id) => id.startsWith('sg-0proxy'))).toEqual([]);
   });
 });

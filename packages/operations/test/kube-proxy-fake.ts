@@ -61,6 +61,8 @@ const sameRule = (a: Rule, b: Rule) => a.IpProtocol === b.IpProtocol && a.FromPo
 export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }: { now?: () => number } = {}) {
   const state = {
     groups: new Map<string, Group>(),
+    // The VPCs' IPv4 blocks (the proxy's egress, spec section 4): vpc-0a1b2c3d has a secondary block, and one disassociated.
+    vpcs: new Map<string, { CidrBlock: string; State: string }[]>(),
     functions: new Map<string, Fn>(),
     roles: new Map<string, { path: string; trust: string; boundary?: string; tags: Record<string, string>; policies: Map<string, string> }>(),
     logGroups: new Map<string, { retention?: number; tags: Record<string, string> }>(),
@@ -87,6 +89,11 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
   // The cluster security group EKS makes (tagged with its cluster's name), admitting its own members.
   const addClusterGroup = (c: Cluster) => {
     const id = c.resourcesVpcConfig.clusterSecurityGroupId;
+    if (!state.vpcs.has(c.resourcesVpcConfig.vpcId)) {
+      state.vpcs.set(c.resourcesVpcConfig.vpcId, c.resourcesVpcConfig.vpcId === 'vpc-0a1b2c3d'
+        ? [{ CidrBlock: '10.0.0.0/16', State: 'associated' }, { CidrBlock: '100.64.0.0/16', State: 'associated' }, { CidrBlock: '10.99.0.0/16', State: 'disassociated' }]
+        : [{ CidrBlock: '10.1.0.0/16', State: 'associated' }]);
+    }
     state.groups.set(id, { GroupId: id, GroupName: `eks-cluster-sg-${c.name}`, VpcId: c.resourcesVpcConfig.vpcId, Description: 'EKS created security group', Tags: { 'aws:eks:cluster-name': c.name }, ingress: [{ IpProtocol: '-1', GroupId: id }], egress: [{ IpProtocol: '-1', CidrIp: '0.0.0.0/0' }] });
   };
   for (const c of clusters) addClusterGroup(c);
@@ -127,12 +134,22 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
     async describeSecurityGroups({ GroupIds, Filters = [] }) {
       record('describeSecurityGroups', ['ec2:DescribeSecurityGroups', '*']);
       const filter = (name: string) => (Filters as { Name: string; Values: string[] }[]).find((f) => f.Name === name)?.Values;
+      // By ids, a missing group is an error; by filters, it is not listed.
       const groups = GroupIds ? (GroupIds as string[]).map(groupOf) : [...state.groups.values()]
-        .filter((g) => (!filter('vpc-id') || filter('vpc-id')!.includes(g.VpcId)) && (!filter('group-name') || filter('group-name')!.includes(g.GroupName)));
+        .filter((g) => (!filter('vpc-id') || filter('vpc-id')!.includes(g.VpcId)) && (!filter('group-name') || filter('group-name')!.includes(g.GroupName))
+          && (!filter('group-id') || filter('group-id')!.includes(g.GroupId)));
       return { SecurityGroups: groups.map((g) => ({
         GroupId: g.GroupId, GroupName: g.GroupName, VpcId: g.VpcId, Description: g.Description, OwnerId: ACCOUNT,
         Tags: Object.entries(g.Tags).map(([Key, Value]) => ({ Key, Value })), IpPermissions: permissionsOf(g.ingress), IpPermissionsEgress: permissionsOf(g.egress),
       })) };
+    },
+    async describeVpcs({ VpcIds }) {
+      record('describeVpcs', ['ec2:DescribeVpcs', '*']);
+      return { Vpcs: (VpcIds as string[]).map((VpcId) => {
+        const blocks = state.vpcs.get(VpcId);
+        if (!blocks) throw error('InvalidVpcID.NotFound', `The vpc ID '${VpcId}' does not exist`);
+        return { VpcId, CidrBlock: blocks[0]!.CidrBlock, CidrBlockAssociationSet: blocks.map((b, i) => ({ AssociationId: `vpc-cidr-assoc-0${i}`, CidrBlock: b.CidrBlock, CidrBlockState: { State: b.State } })) };
+      }) };
     },
     async createSecurityGroup({ GroupName, Description, VpcId, TagSpecifications = [] }) {
       const tags = tagMap((TagSpecifications as { ResourceType: string; Tags: { Key: string; Value: string }[] }[]).find((t) => t.ResourceType === 'security-group')?.Tags);

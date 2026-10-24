@@ -21,7 +21,8 @@ export interface Operation {
   target: Record<string, string>;
   input: Record<string, unknown>;
   status: 'running' | 'succeeded' | 'failed';
-  steps: { name: string; status: StepStatus; startedAt?: string; finishedAt?: string; detail?: string; attempts?: number; changed?: boolean }[];
+  // attempts: every run of the step; retries: those after a transient error (waits not counted).
+  steps: { name: string; status: StepStatus; startedAt?: string; finishedAt?: string; detail?: string; attempts?: number; retries?: number; changed?: boolean }[];
   cursor: number;
   holds: { locks: string[]; slots: string[] };
   activeKey: string;

@@ -26,6 +26,7 @@ const slotMax = (key: string) => (key === ORG_SLOT ? ORG_SLOTS : SLOTS);
 // up to 24 hours after the operation started (about 13,000 workflow events of the 25,000 an execution can hold).
 const slotWait = (attempts: number) => Math.min(60, 10 * 2 ** Math.max(0, attempts - 1));
 const SLOT_WAIT_MAX = 24 * 60 * MINUTE;
+// Retries of a step on a transient error or RetryLater; its waits (a wait outcome) never count.
 const RETRY_MAX = 30;
 // AWS errors that pass: the step waits and runs again (a resource being updated, a throttled API).
 const TRANSIENT = new Set([
@@ -128,7 +129,9 @@ const withPauses = (recorded: Pause[] = [], added: Pause[]) => {
 const iso = (ms: number) => new Date(ms).toISOString();
 // Lambda releases a deleted proxy's network interfaces in minutes: the removal looks again every 30 seconds.
 const RELEASE_WAIT_S = 30;
-const ORGANIZATION_ACCESS_STEPS = new Set<WorkflowType>(['install-router', 'upgrade-router', 'onboard']);
+// The operations that go on without the proxies where the command role refuses them (an onboarding fails if its cluster
+// needs one).
+const ORGANIZATION_ACCESS_STEPS = new Set<WorkflowType>(['install-router', 'upgrade-router', 'cluster-access', 'onboard']);
 const loadBalancerOfRule = (ruleArn: string) => ruleArn.replace(':listener-rule/app/', ':loadbalancer/app/').split('/').slice(0, 4).join('/');
 
 export function createEngine(deps: EngineDeps) {
@@ -525,8 +528,8 @@ export function createEngine(deps: EngineDeps) {
         } catch (err) {
           const made = proxiesOf(err);
           if (made) await saveProxies(op, made);
-          // A router's install or upgrade goes on without the proxies (its other clusters are checked); an onboarding fails
-          // when its candidate's cluster needs one.
+          // A router's install, upgrade or cluster access goes on without the proxies (its other clusters are checked); an
+          // onboarding fails when its candidate's cluster needs one.
           if (err instanceof KubeProxyAccessDenied && ORGANIZATION_ACCESS_STEPS.has(op.type as WorkflowType) && !(kubernetes && err.clusters.includes(kubernetes.cluster))) {
             op.context.clusters = ((op.context.clusters as string[] | undefined) ?? []).filter((c) => !err.clusters.includes(c));
             return { status: 'skipped', detail: err.message };
@@ -615,7 +618,7 @@ export function createEngine(deps: EngineDeps) {
         if (!proxies.length) return { status: 'skipped' };
         let result;
         try {
-          result = await removeKubernetesProxies((await access(op)).kubeProxies, proxies, { since: stepStart(op), now: now() });
+          result = await removeKubernetesProxies((await access(op)).kubeProxies, proxies, { now: now() });
         } catch (err) {
           // What is left stays recorded: the next uninstall goes on with it.
           const left = proxiesOf(err);
@@ -794,7 +797,8 @@ export function createEngine(deps: EngineDeps) {
         await records.putOperation(op);
         return { done: false, waitSeconds: 10 };
       }
-      if ((err instanceof RetryLater || TRANSIENT.has((err as Error).name)) && step.attempts <= RETRY_MAX) {
+      if ((err instanceof RetryLater || TRANSIENT.has((err as Error).name)) && (step.retries ?? 0) < RETRY_MAX) {
+        step.retries = (step.retries ?? 0) + 1;
         step.detail = (err as Error).message;
         await records.putOperation(op);
         return { done: false, waitSeconds: err instanceof RetryLater ? err.seconds : 10 };

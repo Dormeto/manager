@@ -6,9 +6,12 @@
 // it, so that a run can come again. The proxies made are recorded with the router (InstalledRouter.proxies) and removed
 // from that record: a cluster opened to every address, out of reach, gone, made again in another VPC, or the router
 // uninstalled. Order: the security group first (a command role without the organization access of manager 0.20.0 refuses
-// it before anything is made), the rule on the cluster security group, the role, the log group, the function; a removal
-// deletes the function, waits until Lambda released its network interfaces, then revokes the rule and deletes the group,
-// the role and the log group.
+// it before anything is made), whose only egress is TCP 443 to the VPC's IPv4 blocks (a rule naming the cluster security
+// group would keep EKS from deleting that group with the cluster), the rule admitting it on the cluster security group, the
+// role, the log group, the function; a removal deletes the function, waits until Lambda released its network interfaces
+// (up to an hour from the function's deletion, recorded with the proxy), then revokes the rule and deletes the group, the
+// role and the log group, each group looked up first (a group gone has no tag, and the command role's policy allows these
+// calls on tagged groups only).
 import type { Policy } from './blueprint.js';
 import { reachOf, UNREACHABLE, type EksPort } from './cluster-access.js';
 import { RetryLater, deleteRole, find, putRole, same, tagList } from './installer.js';
@@ -21,8 +24,8 @@ export interface KubeProxyPorts {
   lambda: Record<'getFunctionConfiguration' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'deleteFunction', Call>;
   iam: Record<'getRole' | 'createRole' | 'updateAssumeRolePolicy' | 'getRolePolicy' | 'putRolePolicy' | 'listRolePolicies' | 'deleteRolePolicy' | 'deleteRole', Call>;
   logs: Record<'describeLogGroups' | 'createLogGroup' | 'putRetentionPolicy' | 'deleteLogGroup', Call>;
-  ec2: Record<'describeSecurityGroups' | 'createSecurityGroup' | 'authorizeSecurityGroupEgress' | 'revokeSecurityGroupEgress' | 'authorizeSecurityGroupIngress' | 'revokeSecurityGroupIngress'
-    | 'deleteSecurityGroup' | 'describeNetworkInterfaces', Call>;
+  ec2: Record<'describeVpcs' | 'describeSecurityGroups' | 'createSecurityGroup' | 'authorizeSecurityGroupEgress' | 'revokeSecurityGroupEgress' | 'authorizeSecurityGroupIngress'
+    | 'revokeSecurityGroupIngress' | 'deleteSecurityGroup' | 'describeNetworkInterfaces', Call>;
   eks: Pick<EksPort, 'listClusters' | 'describeCluster'>;
 }
 
@@ -32,7 +35,8 @@ export interface KubeProxy {
   environment: Record<string, string>; tags: Record<string, string>; namePrefix: string; rolePrefix: string; rolePolicy: Policy;
 }
 
-// A proxy the manager made, as the router's record keeps it (securityGroupId null until its group exists).
+// A proxy the manager made, as the router's record keeps it (securityGroupId null until its group exists; deletedAt once a
+// removal deleted its function: the hour of waiting for its network interfaces counts from it).
 export interface ProxyRecord {
   cluster: string;
   function: string;
@@ -41,6 +45,7 @@ export interface ProxyRecord {
   securityGroupId: string | null;
   clusterSecurityGroupId: string;
   vpcId: string;
+  deletedAt?: string;
 }
 
 // pending: the step comes back after `seconds` (the function not Active yet, network interfaces not released yet);
@@ -91,9 +96,15 @@ const permissionOf = (r: Rule, Description?: string) => ({
   ...(r.CidrIp ? { IpRanges: [{ CidrIp: r.CidrIp }] } : {}), ...(r.CidrIpv6 ? { Ipv6Ranges: [{ CidrIpv6: r.CidrIpv6 }] } : {}),
   ...(r.PrefixListId ? { PrefixListIds: [{ PrefixListId: r.PrefixListId }] } : {}), ...(r.GroupId ? { UserIdGroupPairs: [{ GroupId: r.GroupId, ...(Description ? { Description } : {}) }] } : {}),
 });
-// TCP 443 from or to a group: the proxy's only egress (to the cluster security group), and its rule on that group.
+const sameRule = (a: Rule, b: Rule) => a.IpProtocol === b.IpProtocol && a.FromPort === b.FromPort && a.ToPort === b.ToPort && a.CidrIp === b.CidrIp && a.CidrIpv6 === b.CidrIpv6
+  && a.PrefixListId === b.PrefixListId && a.GroupId === b.GroupId;
+// TCP 443 from the proxy's group: its rule on the cluster security group.
 const https = (GroupId: string): Rule => ({ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, GroupId });
-const isHttps = (r: Rule, groupId: string) => r.IpProtocol === 'tcp' && r.FromPort === 443 && r.ToPort === 443 && r.GroupId === groupId;
+const isHttps = (r: Rule, groupId: string) => sameRule(r, https(groupId));
+// Which of these security groups exist (a filter lists none for a group gone, where its id would be an error).
+const presentGroups = async (ec2: KubeProxyPorts['ec2'], ids: string[]) => new Set<string>(
+  (((await ec2.describeSecurityGroups({ Filters: [{ Name: 'group-id', Values: ids }] })).SecurityGroups ?? []) as { GroupId: string }[]).map((g) => g.GroupId),
+);
 
 // A rule added, false when it was there already (another run made it meanwhile).
 async function authorize(call: Call, input: unknown) {
@@ -134,27 +145,38 @@ async function clustersOf(eks: KubeProxyPorts['eks']) {
 }
 
 // One proxy removed, step by step: done, waiting for Lambda to release its network interfaces, or still held an hour
-// after the removal started (expired).
-type Removal = { status: 'done' } | { status: 'wait' | 'expired'; held: string[]; message: string };
-async function removeProxy(ports: KubeProxyPorts, p: ProxyRecord, { since, now }: { since: number; now: number }): Promise<Removal> {
+// after its function was deleted (expired). `deleted` is told the record with the deletion's time as soon as it is known.
+type Removal = { status: 'done' } | { status: 'wait' | 'expired'; held: string[]; message: string; record: ProxyRecord };
+async function removeProxy(ports: KubeProxyPorts, p: ProxyRecord, now: number, deleted: (record: ProxyRecord) => void = () => {}): Promise<Removal> {
   const { ec2 } = ports;
-  await find(() => ports.lambda.deleteFunction({ FunctionName: p.function }));
+  // Deleted now, or by an earlier run (its time recorded then).
+  const deletedNow = (await find(() => ports.lambda.deleteFunction({ FunctionName: p.function }))) !== null;
+  const record = { ...p, deletedAt: deletedNow || !p.deletedAt ? new Date(now).toISOString() : p.deletedAt };
+  deleted(record);
+  const late = now - Date.parse(record.deletedAt) > RELEASE_MAX_MS;
   if (p.securityGroupId) {
     const held = (((await ec2.describeNetworkInterfaces({ Filters: [{ Name: 'group-id', Values: [p.securityGroupId] }] })).NetworkInterfaces ?? []) as { NetworkInterfaceId: string }[])
       .map((n) => n.NetworkInterfaceId);
-    const late = now - since > RELEASE_MAX_MS;
     if (held.length) {
       return late
-        ? { status: 'expired', held, message: `cluster ${p.cluster}: Lambda still holds the network interfaces ${held.join(', ')} of the proxy ${p.function} an hour after its function was deleted` }
-        : { status: 'wait', held, message: '' };
+        ? { status: 'expired', held, record, message: `cluster ${p.cluster}: Lambda still holds the network interfaces ${held.join(', ')} of the proxy ${p.function} an hour after its function was deleted` }
+        : { status: 'wait', held, record, message: '' };
     }
-    await revoke(ec2.revokeSecurityGroupIngress, { GroupId: p.clusterSecurityGroupId, IpPermissions: [permissionOf(https(p.securityGroupId))] });
-    try {
-      await ec2.deleteSecurityGroup({ GroupId: p.securityGroupId });
-    } catch (err) {
-      // Something still uses the group (an interface not listed yet): waited for as the interfaces are.
-      if (named(err, 'DependencyViolation')) return late ? { status: 'expired', held: [], message: `cluster ${p.cluster}: the security group ${p.securityGroupId} of the proxy ${p.function} is still in use an hour after its function was deleted: ${(err as Error).message}` } : { status: 'wait', held: [], message: '' };
-      if (!named(err, 'InvalidGroup.NotFound')) throw err;
+    // The cluster's group goes with a deleted cluster, the proxy's with an earlier run of this removal.
+    const present = await presentGroups(ec2, [p.clusterSecurityGroupId, p.securityGroupId]);
+    if (present.has(p.clusterSecurityGroupId)) await revoke(ec2.revokeSecurityGroupIngress, { GroupId: p.clusterSecurityGroupId, IpPermissions: [permissionOf(https(p.securityGroupId))] });
+    if (present.has(p.securityGroupId)) {
+      try {
+        await ec2.deleteSecurityGroup({ GroupId: p.securityGroupId });
+      } catch (err) {
+        // Something still uses the group (an interface not listed yet): waited for as the interfaces are.
+        if (named(err, 'DependencyViolation')) {
+          return late
+            ? { status: 'expired', held: [], record, message: `cluster ${p.cluster}: the security group ${p.securityGroupId} of the proxy ${p.function} is still in use an hour after its function was deleted: ${(err as Error).message}` }
+            : { status: 'wait', held: [], record, message: '' };
+        }
+        if (!named(err, 'InvalidGroup.NotFound')) throw err;
+      }
     }
   }
   await deleteRole(ports.iam, p.role);
@@ -165,7 +187,7 @@ const releasing = (held: string[]) => `waiting for Lambda to release its network
 
 // The proxies of the clusters of the account and region: made or brought to the router's version where the endpoint is
 // private, removed where they are no longer wanted. since: when the step started (a failure Lambda reports for a change made
-// since then fails the step; one left by an earlier operation is tried again), and the removals' hour counts from it.
+// since then fails the step; one left by an earlier operation is tried again).
 export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
   account: string; region: string; routerName: string; kubeProxy: KubeProxy; trust: Policy; boundaryArn: string; zip: Uint8Array; codeSha256: string; existing: ProxyRecord[];
   since?: number; now?: number;
@@ -182,7 +204,7 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
 
   // An earlier proxy removed (`why` says why, ending with its separator): done, or pending while Lambda holds its interfaces.
   async function removal(old: ProxyRecord, why: string): Promise<ProxyOutcome> {
-    const r = await removeProxy(ports, old, at);
+    const r = await removeProxy(ports, old, at.now, (deleted) => records.set(old.cluster, deleted));
     if (r.status === 'done') {
       records.delete(old.cluster);
       return { cluster: old.cluster, status: 'done', detail: `${why} its proxy ${old.function} removed` };
@@ -210,12 +232,12 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     const tags = { ...kp.tags, 'dormeto:role': 'kubernetes-proxy', 'dormeto:cluster': c.name };
     const record: ProxyRecord = { cluster: c.name, function: fn, role: roleName, logGroup: `/aws/lambda/${fn}`, securityGroupId: old?.securityGroupId ?? null, clusterSecurityGroupId: vpc.clusterSecurityGroupId, vpcId: vpc.vpcId };
     // Made again in the same VPC, with a new cluster security group: the rule on the earlier one goes (if it is left).
-    if (old?.securityGroupId && old.clusterSecurityGroupId !== record.clusterSecurityGroupId) {
+    if (old?.securityGroupId && old.clusterSecurityGroupId !== record.clusterSecurityGroupId && (await presentGroups(ec2, [old.clusterSecurityGroupId])).has(old.clusterSecurityGroupId)) {
       if (await revoke(ec2.revokeSecurityGroupIngress, { GroupId: old.clusterSecurityGroupId, IpPermissions: [permissionOf(https(old.securityGroupId))] })) changed.push(`rule on ${old.clusterSecurityGroupId} revoked`);
     }
     if (old) records.set(c.name, record);
 
-    // Its security group, recorded as soon as it exists: only TCP 443 out, to the cluster security group.
+    // Its security group, recorded as soon as it exists.
     let group = (await ec2.describeSecurityGroups({ Filters: [{ Name: 'vpc-id', Values: [vpc.vpcId] }, { Name: 'group-name', Values: [fn] }] })).SecurityGroups?.[0];
     if (!group) {
       let created;
@@ -238,12 +260,19 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     const groupId = String(group.GroupId);
     Object.assign(record, { securityGroupId: groupId });
     records.set(c.name, record);
+    // Its only egress: TCP 443 to each IPv4 block of the VPC (the endpoint's addresses are in the cluster's subnets).
+    const described = (await ec2.describeVpcs({ VpcIds: [vpc.vpcId] })).Vpcs?.[0];
+    const blocks = [...new Set<string>(((described?.CidrBlockAssociationSet ?? []) as { CidrBlock: string; CidrBlockState?: { State?: string } }[])
+      .filter((a) => a.CidrBlockState?.State === 'associated').map((a) => a.CidrBlock))];
+    if (!blocks.length && described?.CidrBlock) blocks.push(described.CidrBlock);
+    const wanted: Rule[] = blocks.map((CidrIp) => ({ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, CidrIp }));
     const egress = rulesOf(group.IpPermissionsEgress);
-    if (!egress.some((r) => isHttps(r, vpc.clusterSecurityGroupId))) {
-      if (await authorize(ec2.authorizeSecurityGroupEgress, { GroupId: groupId, IpPermissions: [permissionOf(https(vpc.clusterSecurityGroupId), `Kubernetes API of cluster ${c.name}`)] })) changed.push('egress to the cluster security group');
-    }
-    // Its default egress (everything) and any other rule revoked.
-    const others = egress.filter((r) => !isHttps(r, vpc.clusterSecurityGroupId));
+    const missing = wanted.filter((w) => !egress.some((r) => sameRule(r, w)));
+    if (missing.length && await authorize(ec2.authorizeSecurityGroupEgress, {
+      GroupId: groupId, IpPermissions: [{ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, IpRanges: missing.map((r) => ({ CidrIp: r.CidrIp, Description: `Kubernetes API of cluster ${c.name}` })) }],
+    })) changed.push('egress to the VPC');
+    // Its default egress (everything) and any other rule revoked (an earlier one to the cluster security group too).
+    const others = egress.filter((r) => !wanted.some((w) => sameRule(r, w)));
     if (others.length && await revoke(ec2.revokeSecurityGroupEgress, { GroupId: groupId, IpPermissions: others.map((r) => permissionOf(r)) })) changed.push('other egress revoked');
 
     // The rule admitting it on the cluster security group.
@@ -345,28 +374,32 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
 }
 
 // The router's proxies removed (its uninstall): those still waiting for Lambda to release their network interfaces stay
-// in `remaining` for the next run; an hour after `since`, the removal fails naming the interfaces still held.
-export async function removeKubernetesProxies(ports: KubeProxyPorts, proxies: ProxyRecord[], at: { since: number; now: number }): Promise<{ status: 'done' | 'wait'; remaining: ProxyRecord[]; detail: string }> {
+// in `remaining` (with the time their function was deleted) for the next run; an hour after that time, the removal fails
+// naming the interfaces still held.
+export async function removeKubernetesProxies(ports: KubeProxyPorts, proxies: ProxyRecord[], at: { now: number }): Promise<{ status: 'done' | 'wait'; remaining: ProxyRecord[]; detail: string }> {
   if (!proxies.length) return { status: 'done', remaining: [], detail: 'no proxy' };
   const remaining: ProxyRecord[] = [];
   const details: string[] = [];
   const expired: string[] = [];
   let index = 0;
+  let current: ProxyRecord | undefined;
   try {
     for (; index < proxies.length; index += 1) {
       const p = proxies[index]!;
-      const r = await removeProxy(ports, p, at);
+      current = p;
+      const r = await removeProxy(ports, p, at.now, (deleted) => { current = deleted; });
+      current = undefined;
       if (r.status === 'done') {
         details.push(`cluster ${p.cluster}: proxy ${p.function} removed`);
         continue;
       }
-      remaining.push(p);
+      remaining.push(r.record);
       if (r.status === 'expired') expired.push(r.message);
       details.push(`cluster ${p.cluster}: proxy ${p.function} deleted, ${releasing(r.held)}`);
     }
     if (expired.length) throw new Error(expired.join('; '));
   } catch (err) {
-    throw withProxies(err, [...remaining, ...proxies.slice(index)]);
+    throw withProxies(err, [...remaining, ...(current ? [current] : []), ...proxies.slice(current ? index + 1 : index)]);
   }
   return { status: remaining.length ? 'wait' : 'done', remaining, detail: details.join('; ') };
 }

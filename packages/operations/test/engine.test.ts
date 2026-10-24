@@ -446,6 +446,16 @@ describe('review fixes', () => {
 });
 
 describe('transient errors', () => {
+  it('a step whose AWS error stays transient fails after 30 retries', async () => {
+    const s = setup();
+    s.account.ports.dynamodb.updateContinuousBackups = async () => { throw Object.assign(new Error('Backups are being enabled for the table: dmtr-dev-router. Please retry later'), { name: 'ContinuousBackupsUnavailableException' }); };
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    const step = (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'install table')!;
+    expect([step.status, step.detail]).toEqual(['failed', 'Backups are being enabled for the table: dmtr-dev-router. Please retry later']);
+    expect(step.retries).toBe(30);
+  });
+
   it('waits and retries a step on a transient AWS error instead of failing the operation', async () => {
     const s = setup();
     const update = s.account.ports.dynamodb.updateContinuousBackups;
@@ -690,6 +700,37 @@ describe('Kubernetes proxies', () => {
     expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies ?? []).toEqual([]);
   });
 
+  it('the cluster-access operation where the command role predates manager 0.20.0 goes on without the proxies, saying what to apply; the clusters reached directly are checked', async () => {
+    const s = withClusters([privateCluster(), eksCluster('open')]);
+    await s.records.putRouter({ name: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-3', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`, version: '0.33.0', build: 'b', installedBy: 'a', installedAt: 'x' });
+    s.kube.state.deny.createSecurityGroup = unauthorized();
+    const op = await s.engine.create('cluster-access', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(s, op.id, 'kubernetes proxies')).toMatchObject({
+      status: 'skipped', detail: `cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`,
+    });
+    expect(await stepOf(s, op.id, 'check clusters')).toMatchObject({ status: 'done', detail: 'cluster open: reachable, every right' });
+    expect(checked(s)).toEqual(['open']);
+  });
+
+  // Waits do not use the step's retry budget (ruling 16): a proxy moved to another VPC waits for its interfaces many times,
+  // then its role, made again, is not assumable by Lambda yet (RetryLater).
+  it('a step that waited 40 times and then asks to retry later is retried, not failed', async () => {
+    const clusters = [privateCluster()];
+    const s = withClusters(clusters);
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    s.kube.state.groups.delete('sg-0cluster00');
+    clusters[0] = eksCluster('eks-demo', { public: false, private: true, vpc: 'vpc-0e5f6a7b', group: 'sg-0cluster02' });
+    s.kube.addClusterGroup(clusters[0]);
+    s.kube.state.releaseReads = 40;
+    const op = await s.engine.create('cluster-access', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const step = await stepOf(s, op.id, 'kubernetes proxies');
+    expect(step.attempts).toBeGreaterThan(42);
+    expect(step.retries).toBe(1);
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([{ ...PROXY, securityGroupId: 'sg-0proxy001', clusterSecurityGroupId: 'sg-0cluster02', vpcId: 'vpc-0e5f6a7b' }]);
+  });
+
   it('onboarding a candidate whose cluster needs a proxy fails where the command role predates manager 0.20.0; one reached directly goes on', async () => {
     const s = withClusters([privateCluster()], { candidates: [k8sCandidate()] });
     s.kube.state.deny.createSecurityGroup = unauthorized();
@@ -730,8 +771,11 @@ describe('Kubernetes proxies', () => {
     const failed = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
     expect(await s.drive(failed.id, { maxIterations: 400 })).toEqual({ done: true, status: 'failed' });
     expect((await s.records.getOperation(failed.id))!.error).toMatch(/^remove kubernetes proxies: cluster eks-other: Lambda still holds the network interfaces eni-0\w+, eni-0\w+ of the proxy dmtr-dev-kube-eks-other an hour after its function was deleted$/);
-    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([proxyOf('eks-other', 'sg-0proxy001', 'sg-0cluster-eks-other')]);
+    // Kept with the time its function was deleted: the hour counts from it.
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([{ ...proxyOf('eks-other', 'sg-0proxy001', 'sg-0cluster-eks-other'), deletedAt: expect.any(String) }]);
+    // Released since.
     s.kube.state.held.clear();
+    s.kube.state.interfaces.clear();
     const again = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
     expect(await s.drive(again.id)).toEqual({ done: true, status: 'succeeded' });
     expect(await stepOf(s, again.id, 'remove kubernetes proxies')).toMatchObject({ status: 'done', detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other removed' });
