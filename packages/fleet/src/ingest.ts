@@ -2,7 +2,7 @@
 // identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
 // arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
-import { CHUNK_WORKLOADS_MAX, SKEW_MS, chunkOf, failureOf, regionOf, routerOf, stateOf, timely, transitionOf, workloadIdOf, workloadOf, type Failure } from './clean.js';
+import { CHUNK_WORKLOADS_MAX, SKEW_MS, chunkOf, failureOf, hibernatedOf, regionOf, routerOf, stateOf, timely, transitionOf, workloadIdOf, workloadOf, type Failure } from './clean.js';
 import type { FailureEntry, FleetStore, HistoryEntry, RouterSummary, WorkloadSummary } from './store.js';
 
 // A router before 0.25.0 says a workload FAILED, never why.
@@ -53,18 +53,19 @@ export function createIngest({ store, now = Date.now, log }: {
       let written: WorkloadSummary | null = null;
       // When its state began, as the router says (0.26.0: the instant of its event), else the check's time; never ahead of
       // the check or the clock (review I1: a time in the future would pin the summary, refusing every later change).
-      const { stateAt: said, ...listed } = w;
+      const { stateAt: said, hibernated, ...listed } = w;
       const timed = timely(said, now());
       const reported = timed && Date.parse(timed) <= Date.parse(checkedAt) + SKEW_MS ? timed : undefined;
       await versioned(account, region, w.workloadId as string, (existing) => {
         before = existing;
-        // A newer check wrote it already; a state change newer than this check is kept.
+        // A newer check wrote it already; a state change newer than this check is kept, with whether its nap hibernated.
         if ((existing?.checkedAt ?? '') > checkedAt) return (written = null);
         const newer = existing?.stateAt && existing.stateAt > checkedAt;
         const stateAt = newer ? existing.stateAt : [existing?.stateAt, reported].filter((t): t is string => !!t).sort().at(-1);
+        const asleepHibernated = newer ? existing.state === 'ASLEEP' && existing.hibernated === true : hibernated === true;
         return (written = {
           ...listed, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
-          ...(newer ? { state: existing.state } : {}), ...(stateAt ? { stateAt } : {}),
+          ...(newer ? { state: existing.state } : {}), ...(asleepHibernated ? { hibernated: true } : {}), ...(stateAt ? { stateAt } : {}),
           historySince: existing?.historySince ?? reported ?? checkedAt,
         });
       });
@@ -114,10 +115,13 @@ export function createIngest({ store, now = Date.now, log }: {
     await store.putHistory({ account, region, router, workloadId, to, at, ...transitionOf(d, at), from: stateOf(d.from) } as HistoryEntry);
     // A workload known before its history (R8) starts it with what the manager knew: its stored state, since then.
     let known: WorkloadSummary | null = null;
+    // `hibernated` follows the state (routers 0.32.0): only while asleep after a nap that hibernated instances.
+    const asleepHibernated = to === 'ASLEEP' && hibernatedOf(d.hibernated) !== undefined;
     await versioned(account, region, workloadId, (existing) => {
       known = existing && !existing.historySince && existing.state ? existing : null;
-      return (existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at
-        ? (known = null) : { ...(existing ?? { account, region, router, workloadId }), state: to, stateAt: at, historySince: existing?.historySince ?? (known ? undefined : at) };
+      if ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at) return (known = null);
+      const { hibernated: _was, ...kept }: WorkloadSummary = existing ?? { account, region, router, workloadId };
+      return { ...kept, state: to, stateAt: at, historySince: existing?.historySince ?? (known ? undefined : at), ...(asleepHibernated ? { hibernated: true } : {}) };
     });
     const first = known as WorkloadSummary | null;
     const since = first ? first.stateAt ?? first.checkedAt : undefined;

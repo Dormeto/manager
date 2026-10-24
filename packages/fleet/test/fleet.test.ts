@@ -512,6 +512,28 @@ describe('state history (R8)', () => {
     expect([a!.hibernated, 'hibernated' in b!, 'hibernated' in c!]).toEqual([true, false, false]);
   });
 
+  it('`hibernated` follows the state: a change out of ASLEEP drops it, a nap that hibernated sets it, a plain one does not', async () => {
+    const s = setup();
+    const hibernated = async () => (await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.hibernated;
+    await s.ingest(checked(T1, [workload('a', 'ASLEEP', { hibernated: true })]));
+    await s.ingest(change('WAKING', at(T1, 10), { from: 'ASLEEP', cause: 'normal' }));
+    expect(await hibernated()).toBeUndefined();
+    await s.ingest(change('AWAKE', at(T1, 20), { from: 'WAKING' }));
+    await s.ingest(change('NAPPING', at(T1, 30), { from: 'AWAKE', cause: 'idle' }));
+    await s.ingest(change('ASLEEP', at(T1, 40), { from: 'NAPPING', hibernated: ['i-0123456789abcdef0'] }));
+    expect(await hibernated()).toBe(true);
+    // A check started before that nap, reported after it: the newer change keeps its state and what it says.
+    await s.ingest(checked(at(T1, 35), [workload('a', 'NAPPING')]));
+    expect([(await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.state, await hibernated()]).toEqual(['ASLEEP', true]);
+    await s.ingest(change('WAKING', at(T1, 50), { from: 'ASLEEP', cause: 'normal' }));
+    await s.ingest(checked(at(T1, 45), [workload('a', 'ASLEEP', { hibernated: true })]));
+    expect([(await s.store.getWorkload(ACCOUNT, REGION, 'a'))!.state, await hibernated()]).toEqual(['WAKING', undefined]);
+    await s.ingest(change('AWAKE', at(T1, 60), { from: 'WAKING' }));
+    await s.ingest(change('NAPPING', at(T1, 70), { from: 'AWAKE', cause: 'idle' }));
+    await s.ingest(change('ASLEEP', at(T1, 80), { from: 'NAPPING', stopped: [] }));
+    expect(await hibernated()).toBeUndefined();
+  });
+
   it('keeps what a nap stopped (router 0.27.0), its known kinds only (R9)', async () => {
     const s = setup();
     await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [
