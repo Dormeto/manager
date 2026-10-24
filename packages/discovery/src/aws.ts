@@ -58,8 +58,10 @@ export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; 
 }
 
 // The Lambda port of the router's Kubernetes client (router lambda/src/aws/lambda.mjs invoke): the parsed answer of a
-// synchronous invocation, with the discovery role's credentials; the SDK's errors as they are raised (ResourceNotFoundException
-// for an absent proxy), a function error thrown. A proxy answers within its 15 seconds: the SDK does not send a call twice.
+// synchronous invocation, with the discovery role's credentials; the SDK's errors as they are raised (AccessDeniedException
+// for an absent proxy: the role may invoke tagged proxies only), a function error thrown. A proxy answers within its 15
+// seconds (the request times out after 20): the SDK sends a call at most twice, once more after a throttled or failed
+// invocation (spec section 9); discovery's calls only read (GET), so a call sent again changes nothing.
 export function lambdaPort(credentials: Credentials | (() => Promise<Credentials>), region: string, client?: Sender) {
   const sender: Sender = client ?? new LambdaClient({ region, credentials, maxAttempts: 2, requestHandler: { connectionTimeout: 3_000, requestTimeout: 20_000 } });
   return {
