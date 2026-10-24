@@ -67,7 +67,8 @@ export interface EngineDeps {
   // commandRole: the command role's name without its path; the forwarder ignores the manager's own calls (routers 0.23.0).
   // ipListsCatalog and ipListsBucket: the manager's IP lists (R6b), read by its routers (router 0.24.0).
   // discoveryRole: the discovery role's name (DmtDiscoveryRole by default), given the view policy in the clusters.
-  settings: { env: string; principals: string[]; discoveryRole?: string; routerSettings: { checkSchedule: string; ipLists: string; ipListsCatalog: string; ipListsBucket: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
+  // version: the manager's own (VERSION), named in the organization access to apply; unknown without it.
+  settings: { env: string; version?: string; principals: string[]; discoveryRole?: string; routerSettings: { checkSchedule: string; ipLists: string; ipListsCatalog: string; ipListsBucket: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
   start(op: Operation): Promise<string>; // starts the workflow execution, returns its ARN
   now?: () => number;
   newId?: () => string;
@@ -524,6 +525,7 @@ export function createEngine(deps: EngineDeps) {
           result = await ensureKubernetesProxies((await access(op)).kubeProxies, {
             account: op.target.account!, region: op.target.region!, routerName, kubeProxy: blueprint.kubeProxy, trust: blueprint.roles.find((r) => r.key === 'controller')!.trust,
             boundaryArn: `arn:aws:iam::${op.target.account}:policy/DmtRouterBoundary`, zip, codeSha256, existing, since: stepStart(op), now: now(),
+            ...(deps.settings.version ? { managerVersion: deps.settings.version } : {}),
           });
         } catch (err) {
           const made = proxiesOf(err);

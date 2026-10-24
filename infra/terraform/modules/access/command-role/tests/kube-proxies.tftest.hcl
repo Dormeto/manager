@@ -1,5 +1,4 @@
-# The command role's permissions for the Kubernetes proxies of private EKS endpoints (R10.6, manager 0.20.0), in the
-# account's partition.
+# The command role's permissions for the Kubernetes proxies of private EKS endpoints (R10.6), in the account's partition.
 mock_provider "aws" {
   override_data {
     target = data.aws_caller_identity.current

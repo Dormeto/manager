@@ -286,15 +286,21 @@ describe('the Kubernetes proxies step', () => {
     expect(s.account.state.groups.has('sg-0proxy000')).toBe(false);
   });
 
-  it('a command role without the organization access of manager 0.20.0 refuses the security group: nothing is made, and the error says what to apply', async () => {
+  // Ruling 19: the organization access to apply is the running manager's (its version given), never a number in the code.
+  it('a command role without this manager\'s organization access refuses the security group: nothing is made, and the error names the access of the manager running', async () => {
     const s = setup([privateCluster(), cluster('open')]);
     const refusal = 'You are not authorized to perform this operation. User: arn:aws:sts::222222222222:assumed-role/DmtCommandRole/dmt-dev-operations is not authorized to perform: ec2:CreateSecurityGroup';
     s.account.state.deny.createSecurityGroup = ec2Error('UnauthorizedOperation', refusal);
-    const err = await s.step().catch((e: unknown) => e) as KubeProxyAccessDenied;
+    const err = await s.step({ managerVersion: '0.21.3' }).catch((e: unknown) => e) as KubeProxyAccessDenied;
     expect(err).toBeInstanceOf(KubeProxyAccessDenied);
-    expect(err.message).toBe(`cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`);
+    expect(err.message).toBe(`cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.21.3 (${refusal})`);
     expect(err.clusters).toEqual(['eks-demo']);
     expect([s.account.state.roles.size, s.account.state.logGroups.size, s.account.state.functions.size, s.proxies()]).toEqual([0, 0, 0, []]);
+    // Its version unknown (no VERSION, or a build without its manifest): this manager's release.
+    for (const managerVersion of [undefined, '', 'missing']) {
+      const unknown = await s.step({ managerVersion }).catch((e: unknown) => e) as KubeProxyAccessDenied;
+      expect(unknown.message, String(managerVersion)).toBe(`cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of this manager's release (${refusal})`);
+    }
   });
 
   it('a cluster made again under the same name (new endpoint, new cluster security group): its proxy follows it', async () => {

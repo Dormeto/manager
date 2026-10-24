@@ -28,7 +28,8 @@ const candidate = (over: Partial<Candidate> = {}): Candidate => ({
 });
 
 // clusters: those of the Kubernetes proxies' EC2 and Lambda (their cluster security groups), the same as eks's.
-function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = fakeEks([]), clusters = [] as ReturnType<typeof eksCluster>[] } = {}) {
+// version: the manager's own (VERSION), named in what to apply.
+function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = fakeEks([]), clusters = [] as ReturnType<typeof eksCluster>[], version = undefined as string | undefined } = {}) {
   let now = T0;
   let ids = 0;
   const dynamo = fakeDynamo();
@@ -82,7 +83,7 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = 
       },
     }),
     bundle: async () => ({ blueprint: BUNDLE, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
-    settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
+    settings: { env: 'dev', ...(version ? { version } : {}), principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
     start: async (op) => { started.push(op.id); return `arn:execution:${op.id}`; },
     now: () => now, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
   });
@@ -702,15 +703,16 @@ describe('Kubernetes proxies', () => {
     expect(s.kube.state.ops).toEqual([]);
   });
 
-  it('an install or upgrade where the command role predates manager 0.20.0 goes on without the proxies, saying what to apply; the clusters reached directly are checked', async () => {
-    const s = withClusters([privateCluster(), eksCluster('open')]);
+  // Ruling 19: the message names the manager's running version (VERSION), never a release number written in the code.
+  it('an install or upgrade where the command role predates this manager\'s release goes on without the proxies, naming the organization access of the manager running; the clusters reached directly are checked', async () => {
+    const s = withClusters([privateCluster(), eksCluster('open')], { version: '0.20.0-dev.1' });
     s.kube.state.deny.createSecurityGroup = unauthorized();
     for (const type of ['install-router', 'upgrade-router'] as const) {
       s.invocations.length = 0;
       const op = await s.engine.create(type, { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
       expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
       expect(await stepOf(s, op.id, 'kubernetes proxies'), type).toMatchObject({
-        status: 'skipped', detail: `cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`,
+        status: 'skipped', detail: `cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0-dev.1 (${refusal})`,
       });
       expect(await stepOf(s, op.id, 'check clusters'), type).toMatchObject({ status: 'done', detail: 'cluster open: reachable, every right' });
       expect(checked(s), type).toEqual(['open']);
@@ -719,14 +721,14 @@ describe('Kubernetes proxies', () => {
     expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies ?? []).toEqual([]);
   });
 
-  it('the cluster-access operation where the command role predates manager 0.20.0 goes on without the proxies, saying what to apply; the clusters reached directly are checked', async () => {
+  it('the cluster-access operation where the command role predates this manager\'s release goes on without the proxies, saying what to apply (the manager\'s version unknown); the clusters reached directly are checked', async () => {
     const s = withClusters([privateCluster(), eksCluster('open')]);
     await s.records.putRouter({ name: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-3', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`, version: '0.33.0', build: 'b', installedBy: 'a', installedAt: 'x' });
     s.kube.state.deny.createSecurityGroup = unauthorized();
     const op = await s.engine.create('cluster-access', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
     expect(await stepOf(s, op.id, 'kubernetes proxies')).toMatchObject({
-      status: 'skipped', detail: `cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`,
+      status: 'skipped', detail: `cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of this manager's release (${refusal})`,
     });
     expect(await stepOf(s, op.id, 'check clusters')).toMatchObject({ status: 'done', detail: 'cluster open: reachable, every right' });
     expect(checked(s)).toEqual(['open']);
@@ -750,15 +752,15 @@ describe('Kubernetes proxies', () => {
     expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([{ ...PROXY, securityGroupId: 'sg-0proxy001', clusterSecurityGroupId: 'sg-0cluster02', vpcId: 'vpc-0e5f6a7b' }]);
   });
 
-  it('onboarding a candidate whose cluster needs a proxy fails where the command role predates manager 0.20.0; one reached directly goes on', async () => {
-    const s = withClusters([privateCluster()], { candidates: [k8sCandidate()] });
+  it('onboarding a candidate whose cluster needs a proxy fails where the command role predates this manager\'s release; one reached directly goes on', async () => {
+    const s = withClusters([privateCluster()], { candidates: [k8sCandidate()], version: '0.20.0' });
     s.kube.state.deny.createSecurityGroup = unauthorized();
     const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
     expect((await s.records.getOperation(op.id))!.error).toBe(`kubernetes proxies: cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`);
     expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
 
-    const direct = withClusters([eksCluster('eks-demo'), privateCluster('private')], { candidates: [k8sCandidate()] });
+    const direct = withClusters([eksCluster('eks-demo'), privateCluster('private')], { candidates: [k8sCandidate()], version: '0.20.0' });
     direct.kube.state.deny.createSecurityGroup = unauthorized();
     const onboard = await direct.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
     expect(await direct.drive(onboard.id)).toEqual({ done: true, status: 'succeeded' });

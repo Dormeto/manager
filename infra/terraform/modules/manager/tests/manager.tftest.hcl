@@ -681,6 +681,17 @@ run "discovery_knows_the_routers" {
   }
 }
 
+# Private EKS endpoints (R10.6, ruling 19): where an account's organization access is older, the operations name the
+# organization access of the manager running, so they know its version as the API and the update check do.
+run "operations_know_the_manager_version" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.operations.environment[0].variables["VERSION"] == local.version
+    error_message = "The operations get VERSION, the manager's version, as the API and the update check do."
+  }
+}
+
 run "organization_conditions_by_default" {
   command = plan
 

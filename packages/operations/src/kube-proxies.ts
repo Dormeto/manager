@@ -5,8 +5,8 @@
 // DmtCommandRole, each run finding what exists (named from the cluster by the router's rule) before creating or updating
 // it, so that a run can come again. The proxies made are recorded with the router (InstalledRouter.proxies) and removed
 // from that record: a cluster opened to every address, out of reach, gone, made again in another VPC, or the router
-// uninstalled. Order: the security group first (a command role without the organization access of manager 0.20.0 refuses
-// it before anything is made), whose only egress is TCP 443 to the VPC's IPv4 blocks (a rule naming the cluster security
+// uninstalled. Order: the security group first (a command role without the organization access of this manager's release
+// refuses it before anything is made), whose only egress is TCP 443 to the VPC's IPv4 blocks (a rule naming the cluster security
 // group would keep EKS from deleting that group with the cluster), the rule admitting it on the cluster security group, the
 // role, the log group, the function; a removal deletes the function, waits until Lambda released its network interfaces
 // (up to an hour from the function's deletion, recorded with the proxy), then revokes the rule and deletes the group, the
@@ -52,8 +52,8 @@ export interface ProxyRecord {
 // changed: something was made or removed by this run.
 export interface ProxyOutcome { cluster: string; status: 'done' | 'skipped' | 'pending'; detail: string; seconds?: number; changed?: boolean }
 
-// The command role refuses the proxies' calls (an organization access older than manager 0.20.0); clusters: those whose
-// endpoint needs a proxy.
+// The command role refuses the proxies' calls (an organization access older than this manager's release); clusters: those
+// whose endpoint needs a proxy.
 export class KubeProxyAccessDenied extends Error {
   override name = 'KubeProxyAccessDenied';
   constructor(message: string, readonly clusters: string[]) {
@@ -67,7 +67,9 @@ const PENDING_SECONDS = 10;
 const RELEASE_SECONDS = 30;
 // Lambda can take minutes to release a deleted VPC function's network interfaces: waited for up to an hour.
 const RELEASE_MAX_MS = 60 * 60_000;
-const ORGANIZATION_ACCESS = 'apply the organization access of manager 0.20.0';
+// What to apply where the command role refuses the proxies' calls: the organization access of the manager running (its
+// VERSION), of this manager's release when unknown (ruling 19: no release number in the code, it is chosen at release).
+export const organizationAccess = (version?: string) => `apply the organization access of ${version && /^\d+\.\d+\.\d+/.test(version) ? `manager ${version}` : 'this manager\'s release'}`;
 
 // The records an error leaves behind (what was made before it): the step keeps them, a later run removes them.
 const PROXIES = Symbol('proxies');
@@ -190,7 +192,7 @@ const releasing = (held: string[]) => `waiting for Lambda to release its network
 // since then fails the step; one left by an earlier operation is tried again).
 export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
   account: string; region: string; routerName: string; kubeProxy: KubeProxy; trust: Policy; boundaryArn: string; zip: Uint8Array; codeSha256: string; existing: ProxyRecord[];
-  since?: number; now?: number;
+  since?: number; now?: number; managerVersion?: string;
 }): Promise<{ outcomes: ProxyOutcome[]; proxies: ProxyRecord[] }> {
   const kp = input.kubeProxy;
   const { iam, logs, lambda, ec2 } = ports;
@@ -366,7 +368,7 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     if (expired.length) throw new Error(expired.join('; '));
   } catch (err) {
     const failure = denied(err)
-      ? new KubeProxyAccessDenied(`${current ? `cluster ${current}: the command role may not set up its Kubernetes proxy` : 'the command role may not set up the Kubernetes proxies'}: ${ORGANIZATION_ACCESS} (${(err as Error).message})`, needing)
+      ? new KubeProxyAccessDenied(`${current ? `cluster ${current}: the command role may not set up its Kubernetes proxy` : 'the command role may not set up the Kubernetes proxies'}: ${organizationAccess(input.managerVersion)} (${(err as Error).message})`, needing)
       : err;
     throw withProxies(failure, [...records.values()]);
   }

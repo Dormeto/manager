@@ -114,6 +114,8 @@ resource "aws_lambda_function" "operations" {
       ROUTER_VERSION     = local.router_version
       COMMAND_ROLE       = var.command_role_name
       MANAGER_PRINCIPALS = jsonencode([aws_iam_role.api.arn])
+      # The manager's version: the organization access to apply where an account's is older (private EKS endpoints).
+      VERSION = local.version
       # The connections a discovery run decides start their executions here (by name: the state machine invokes this).
       OPERATIONS_STATE_MACHINE = "arn:aws:states:${local.region}:${local.account_id}:stateMachine:${local.name}-operations"
       # Installed routers send their state there (scale design §3).

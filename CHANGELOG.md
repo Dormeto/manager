@@ -18,13 +18,14 @@ may invoke the proxies.
   endpoint is open to every address keeps direct calls. A cluster with private access off and a public endpoint limited
   to some addresses stays ineligible: turn on private access. The manager creates, updates and removes the proxies of
   the routers it installs, in a `kubernetes proxies` step of the router's install, upgrade, onboarding and cluster
-  access operations (and `remove kubernetes proxies` at uninstall); apply the access again, then upgrade the routers.
-  An account whose access was not applied again goes on without the proxies, with "apply the organization access of
-  manager 0.20.0". A router written in Terraform gets its proxies from the router repository's module
-  `kubernetes-proxy`, one instance per cluster beside `eks-access`. Discovery reads such clusters through the proxy and
-  says why one is not eligible (no router in the account and region, a router without its proxy, or private access
-  off); the router's page and `GET /api/routers/{router}` say for each cluster "directly" or "through its proxy <name>
-  (<version>)". The proxy costs Lambda invocations only (a few cents a month): no NAT gateway, no VPC endpoint.
+  access operations (and `remove kubernetes proxies` at uninstall); apply the access again, then upgrade the routers. In
+  an account whose access was not applied again, installs and upgrades go on without the proxies, saying "apply the
+  organization access of manager <version>" (the version running), while an onboarding that needs a proxy fails with it.
+  A router written in Terraform gets its proxies from the router repository's module `kubernetes-proxy`, one instance
+  per cluster beside `eks-access`. Discovery reads such clusters through the proxy and says why one is not eligible (no
+  router in the account and region, a router without its proxy, or private access off); the router's page and `GET
+  /api/routers/{router}` say for each cluster "directly" or "through its proxy <name> (<version>)". The proxy costs
+  Lambda invocations only (a few cents a month): no NAT gateway, no VPC endpoint.
 - EC2 hibernation. A nap hibernates a standalone EC2 instance that was launched with hibernation, instead of stopping
   it, so it wakes with its memory and processes as they were. It is on by default: an instance launched without
   hibernation, or one AWS refuses to hibernate, is stopped as before, so no nap fails. The most specific setting wins:

@@ -29,6 +29,8 @@ const engine = createEngine({
   bundle: createBundle({ s3: new S3Client({}), bucket: process.env.ARTIFACTS_BUCKET ?? '', version: process.env.ROUTER_VERSION ?? '' }),
   settings: {
     env,
+    // The manager's version (VERSION), in what to apply where an account's organization access is older.
+    ...(process.env.VERSION ? { version: process.env.VERSION } : {}),
     principals: JSON.parse(process.env.MANAGER_PRINCIPALS ?? '[]'),
     routerSettings: {
       checkSchedule: CHECK_SCHEDULE, ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false', managerBus: process.env.MANAGER_BUS ?? '',

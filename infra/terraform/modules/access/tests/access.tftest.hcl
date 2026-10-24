@@ -84,7 +84,7 @@ run "with_the_command_role_no_such_tag" {
   }
 }
 
-# The Kubernetes proxies of private EKS endpoints (R10.6, manager 0.20.0): the statements, in the account's partition.
+# The Kubernetes proxies of private EKS endpoints (R10.6): the statements, in the account's partition.
 run "discovery_invokes_only_the_kubernetes_proxies" {
   command = plan
 
