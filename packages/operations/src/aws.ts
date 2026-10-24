@@ -1,15 +1,19 @@
-// AWS SDK adapters of the operations Lambda: the installer ports and the router invocations in a target account and region,
-// through DmtCommandRole, and the router bundle from the artifacts bucket.
+// AWS SDK adapters of the operations Lambda: the installer ports, the Kubernetes proxies' ports and the router invocations
+// in a target account and region, through DmtCommandRole, and the router bundle from the artifacts bucket.
 import { CloudWatchLogsClient, CreateLogGroupCommand, DeleteLogGroupCommand, DescribeLogGroupsCommand, PutRetentionPolicyCommand } from '@aws-sdk/client-cloudwatch-logs';
 import {
   CreateTableCommand, DeleteTableCommand, DescribeContinuousBackupsCommand, DescribeTableCommand, DescribeTimeToLiveCommand, DynamoDBClient, UpdateContinuousBackupsCommand, UpdateTimeToLiveCommand,
 } from '@aws-sdk/client-dynamodb';
 import {
+  AuthorizeSecurityGroupEgressCommand, AuthorizeSecurityGroupIngressCommand, CreateSecurityGroupCommand, DeleteSecurityGroupCommand, DescribeNetworkInterfacesCommand, DescribeSecurityGroupsCommand,
+  EC2Client, RevokeSecurityGroupEgressCommand, RevokeSecurityGroupIngressCommand,
+} from '@aws-sdk/client-ec2';
+import {
   CreateRoleCommand, DeleteRoleCommand, DeleteRolePolicyCommand, GetRoleCommand, GetRolePolicyCommand, IAMClient, ListRolePoliciesCommand, PutRolePolicyCommand, UpdateAssumeRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import {
   AddPermissionCommand, CreateEventSourceMappingCommand, CreateFunctionCommand, RemovePermissionCommand, DeleteEventSourceMappingCommand, DeleteFunctionCommand, GetFunctionCommand,
-  GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient, ListEventSourceMappingsCommand, PutFunctionEventInvokeConfigCommand, UpdateEventSourceMappingCommand,
+  GetFunctionConfigurationCommand, GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient, ListEventSourceMappingsCommand, PutFunctionEventInvokeConfigCommand, UpdateEventSourceMappingCommand,
   UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
 import {
@@ -27,6 +31,7 @@ import type { Blueprint } from './blueprint.js';
 import type { EksPort } from './cluster-access.js';
 import type { TargetAccess } from './engine.js';
 import { createInstaller, type InstallerPorts } from './installer.js';
+import type { KubeProxyPorts } from './kube-proxies.js';
 
 type Credentials = { accessKeyId: string; secretAccessKey: string; sessionToken: string; expiration?: Date };
 type Send = { send(command: any): Promise<any> };
@@ -79,6 +84,35 @@ export function eksPort(credentials: Credentials, region: string): EksPort {
   };
 }
 
+// The calls of the Kubernetes proxies step (kube-proxies.ts), through the given clients.
+export function kubeProxyClientPorts(clients: Record<'ec2' | 'lambda' | 'iam' | 'logs' | 'eks', Send>): KubeProxyPorts {
+  return {
+    ec2: port(clients.ec2, {
+      describeSecurityGroups: DescribeSecurityGroupsCommand, createSecurityGroup: CreateSecurityGroupCommand, authorizeSecurityGroupEgress: AuthorizeSecurityGroupEgressCommand,
+      revokeSecurityGroupEgress: RevokeSecurityGroupEgressCommand, authorizeSecurityGroupIngress: AuthorizeSecurityGroupIngressCommand, revokeSecurityGroupIngress: RevokeSecurityGroupIngressCommand,
+      deleteSecurityGroup: DeleteSecurityGroupCommand, describeNetworkInterfaces: DescribeNetworkInterfacesCommand,
+    }),
+    lambda: port(clients.lambda, {
+      getFunctionConfiguration: GetFunctionConfigurationCommand, createFunction: CreateFunctionCommand, updateFunctionConfiguration: UpdateFunctionConfigurationCommand,
+      updateFunctionCode: UpdateFunctionCodeCommand, deleteFunction: DeleteFunctionCommand,
+    }),
+    iam: port(clients.iam, {
+      getRole: GetRoleCommand, createRole: CreateRoleCommand, updateAssumeRolePolicy: UpdateAssumeRolePolicyCommand, getRolePolicy: GetRolePolicyCommand,
+      putRolePolicy: PutRolePolicyCommand, listRolePolicies: ListRolePoliciesCommand, deleteRolePolicy: DeleteRolePolicyCommand, deleteRole: DeleteRoleCommand,
+    }),
+    logs: port(clients.logs, { describeLogGroups: DescribeLogGroupsCommand, createLogGroup: CreateLogGroupCommand, putRetentionPolicy: PutRetentionPolicyCommand, deleteLogGroup: DeleteLogGroupCommand }),
+    eks: port(clients.eks, { listClusters: ListClustersCommand, describeCluster: DescribeClusterCommand }),
+  };
+}
+
+// The same with the command role's credentials in a region.
+export function kubeProxyPorts(credentials: Credentials, region: string): KubeProxyPorts {
+  const opts = { region, credentials, retryMode: 'adaptive' as const, maxAttempts: 6 };
+  return kubeProxyClientPorts({
+    ec2: new EC2Client(opts), lambda: new LambdaClient(opts), iam: new IAMClient({ ...opts, region: 'us-east-1' }), logs: new CloudWatchLogsClient(opts), eks: new EKSClient({ region, credentials, maxAttempts: 5 }),
+  });
+}
+
 // DmtCommandRole of the target account; credentials cached until 5 minutes before they expire.
 export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; roleName: string; sessionName: string }) {
   const cache = new Map<string, Credentials>();
@@ -96,6 +130,8 @@ export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; 
     const lambda = new LambdaClient({ region, credentials });
     return {
       eks: eksPort(credentials, region),
+      // Made when a step asks for them (the cluster steps only).
+      get kubeProxies() { return kubeProxyPorts(credentials, region); },
       installer: (options) => createInstaller(installerPorts(credentials, region), options),
       async invoke(functionArn, payload) {
         const out = await lambda.send(new InvokeCommand({ FunctionName: functionArn, Payload: Buffer.from(JSON.stringify(payload)) }));

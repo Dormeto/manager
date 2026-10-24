@@ -11,6 +11,7 @@ import { createRecords } from '../src/records.js';
 import { fakeDynamo } from './dynamo-fake.js';
 import { fakeInstallAccount } from './install-fake.js';
 import { fakeEks } from './eks-fake.js';
+import { fakeKubeAccount } from './kube-proxy-fake.js';
 
 const ACCOUNT = '222222222222';
 const BUS = 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager';
@@ -36,6 +37,7 @@ function setup({ commandMissing = false } = {}) {
     routers: async () => [],
     target: async (_account, region) => ({
       eks: fakeEks([]),
+      kubeProxies: fakeKubeAccount([]).ports,
       installer: (options) => createInstaller({ ...regions[region]!.ports, iam: iam.ports.iam }, options),
       invoke: async () => { throw new Error('no router call'); },
     }),

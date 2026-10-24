@@ -9,6 +9,9 @@ import { createRecords } from '../src/records.js';
 import { fakeDynamo } from './dynamo-fake.js';
 import { fakeInstallAccount } from './install-fake.js';
 import { cluster as eksCluster, fakeEks } from './eks-fake.js';
+import { fakeKubeAccount } from './kube-proxy-fake.js';
+// @ts-expect-error the router's module has no type declarations
+import { PLACEHOLDERS, blueprint as routerBlueprint } from '../../../../router/install/blueprint.mjs';
 
 const T0 = Date.UTC(2026, 9, 5, 12, 0);
 const ACCOUNT = '121014831971';
@@ -24,12 +27,14 @@ const candidate = (over: Partial<Candidate> = {}): Candidate => ({
   status: 'pending-onboarding', statusReason: 'eligible: instance i-1', firstSeenAt: '2026-10-05T10:00:00.000Z', lastSeenAt: '2026-10-05T10:00:00.000Z', history: [], ...over,
 });
 
-function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = fakeEks([]) } = {}) {
+// clusters: those of the Kubernetes proxies' EC2 and Lambda (their cluster security groups), the same as eks's.
+function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = fakeEks([]), clusters = [] as ReturnType<typeof eksCluster>[] } = {}) {
   let now = T0;
   let ids = 0;
   const dynamo = fakeDynamo();
   const records = createRecords({ dynamo, table: 't', now: () => now });
   const account = fakeInstallAccount();
+  const kube = fakeKubeAccount(clusters, { now: () => now });
   const items = new Map(candidates.map((c) => [c.id, c]));
   // Status changes of the candidates, as the discovery counts move with them.
   const moves: [string, string][] = [];
@@ -69,13 +74,14 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = 
     target: async () => ({
       eks,
       installer: (options) => createInstaller(account.ports, options),
+      kubeProxies: { ...kube.ports, eks },
       invoke: async (functionArn, payload) => {
         invocations.push([functionArn, payload]);
         if (router.controllerGone && functionArn.endsWith('-controller')) throw Object.assign(new Error(`Function not found: ${functionArn}`), { name: 'ResourceNotFoundException' });
         return answers[payload.action as string]!(payload);
       },
     }),
-    bundle: async () => ({ blueprint: published as unknown as Blueprint, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
+    bundle: async () => ({ blueprint: BUNDLE, zip: ZIP, codeSha256: createHash('sha256').update(ZIP).digest('base64') }),
     settings: { env: 'dev', principals: [`arn:aws:iam::${ACCOUNT}:role/dmt-dev-manager-api`], routerSettings: { ipListsCatalog: 's3://dmt-dev-manager-ip-lists-121014831971/catalog.json', ipListsBucket: 'dmt-dev-manager-ip-lists-121014831971', checkSchedule: 'rate(5 minutes)', ipLists: '[]', noWakeRules: '[]', metrics: 'false', managerBus: BUS, commandRole: 'DmtCommandRole' } },
     start: async (op) => { started.push(op.id); return `arn:execution:${op.id}`; },
     now: () => now, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
@@ -90,8 +96,12 @@ function setup({ routers = [] as RouterRef[], candidates = [candidate()], eks = 
     }
     throw new Error('the operation never finished');
   }
-  return { engine, records, account, invocations, invocationsPaused, router, answers, items, moves, started, drive, eks, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { engine, records, account, kube, invocations, invocationsPaused, router, answers, items, moves, started, drive, eks, advance: (ms: number) => { now += ms; }, now: () => now };
 }
+
+// The published blueprint with the Kubernetes proxy's definition of routers 0.33.0 (router install/blueprint.mjs), as
+// `npm run package` publishes it.
+const BUNDLE = { ...published, kubeProxy: routerBlueprint({ version: published.router.version, p: { ...PLACEHOLDERS, build: published.router.build } }).kubeProxy } as unknown as Blueprint;
 
 const DEV_ROUTER: RouterRef = {
   name: 'dmt-dev', account: ACCOUNT, region: 'eu-west-3', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmt-dev-controller`,
@@ -111,7 +121,7 @@ describe('operations engine', () => {
     const stored = (await s.records.getOperation(op.id))!;
     expect(stored.steps.map((x) => [x.name, x.status])).toEqual([
       ['find router', 'done'], ['lock router', 'skipped'], ...['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'].map((n) => [`install ${n}`, 'skipped']),
-      ['register router', 'skipped'], ['access entries', 'skipped'], ['check clusters', 'skipped'],
+      ['register router', 'skipped'], ['access entries', 'skipped'], ['kubernetes proxies', 'skipped'], ['check clusters', 'skipped'],
       ['slot', 'done'], ['lock load balancer', 'done'], ['preview', 'done'], ['onboard', 'done'], ['verify', 'done'], ['candidate', 'done'],
     ]);
     expect(s.invocations.map(([fn, p]) => [fn.split(':').at(-1), p.action])).toEqual([['dmt-dev-onboarder', 'preview'], ['dmt-dev-onboarder', 'onboard'], ['dmt-dev-controller', 'status']]);
@@ -359,7 +369,7 @@ describe('operations engine', () => {
   it('a workflow failure releases what the operation holds and records the error', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, workloadId: 'paris' }, 'ops');
-    for (let i = 0; i < 17; i += 1) await s.engine.next(op.id); // up to the load balancer's lock (after the cluster steps)
+    for (let i = 0; i < 18; i += 1) await s.engine.next(op.id); // up to the load balancer's lock (after the cluster steps)
     expect((await s.records.getOperation(op.id))!.holds.locks).toEqual([`LB#${LB}`]);
     await s.engine.fail(op.id, 'States.Timeout: the task timed out');
     const stored = (await s.records.getOperation(op.id))!;
@@ -473,7 +483,7 @@ describe('cluster access', () => {
     const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
     const stored = (await s.records.getOperation(op.id))!;
-    expect(stored.steps.map((x) => x.name).slice(-4)).toEqual(['register router', 'access entries', 'check clusters', 'verify router']);
+    expect(stored.steps.map((x) => x.name).slice(-5)).toEqual(['register router', 'access entries', 'kubernetes proxies', 'check clusters', 'verify router']);
     expect(stored.steps.find((x) => x.name === 'access entries')).toMatchObject({ status: 'done', detail: 'cluster eks-demo: access entries created for 3 router roles (group dormeto:router) and DmtDiscoveryRole (AmazonEKSViewPolicy)' });
     expect(s.eks.writes.filter(([w]) => w === 'createAccessEntry').map(([, i]) => i.principalArn)).toEqual([ROLE('controller'), ROLE('waker'), ROLE('onboarder'), `arn:aws:iam::${ACCOUNT}:role/DmtDiscoveryRole`]);
     expect(stored.steps.find((x) => x.name === 'check clusters')).toMatchObject({ status: 'done', detail: 'cluster eks-demo: reachable, every right' });
@@ -585,6 +595,146 @@ describe('cluster access', () => {
     await s.records.putRouter({ name: 'dmtr-dev', account: ACCOUNT, region: 'eu-west-3', controller: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-controller`, onboarder: `arn:aws:lambda:eu-west-3:${ACCOUNT}:function:dmtr-dev-onboarder`, version: '0.29.0', build: 'b', installedBy: 'a', installedAt: 'x' });
     const op = await s.engine.create('cluster-access', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
-    expect((await s.records.getOperation(op.id))!.steps.map((x) => [x.name, x.status])).toEqual([['find router', 'done'], ['access entries', 'done'], ['check clusters', 'done']]);
+    expect((await s.records.getOperation(op.id))!.steps.map((x) => [x.name, x.status])).toEqual([['find router', 'done'], ['access entries', 'done'], ['kubernetes proxies', 'skipped'], ['check clusters', 'done']]);
+  });
+});
+
+// Private EKS endpoints (vision docs/specs/2026-10-24-private-eks-endpoints-design.md, section 6): the router's proxy in each
+// cluster whose endpoint is private, made in its cluster steps and removed when it uninstalls.
+describe('Kubernetes proxies', () => {
+  const FN = 'dmtr-dev-kube-eks-demo';
+  const proxyOf = (cluster: string, group: string, clusterGroup: string) => ({
+    cluster, function: `dmtr-dev-kube-${cluster}`, role: `dmtr-dev-eu-west-3-kube-${cluster}`, logGroup: `/aws/lambda/dmtr-dev-kube-${cluster}`, securityGroupId: group, clusterSecurityGroupId: clusterGroup, vpcId: 'vpc-0a1b2c3d',
+  });
+  const PROXY = proxyOf('eks-demo', 'sg-0proxy000', 'sg-0cluster00');
+  const privateCluster = (name = 'eks-demo') => eksCluster(name, { public: false, private: true });
+  const withClusters = (clusters: ReturnType<typeof eksCluster>[], over: Parameters<typeof setup>[0] = {}) => setup({ eks: fakeEks(clusters), clusters, ...over });
+  const k8sCandidate = (cluster = 'eks-demo') => candidate({
+    backend: { kind: 'k8s', id: `${cluster}/demo/Deployment/web`, kubernetes: { cluster, namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, switch: 'ingress', ingress: { name: 'web', ruleIndex: 0, groupOrder: -1, service: { name: 'web', port: { number: 80 } } }, hpa: false, keda: false, capacity: 'nodes', autoscaler: 'karpenter' } } as Candidate['backend'],
+  });
+  const refusal = 'You are not authorized to perform this operation. User: arn:aws:sts::121014831971:assumed-role/DmtCommandRole/dmt-dev-operations is not authorized to perform: ec2:CreateSecurityGroup';
+  const unauthorized = () => Object.assign(new Error(refusal), { name: 'UnauthorizedOperation' });
+  const stepOf = async (s: ReturnType<typeof setup>, id: string, name: string) => (await s.records.getOperation(id))!.steps.find((x) => x.name === name)!;
+  const checked = (s: ReturnType<typeof setup>) => s.invocations.filter(([, p]) => p.action === 'clusterCheck').map(([, p]) => p.cluster);
+
+  it('runs between the access entries and the check in the cluster steps, and uninstalling removes the proxies after the access entries', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    const cluster = ['access entries', 'kubernetes proxies', 'check clusters'];
+    const plan = async (type: Parameters<typeof s.engine.create>[0], input: Record<string, unknown>) => (await s.engine.create(type, input, 'admin')).steps.map((x) => x.name);
+    const install = await plan('install-router', { account: ACCOUNT, region: 'eu-west-1' });
+    expect(install.slice(install.indexOf('register router'))).toEqual(['register router', ...cluster, 'verify router']);
+    const upgrade = await plan('upgrade-router', { account: ACCOUNT, region: 'eu-west-2' });
+    expect(upgrade.slice(upgrade.indexOf('register router'))).toEqual(['register router', ...cluster, 'verify router']);
+    const onboard = await plan('onboard', { candidateId: TG });
+    expect(onboard.slice(onboard.indexOf('register router'), onboard.indexOf('slot'))).toEqual(['register router', ...cluster]);
+    expect(await plan('cluster-access', { account: ACCOUNT, region: 'eu-west-3' })).toEqual(['find router', ...cluster]);
+    const uninstall = await plan('uninstall-router', { account: ACCOUNT, region: 'us-east-1' });
+    expect(uninstall.slice(uninstall.indexOf('check empty'), uninstall.indexOf('check empty') + 4)).toEqual(['check empty', 'remove access entries', 'remove kubernetes proxies', 'uninstall event rule']);
+  });
+
+  it('a router installed where a cluster is private gets its proxy, waiting until it is Active, recorded with the router; the check follows', async () => {
+    const s = withClusters([privateCluster(), eksCluster('open')]);
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const step = await stepOf(s, op.id, 'kubernetes proxies');
+    expect(step).toMatchObject({ status: 'done', detail: `cluster eks-demo: proxy ${FN} in place; cluster open: reached directly` });
+    expect(step.attempts).toBeGreaterThan(2);
+    expect(s.kube.state.functions.get(FN)!.config).toMatchObject({ State: 'Active', Handler: 'kube-proxy.handler', Role: `arn:aws:iam::${ACCOUNT}:role/dormeto/router/dmtr-dev-eu-west-3-kube-eks-demo` });
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([PROXY]);
+    // Both clusters have their access entries and are checked.
+    expect(checked(s)).toEqual(['eks-demo', 'open']);
+    // An upgrade keeps the record (register router writes the router again) and changes nothing in place.
+    s.kube.state.ops.length = 0;
+    const upgrade = await s.engine.create('upgrade-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(upgrade.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(s, upgrade.id, 'kubernetes proxies')).toMatchObject({ status: 'skipped' });
+    expect(s.kube.writes()).toEqual([]);
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([PROXY]);
+  });
+
+  it('the cluster-access operation removes the proxy of a cluster deleted since, from the router\'s record', async () => {
+    const clusters = [privateCluster()];
+    const s = withClusters(clusters);
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    clusters.splice(0, 1);
+    s.kube.state.groups.delete('sg-0cluster00');
+    const op = await s.engine.create('cluster-access', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(s, op.id, 'kubernetes proxies')).toMatchObject({ status: 'done', detail: `cluster eks-demo no longer exists: its proxy ${FN} removed` });
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([]);
+    expect([s.kube.state.functions.size, s.kube.state.roles.size, s.kube.state.groups.size]).toEqual([0, 0, 0]);
+  });
+
+  it('a router written in Terraform skips the step: its proxies are the customer\'s', async () => {
+    const s = withClusters([privateCluster()], { routers: [DEV_ROUTER], candidates: [k8sCandidate()] });
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(s, op.id, 'kubernetes proxies')).toMatchObject({ status: 'skipped', detail: 'router dmt-dev is written in Terraform: its proxies are the customer\'s (module kubernetes-proxy)' });
+    expect(s.kube.state.ops).toEqual([]);
+  });
+
+  it('an install or upgrade where the command role predates manager 0.20.0 goes on without the proxies, saying what to apply; the clusters reached directly are checked', async () => {
+    const s = withClusters([privateCluster(), eksCluster('open')]);
+    s.kube.state.deny.createSecurityGroup = unauthorized();
+    for (const type of ['install-router', 'upgrade-router'] as const) {
+      s.invocations.length = 0;
+      const op = await s.engine.create(type, { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      expect(await stepOf(s, op.id, 'kubernetes proxies'), type).toMatchObject({
+        status: 'skipped', detail: `cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`,
+      });
+      expect(await stepOf(s, op.id, 'check clusters'), type).toMatchObject({ status: 'done', detail: 'cluster open: reachable, every right' });
+      expect(checked(s), type).toEqual(['open']);
+    }
+    expect([s.kube.state.roles.size, s.kube.state.functions.size]).toEqual([0, 0]);
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies ?? []).toEqual([]);
+  });
+
+  it('onboarding a candidate whose cluster needs a proxy fails where the command role predates manager 0.20.0; one reached directly goes on', async () => {
+    const s = withClusters([privateCluster()], { candidates: [k8sCandidate()] });
+    s.kube.state.deny.createSecurityGroup = unauthorized();
+    const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toBe(`kubernetes proxies: cluster eks-demo: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0.20.0 (${refusal})`);
+    expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
+
+    const direct = withClusters([eksCluster('eks-demo'), privateCluster('private')], { candidates: [k8sCandidate()] });
+    direct.kube.state.deny.createSecurityGroup = unauthorized();
+    const onboard = await direct.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+    expect(await direct.drive(onboard.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(direct, onboard.id, 'kubernetes proxies')).toMatchObject({ status: 'skipped', detail: expect.stringMatching(/^cluster private: the command role may not set up its Kubernetes proxy: apply the organization access of manager 0\.20\.0/) });
+    expect(checked(direct)).toEqual(['eks-demo']);
+  });
+
+  it('uninstalling a router removes every proxy recorded, after the access entries, waiting while Lambda holds their network interfaces', async () => {
+    const s = withClusters([privateCluster(), privateCluster('eks-other')]);
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([PROXY, proxyOf('eks-other', 'sg-0proxy001', 'sg-0cluster-eks-other')]);
+    s.kube.state.releaseReads = 3;
+    const op = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const step = await stepOf(s, op.id, 'remove kubernetes proxies');
+    expect(step).toMatchObject({ status: 'done', detail: `cluster eks-demo: proxy ${FN} removed; cluster eks-other: proxy dmtr-dev-kube-eks-other removed` });
+    expect(step.attempts).toBeGreaterThan(2);
+    const { state } = s.kube;
+    expect([state.functions.size, state.roles.size, state.logGroups.size, state.interfaces.size, [...state.groups.keys()]]).toEqual([0, 0, 0, 0, ['sg-0cluster00', 'sg-0cluster-eks-other']]);
+    expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toBeNull();
+  });
+
+  // Review focus 4: a removal that failed (interfaces held for more than an hour) keeps the proxies left on the record, and
+  // the next uninstall finishes with them.
+  it('an uninstall that failed while Lambda held a proxy\'s network interfaces keeps what is left, and the next one finishes it', async () => {
+    const s = withClusters([privateCluster(), privateCluster('eks-other')]);
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    s.kube.state.held.add('dmtr-dev-kube-eks-other');
+    const failed = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(failed.id, { maxIterations: 400 })).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(failed.id))!.error).toMatch(/^remove kubernetes proxies: cluster eks-other: Lambda still holds the network interfaces eni-0\w+, eni-0\w+ of the proxy dmtr-dev-kube-eks-other an hour after its function was deleted$/);
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies).toEqual([proxyOf('eks-other', 'sg-0proxy001', 'sg-0cluster-eks-other')]);
+    s.kube.state.held.clear();
+    const again = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(again.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(s, again.id, 'remove kubernetes proxies')).toMatchObject({ status: 'done', detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other removed' });
+    expect([...s.kube.state.groups.keys()]).toEqual(['sg-0cluster00', 'sg-0cluster-eks-other']);
   });
 });

@@ -1,4 +1,6 @@
 // The router blueprint published with each router version (router install/blueprint.mjs), and its placeholders.
+import type { KubeProxy } from './kube-proxies.js';
+
 export interface Policy {
   Version: string;
   Statement: Record<string, unknown>[];
@@ -28,6 +30,8 @@ export interface Blueprint {
   eventSourceMappings?: { key: string; function: string; queue: string; batchSize: number; maximumBatchingWindowSeconds: number; maximumConcurrency: number; reportBatchItemFailures: boolean }[];
   // Routers 0.23.0 and later: the forwarder of event-driven discovery refresh, installed per account (packaging design §5).
   forwarder?: Forwarder;
+  // Routers 0.33.0 and later: the Kubernetes proxy of each cluster whose endpoint is private, applied per cluster (R10.6).
+  kubeProxy?: KubeProxy;
 }
 
 export interface Forwarder {

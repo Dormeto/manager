@@ -117,11 +117,11 @@ type StoredExclusion = Omit<Exclusion, 'expired' | 'lifting'>;
 export type WorkflowType = Exclude<OperationType, 'update-manager'>;
 const INSTALL = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'].map((s) => `install ${s}`);
 const UNINSTALL = ['event rule', 'schedule', 'event source mappings', 'functions', 'queues', 'log groups', 'table', 'roles'].map((s) => `uninstall ${s}`);
-const CLUSTER = ['access entries', 'check clusters'];
+const CLUSTER = ['access entries', 'kubernetes proxies', 'check clusters'];
 const PLANS: Record<WorkflowType, string[]> = {
   'install-router': ['find router', 'lock router', ...INSTALL, 'register router', ...CLUSTER, 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...INSTALL, 'register router', ...CLUSTER, 'verify router'],
-  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', ...UNINSTALL, 'unregister router'],
+  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', 'remove kubernetes proxies', ...UNINSTALL, 'unregister router'],
   onboard: ['find router', 'lock router', ...INSTALL, 'register router', ...CLUSTER, 'slot', 'lock load balancer', 'preview', 'onboard', 'verify', 'candidate'],
   offboard: ['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'candidate'],
   exclude: ['pause workloads'],

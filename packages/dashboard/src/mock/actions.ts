@@ -19,7 +19,7 @@ const ACCOUNT = /^\d{12}$/;
 const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 const ROLES = ['viewer', 'operator', 'admin', 'member'];
-const CLUSTER_STEPS = ['access entries', 'check clusters'];
+const CLUSTER_STEPS = ['access entries', 'kubernetes proxies', 'check clusters'];
 
 // --- Pauses, naps and wakes ----------------------------------------------------------------------------------------------
 

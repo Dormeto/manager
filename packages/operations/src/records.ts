@@ -1,6 +1,7 @@
 // Operations items of the manager table (partition T#default): operation records, the claim of a target by one operation,
 // locks with an expiry, slots per account and region, and the registry of the routers the manager installed.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+import type { ProxyRecord } from './kube-proxies.js';
 
 const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
@@ -46,6 +47,8 @@ export interface InstalledRouter {
   uninstalling?: boolean; // an uninstall runs: no new onboarding
   // The EKS clusters of its account and region, as its last check found them (R10.5: the router's view).
   clusters?: { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; checkedAt: string }[];
+  // The Kubernetes proxies the manager made for its clusters whose endpoint is private (R10.6): what their removals delete.
+  proxies?: ProxyRecord[];
 }
 
 // Any DynamoDB client: only send() is used.

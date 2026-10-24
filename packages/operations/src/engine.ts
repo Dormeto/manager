@@ -6,6 +6,7 @@ import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, Records, WorkflowType } from './records.js';
 import { ClusterAccessDenied, ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
+import { KubeProxyAccessDenied, ensureKubernetesProxies, proxiesOf, removeKubernetesProxies, type KubeProxyPorts, type ProxyRecord } from './kube-proxies.js';
 
 const MINUTE = 60_000;
 // An operation lasts at most its slot waits (SLOT_WAIT_MAX) and the steps after them: the workflow's timeout is 25 hours
@@ -48,6 +49,8 @@ export interface RouterRef {
 export interface TargetAccess {
   // The EKS clusters of the account and region (Kubernetes workloads, R10.5): their access entries.
   eks: EksPort;
+  // The Kubernetes proxies of the clusters whose endpoint is private (R10.6).
+  kubeProxies: KubeProxyPorts;
   installer(options: Parameters<typeof createInstaller>[1]): ReturnType<typeof createInstaller>;
   invoke(functionArn: string, payload: Record<string, unknown>): Promise<any>;
 }
@@ -82,18 +85,20 @@ export class Conflict extends Error {
 class Busy extends Error {}
 class SlotBusy extends Busy {}
 
-type Outcome = StepResult | { status: 'wait'; seconds: number; detail?: string };
+// wait with changed: this run changed something and the step comes back after `seconds` (recorded as done in the end).
+type Outcome = StepResult | { status: 'wait'; seconds: number; detail?: string; changed?: boolean };
 
 const installSteps = INSTALL_STEPS.map((s) => `install ${s}`);
 const uninstallSteps = UNINSTALL_STEPS.map((s) => `uninstall ${s}`);
-// The router's access to the EKS clusters of its account and region, and its check of each (Kubernetes workloads, R10.5).
-const clusterSteps = ['access entries', 'check clusters'];
+// The router's access to the EKS clusters of its account and region, the proxies of those whose endpoint is private
+// (R10.6), and its check of each (Kubernetes workloads, R10.5).
+const clusterSteps = ['access entries', 'kubernetes proxies', 'check clusters'];
 // EKS honours a new access entry within seconds: until then the cluster does not know the router's role.
 const ENTRY_PROPAGATION_MS = 120_000;
 const PLANS: Record<WorkflowType, string[]> = {
   'install-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
   'upgrade-router': ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'verify router'],
-  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', ...uninstallSteps, 'unregister router'],
+  'uninstall-router': ['find router', 'lock router', 'mark uninstalling', 'check empty', 'remove access entries', 'remove kubernetes proxies', ...uninstallSteps, 'unregister router'],
   // The slot before the load balancer's lock: an operation waiting for a slot holds no lock others wait for.
   onboard: ['find router', 'lock router', ...installSteps, 'register router', ...clusterSteps, 'slot', 'lock load balancer', 'preview', 'onboard', 'verify', 'candidate'],
   // Paused first (that wakes an asleep workload): no nap starts or commits while the instrumentation goes.
@@ -121,6 +126,9 @@ const withPauses = (recorded: Pause[] = [], added: Pause[]) => {
 };
 
 const iso = (ms: number) => new Date(ms).toISOString();
+// Lambda releases a deleted proxy's network interfaces in minutes: the removal looks again every 30 seconds.
+const RELEASE_WAIT_S = 30;
+const ORGANIZATION_ACCESS_STEPS = new Set<WorkflowType>(['install-router', 'upgrade-router', 'onboard']);
 const loadBalancerOfRule = (ruleArn: string) => ruleArn.replace(':listener-rule/app/', ':loadbalancer/app/').split('/').slice(0, 4).join('/');
 
 export function createEngine(deps: EngineDeps) {
@@ -331,6 +339,13 @@ export function createEngine(deps: EngineDeps) {
     return blueprint.roles.filter((r) => ['controller', 'waker', 'onboarder'].includes(r.key)).map((r) => `arn:aws:iam::${op.target.account}:role${r.path}${r.name}`);
   }
 
+  // The proxies kept on the router's record (the removals read them), written when they changed.
+  async function saveProxies(op: Operation, proxies: ProxyRecord[]) {
+    const installed = await records.getRouter(op.target.account!, op.target.region!);
+    if (installed && JSON.stringify(installed.proxies ?? []) !== JSON.stringify(proxies)) await records.putRouter({ ...installed, proxies });
+  }
+  const stepStart = (op: Operation) => Date.parse(op.steps[op.cursor]?.startedAt ?? iso(now()));
+
   async function installer(op: Operation) {
     const { blueprint, zip, codeSha256 } = await filledBlueprint(op);
     const target = await access(op);
@@ -460,11 +475,13 @@ export function createEngine(deps: EngineDeps) {
         if (op.type === 'onboard' && !installing(op)) return { status: 'skipped' };
         const { blueprint } = await filledBlueprint(op);
         const fn = (key: string) => `arn:aws:lambda:${op.target.region}:${op.target.account}:function:${blueprint.functions.find((f) => f.key === key)!.name}`;
+        // The proxies made before stay recorded: their removals read them.
+        const proxies = (await records.getRouter(op.target.account!, op.target.region!))?.proxies;
         const router = {
           name: blueprint.router.name, account: op.target.account!, region: op.target.region!, controller: fn('controller'), onboarder: fn('onboarder'),
           version: blueprint.router.version, build: blueprint.router.build, installedBy: op.by, installedAt: iso(now()),
         };
-        await records.putRouter(router);
+        await records.putRouter({ ...router, ...(proxies ? { proxies } : {}) });
         op.context.router = { ...router, source: 'manager' };
         return { status: 'done', detail: `${router.name} ${router.version}` };
       }
@@ -490,6 +507,39 @@ export function createEngine(deps: EngineDeps) {
         if (results.some((r) => r.status === 'done')) op.context.entriesAt = now();
         if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
         return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
+      }
+      case 'kubernetes proxies': {
+        const kubernetes = await kubernetesOf(op);
+        if (op.type === 'onboard' && !kubernetes) return { status: 'skipped' };
+        const router = op.context.router as RouterRef;
+        if (router.source === 'terraform') return { status: 'skipped', detail: `router ${router.name} is written in Terraform: its proxies are the customer's (module kubernetes-proxy)` };
+        const { blueprint, zip, codeSha256 } = await filledBlueprint(op);
+        if (!blueprint.kubeProxy) return { status: 'skipped', detail: `the router bundle ${blueprint.router.version} has no Kubernetes proxy: routers 0.33.0 or later` };
+        const existing = (await records.getRouter(op.target.account!, op.target.region!))?.proxies ?? [];
+        let result;
+        try {
+          result = await ensureKubernetesProxies((await access(op)).kubeProxies, {
+            account: op.target.account!, region: op.target.region!, routerName, kubeProxy: blueprint.kubeProxy, trust: blueprint.roles.find((r) => r.key === 'controller')!.trust,
+            boundaryArn: `arn:aws:iam::${op.target.account}:policy/DmtRouterBoundary`, zip, codeSha256, existing, since: stepStart(op), now: now(),
+          });
+        } catch (err) {
+          const made = proxiesOf(err);
+          if (made) await saveProxies(op, made);
+          // A router's install or upgrade goes on without the proxies (its other clusters are checked); an onboarding fails
+          // when its candidate's cluster needs one.
+          if (err instanceof KubeProxyAccessDenied && ORGANIZATION_ACCESS_STEPS.has(op.type as WorkflowType) && !(kubernetes && err.clusters.includes(kubernetes.cluster))) {
+            op.context.clusters = ((op.context.clusters as string[] | undefined) ?? []).filter((c) => !err.clusters.includes(c));
+            return { status: 'skipped', detail: err.message };
+          }
+          throw err;
+        }
+        await saveProxies(op, result.proxies);
+        const detail = result.outcomes.map((o) => o.detail).join('; ');
+        const pending = result.outcomes.filter((o) => o.status === 'pending');
+        const changed = result.outcomes.some((o) => o.status === 'done' || o.changed);
+        if (pending.length) return { status: 'wait', seconds: Math.min(...pending.map((o) => o.seconds ?? 10)), detail, changed };
+        if (!result.outcomes.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
+        return { status: changed ? 'done' : 'skipped', detail };
       }
       case 'check clusters': {
         const clusters = (op.context.clusters as string[] | undefined) ?? [];
@@ -559,6 +609,22 @@ export function createEngine(deps: EngineDeps) {
         }
         if (!results.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
         return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
+      }
+      case 'remove kubernetes proxies': {
+        const proxies = (await records.getRouter(op.target.account!, op.target.region!))?.proxies ?? [];
+        if (!proxies.length) return { status: 'skipped' };
+        let result;
+        try {
+          result = await removeKubernetesProxies((await access(op)).kubeProxies, proxies, { since: stepStart(op), now: now() });
+        } catch (err) {
+          // What is left stays recorded: the next uninstall goes on with it.
+          const left = proxiesOf(err);
+          if (left) await saveProxies(op, left);
+          throw err;
+        }
+        await saveProxies(op, result.remaining);
+        if (result.status === 'wait') return { status: 'wait', seconds: RELEASE_WAIT_S, detail: result.detail, changed: true };
+        return { status: 'done', detail: result.detail };
       }
       case 'unregister router':
         await records.deleteRouter(op.target.account!, op.target.region!);
@@ -698,7 +764,7 @@ export function createEngine(deps: EngineDeps) {
       }
       const outcome = await run(op, step.name);
       if (outcome.status === 'pending' || outcome.status === 'wait') {
-        if (outcome.status === 'pending' && outcome.changed) step.changed = true;
+        if (outcome.changed) step.changed = true;
         if (outcome.detail) step.detail = outcome.detail;
         if (outcome.status === 'pending' && now() - Date.parse(step.startedAt) > PENDING_MAX) {
           throw new Error(`still pending after ${PENDING_MAX / MINUTE} minutes${outcome.detail ? ` (${outcome.detail})` : ''}`);
