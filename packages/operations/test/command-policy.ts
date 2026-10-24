@@ -3,8 +3,11 @@
 import { readFileSync } from 'node:fs';
 
 export const ACCOUNT = '222222222222';
-const policy = JSON.parse(readFileSync(new URL('../../../infra/terraform/modules/access/command-role/command-policy.json', import.meta.url), 'utf8')
-  .replaceAll('${account}', ACCOUNT).replaceAll('${partition}', 'aws')) as { Statement: { Effect: string; Action: string | string[]; Resource: string | string[]; Condition?: Record<string, Record<string, string | string[]>> }[] };
+type Policy = { Statement: { Effect: string; Action: string | string[]; Resource: string | string[]; Condition?: Record<string, Record<string, string | string[]>> }[] };
+// A policy document of the access module, its placeholders filled, evaluated by `allows`-like functions.
+export const load = (file: string): Policy => JSON.parse(readFileSync(new URL(`../../../infra/terraform/modules/access/${file}`, import.meta.url), 'utf8')
+  .replaceAll('${account}', ACCOUNT).replaceAll('${partition}', 'aws'));
+const policy = load('command-role/command-policy.json');
 
 const like = (pattern: string, value: string) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`).test(value);
 const list = <T>(v: T | T[]) => ([] as T[]).concat(v);
@@ -12,7 +15,8 @@ const list = <T>(v: T | T[]) => ([] as T[]).concat(v);
 // Allow statements only (the policy has no Deny); StringEquals, ArnLike, ForAllValues:StringEquals and Null conditions, as
 // the policy uses (ForAllValues holds for a key the request does not carry, as IAM evaluates it; Null "true" holds only
 // for a key it does not carry).
-export function allows(action: string, resource: string, context: Record<string, string | string[]> = {}) {
+export const allows = (action: string, resource: string, context: Record<string, string | string[]> = {}) => evaluate(policy, action, resource, context);
+export function evaluate(policy: Policy, action: string, resource: string, context: Record<string, string | string[]> = {}) {
   return policy.Statement.some((s) => s.Effect === 'Allow' && list(s.Action).some((a) => like(a, action)) && list(s.Resource).some((r) => like(r, resource))
     && Object.entries(s.Condition ?? {}).every(([test, keys]) => Object.entries(keys).every(([key, values]) => {
       const value = context[key];

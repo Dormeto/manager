@@ -41,7 +41,7 @@
       "Sid": "InvokeKubernetesProxies",
       "Effect": "Allow",
       "Action": "lambda:InvokeFunction",
-      "Resource": "arn:${partition}:lambda:*:${account}:function:*-kube-*",
+      "Resource": "arn:*:lambda:*:*:function:*-kube-*",
       "Condition": {
         "StringEquals": {
           "aws:ResourceTag/dormeto:role": "kubernetes-proxy"

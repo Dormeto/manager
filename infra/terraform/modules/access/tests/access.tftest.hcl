@@ -91,9 +91,9 @@ run "discovery_invokes_only_the_kubernetes_proxies" {
   assert {
     condition = [for s in jsondecode(aws_iam_role_policy.discovery.policy).Statement : s if s.Sid == "InvokeKubernetesProxies"] == [{
       Sid = "InvokeKubernetesProxies", Effect = "Allow", Action = "lambda:InvokeFunction"
-      Resource  = "arn:aws-us-gov:lambda:*:222222222222:function:*-kube-*"
+      Resource  = "arn:*:lambda:*:*:function:*-kube-*"
       Condition = { StringEquals = { "aws:ResourceTag/dormeto:role" = "kubernetes-proxy" } }
     }]
-    error_message = "Discovery invokes functions named *-kube-* and tagged dormeto:role = kubernetes-proxy only."
+    error_message = "The same statement for every partition and account: discovery invokes functions named *-kube-* and tagged dormeto:role = kubernetes-proxy only."
   }
 }
