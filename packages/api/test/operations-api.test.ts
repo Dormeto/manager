@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RouterSummary } from '@dormeto/fleet';
 import type { InstalledRouter, Operation } from '@dormeto/operations';
 import { createApi, RouterError, type ApiEvent, type AuditEntry, type OperationsApi } from '../src/api.js';
 import { candidate, memoryStore } from './memory-store.js';
@@ -7,7 +8,7 @@ const NOW = Date.UTC(2026, 9, 5, 12, 0);
 const MANAGER = '121014831971';
 const TG = `arn:aws:elasticloadbalancing:eu-west-3:${MANAGER}:targetgroup/paris-app/73e2d6bc24d8a067`;
 
-function setup({ installed = [] as InstalledRouter[], conflict = null as string | null, listed = null as Operation[] | null, visible = undefined as (() => boolean) | undefined } = {}) {
+function setup({ installed = [] as InstalledRouter[], conflict = null as string | null, listed = null as Operation[] | null, visible = undefined as (() => boolean) | undefined, answers = '0.18.0', summaries = undefined as RouterSummary[] | undefined } = {}) {
   const audit: AuditEntry[] = [];
   const created: [string, Record<string, unknown>, string][] = [];
   const calls: [string, Record<string, unknown>][] = [];
@@ -30,7 +31,7 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
     managerAccount: MANAGER,
     invoke: async (router, payload) => {
       calls.push([router.name, payload]);
-      if (payload.action === 'router') return { router: { version: '0.18.0', build: 'b' }, pauses: [], workloads: { total: 0, byState: {}, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } };
+      if (payload.action === 'router') return { router: { version: answers, build: 'b' }, pauses: [], workloads: { total: 0, byState: {}, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } };
       throw new RouterError('unexpected');
     },
     audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
@@ -38,6 +39,7 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
     discovery: { store: memoryStore([candidate(TG, { targetGroupArn: TG, region: 'eu-west-3' })]), run: async () => {} },
     operations,
     ...(visible ? { visible } : {}),
+    ...(summaries ? { fleet: { listRouters: async () => summaries, listWorkloads: async () => [], getWorkload: async () => null } } : {}),
   });
   return { api, audit, created, calls, operation };
 }
@@ -111,6 +113,26 @@ describe('operations', () => {
     expect(res.statusCode).toBe(400);
     expect(json(res).message).toBe('settings: hibernate must be true or false');
     expect(created).toHaveLength(1);
+  });
+
+  it('refuses Hibernate up front on a router before 0.32.0 (409), whatever it reports or answers; lets it through elsewhere', async () => {
+    const hibernate = { type: 'onboard', candidateId: TG, settings: { hibernate: true } };
+    const old = setup({ installed: [installedParis] });
+    const res = await old.api(event('POST', '/api/operations', 'dmt-operator', hibernate));
+    expect([res.statusCode, json(res)]).toEqual([409, { error: 'conflict', message: 'router dmt-dev-eu-west-3 is older than 0.32.0: upgrade it to onboard with Hibernate' }]);
+    expect(old.created).toEqual([]);
+    // Without hibernate, the router is not asked.
+    expect((await old.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, settings: { idleMinutes: 30 } }))).statusCode).toBe(202);
+    expect(old.calls).toHaveLength(1);
+    // A router that reports: the version of its last report, without a call.
+    const summary = { account: MANAGER, region: 'eu-west-3', name: 'dmt-dev', version: '0.31.0', build: 'b', checkSchedule: 'rate(5 minutes)', checkedAt: new Date(NOW - 60_000).toISOString(), durationMs: 1, health: null, pauses: [], counts: {}, check: { checkedAt: new Date(NOW - 60_000).toISOString(), total: 1, received: [0] } };
+    const reporting = setup({ installed: [installedParis], answers: '0.32.0', summaries: [summary] });
+    expect((await reporting.api(event('POST', '/api/operations', 'dmt-operator', hibernate))).statusCode).toBe(409);
+    expect(reporting.calls).toEqual([]);
+    for (const ok of [setup({ installed: [installedParis], answers: '0.32.0' }), setup({ installed: [installedParis], answers: '0.32.0-dev.1' }), setup()]) {
+      expect((await ok.api(event('POST', '/api/operations', 'dmt-operator', hibernate))).statusCode).toBe(202);
+      expect(ok.created.at(-1)![1]).toMatchObject({ settings: { hibernate: true } });
+    }
   });
 
   it('a second operation on the same target answers 409 with the running one', async () => {

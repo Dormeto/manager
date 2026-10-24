@@ -12,7 +12,7 @@ import { createGroupGrants } from './group-grants.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
-import { compareVersions, VERSION, type UpdateService } from './update.js';
+import { atLeastCore, compareVersions, VERSION, type UpdateService } from './update.js';
 
 export type Router = FleetRouter;
 
@@ -2077,6 +2077,13 @@ export function createApi({
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
       settingsOfFailures(body.settings as Record<string, unknown> | undefined);
+      // A router before 0.32.0 would refuse the setting at the preview ("unknown setting hibernate"): refused here, with the
+      // upgrade it needs. Without a router there, the onboarding installs the manager's own.
+      if ((body.settings as Record<string, unknown> | undefined)?.hibernate !== undefined) {
+        const router = routers.find((r) => accountOfRouter(r) === c.account && r.region === c.region);
+        const running = router ? await versionOfRouter(router) : null;
+        if (router && running && !atLeastCore(running, '0.32.0')) throw new HttpError(409, 'conflict', `router ${router.name} is older than 0.32.0: upgrade it to onboard with Hibernate`);
+      }
       if (body.tags !== undefined) {
         const problem = tagsProblem(body.tags);
         if (problem) throw new HttpError(400, 'bad_request', problem);
@@ -2117,6 +2124,15 @@ export function createApi({
         throw err;
       }
     });
+  }
+
+  // The version a router runs: its last report (or the manager's install or upgrade since), else its own answer; null when
+  // neither tells.
+  async function versionOfRouter(router: Router): Promise<string | null> {
+    const summary = fleet ? (await fleet.listRouters().catch(() => [] as RouterSummary[])).find((x) => x.account === accountOfRouter(router) && x.region === router.region) : undefined;
+    if (summary && reporting(summary, now())) return (router.installed && Date.parse(router.installed.at) > Date.parse(summary.checkedAt) ? router.installed : summary).version;
+    const answer = await invoke(router, { action: 'router' }).catch(() => null) as { router?: { version?: unknown } } | null;
+    return typeof answer?.router?.version === 'string' ? answer.router.version : null;
   }
 
   // Refused before an operation starts where the last discovery run found the account's command role missing (packaging
