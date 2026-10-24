@@ -34,6 +34,14 @@ run "the_command_role_manages_the_kubernetes_proxies_network" {
     error_message = "Egress and deletion only on security groups tagged dormeto:role = kubernetes-proxy."
   }
   assert {
+    condition     = [for s in jsondecode(aws_iam_role_policy.command.policy).Statement : s.Resource if s.Sid == "KubeProxyCreateSecurityGroup"] == ["arn:aws-us-gov:ec2:*:*:vpc/*"]
+    error_message = "The proxy's group is created in the account's VPCs and in those shared with it (RAM), whose ARN carries their owner's account."
+  }
+  assert {
+    condition     = [for s in jsondecode(aws_iam_role_policy.command.policy).Statement : s.Resource if s.Sid == "KubeProxyCreateTaggedSecurityGroup"] == ["arn:aws-us-gov:ec2:*:222222222222:security-group/*"]
+    error_message = "The proxy's group itself is the account's own, in its partition."
+  }
+  assert {
     condition = [for s in jsondecode(aws_iam_role_policy.command.policy).Statement : s.Resource if s.Sid == "KubeProxyClusterGroups"] == [["arn:aws-us-gov:ec2:*:222222222222:security-group/*"]]
     error_message = "Ingress on security groups, in the account and partition, tagged aws:eks:cluster-name."
   }

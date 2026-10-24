@@ -226,7 +226,7 @@
       "Sid": "KubeProxyCreateSecurityGroup",
       "Effect": "Allow",
       "Action": "ec2:CreateSecurityGroup",
-      "Resource": "arn:${partition}:ec2:*:${account}:vpc/*"
+      "Resource": "arn:${partition}:ec2:*:*:vpc/*"
     },
     {
       "Sid": "KubeProxyCreateTaggedSecurityGroup",

@@ -1,6 +1,6 @@
 // The command role's policy against the calls the operations make in a member account (packaging design §5).
 import { describe, expect, it } from 'vitest';
-import { ACCOUNT, FORWARDER_CALLS, KUBE_PROXY_CALLS, KUBE_REGION, allows, clusterGroup, kubeFunction, proxyGroup, role, vpc } from './command-policy.js';
+import { ACCOUNT, FORWARDER_CALLS, KUBE_PROXY_CALLS, KUBE_REGION, allows, clusterGroup, kubeFunction, proxyGroup, role, sharedVpc, vpc } from './command-policy.js';
 import { ensureClusterAccess, removeClusterAccess, type EksPort } from '../src/cluster-access.js';
 
 describe('the command role\'s policy', () => {
@@ -37,6 +37,21 @@ describe('the command role\'s Kubernetes proxies (R10.6)', () => {
     expect(allows('ec2:CreateTags', proxyGroup, { 'ec2:CreateAction': 'RunInstances' })).toBe(false);
     expect(allows('ec2:CreateTags', `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:instance/i-0abc`, { 'ec2:CreateAction': 'CreateSecurityGroup' })).toBe(false);
     expect(allows('ec2:DeleteVpc', vpc)).toBe(false);
+  });
+
+  // Ruling 25: CreateSecurityGroup is authorized against the VPC's ARN, which carries the VPC owner's account; a VPC shared
+  // through RAM from a network account is another owner's (an account can only use its own VPCs and those shared with it).
+  it('creates the proxy\'s group in a VPC another account shares with it, the group itself in its own account only', () => {
+    expect(allows('ec2:CreateSecurityGroup', sharedVpc)).toBe(true);
+    const otherGroup = `arn:aws:ec2:${KUBE_REGION}:333333333333:security-group/sg-0other0`;
+    expect(allows('ec2:CreateSecurityGroup', otherGroup, { 'aws:RequestTag/dormeto:role': 'kubernetes-proxy' })).toBe(false);
+    expect(allows('ec2:CreateTags', otherGroup, { 'ec2:CreateAction': 'CreateSecurityGroup' })).toBe(false);
+    for (const action of ['ec2:RevokeSecurityGroupEgress', 'ec2:AuthorizeSecurityGroupEgress', 'ec2:DeleteSecurityGroup']) {
+      expect(allows(action, otherGroup, { 'aws:ResourceTag/dormeto:role': 'kubernetes-proxy' }), action).toBe(false);
+    }
+    for (const action of ['ec2:AuthorizeSecurityGroupIngress', 'ec2:RevokeSecurityGroupIngress']) {
+      expect(allows(action, otherGroup, { 'aws:ResourceTag/aws:eks:cluster-name': 'eks-demo' }), action).toBe(false);
+    }
   });
 
   it('manages only the routers\' functions', () => {

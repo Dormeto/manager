@@ -58,6 +58,8 @@ export const kubeRole = `arn:aws:iam::${ACCOUNT}:role/dormeto/router/dmtr-dev-${
 export const kubeFunction = `arn:aws:lambda:${KUBE_REGION}:${ACCOUNT}:function:dmtr-dev-kube-eks-demo`;
 export const kubeLogGroup = `arn:aws:logs:${KUBE_REGION}:${ACCOUNT}:log-group:/aws/lambda/dmtr-dev-kube-eks-demo`;
 export const vpc = `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:vpc/vpc-0a1b2c3d`;
+// A VPC a network account shares with the account (RAM): its ARN carries its owner's account (ruling 25).
+export const sharedVpc = `arn:aws:ec2:${KUBE_REGION}:333333333333:vpc/vpc-0shared0`;
 export const proxyGroup = `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:security-group/sg-0proxy000`;
 export const clusterGroup = `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:security-group/sg-0cluster00`;
 const proxyTag = { 'aws:ResourceTag/dormeto:role': 'kubernetes-proxy' };
@@ -68,6 +70,8 @@ export const KUBE_PROXY_CALLS: [string, string, Record<string, string>?][] = [
   ['ec2:DescribeSecurityGroups', '*'], ['ec2:DescribeSubnets', '*'], ['ec2:DescribeVpcs', '*'], ['ec2:DescribeNetworkInterfaces', '*'],
   // Its security group: created tagged, its default egress revoked, then 443 to the cluster's group.
   ['ec2:CreateSecurityGroup', vpc], ['ec2:CreateSecurityGroup', proxyGroup, { 'aws:RequestTag/dormeto:role': 'kubernetes-proxy' }],
+  // In a VPC shared with the account, the group is still the account's own.
+  ['ec2:CreateSecurityGroup', sharedVpc],
   ['ec2:CreateTags', proxyGroup, { 'ec2:CreateAction': 'CreateSecurityGroup' }],
   ['ec2:RevokeSecurityGroupEgress', proxyGroup, proxyTag], ['ec2:AuthorizeSecurityGroupEgress', proxyGroup, proxyTag],
   // The rule on the cluster's own group (the one EKS tags), from the proxy's.
