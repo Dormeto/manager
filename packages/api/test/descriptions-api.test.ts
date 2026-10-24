@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { createFleetStore } from '@dormeto/fleet';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
-import { createApi, type ApiEvent, type AuditEntry } from '../src/api.js';
+import { createApi, RouterError, type ApiEvent, type AuditEntry } from '../src/api.js';
 
 const NOW = Date.UTC(2026, 9, 24, 12, 0);
 const ACCOUNT = '121014831971';
@@ -96,11 +96,37 @@ describe('a workload description', () => {
     expect([res.statusCode, json(res), s.audit.length - before]).toEqual([200, { description: null }, 2]);
   });
 
-  it('a workload the fleet does not know answers 404 and stores nothing', async () => {
+  it('a workload of a reporting router that the fleet does not know yet answers 404 and stores nothing', async () => {
     const s = await setup();
     const res = await s.api(operator('PUT', '/api/workloads/dmt-dev/pending/description', { text: 'x' }));
-    expect([res.statusCode, json(res).message]).toEqual([404, 'unknown workload: pending']);
+    expect([res.statusCode, json(res).message]).toEqual([404, 'workload pending is not known to the manager yet (its router reports it within 5 minutes)']);
     expect((await s.store.listDescriptions('workload')).size).toBe(0);
+  });
+
+  it('a router that does not report: its status decides (a workload it lists is described, an unknown one is 404, another error fails)', async () => {
+    const store = createFleetStore({ dynamo: fakeDynamo(), table: 't', now: () => NOW });
+    const api = createApi({
+      routers: ROUTERS, now: () => NOW, newId: () => 'id-1', version: '0.19.0', managerAccount: ACCOUNT,
+      audit: { write: async () => {}, list: async () => [] },
+      invoke: async (_r, payload) => {
+        if (payload.action !== 'status') return null;
+        if (payload.workloadId === 'live') return { workloadId: 'live', state: 'AWAKE' };
+        if (payload.workloadId === 'boom') throw new RouterError('throttled');
+        throw new RouterError(`workload not configured: ${payload.workloadId}`);
+      },
+      // No summary of the router (manager_event_bus_arn null): nothing of its workloads in the fleet either.
+      fleet: {
+        listRouters: async () => [], listWorkloads: async () => [], getWorkload: async () => null,
+        getDescription: (k) => store.getDescription(k), putDescription: (k, d) => store.putDescription(k, d),
+        deleteDescription: (k) => store.deleteDescription(k), listDescriptions: (kind) => store.listDescriptions(kind),
+      },
+    });
+    const live = await api(operator('PUT', '/api/workloads/dmt-dev/live/description', { text: 'Live' }));
+    expect([live.statusCode, json(live).description?.text]).toEqual([200, 'Live']);
+    const unknown = await api(operator('PUT', '/api/workloads/dmt-dev/gone/description', { text: 'x' }));
+    expect([unknown.statusCode, json(unknown).message]).toEqual([404, 'workload not configured: gone']);
+    expect((await api(operator('PUT', '/api/workloads/dmt-dev/boom/description', { text: 'x' }))).statusCode).toBe(502);
+    expect([...(await store.listDescriptions('workload')).keys()]).toEqual([`${ACCOUNT}#eu-west-1#live`]);
   });
 
   it('the detail carries it (null without), and the list rows a one-line summary', async () => {

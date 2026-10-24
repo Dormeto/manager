@@ -865,8 +865,8 @@ export function createApi({
     };
   };
   // PUT sets (an empty text clears) and DELETE clears a description: audited `description`, "set (N characters)" or "cleared".
-  // The caller has been checked for the role; `known` says whether what it describes exists.
-  function describeRoute(identity: Identity, event: ApiEvent, key: DescriptionKey, target: string, known: () => Promise<boolean>, missing: string) {
+  // The caller has been checked for the role; `known` throws when what it describes does not exist.
+  function describeRoute(identity: Identity, event: ApiEvent, key: DescriptionKey, target: string, known: () => Promise<void>) {
     let text = '';
     if (event.requestContext.http.method === 'PUT') {
       const raw = bodyOf(event).text;
@@ -881,7 +881,7 @@ export function createApi({
         await fleet.deleteDescription(key);
         return { result: 'cleared', response: reply(200, { description: null }) };
       }
-      if (!(await known())) throw new HttpError(404, 'not_found', missing);
+      await known();
       const description = { text, by: identity.email, at: new Date(now()).toISOString() };
       await fleet.putDescription(key, description);
       return { result: `set (${[...text].length} characters)`, response: reply(200, { description }) };
@@ -1191,7 +1191,7 @@ export function createApi({
       if ((method === 'PUT' || method === 'DELETE') && b === 'description' && !action) {
         await needAudited(identity, 'admin', 'description', router.name);
         // The router is one of the manager's (routerOf above).
-        return describeRoute(identity, event, { kind: 'router', account: accountOfRouter(router), region: router.region }, router.name, async () => true, `unknown router: ${a}`);
+        return describeRoute(identity, event, { kind: 'router', account: accountOfRouter(router), region: router.region }, router.name, async () => {});
       }
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
       if (method === 'PUT' && b === 'settings' && !action) {
@@ -1441,10 +1441,20 @@ export function createApi({
       }
       if ((method === 'PUT' || method === 'DELETE') && action === 'description' && !parts[4]) {
         await needAudited(identity, 'operator', 'description', `${router.name}/${id}`);
-        const account = accountOfRouter(router);
-        // Known to the manager's fleet store (a workload its first check has not yet reached is not).
-        return describeRoute(identity, event, { kind: 'workload', account, region: router.region, id }, `${router.name}/${id}`,
-          async () => (await fleet?.getWorkload(account, router.region, id)) != null, `unknown workload: ${id}`);
+        // Known as its tags are read: a router that reports, from its summary in the fleet (a workload its first check
+        // has not reached yet is not); one that does not, from its status.
+        return describeRoute(identity, event, { kind: 'workload', account: accountOfRouter(router), region: router.region, id }, `${router.name}/${id}`, async () => {
+          if (await reportsNow()) {
+            if ((await summaryNow()) === null) throw new HttpError(404, 'not_found', `workload ${id} is not known to the manager yet (its router reports it within 5 minutes)`);
+            return;
+          }
+          try {
+            await statusNow();
+          } catch (err) {
+            if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
+            throw err;
+          }
+        });
       }
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
