@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { fill, type Policy } from '../src/blueprint.js';
 import { RetryLater } from '../src/installer.js';
-import { KubeProxyAccessDenied, ensureKubernetesProxies, proxiesOf, removeKubernetesProxies, type KubeProxy, type ProxyOutcome, type ProxyRecord } from '../src/kube-proxies.js';
+import { KubeProxyAccessDenied, ensureKubernetesProxies, proxiesOf, removeKubernetesProxies, unrecordedKubernetesProxies, type KubeProxy, type ProxyOutcome, type ProxyRecord } from '../src/kube-proxies.js';
 import { ACCOUNT, KUBE_PROXY_CALLS, KUBE_REGION, allows } from './command-policy.js';
 import { cluster, pem } from './eks-fake.js';
 import { fakeKubeAccount } from './kube-proxy-fake.js';
@@ -472,6 +472,26 @@ describe('the Kubernetes proxies step', () => {
 });
 
 describe('removing the Kubernetes proxies', () => {
+  // Minor 9: a proxy whose record was lost is found for its removal by the name rule in the region's clusters, and its tag.
+  it('finds the proxies of the region\'s clusters that exist without a record (by the name rule, tagged dormeto:role = kubernetes-proxy)', async () => {
+    const s = setup([privateCluster(), privateCluster('eks-other'), cluster('open')]);
+    await s.step();
+    const [demo, other] = s.proxies();
+    s.account.state.calls.length = 0;
+    expect(await unrecordedKubernetesProxies(s.account.ports, { kubeProxy: KUBE_PROXY, recorded: [demo!] })).toEqual([other]);
+    expect(await unrecordedKubernetesProxies(s.account.ports, { kubeProxy: KUBE_PROXY, recorded: [demo!, other!] })).toEqual([]);
+    for (const call of s.account.state.calls) expect(allows(...call), JSON.stringify(call)).toBe(true);
+    // A function of that name without the proxy's tag is not one; nor is a group of that name without it.
+    s.account.state.groups.get(other!.securityGroupId!)!.Tags = {};
+    expect(await unrecordedKubernetesProxies(s.account.ports, { kubeProxy: KUBE_PROXY, recorded: [demo!] })).toEqual([{ ...other!, securityGroupId: null }]);
+    s.account.state.functions.get(other!.function)!.tags = { 'dormeto:role': 'something-else' };
+    expect(await unrecordedKubernetesProxies(s.account.ports, { kubeProxy: KUBE_PROXY, recorded: [demo!] })).toEqual([]);
+    // A command role that may not list the clusters (an access older than the proxies) made none: none found.
+    const denied = setup();
+    denied.account.ports.eks.listClusters = async () => { throw ec2Error('AccessDeniedException', 'User is not authorized to perform: eks:ListClusters'); };
+    expect(await unrecordedKubernetesProxies(denied.account.ports, { kubeProxy: KUBE_PROXY, recorded: [] })).toEqual([]);
+  });
+
   it('deletes the function, waits until Lambda released its network interfaces, then revokes the rule and deletes the group, the role and the log group', async () => {
     const s = setup();
     await s.step();

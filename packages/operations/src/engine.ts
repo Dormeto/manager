@@ -6,7 +6,7 @@ import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, Records, WorkflowType } from './records.js';
 import { ClusterAccessDenied, ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
-import { KubeProxyAccessDenied, ensureKubernetesProxies, proxiesOf, removeKubernetesProxies, type KubeProxyPorts, type ProxyRecord } from './kube-proxies.js';
+import { KubeProxyAccessDenied, ensureKubernetesProxies, proxiesOf, removeKubernetesProxies, unrecordedKubernetesProxies, type KubeProxyPorts, type ProxyRecord } from './kube-proxies.js';
 
 const MINUTE = 60_000;
 // An operation lasts at most its slot waits (SLOT_WAIT_MAX) and the steps after them: the workflow's timeout is 25 hours
@@ -620,11 +620,15 @@ export function createEngine(deps: EngineDeps) {
         return { status: results.some((r) => r.status === 'done') ? 'done' : 'skipped', detail: results.map((r) => r.detail).join('; ') };
       }
       case 'remove kubernetes proxies': {
-        const proxies = (await records.getRouter(op.target.account!, op.target.region!))?.proxies ?? [];
+        // Those recorded, and those of the region's clusters without a record (one lost), by the name rule and their tag.
+        const recorded = (await records.getRouter(op.target.account!, op.target.region!))?.proxies ?? [];
+        const { kubeProxies } = await access(op);
+        const { blueprint } = await filledBlueprint(op);
+        const proxies = [...recorded, ...(blueprint.kubeProxy ? await unrecordedKubernetesProxies(kubeProxies, { kubeProxy: blueprint.kubeProxy, recorded }) : [])];
         if (!proxies.length) return { status: 'skipped' };
         let result;
         try {
-          result = await removeKubernetesProxies((await access(op)).kubeProxies, proxies, { now: now() });
+          result = await removeKubernetesProxies(kubeProxies, proxies, { now: now() });
         } catch (err) {
           // What is left stays recorded: the next uninstall goes on with it.
           const left = proxiesOf(err);

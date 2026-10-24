@@ -857,6 +857,25 @@ describe('Kubernetes proxies', () => {
     expect(await s.records.getRouter(ACCOUNT, 'eu-west-3')).toBeNull();
   });
 
+  // Minor 9: a proxy whose record was lost is removed too, found by the name rule in the region's clusters and its tag; a
+  // function of such a name without the tag is left alone.
+  it('uninstalling a router removes the proxies of the region\'s clusters it has no record of, tagged as its proxies only', async () => {
+    const s = withClusters([privateCluster(), privateCluster('eks-other'), eksCluster('eks-third')]);
+    await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
+    const installed = (await s.records.getRouter(ACCOUNT, 'eu-west-3'))!;
+    await s.records.putRouter({ ...installed, proxies: [PROXY] });
+    const lookalike = 'dmtr-dev-kube-eks-third';
+    s.kube.state.functions.set(lookalike, {
+      config: { FunctionName: lookalike, FunctionArn: `arn:aws:lambda:eu-west-1:222222222222:function:${lookalike}`, State: 'Active', LastUpdateStatus: 'Successful', VpcConfig: { SubnetIds: ['subnet-0aaa'], SecurityGroupIds: ['sg-0cluster-eks-third'] } },
+      tags: { owner: 'platform-team' }, reads: 0,
+    });
+    const op = await s.engine.create('uninstall-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(await stepOf(s, op.id, 'remove kubernetes proxies')).toMatchObject({ status: 'done', detail: `cluster eks-demo: proxy ${FN} removed; cluster eks-other: proxy dmtr-dev-kube-eks-other removed` });
+    const { state } = s.kube;
+    expect([[...state.functions.keys()], state.roles.size, state.logGroups.size, [...state.groups.keys()]]).toEqual([[lookalike], 0, 0, ['sg-0cluster00', 'sg-0cluster-eks-other', 'sg-0cluster-eks-third']]);
+  });
+
   // Review focus 4: a removal that failed (interfaces held for more than an hour) keeps the proxies left on the record, and
   // the next uninstall finishes with them.
   it('an uninstall that failed while Lambda held a proxy\'s network interfaces keeps what is left, and the next one finishes it', async () => {

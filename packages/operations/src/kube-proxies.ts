@@ -119,8 +119,10 @@ async function groupById(ec2: KubeProxyPorts['ec2'], id: string) {
 }
 // Which of these security groups exist (a filter lists none for a group gone, where its id would be an error).
 const presentGroups = async (ec2: KubeProxyPorts['ec2'], ids: string[]) => new Set<string>(
-  (((await ec2.describeSecurityGroups({ Filters: [{ Name: 'group-id', Values: ids }] })).SecurityGroups ?? []) as { GroupId: string }[]).map((g) => g.GroupId),
+  (((await ec2.describeSecurityGroups({ Filters: [{ Name: 'group-id', Values: ids.filter(Boolean) }] })).SecurityGroups ?? []) as { GroupId: string }[]).map((g) => g.GroupId),
 );
+const PROXY_TAG = 'kubernetes-proxy';
+const tagged = (tags: Record<string, string> | { Key: string; Value: string }[] = {}) => (Array.isArray(tags) ? tags.some((t) => t.Key === 'dormeto:role' && t.Value === PROXY_TAG) : tags['dormeto:role'] === PROXY_TAG);
 
 // A rule added, false when it was there already (another run made it meanwhile).
 async function authorize(call: Call, input: unknown) {
@@ -423,6 +425,33 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     throw withProxies(failure, [...records.values()]);
   }
   return { outcomes, proxies: [...records.values()] };
+}
+
+// The router's proxies that exist without a record (one lost): looked up by name in the region's clusters (the name rule), a
+// function tagged dormeto:role = kubernetes-proxy only, with its group of the same name if tagged so too; for their removal.
+// A command role that may not list the clusters or read the functions (an organization access older than the proxies)
+// made none: none found.
+export async function unrecordedKubernetesProxies(ports: KubeProxyPorts, input: { kubeProxy: Pick<KubeProxy, 'namePrefix' | 'rolePrefix'>; recorded: ProxyRecord[] }): Promise<ProxyRecord[]> {
+  const found: ProxyRecord[] = [];
+  try {
+    for (const c of await clustersOf(ports.eks)) {
+      if (input.recorded.some((p) => p.cluster === c.name)) continue;
+      const fn = kubeProxyName(input.kubeProxy.namePrefix, c.name);
+      const config = await find(() => ports.lambda.getFunctionConfiguration({ FunctionName: fn }));
+      if (!config || !tagged((await find(() => ports.lambda.listTags({ Resource: config.FunctionArn })))?.Tags)) continue;
+      const vpcId: string = config.VpcConfig?.VpcId ?? c.resourcesVpcConfig?.vpcId ?? '';
+      const group = vpcId ? ((await ports.ec2.describeSecurityGroups({ Filters: [{ Name: 'vpc-id', Values: [vpcId] }, { Name: 'group-name', Values: [fn] }] })).SecurityGroups ?? [])
+        .find((g: { Tags?: { Key: string; Value: string }[] }) => tagged(g.Tags)) : undefined;
+      found.push({
+        cluster: c.name, function: fn, role: kubeProxyName(input.kubeProxy.rolePrefix, c.name), logGroup: `/aws/lambda/${fn}`, securityGroupId: group?.GroupId ?? null,
+        clusterSecurityGroupId: c.resourcesVpcConfig?.clusterSecurityGroupId ?? '', vpcId,
+      });
+    }
+  } catch (err) {
+    if (denied(err)) return [];
+    throw err;
+  }
+  return found;
 }
 
 // The router's proxies removed (its uninstall): those still waiting for Lambda to release their network interfaces stay
