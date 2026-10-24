@@ -108,6 +108,15 @@ const sameRule = (a: Rule, b: Rule) => a.IpProtocol === b.IpProtocol && a.FromPo
 // TCP 443 from the proxy's group: its rule on the cluster security group.
 const https = (GroupId: string): Rule => ({ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, GroupId });
 const isHttps = (r: Rule, groupId: string) => sameRule(r, https(groupId));
+// A security group by its id, undefined when it is gone (EC2 answers InvalidGroup.NotFound for an id it does not know).
+async function groupById(ec2: KubeProxyPorts['ec2'], id: string) {
+  try {
+    return (await ec2.describeSecurityGroups({ GroupIds: [id] })).SecurityGroups?.[0];
+  } catch (err) {
+    if (named(err, 'InvalidGroup.NotFound')) return undefined;
+    throw err;
+  }
+}
 // Which of these security groups exist (a filter lists none for a group gone, where its id would be an error).
 const presentGroups = async (ec2: KubeProxyPorts['ec2'], ids: string[]) => new Set<string>(
   (((await ec2.describeSecurityGroups({ Filters: [{ Name: 'group-id', Values: ids }] })).SecurityGroups ?? []) as { GroupId: string }[]).map((g) => g.GroupId),
@@ -243,6 +252,8 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     const fn = kubeProxyName(kp.namePrefix, c.name);
     const roleName = kubeProxyName(kp.rolePrefix, c.name);
     const label = `cluster ${c.name}: proxy ${fn}`;
+    // Being created or deleted, or failed: nothing made or changed (a proxy it has stays until it is ACTIVE again or gone).
+    if (c.status && c.status !== 'ACTIVE' && c.status !== 'UPDATING') return { cluster: c.name, status: 'skipped', detail: `cluster ${c.name} is ${c.status}: no proxy set up until it is ACTIVE (set up its access again then)` };
     if (!c.endpoint || !c.certificateAuthority?.data) return { cluster: c.name, status: 'skipped', detail: `cluster ${c.name}: no endpoint yet (${c.status ?? 'unknown'}): set up its access again once it is active` };
     if (!vpc.clusterSecurityGroupId) return { cluster: c.name, status: 'skipped', detail: `cluster ${c.name}: no cluster security group (resourcesVpcConfig.clusterSecurityGroupId) to admit its proxy` };
     const changed: string[] = [];
@@ -274,12 +285,7 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
       }
       records.set(c.name, { ...record, securityGroupId: created.GroupId });
       changed.push('security group created');
-      try {
-        group = (await ec2.describeSecurityGroups({ GroupIds: [created.GroupId] })).SecurityGroups?.[0];
-      } catch (err) {
-        if (named(err, 'InvalidGroup.NotFound')) throw new RetryLater(`security group ${created.GroupId} made, not described yet`);
-        throw err;
-      }
+      group = await groupById(ec2, created.GroupId);
       if (!group) throw new RetryLater(`security group ${created.GroupId} made, not described yet`);
     }
     const groupId = String(group.GroupId);
@@ -300,8 +306,15 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     const others = egress.filter((r) => !wanted.some((w) => sameRule(r, w)));
     if (others.length && await revoke(ec2.revokeSecurityGroupEgress, { GroupId: groupId, IpPermissions: others.map((r) => permissionOf(r)) })) changed.push('other egress revoked');
 
-    // The rule admitting it on the cluster security group.
-    const clusterGroup = (await ec2.describeSecurityGroups({ GroupIds: [vpc.clusterSecurityGroupId] })).SecurityGroups?.[0];
+    // The rule admitting it on the cluster security group; gone meanwhile, the cluster is being deleted or made again (what
+    // was made stays recorded: the next run follows the cluster).
+    const clusterGroup = await groupById(ec2, vpc.clusterSecurityGroupId);
+    if (!clusterGroup) {
+      return {
+        cluster: c.name, status: 'skipped', ...(changed.length ? { changed: true } : {}),
+        detail: `cluster ${c.name}: its cluster security group ${vpc.clusterSecurityGroupId} no longer exists (the cluster deleted or made again meanwhile): set up its access again`,
+      };
+    }
     if (!rulesOf(clusterGroup?.IpPermissions).some((r) => isHttps(r, groupId))) {
       if (await authorize(ec2.authorizeSecurityGroupIngress, { GroupId: vpc.clusterSecurityGroupId, IpPermissions: [permissionOf(https(groupId), `Dormeto Kubernetes proxy ${fn}`)] })) changed.push(`rule on ${vpc.clusterSecurityGroupId}`);
     }

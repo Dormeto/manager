@@ -294,6 +294,32 @@ describe('the Kubernetes proxies step', () => {
     expect(s.account.writes()).toEqual([]);
   });
 
+  // Minor 6: a cluster neither ACTIVE nor UPDATING (being created or deleted, or failed) gets nothing, its status named;
+  // the proxy it has stays until it is ACTIVE again or gone.
+  it('a private cluster being created, deleted or failed is skipped, naming its status; one UPDATING gets its proxy', async () => {
+    for (const status of ['CREATING', 'DELETING', 'FAILED', 'PENDING']) {
+      const s = setup([{ ...privateCluster(), status }]);
+      expect((await s.step()).outcomes, status).toEqual([{ cluster: 'eks-demo', status: 'skipped', detail: `cluster eks-demo is ${status}: no proxy set up until it is ACTIVE (set up its access again then)` }]);
+      expect(s.account.writes(), status).toEqual([]);
+    }
+    const deleting = setup();
+    await deleting.step();
+    deleting.account.state.ops.length = 0;
+    deleting.clusters[0]!.status = 'DELETING';
+    expect((await deleting.step()).proxies).toEqual([RECORD]);
+    expect(deleting.account.writes()).toEqual([]);
+    const updating = setup([{ ...privateCluster(), status: 'UPDATING' }]);
+    expect((await updating.step()).proxies).toEqual([RECORD]);
+  });
+
+  it('a cluster security group gone meanwhile (the cluster deleted as the step runs) is no failure: the cluster is skipped, saying so', async () => {
+    const s = setup();
+    s.account.state.groups.delete('sg-0cluster00');
+    expect((await s.step()).outcomes).toEqual([{ cluster: 'eks-demo', status: 'skipped', changed: true, detail: 'cluster eks-demo: its cluster security group sg-0cluster00 no longer exists (the cluster deleted or made again meanwhile): set up its access again' }]);
+    // What was made stays recorded: the next run removes it once the cluster is gone.
+    expect(s.proxies()).toEqual([RECORD]);
+  });
+
   // EKS made a cluster security group for every cluster from platform eks.3 on (2019): an older one has none to admit the proxy.
   it('a private cluster without a cluster security group is skipped, saying so', async () => {
     const old = privateCluster();
