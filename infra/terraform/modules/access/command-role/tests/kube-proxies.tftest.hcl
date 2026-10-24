@@ -21,7 +21,7 @@ run "the_command_role_manages_the_kubernetes_proxies_network" {
 
   assert {
     condition = [for s in jsondecode(aws_iam_role_policy.command.policy).Statement : s if s.Sid == "KubeProxyNetworkRead"] == [{
-      Sid = "KubeProxyNetworkRead", Effect = "Allow", Resource = "*"
+      Sid    = "KubeProxyNetworkRead", Effect = "Allow", Resource = "*"
       Action = ["ec2:DescribeSecurityGroups", "ec2:DescribeSubnets", "ec2:DescribeVpcs", "ec2:DescribeNetworkInterfaces"]
     }]
     error_message = "The command role must describe security groups, subnets, VPCs and network interfaces."
@@ -41,7 +41,7 @@ run "the_command_role_manages_the_kubernetes_proxies_network" {
     error_message = "The proxy's group itself is the account's own, in its partition."
   }
   assert {
-    condition = [for s in jsondecode(aws_iam_role_policy.command.policy).Statement : s.Resource if s.Sid == "KubeProxyClusterGroups"] == [["arn:aws-us-gov:ec2:*:222222222222:security-group/*"]]
+    condition     = [for s in jsondecode(aws_iam_role_policy.command.policy).Statement : s.Resource if s.Sid == "KubeProxyClusterGroups"] == [["arn:aws-us-gov:ec2:*:222222222222:security-group/*"]]
     error_message = "Ingress on security groups, in the account and partition, tagged aws:eks:cluster-name."
   }
 }

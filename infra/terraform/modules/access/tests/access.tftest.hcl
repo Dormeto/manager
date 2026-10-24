@@ -90,7 +90,7 @@ run "discovery_invokes_only_the_kubernetes_proxies" {
 
   assert {
     condition = [for s in jsondecode(aws_iam_role_policy.discovery.policy).Statement : s if s.Sid == "InvokeKubernetesProxies"] == [{
-      Sid = "InvokeKubernetesProxies", Effect = "Allow", Action = "lambda:InvokeFunction"
+      Sid       = "InvokeKubernetesProxies", Effect = "Allow", Action = "lambda:InvokeFunction"
       Resource  = "arn:*:lambda:*:*:function:*-kube-*"
       Condition = { StringEquals = { "aws:ResourceTag/dormeto:role" = "kubernetes-proxy" } }
     }]
