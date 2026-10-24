@@ -8,12 +8,11 @@ import { grantRowsProblem } from '../groups';
 import { rowsOf } from '../tags';
 import { ACCOUNTS, ME, accountName } from './org';
 import {
-  addOperation, audited, change, fail, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
+  addOperation, audited, change, fail, hasHibernation, hibernationOf, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
   type Demo, type DemoGroup, type DemoOperation, type DemoRouter, type DemoWorkload, type WorkflowType,
 } from './state';
 import { operationView } from './views';
 import { MINUTE, SECOND, iso } from './util';
-import { hasHibernation, hibernationOf } from './state';
 
 type Body = Record<string, unknown>;
 const ACCOUNT = /^\d{12}$/;

@@ -81,7 +81,12 @@ const HEADING = /^(#{1,6})\s+(\S.*)$/;
 const BULLET = /^[-*+]\s+(\S.*)$/;
 const NUMBER = /^\d{1,9}[.)]\s+(\S.*)$/;
 
-export function renderMarkdown(text: string, options: MarkdownOptions = {}, depth = 0): VNodeChild[] {
+export function renderMarkdown(text: string, options: MarkdownOptions = {}): VNodeChild[] {
+  return blocksOf(text, options, 0);
+}
+
+// The blocks of a text; `depth` counts the quotes around it.
+function blocksOf(text: string, options: MarkdownOptions, depth: number): VNodeChild[] {
   const blocks: VNodeChild[] = [];
   let paragraph: string[] = [];
   let items: string[] = [];
@@ -111,7 +116,7 @@ export function renderMarkdown(text: string, options: MarkdownOptions = {}, dept
       const quoted: string[] = [];
       for (; n < lines.length && lines[n]!.trim().startsWith('>'); n += 1) quoted.push(lines[n]!.trim().slice(1).replace(/^ /, ''));
       n -= 1;
-      blocks.push(h('blockquote', renderMarkdown(quoted.join('\n'), options, depth + 1)));
+      blocks.push(h('blockquote', blocksOf(quoted.join('\n'), options, depth + 1)));
       continue;
     }
     const heading = HEADING.exec(trimmed);

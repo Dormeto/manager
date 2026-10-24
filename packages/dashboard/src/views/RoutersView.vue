@@ -96,7 +96,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
           <v-avatar :color="tone(item)" variant="tonal" rounded="lg" size="36" class="dm-router__icon"><v-icon :icon="mdiRouterNetwork" size="20" /></v-avatar>
           <div class="dm-router__id">
             <router-link :to="`/routers/${encodeURIComponent(item.name)}`" class="dm-router__name">{{ item.name }}</router-link>
-            <div v-if="item.summary" class="dm-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
+            <div v-if="item.summary" class="dm-list-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
             <div class="dm-router__where"><span v-if="item.account" class="mono">{{ item.account }}</span><span v-if="item.account" aria-hidden="true">·</span><RegionLabel :region="item.region" /></div>
           </div>
         </div>
@@ -201,7 +201,6 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 .dm-health__alarm { display: flex; align-items: center; gap: 5px; margin-top: 6px; font-weight: 500; }
 .dm-health__tip + .dm-health__tip { margin-top: 6px; }
 
-.dm-summary { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 .dm-states { display: flex; flex-wrap: wrap; gap: 4px; min-width: 10rem; max-width: 13rem; }
 .dm-mono-field :deep(input) { font-family: var(--dm-mono); }
 

@@ -212,6 +212,9 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
 .dm-drawer .v-list-item__prepend > .v-list-item__spacer { display: none; }
 @media (prefers-reduced-motion: reduce) { .dm-nav-icon * { animation: none !important; transition: none !important; } }
 
+/* A description's first line under a name in the Routers and Workloads lists, cut with an ellipsis. */
+.dm-list-summary { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+
 /* Markdown drawn by src/markdown.ts (release notes, descriptions). */
 .dm-md { font-size: 0.9rem; line-height: 1.5; overflow-wrap: anywhere; }
 .dm-md > :last-child { margin-bottom: 0; }

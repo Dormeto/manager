@@ -492,7 +492,7 @@ export function matches(e: StoredExclusion, c: { account: string; targetGroupArn
 // Each place a workload's hibernation can come from, among the demo's routers and workloads: the first router reads no manager
 // settings (built-in default), the others read them; some workloads set a value of their own or have fallback instance types
 // (a router's own value is set from the dashboard).
-function seedHibernation(routers: DemoRouter[], workloads: DemoWorkload[], now: number): void {
+function seedHibernation(routers: DemoRouter[], workloads: DemoWorkload[]): void {
   // The first router is written in Terraform without a catalog: it reads no manager settings.
   routers[0]!.readsManager = false;
   workloads.forEach((w, i) => {
@@ -520,7 +520,7 @@ function seedDescriptions(routers: DemoRouter[], workloads: DemoWorkload[], now:
 function build(now: number): Demo {
   const routers = ORG.routers.map((r) => makeRouter(r, now));
   const workloads = ORG.workloads.map((spec) => buildWorkload(spec, routers.find((r) => r.name === spec.router)!, now));
-  seedHibernation(routers, workloads, now);
+  seedHibernation(routers, workloads);
   seedDescriptions(routers, workloads, now);
   workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
