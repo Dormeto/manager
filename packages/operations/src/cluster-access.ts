@@ -1,9 +1,13 @@
 // A router's access to the EKS clusters of its account and region (vision docs/specs/2026-10-11-kubernetes-design.md,
 // section 4): its roles in the Kubernetes group dormeto:router, whose rights come from the ClusterRole Dormeto publishes
 // (supposed there, checked by the router's clusterCheck), and DmtDiscoveryRole with AmazonEKSViewPolicy. Made by API calls of
-// DmtCommandRole, whose statement EksAccessEntries allows these roles, this group and this policy only. A cluster on
-// aws-auth only, or one the router cannot reach, is left with what to do. Removing the router removes its roles' entries:
-// EKS keeps an entry whose role is gone, and that entry does not work for a role made again with the same ARN.
+// DmtCommandRole, whose statement EksAccessEntries allows these roles, this group and this policy only. A cluster reached
+// through its proxy function (a private endpoint, vision docs/specs/2026-10-24-private-eks-endpoints-design.md) gets the
+// same entries. A cluster on aws-auth only, or one nothing reaches, is left with what to do. Removing the router removes
+// its roles' entries: EKS keeps an entry whose role is gone, and that entry does not work for a role made again with the
+// same ARN.
+// @ts-expect-error the router's module has no type declarations
+import { reachOf as routerReachOf, UNREACHABLE as ROUTER_UNREACHABLE } from '../../../../router/lambda/src/lib/k8s.mjs';
 
 // Loose SDK shapes: the adapter (aws.ts) passes the commands' inputs and outputs through.
 type Call = (input: any) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -11,9 +15,13 @@ export type EksPort = Record<'listClusters' | 'describeCluster' | 'describeAcces
 
 export const ROUTER_GROUP = 'dormeto:router';
 const viewPolicy = (partition: string) => `arn:${partition}:eks::aws:cluster-access-policy/AmazonEKSViewPolicy`;
-const PRIVATE = 'its endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)';
+// How a cluster's API is reached (the router's rule, spec section 2), and why when not at all (spec section 8).
+export type Reach = 'direct' | 'proxy' | 'none';
+export const reachOf = routerReachOf as (vpc: { endpointPublicAccess?: boolean; publicAccessCidrs?: string[]; endpointPrivateAccess?: boolean }) => Reach;
+export const UNREACHABLE = ROUTER_UNREACHABLE as string;
 
-// ready: the router can be checked there (an endpoint it reaches; on aws-auth only, the customer maps its roles).
+// ready: the router can be checked there (an endpoint it reaches, directly or through its proxy; on aws-auth only, the
+// customer maps its roles).
 export interface ClusterAccess {
   cluster: string;
   status: 'done' | 'skipped';
@@ -66,8 +74,8 @@ export async function ensureClusterAccess(eks: EksPort, { routerRoles, discovery
       results.push({ cluster: name, status: 'skipped', ready: true, detail: `cluster ${name}: authentication mode CONFIG_MAP (aws-auth only): switch it to API_AND_CONFIG_MAP, or map the router's roles to the group ${ROUTER_GROUP} in aws-auth` });
       continue;
     }
-    if (!(vpc.endpointPublicAccess && (vpc.publicAccessCidrs ?? []).includes('0.0.0.0/0'))) {
-      results.push({ cluster: name, status: 'skipped', ready: false, detail: `cluster ${name}: ${PRIVATE}` });
+    if (reachOf(vpc) === 'none') {
+      results.push({ cluster: name, status: 'skipped', ready: false, detail: `cluster ${name}: ${UNREACHABLE}` });
       continue;
     }
     try {

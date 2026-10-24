@@ -39,7 +39,8 @@ export type UninstallStep = (typeof UNINSTALL_STEPS)[number];
 
 const NOT_FOUND = new Set(['NoSuchEntityException', 'NoSuchEntity', 'ResourceNotFoundException', 'QueueDoesNotExist', 'AWS.SimpleQueueService.NonExistentQueue']);
 const notFound = (err: unknown) => NOT_FOUND.has((err as Error).name);
-async function find<T>(call: () => Promise<T>): Promise<T | null> {
+// What a call answers, null when the resource does not exist (shared with the Kubernetes proxies, kube-proxies.ts).
+export async function find<T>(call: () => Promise<T>): Promise<T | null> {
   try {
     return await call();
   } catch (err) {
@@ -51,52 +52,54 @@ async function find<T>(call: () => Promise<T>): Promise<T | null> {
 // Equal whatever the key order (AWS answers objects in its own order).
 const canonical = (value: unknown): unknown => (Array.isArray(value) ? value.map(canonical)
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value);
-const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+export const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 // Every field Dormeto sets has its value in the current resource (AWS adds defaults that were not sent).
 const covers = (current: unknown, wanted: unknown): boolean => (wanted && typeof wanted === 'object' && !Array.isArray(wanted)
   ? Boolean(current && typeof current === 'object') && Object.entries(wanted).every(([k, v]) => covers((current as Record<string, unknown>)[k], v))
   : same(current, wanted));
 const policyOf = (document: string) => JSON.parse(decodeURIComponent(document)) as unknown;
-const tagList = (tags: Record<string, string>) => Object.entries(tags).map(([Key, Value]) => ({ Key, Value }));
+export const tagList = (tags: Record<string, string>) => Object.entries(tags).map(([Key, Value]) => ({ Key, Value }));
 const result = (changed: string[]): StepResult => (changed.length ? { status: 'done', detail: changed.join(', ') } : { status: 'skipped' });
+
+// A role with the boundary, its trust and its inline policy: created, or brought in line (what changed added to `changed`).
+// Shared with the Kubernetes proxies' roles (kube-proxies.ts).
+export type RoleDefinition = { name: string; path: string; trust: unknown; policyName: string; policy: unknown };
+export async function putRole(iam: Pick<InstallerPorts['iam'], 'getRole' | 'createRole' | 'updateAssumeRolePolicy' | 'getRolePolicy' | 'putRolePolicy'>, boundaryArn: string, role: RoleDefinition, tags: Record<string, string>, changed: string[]) {
+  const existing = (await find(() => iam.getRole({ RoleName: role.name })))?.Role;
+  if (!existing) {
+    await iam.createRole({ RoleName: role.name, Path: role.path, AssumeRolePolicyDocument: JSON.stringify(role.trust), PermissionsBoundary: boundaryArn, Tags: tagList(tags) });
+    changed.push(`role ${role.name}`);
+  } else {
+    if (existing.PermissionsBoundary?.PermissionsBoundaryArn !== boundaryArn) {
+      throw new Error(`role ${role.name} exists without the permissions boundary ${boundaryArn.split('/').at(-1)}: not created by Dormeto`);
+    }
+    if (!same(policyOf(existing.AssumeRolePolicyDocument), role.trust)) {
+      await iam.updateAssumeRolePolicy({ RoleName: role.name, PolicyDocument: JSON.stringify(role.trust) });
+      changed.push(`trust of ${role.name}`);
+    }
+  }
+  const current = await find(() => iam.getRolePolicy({ RoleName: role.name, PolicyName: role.policyName }));
+  if (!current || !same(policyOf(current.PolicyDocument), role.policy)) {
+    await iam.putRolePolicy({ RoleName: role.name, PolicyName: role.policyName, PolicyDocument: JSON.stringify(role.policy) });
+    if (existing) changed.push(`policy of ${role.name}`);
+  }
+}
+
+// A role and its inline policies deleted: false when it did not exist.
+export async function deleteRole(iam: Pick<InstallerPorts['iam'], 'listRolePolicies' | 'deleteRolePolicy' | 'deleteRole'>, name: string): Promise<boolean> {
+  const names = (await find(() => iam.listRolePolicies({ RoleName: name })))?.PolicyNames;
+  if (!names) return false;
+  for (const PolicyName of names) await iam.deleteRolePolicy({ RoleName: name, PolicyName });
+  await iam.deleteRole({ RoleName: name });
+  return true;
+}
 
 export function createInstaller(ports: InstallerPorts, options: { boundaryArn: string; principals: string[]; zip: () => Promise<Uint8Array>; codeSha256: string }) {
   const { iam, dynamodb, sqs, logs, lambda, scheduler, events } = ports;
-  const boundaryName = options.boundaryArn.split('/').at(-1);
-
-  // A role with the boundary, its trust and its inline policy: created, or brought in line.
-  async function putRole(role: Blueprint['roles'][number] | Forwarder['role'], tags: Record<string, string>, changed: string[]) {
-    const existing = (await find(() => iam.getRole({ RoleName: role.name })))?.Role;
-    if (!existing) {
-      await iam.createRole({ RoleName: role.name, Path: role.path, AssumeRolePolicyDocument: JSON.stringify(role.trust), PermissionsBoundary: options.boundaryArn, Tags: tagList(tags) });
-      changed.push(`role ${role.name}`);
-    } else {
-      if (existing.PermissionsBoundary?.PermissionsBoundaryArn !== options.boundaryArn) {
-        throw new Error(`role ${role.name} exists without the permissions boundary ${boundaryName}: not created by Dormeto`);
-      }
-      if (!same(policyOf(existing.AssumeRolePolicyDocument), role.trust)) {
-        await iam.updateAssumeRolePolicy({ RoleName: role.name, PolicyDocument: JSON.stringify(role.trust) });
-        changed.push(`trust of ${role.name}`);
-      }
-    }
-    const current = await find(() => iam.getRolePolicy({ RoleName: role.name, PolicyName: role.policyName }));
-    if (!current || !same(policyOf(current.PolicyDocument), role.policy)) {
-      await iam.putRolePolicy({ RoleName: role.name, PolicyName: role.policyName, PolicyDocument: JSON.stringify(role.policy) });
-      if (existing) changed.push(`policy of ${role.name}`);
-    }
-  }
-
-  async function deleteRole(name: string): Promise<boolean> {
-    const names = (await find(() => iam.listRolePolicies({ RoleName: name })))?.PolicyNames;
-    if (!names) return false;
-    for (const PolicyName of names) await iam.deleteRolePolicy({ RoleName: name, PolicyName });
-    await iam.deleteRole({ RoleName: name });
-    return true;
-  }
 
   async function roles(b: Blueprint): Promise<StepResult> {
     const changed: string[] = [];
-    for (const role of b.roles) await putRole(role, b.tags, changed);
+    for (const role of b.roles) await putRole(iam, options.boundaryArn, role, b.tags, changed);
     return result(changed);
   }
 
@@ -105,7 +108,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
   const forwarder = {
     async role(f: Forwarder): Promise<StepResult> {
       const changed: string[] = [];
-      await putRole(f.role, f.role.tags, changed);
+      await putRole(iam, options.boundaryArn, f.role, f.role.tags, changed);
       return result(changed);
     },
     async rule(f: Forwarder): Promise<StepResult> {
@@ -130,7 +133,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
       return { status: 'done', detail: `rule ${f.rule.name}` };
     },
     async removeRole(f: Forwarder): Promise<StepResult> {
-      return result((await deleteRole(f.role.name)) ? [`role ${f.role.name}`] : []);
+      return result((await deleteRole(iam, f.role.name)) ? [`role ${f.role.name}`] : []);
     },
   };
 
@@ -440,7 +443,7 @@ export function createInstaller(ports: InstallerPorts, options: { boundaryArn: s
     table: async (b) => result((await deleted(() => dynamodb.deleteTable({ TableName: b.table.name }))) ? [`table ${b.table.name}`] : []),
     roles: async (b) => {
       const changed: string[] = [];
-      for (const role of b.roles) if (await deleteRole(role.name)) changed.push(`role ${role.name}`);
+      for (const role of b.roles) if (await deleteRole(iam, role.name)) changed.push(`role ${role.name}`);
       return result(changed);
     },
   };

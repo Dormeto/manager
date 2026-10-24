@@ -3,6 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { ensureClusterAccess, removeClusterAccess } from '../src/cluster-access.js';
 import { cluster, fakeEks } from './eks-fake.js';
+// @ts-expect-error the router's module has no type declarations
+import { UNREACHABLE } from '../../../../router/lambda/src/lib/k8s.mjs';
 
 const ACCOUNT = '121014831971';
 const ROLES = ['controller', 'waker', 'onboarder'].map((r) => `arn:aws:iam::${ACCOUNT}:role/dormeto/router/dmtr-dev-eu-west-1-${r}`);
@@ -25,14 +27,25 @@ describe('the router\'s access to the EKS clusters', () => {
     expect(eks.writes).toEqual([]);
   });
 
-  it('leaves a cluster on aws-auth only, or one it cannot reach, with what to do', async () => {
-    const eks = fakeEks([cluster('legacy', { mode: 'CONFIG_MAP' }), cluster('private', { public: false }), cluster('office', { cidrs: ['198.51.100.0/24'] })]);
+  // Neither public to every address nor with private access on: no transport reaches it (spec section 2).
+  it('leaves a cluster on aws-auth only, or one nothing reaches, with what to do', async () => {
+    const eks = fakeEks([cluster('legacy', { mode: 'CONFIG_MAP' }), cluster('closed', { public: false }), cluster('office', { cidrs: ['198.51.100.0/24'] })]);
     expect(await ensureClusterAccess(eks, { routerRoles: ROLES, discoveryRole: DISCOVERY })).toEqual([
       { cluster: 'legacy', status: 'skipped', ready: true, detail: 'cluster legacy: authentication mode CONFIG_MAP (aws-auth only): switch it to API_AND_CONFIG_MAP, or map the router\'s roles to the group dormeto:router in aws-auth' },
-      { cluster: 'private', status: 'skipped', ready: false, detail: 'cluster private: its endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)' },
-      { cluster: 'office', status: 'skipped', ready: false, detail: 'cluster office: its endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)' },
+      { cluster: 'closed', status: 'skipped', ready: false, detail: `cluster closed: ${UNREACHABLE}` },
+      { cluster: 'office', status: 'skipped', ready: false, detail: `cluster office: ${UNREACHABLE}` },
     ]);
     expect(eks.writes).toEqual([]);
+  });
+
+  // Private EKS endpoints (vision docs/specs/2026-10-24-private-eks-endpoints-design.md, section 6): the router and
+  // discovery reach it through its proxy function, with the same access entries.
+  it('makes the entries in a cluster reached through its proxy: private only, or public to some addresses with private access on', async () => {
+    const eks = fakeEks([cluster('private', { public: false, private: true }), cluster('office', { cidrs: ['198.51.100.0/24'], private: true })]);
+    expect(await ensureClusterAccess(eks, { routerRoles: ROLES, discoveryRole: DISCOVERY })).toEqual(['private', 'office'].map((name) => (
+      { cluster: name, status: 'done', ready: true, detail: `cluster ${name}: access entries created for 3 router roles (group dormeto:router) and DmtDiscoveryRole (AmazonEKSViewPolicy)` }
+    )));
+    expect(eks.writes.filter(([w]) => w === 'createAccessEntry').map(([, i]) => i.clusterName)).toEqual([...Array(4).fill('private'), ...Array(4).fill('office')]);
   });
 
   it('an entry the customer made without the group is left as it is, and said', async () => {

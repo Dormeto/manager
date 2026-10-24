@@ -72,8 +72,8 @@ export const KUBE_PROXY_CALLS: [string, string, Record<string, string>?][] = [
   ['ec2:RevokeSecurityGroupEgress', proxyGroup, proxyTag], ['ec2:AuthorizeSecurityGroupEgress', proxyGroup, proxyTag],
   // The rule on the cluster's own group (the one EKS tags), from the proxy's.
   ['ec2:AuthorizeSecurityGroupIngress', clusterGroup, clusterTag], ['ec2:RevokeSecurityGroupIngress', clusterGroup, clusterTag],
-  // Its role, with the boundary, passed to Lambda.
-  ['iam:GetRole', kubeRole], ['iam:ListRolePolicies', kubeRole], ['iam:CreateRole', kubeRole, boundary], ['iam:TagRole', kubeRole],
+  // Its role, with the boundary (its trust put back when changed), passed to Lambda.
+  ['iam:GetRole', kubeRole], ['iam:ListRolePolicies', kubeRole], ['iam:CreateRole', kubeRole, boundary], ['iam:TagRole', kubeRole], ['iam:UpdateAssumeRolePolicy', kubeRole],
   ['iam:PutRolePolicy', kubeRole, boundary], ['iam:GetRolePolicy', kubeRole], ['iam:DeleteRolePolicy', kubeRole, boundary], ['iam:DeleteRole', kubeRole],
   ['iam:PassRole', kubeRole, { 'iam:PassedToService': 'lambda.amazonaws.com' }],
   // Its log group.
