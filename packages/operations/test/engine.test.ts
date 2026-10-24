@@ -821,6 +821,18 @@ describe('Kubernetes proxies', () => {
     });
   });
 
+  // Minor 11: a role Lambda keeps refusing is retried as IAM propagation, then the step fails with Lambda's own message.
+  it('an install whose proxy role Lambda keeps refusing fails after its retries, saying why', async () => {
+    const s = withClusters([privateCluster()]);
+    const refusal = 'The provided execution role does not have permissions to call CreateNetworkInterface on EC2';
+    s.kube.ports.lambda.createFunction = async () => { throw Object.assign(new Error(refusal), { name: 'InvalidParameterValueException' }); };
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.error).toBe(`kubernetes proxies: role dmtr-dev-eu-west-3-kube-eks-demo not usable by Lambda yet: ${refusal}`);
+    expect(stored.steps.find((x) => x.name === 'kubernetes proxies')!.retries).toBe(30);
+  });
+
   // Minor 5: the step waits for a function to settle 15 minutes at most, then fails with its state.
   it('an install whose proxy function never settles fails 15 minutes after its creation, with the function\'s state', async () => {
     const s = withClusters([privateCluster()]);

@@ -349,8 +349,9 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
       try {
         await lambda.createFunction({ ...config, Architectures: kp.architectures, Code: { ZipFile: input.zip }, Tags: tags });
       } catch (err) {
-        // A new role (or its policy) not seen by Lambda yet: IAM propagation.
-        if (named(err, 'InvalidParameterValueException') && /cannot be assumed|does not have permissions/.test((err as Error).message)) throw new RetryLater(`role ${roleName} not usable by Lambda yet`);
+        // A new role (or its policy) not seen by Lambda yet: IAM propagation. Lambda's message kept: the step's last retry
+        // fails with it, when the role is refused for another reason than propagation.
+        if (named(err, 'InvalidParameterValueException') && /cannot be assumed|does not have permissions/.test((err as Error).message)) throw new RetryLater(`role ${roleName} not usable by Lambda yet: ${(err as Error).message}`);
         throw err;
       }
       changed.push('function created');

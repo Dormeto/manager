@@ -207,6 +207,17 @@ describe('the Kubernetes proxies step', () => {
     expect((await u.once()).outcomes).toEqual([{ cluster: 'eks-demo', status: 'failed', detail: `cluster eks-demo: the function ${FN} is still updating 15 minutes after its last change (state Active): The function is being updated. (Updating)` }]);
   });
 
+  // Minor 11: Lambda's refusal of the role is retried as IAM propagation, with Lambda's own message, so that the step's
+  // final failure says why when it is not propagation (a role policy without the network interfaces' rights).
+  it('a role Lambda refuses is retried later, with Lambda\'s own message', async () => {
+    const s = setup();
+    const refusal = 'The provided execution role does not have permissions to call CreateNetworkInterface on EC2';
+    s.account.ports.lambda.createFunction = async () => { throw ec2Error('InvalidParameterValueException', refusal); };
+    const err = await s.once().catch((e: unknown) => e) as RetryLater;
+    expect(err).toBeInstanceOf(RetryLater);
+    expect(err.message).toBe(`role ${ROLE} not usable by Lambda yet: ${refusal}`);
+  });
+
   it('a new endpoint or new code updates the function, and nothing else', async () => {
     const s = setup();
     await s.step();
