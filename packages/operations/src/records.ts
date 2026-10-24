@@ -47,7 +47,7 @@ export interface InstalledRouter {
   installedAt: string;
   uninstalling?: boolean; // an uninstall runs: no new onboarding
   // The EKS clusters of its account and region, as its last check found them (R10.5: the router's view).
-  clusters?: { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; checkedAt: string }[];
+  clusters?: { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; via?: 'direct' | 'proxy'; proxy?: { name: string; version: string | null }; checkedAt: string }[];
   // The Kubernetes proxies the manager made for its clusters whose endpoint is private (R10.6): what their removals delete.
   proxies?: ProxyRecord[];
 }

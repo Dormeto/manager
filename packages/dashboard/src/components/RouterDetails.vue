@@ -115,6 +115,8 @@ const columns = computed<Section[][]>(() => {
                   <template v-else-if="c.allowed">reachable, every right</template>
                   <template v-else-if="c.missing.length">missing {{ c.missing.join('; ') }}: {{ CLUSTER_ROLE }}</template>
                   <template v-else>{{ c.reason }}</template>
+                  <template v-if="c.via === 'direct'"> directly</template>
+                  <template v-else-if="c.via === 'proxy' && c.proxy"> through its proxy {{ c.proxy.name }}<template v-if="c.proxy.version"> ({{ c.proxy.version }})</template></template>
                   <span class="dm-detail__when"> checked {{ relative(c.checkedAt, now) }}</span>
                 </td>
               </tr>

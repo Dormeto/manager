@@ -488,6 +488,25 @@ describe('cluster access', () => {
     backend: { kind: 'k8s', id: 'eks-demo/demo/Deployment/web', kubernetes: { cluster: 'eks-demo', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, switch: 'ingress', ingress: { name: 'web', ruleIndex: 0, groupOrder: -1, service: { name: 'web', port: { number: 80 } } }, hpa: false, keda: false, capacity: 'nodes', autoscaler: 'karpenter' } } as Candidate['backend'],
   });
 
+  it('keeps how each cluster was reached: directly, through its proxy with its version or without, and nothing for a router that does not say', async () => {
+    const s = setup({ eks: fakeEks([eksCluster('eks-demo')]) });
+    s.router.clusterChecks['eks-demo'] = { cluster: 'eks-demo', reachable: true, allowed: true, missing: [], via: 'proxy', proxy: { name: 'dmt-dev-kube-eks-demo', version: null } };
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const at = new Date(s.now()).toISOString();
+    expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.clusters).toEqual([{ name: 'eks-demo', reachable: true, allowed: true, missing: [], via: 'proxy', proxy: { name: 'dmt-dev-kube-eks-demo', version: null }, checkedAt: at }]);
+  });
+
+  it('keeps nothing about the way for a router that does not say, and "direct" when it does', async () => {
+    for (const [answer, expected] of [[{}, {}], [{ via: 'direct' }, { via: 'direct' }]] as const) {
+      const s = setup({ eks: fakeEks([eksCluster('eks-demo')]) });
+      s.router.clusterChecks['eks-demo'] = { cluster: 'eks-demo', reachable: true, allowed: true, missing: [], ...answer };
+      const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');
+      await s.drive(op.id);
+      expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.clusters).toEqual([{ name: 'eks-demo', reachable: true, allowed: true, missing: [], ...expected, checkedAt: new Date(s.now()).toISOString() }]);
+    }
+  });
+
   it('a router installed where a cluster runs gets its access entries, and each cluster\'s check is kept on the router', async () => {
     const s = setup({ eks: fakeEks([eksCluster('eks-demo')]) });
     const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin@example.com');

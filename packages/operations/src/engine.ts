@@ -548,7 +548,7 @@ export function createEngine(deps: EngineDeps) {
         const clusters = (op.context.clusters as string[] | undefined) ?? [];
         if (!clusters.length) return { status: 'skipped' };
         const kubernetes = await kubernetesOf(op);
-        const checks: { cluster: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string }[] = [];
+        const checks: { cluster: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; via?: 'direct' | 'proxy'; proxy?: { name: string; version: string | null } }[] = [];
         for (const cluster of clusters) {
           try {
             checks.push(await invokeRouter(op, 'controller', { action: 'clusterCheck', cluster, ...(kubernetes?.cluster === cluster ? { namespace: kubernetes.namespace } : {}) }));
@@ -566,7 +566,7 @@ export function createEngine(deps: EngineDeps) {
         const installed = await records.getRouter(op.target.account!, op.target.region!);
         if (installed) {
           const checkedAt = iso(now());
-          await records.putRouter({ ...installed, clusters: checks.map((c) => ({ name: c.cluster, reachable: c.reachable, allowed: c.allowed, missing: c.missing ?? [], ...(c.reason ? { reason: c.reason } : {}), checkedAt })) });
+          await records.putRouter({ ...installed, clusters: checks.map((c) => ({ name: c.cluster, reachable: c.reachable, allowed: c.allowed, missing: c.missing ?? [], ...(c.reason ? { reason: c.reason } : {}), ...(c.via ? { via: c.via } : {}), ...(c.proxy ? { proxy: c.proxy } : {}), checkedAt })) });
         }
         // An onboarding stops on its candidate's cluster when the router may not use it.
         const own = kubernetes && checks.find((c) => c.cluster === kubernetes.cluster);

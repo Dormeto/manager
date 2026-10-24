@@ -137,7 +137,7 @@ export function organization(scenario: Scenario): Organization {
     const base = { name, account: account.id, region, concurrency: { limit: 1000, needed: 0, worstCase: 0 }, peak: 1 };
     if (i === 0) {
       return {
-        ...base, source: 'terraform' as const, ...AVAILABLE, installedDays: r.int(80, 120), metrics: true, clusters: [`${account.name}-eks`],
+        ...base, source: 'terraform' as const, ...AVAILABLE, installedDays: r.int(80, 120), metrics: true, clusters: [`${account.name}-eks`, `${account.name}-eks-private`],
         ownLists: [{ name: 'office-egress', url: `s3://dmt-demo-config-${account.id}/lists/office-egress.txt`, action: 'ignore', refreshHours: 24, entries: r.int(6, 20) }],
       };
     }

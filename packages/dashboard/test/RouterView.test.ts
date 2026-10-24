@@ -57,6 +57,9 @@ vi.mock('../src/api', () => ({
     if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), ...(described === undefined ? {} : { description: described }), clusters: [
       { name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-legacy', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
+      { name: 'eks-edge', reachable: true, allowed: true, missing: [], via: 'direct', checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
+      { name: 'eks-private', reachable: true, allowed: true, missing: [], via: 'proxy', proxy: { name: 'dmtr-dev-eu-west-3-kube-eks-private', version: '0.33.0' }, checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
+      { name: 'eks-failed', reachable: false, allowed: false, missing: [], reason: 'the proxy does not answer', via: 'proxy', proxy: { name: 'dmtr-dev-eu-west-3-kube-eks-failed', version: null }, checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-lab', reachable: false, allowed: false, missing: [], reason: 'GET /apis: no connection within 3000 ms', checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
     ] };
     if (path === '/alerts') return { alarms: [{ id: 'router#111122223333#eu-west-3', kind: 'router', name: 'dmtr-dev-eu-west-3', level: 'warning', since: new Date(Date.now() - 600_000).toISOString(), problems: [] }], notifications: null };
@@ -143,6 +146,10 @@ describe('Router view', () => {
     const text = wrapper.find('[data-test="clusters"]').findAll('tr').map((r) => `${r.find('th').text()} ${r.find('td').text()}`.replace(/\s+/g, ' ')).join(' | ');
     expect(text).toContain('eks-demo reachable, every right checked 1 h ago');
     expect(text).toContain('eks-legacy missing get nodes: apply dormeto-kubernetes-<version>.yaml of the release (the ClusterRole and its binding to the group dormeto:router): https://dormeto.com/organization-access.html#kubernetes');
+    expect(text).toContain('eks-edge reachable, every right directly checked 1 h ago');
+    expect(text).toContain('eks-private reachable, every right through its proxy dmtr-dev-eu-west-3-kube-eks-private (0.33.0) checked 1 h ago');
+    expect(text).toContain('eks-failed unreachable: the proxy does not answer through its proxy dmtr-dev-eu-west-3-kube-eks-failed checked 1 h ago');
+    expect(text).not.toMatch(/eks-demo [^|]*(directly|through)/);
     expect(text).toContain('eks-lab unreachable: GET /apis: no connection within 3000 ms');
     wrapper.unmount();
   });

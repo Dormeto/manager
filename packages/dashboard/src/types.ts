@@ -272,7 +272,7 @@ export interface Configured<T> {
 
 // GET /api/routers/{name}: the router action.
 // An EKS cluster of a router's account and region, as the router's last check found it (R10.5).
-export interface ClusterCheck { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; checkedAt: string }
+export interface ClusterCheck { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; via?: 'direct' | 'proxy'; proxy?: { name: string; version: string | null }; checkedAt: string }
 
 export interface RouterDetails {
   name: string;

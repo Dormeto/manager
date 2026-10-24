@@ -232,7 +232,7 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
   return {
     name: spec.name, account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
-    clusters: (spec.clusters ?? []).map((name) => ({ name, reachable: true, allowed: true, missing: [], checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
+    clusters: (spec.clusters ?? []).map((name, i) => ({ name, reachable: true, allowed: true, missing: [], ...(i === 0 ? { via: 'direct' as const } : { via: 'proxy' as const, proxy: { name: `${spec.name}-kube-${name}`, version: spec.version } }), checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
     ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null,
   };
 }
