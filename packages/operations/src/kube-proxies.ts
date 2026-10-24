@@ -21,7 +21,7 @@ import { kubeProxyName as routerKubeProxyName } from '../../../../router/lambda/
 // Loose SDK shapes: the adapters (aws.ts) pass the commands' inputs and outputs through.
 type Call = (input: any) => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 export interface KubeProxyPorts {
-  lambda: Record<'getFunctionConfiguration' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'deleteFunction', Call>;
+  lambda: Record<'getFunctionConfiguration' | 'createFunction' | 'updateFunctionConfiguration' | 'updateFunctionCode' | 'listTags' | 'tagResource' | 'deleteFunction', Call>;
   iam: Record<'getRole' | 'createRole' | 'updateAssumeRolePolicy' | 'getRolePolicy' | 'putRolePolicy' | 'listRolePolicies' | 'deleteRolePolicy' | 'deleteRole', Call>;
   logs: Record<'describeLogGroups' | 'createLogGroup' | 'putRetentionPolicy' | 'deleteLogGroup', Call>;
   ec2: Record<'describeVpcs' | 'describeSecurityGroups' | 'createSecurityGroup' | 'authorizeSecurityGroupEgress' | 'revokeSecurityGroupEgress' | 'authorizeSecurityGroupIngress'
@@ -383,10 +383,20 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
       changed.push('configuration updated');
       return pending();
     }
-    if (fnState.CodeSha256 !== input.codeSha256) {
-      await lambda.updateFunctionCode({ FunctionName: fn, ZipFile: input.zip });
-      changed.push('code updated');
+    // Its code and architectures (the bundle's code runs on its architectures; UpdateFunctionCode sets both).
+    const architectures = (a: string[] = ['x86_64']) => [...a].sort().join(',');
+    if (fnState.CodeSha256 !== input.codeSha256 || architectures(fnState.Architectures) !== architectures(kp.architectures)) {
+      await lambda.updateFunctionCode({ FunctionName: fn, ZipFile: input.zip, Architectures: kp.architectures });
+      changed.push(fnState.CodeSha256 !== input.codeSha256 ? 'code updated' : 'architectures updated');
       return pending();
+    }
+    // Its tags (discovery may invoke only functions tagged dormeto:role = kubernetes-proxy): ours put back, others kept.
+    const arn = fnState.FunctionArn ?? `arn:aws:lambda:${input.region}:${input.account}:function:${fn}`;
+    const present: Record<string, string> = (await lambda.listTags({ Resource: arn })).Tags ?? {};
+    const lost = Object.fromEntries(Object.entries(tags).filter(([k, v]) => present[k] !== v));
+    if (Object.keys(lost).length) {
+      await lambda.tagResource({ Resource: arn, Tags: lost });
+      changed.push('tags restored');
     }
     return done();
   }

@@ -84,7 +84,7 @@ export const KUBE_PROXY_CALLS: [string, string, Record<string, string>?][] = [
   ['logs:DescribeLogGroups', '*'], ['logs:CreateLogGroup', kubeLogGroup], ['logs:TagResource', kubeLogGroup], ['logs:PutRetentionPolicy', kubeLogGroup],
   ['logs:DeleteLogGroup', kubeLogGroup],
   // Its function (state Active read from its configuration).
-  ['lambda:CreateFunction', kubeFunction], ['lambda:TagResource', kubeFunction], ['lambda:GetFunction', kubeFunction],
+  ['lambda:CreateFunction', kubeFunction], ['lambda:TagResource', kubeFunction], ['lambda:ListTags', kubeFunction], ['lambda:GetFunction', kubeFunction],
   ['lambda:GetFunctionConfiguration', kubeFunction], ['lambda:UpdateFunctionCode', kubeFunction], ['lambda:UpdateFunctionConfiguration', kubeFunction],
   ['lambda:InvokeFunction', kubeFunction], ['lambda:DeleteFunction', kubeFunction],
   // Removal: its group deleted last.

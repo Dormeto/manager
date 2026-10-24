@@ -13,8 +13,8 @@ import {
 } from '@aws-sdk/client-iam';
 import {
   AddPermissionCommand, CreateEventSourceMappingCommand, CreateFunctionCommand, RemovePermissionCommand, DeleteEventSourceMappingCommand, DeleteFunctionCommand, GetFunctionCommand,
-  GetFunctionConfigurationCommand, GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient, ListEventSourceMappingsCommand, PutFunctionEventInvokeConfigCommand, UpdateEventSourceMappingCommand,
-  UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
+  GetFunctionConfigurationCommand, GetFunctionEventInvokeConfigCommand, GetPolicyCommand, InvokeCommand, LambdaClient, ListEventSourceMappingsCommand, ListTagsCommand, PutFunctionEventInvokeConfigCommand,
+  TagResourceCommand, UpdateEventSourceMappingCommand, UpdateFunctionCodeCommand, UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
 import {
   AssociateAccessPolicyCommand, CreateAccessEntryCommand, DeleteAccessEntryCommand, DescribeAccessEntryCommand, DescribeClusterCommand, EKSClient, ListAssociatedAccessPoliciesCommand, ListClustersCommand,
@@ -94,7 +94,7 @@ export function kubeProxyClientPorts(clients: Record<'ec2' | 'lambda' | 'iam' | 
     }),
     lambda: port(clients.lambda, {
       getFunctionConfiguration: GetFunctionConfigurationCommand, createFunction: CreateFunctionCommand, updateFunctionConfiguration: UpdateFunctionConfigurationCommand,
-      updateFunctionCode: UpdateFunctionCodeCommand, deleteFunction: DeleteFunctionCommand,
+      updateFunctionCode: UpdateFunctionCodeCommand, listTags: ListTagsCommand, tagResource: TagResourceCommand, deleteFunction: DeleteFunctionCommand,
     }),
     iam: port(clients.iam, {
       getRole: GetRoleCommand, createRole: CreateRoleCommand, updateAssumeRolePolicy: UpdateAssumeRolePolicyCommand, getRolePolicy: GetRolePolicyCommand,

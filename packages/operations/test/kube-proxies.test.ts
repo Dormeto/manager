@@ -238,11 +238,32 @@ describe('the Kubernetes proxies step', () => {
     expect(s.account.writes()).toEqual([]);
   });
 
+  // Minor 8: discovery may invoke only functions tagged dormeto:role = kubernetes-proxy, and the router's arm64 bundle runs
+  // on arm64 only: both are put back on an existing function (the customer's own tags kept).
+  it('an existing function whose tags or architectures were changed by hand gets them back, its other tags kept', async () => {
+    const s = setup();
+    await s.step();
+    const fn = s.account.state.functions.get(FN)!;
+    fn.tags = { 'dormeto:router': ROUTER, 'dormeto:cluster': 'another', owner: 'platform-team' };
+    fn.config.Architectures = ['x86_64'];
+    s.account.state.ops.length = 0;
+    const result = await s.step();
+    expect(s.account.writes()).toEqual(['updateFunctionCode', 'tagResource']);
+    expect(fn.tags).toEqual({ ...TAGS, owner: 'platform-team' });
+    expect(fn.config.Architectures).toEqual(['arm64']);
+    expect(s.runs.flat().some((o) => typeof o !== 'string' && o.detail === `cluster eks-demo: proxy ${FN}: architectures updated, waiting until it is Active`)).toBe(true);
+    expect(result.outcomes).toEqual([{ cluster: 'eks-demo', status: 'done', detail: `cluster eks-demo: proxy ${FN}: tags restored` }]);
+    s.account.state.ops.length = 0;
+    await s.step();
+    expect(s.account.writes()).toEqual([]);
+  });
+
   it('makes only calls the command role\'s policy allows, each listed in KUBE_PROXY_CALLS: creation, update, removal', async () => {
     const s = setup();
     s.account.state.ipv6 = true;
     await s.step();
-    // A trust changed by hand, a new endpoint and new code, then the cluster opened to every address.
+    // Tags and a trust changed by hand, a new endpoint and new code, then the cluster opened to every address.
+    s.account.state.functions.get(FN)!.tags = {};
     s.account.state.roles.get(ROLE)!.trust = '{}';
     s.clusters[0]!.endpoint = 'https://EKSDEMO0A1C.gr7.eu-west-1.eks.amazonaws.com';
     const zip = new Uint8Array([4]);

@@ -10,7 +10,7 @@ describe('the Kubernetes proxies\' ports', () => {
     const ports = kubeProxyClientPorts({ ec2: client('ec2'), lambda: client('lambda'), iam: client('iam'), logs: client('logs'), eks: client('eks') });
     const expected: Record<keyof KubeProxyPorts, string[]> = {
       ec2: ['describeVpcs', 'describeSecurityGroups', 'createSecurityGroup', 'authorizeSecurityGroupEgress', 'revokeSecurityGroupEgress', 'authorizeSecurityGroupIngress', 'revokeSecurityGroupIngress', 'deleteSecurityGroup', 'describeNetworkInterfaces'],
-      lambda: ['getFunctionConfiguration', 'createFunction', 'updateFunctionConfiguration', 'updateFunctionCode', 'deleteFunction'],
+      lambda: ['getFunctionConfiguration', 'createFunction', 'updateFunctionConfiguration', 'updateFunctionCode', 'listTags', 'tagResource', 'deleteFunction'],
       iam: ['getRole', 'createRole', 'updateAssumeRolePolicy', 'getRolePolicy', 'putRolePolicy', 'listRolePolicies', 'deleteRolePolicy', 'deleteRole'],
       logs: ['describeLogGroups', 'createLogGroup', 'putRetentionPolicy', 'deleteLogGroup'],
       eks: ['listClusters', 'describeCluster'],

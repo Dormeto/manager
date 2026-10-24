@@ -261,13 +261,27 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
       f.reads = state.pendingReads;
       return {};
     },
-    async updateFunctionCode({ FunctionName, ZipFile }) {
+    async updateFunctionCode({ FunctionName, ZipFile, Architectures }) {
       record('updateFunctionCode', ['lambda:UpdateFunctionCode', arns.fn(FunctionName)]);
       const f = state.functions.get(FunctionName);
       if (!f) throw error('ResourceNotFoundException');
       if (f.config.State === 'Pending' || f.config.LastUpdateStatus === 'InProgress') throw error('ResourceConflictException', `The operation cannot be performed at this time. An update is in progress for resource: ${arns.fn(FunctionName)}`);
-      Object.assign(f.config, { CodeSha256: sha(ZipFile), LastUpdateStatus: 'InProgress', LastModified: new Date(now()).toISOString().replace('Z', '+0000') });
+      Object.assign(f.config, { CodeSha256: sha(ZipFile), ...(Architectures ? { Architectures } : {}), LastUpdateStatus: 'InProgress', LastModified: new Date(now()).toISOString().replace('Z', '+0000') });
       f.reads = state.pendingReads;
+      return {};
+    },
+    // Lambda answers a function's tags with lambda:ListTags only (GetFunction leaves them out without it).
+    async listTags({ Resource }) {
+      record('listTags', ['lambda:ListTags', Resource]);
+      const f = state.functions.get(String(Resource).split(':').at(-1)!);
+      if (!f) throw error('ResourceNotFoundException', `Function not found: ${Resource}`);
+      return { Tags: { ...f.tags } };
+    },
+    async tagResource({ Resource, Tags }) {
+      record('tagResource', ['lambda:TagResource', Resource]);
+      const f = state.functions.get(String(Resource).split(':').at(-1)!);
+      if (!f) throw error('ResourceNotFoundException', `Function not found: ${Resource}`);
+      Object.assign(f.tags, Tags);
       return {};
     },
     async deleteFunction({ FunctionName }) {

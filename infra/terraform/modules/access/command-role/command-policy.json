@@ -70,6 +70,7 @@
       "Action": [
         "lambda:CreateFunction",
         "lambda:TagResource",
+        "lambda:ListTags",
         "lambda:GetFunction",
         "lambda:GetFunctionConfiguration",
         "lambda:UpdateFunctionCode",
