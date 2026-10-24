@@ -14,7 +14,7 @@
 // calls on tagged groups only).
 import type { Policy } from './blueprint.js';
 import { reachOf, UNREACHABLE, type EksPort } from './cluster-access.js';
-import { RetryLater, deleteRole, find, putRole, same, tagList } from './installer.js';
+import { RetryLater, TRANSIENT, deleteRole, find, putRole, same, tagList } from './installer.js';
 // @ts-expect-error the router's module has no type declarations
 import { kubeProxyName as routerKubeProxyName } from '../../../../router/lambda/src/lib/kube-proxy-name.mjs';
 
@@ -49,8 +49,9 @@ export interface ProxyRecord {
 }
 
 // pending: the step comes back after `seconds` (the function not Active yet, network interfaces not released yet);
+// failed: this cluster's proxy could not be set up or removed (detail: why), the other clusters' went on (ruling 24);
 // changed: something was made or removed by this run.
-export interface ProxyOutcome { cluster: string; status: 'done' | 'skipped' | 'pending'; detail: string; seconds?: number; changed?: boolean }
+export interface ProxyOutcome { cluster: string; status: 'done' | 'skipped' | 'pending' | 'failed'; detail: string; seconds?: number; changed?: boolean }
 
 // The command role refuses the proxies' calls (an organization access older than this manager's release); clusters: those
 // whose endpoint needs a proxy.
@@ -188,8 +189,9 @@ async function removeProxy(ports: KubeProxyPorts, p: ProxyRecord, now: number, d
 const releasing = (held: string[]) => `waiting for Lambda to release its network interfaces${held.length ? ` (${held.join(', ')})` : ''}`;
 
 // The proxies of the clusters of the account and region: made or brought to the router's version where the endpoint is
-// private, removed where they are no longer wanted. since: when the step started (a failure Lambda reports for a change made
-// since then fails the step; one left by an earlier operation is tried again).
+// private, removed where they are no longer wanted; every cluster processed, one that fails a `failed` outcome (ruling 24).
+// since: when the step started (a failure Lambda reports for a change made since then is the cluster's failure; one left by
+// an earlier operation is tried again).
 export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
   account: string; region: string; routerName: string; kubeProxy: KubeProxy; trust: Policy; boundaryArn: string; zip: Uint8Array; codeSha256: string; existing: ProxyRecord[];
   since?: number; now?: number; managerVersion?: string;
@@ -200,7 +202,6 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
   const at = { since: input.since ?? now, now };
   const records = new Map(input.existing.map((p) => [p.cluster, p]));
   const outcomes: ProxyOutcome[] = [];
-  const expired: string[] = [];
   const needing: string[] = [];
   let current = '';
 
@@ -211,8 +212,26 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
       records.delete(old.cluster);
       return { cluster: old.cluster, status: 'done', detail: `${why} its proxy ${old.function} removed` };
     }
-    if (r.status === 'expired') expired.push(r.message);
+    if (r.status === 'expired') return { cluster: old.cluster, status: 'failed', changed: true, detail: r.message };
     return { cluster: old.cluster, status: 'pending', seconds: RELEASE_SECONDS, changed: true, detail: `${why} its proxy ${old.function} deleted, ${releasing(r.held)}` };
+  }
+
+  // One cluster's work: what fails there is its outcome, its records kept (ruling 24: the other clusters go on). What the
+  // step must meet again is thrown: a dependency not ready yet (RetryLater), an error that passes (TRANSIENT), the command
+  // role's refusal (the whole account's organization access).
+  async function oneCluster(cluster: string, work: () => Promise<ProxyOutcome>): Promise<ProxyOutcome> {
+    current = cluster;
+    const before = JSON.stringify(records.get(cluster) ?? null);
+    try {
+      return await work();
+    } catch (err) {
+      if (err instanceof RetryLater || TRANSIENT.has((err as Error).name) || denied(err)) throw err;
+      const message = String((err as Error)?.message ?? err);
+      return {
+        cluster, status: 'failed', ...(JSON.stringify(records.get(cluster) ?? null) !== before ? { changed: true } : {}),
+        detail: message.startsWith(`cluster ${cluster}:`) ? message : `cluster ${cluster}: ${message}`,
+      };
+    }
   }
 
   async function ensureProxy(c: Awaited<ReturnType<typeof clustersOf>>[number]): Promise<ProxyOutcome> {
@@ -352,20 +371,16 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     const reach = new Map(clusters.map((c) => [c.name, reachOf(c.resourcesVpcConfig ?? {})]));
     needing.push(...clusters.filter((c) => reach.get(c.name) === 'proxy').map((c) => c.name));
     for (const c of clusters) {
-      current = c.name;
-      if (reach.get(c.name) === 'proxy') {
-        outcomes.push(await ensureProxy(c));
-        continue;
-      }
-      const why = reach.get(c.name) === 'direct' ? `cluster ${c.name}: reached directly` : `cluster ${c.name}: ${UNREACHABLE}`;
-      const old = records.get(c.name);
-      outcomes.push(old ? await removal(old, `${why};`) : { cluster: c.name, status: 'skipped', detail: why });
+      outcomes.push(await oneCluster(c.name, async () => {
+        if (reach.get(c.name) === 'proxy') return ensureProxy(c);
+        const why = reach.get(c.name) === 'direct' ? `cluster ${c.name}: reached directly` : `cluster ${c.name}: ${UNREACHABLE}`;
+        const old = records.get(c.name);
+        return old ? removal(old, `${why};`) : { cluster: c.name, status: 'skipped', detail: why };
+      }));
     }
     for (const old of [...records.values()].filter((p) => !reach.has(p.cluster))) {
-      current = old.cluster;
-      outcomes.push(await removal(old, `cluster ${old.cluster} no longer exists:`));
+      outcomes.push(await oneCluster(old.cluster, () => removal(old, `cluster ${old.cluster} no longer exists:`)));
     }
-    if (expired.length) throw new Error(expired.join('; '));
   } catch (err) {
     const failure = denied(err)
       ? new KubeProxyAccessDenied(`${current ? `cluster ${current}: the command role may not set up its Kubernetes proxy` : 'the command role may not set up the Kubernetes proxies'}: ${organizationAccess(input.managerVersion)} (${(err as Error).message})`, needing)

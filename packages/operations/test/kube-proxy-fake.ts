@@ -75,6 +75,7 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
     held: new Set<string>(), // functions whose interfaces Lambda does not release (yet)
     ipv6: false, // the VPC has an IPv6 block: a new group's default egress has ::/0 too
     failNext: null as null | { code: string; reason: string }, // the next new function ends Failed
+    failing: new Map<string, { code: string; reason: string }>(), // by function name: each time it is made, it ends Failed
     deny: {} as Record<string, Error>, // by port method: refused (UnauthorizedOperation, AccessDenied)
     calls: [] as Call[], // as IAM evaluates them
     ops: [] as string[], // the port methods called, in order
@@ -243,7 +244,7 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
       const { Code, Tags, ...config } = input;
       state.functions.set(fn, {
         config: { ...structuredClone(config), FunctionArn: arns.fn(fn), CodeSha256: sha(Code.ZipFile), State: 'Pending', StateReason: 'The function is being created.', LastUpdateStatus: 'InProgress', LastModified: new Date(now()).toISOString().replace('Z', '+0000') },
-        tags: { ...Tags }, reads: state.pendingReads, ...(state.failNext ? { failure: state.failNext } : {}),
+        tags: { ...Tags }, reads: state.pendingReads, ...((state.failing.get(fn) ?? state.failNext) ? { failure: state.failing.get(fn) ?? state.failNext! } : {}),
       });
       state.failNext = null;
       return {};

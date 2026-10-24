@@ -32,6 +32,12 @@ export class RetryLater extends Error {
   }
 }
 
+// AWS errors that pass: the step waits and runs again (a resource being updated, a throttled API).
+export const TRANSIENT = new Set([
+  'ContinuousBackupsUnavailableException', 'ResourceInUseException', 'LimitExceededException', 'TooManyRequestsException', 'ThrottlingException', 'Throttling',
+  'ResourceConflictException', 'ConcurrentModificationException', 'ServiceUnavailableException', 'InternalFailure',
+]);
+
 export const INSTALL_STEPS = ['roles', 'table', 'queues', 'log groups', 'functions', 'async invoke', 'event source mappings', 'permissions', 'event rule', 'schedule'] as const;
 export const UNINSTALL_STEPS = ['event rule', 'schedule', 'event source mappings', 'functions', 'queues', 'log groups', 'table', 'roles'] as const;
 export type InstallStep = (typeof INSTALL_STEPS)[number];

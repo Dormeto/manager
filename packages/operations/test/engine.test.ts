@@ -768,6 +768,59 @@ describe('Kubernetes proxies', () => {
     expect(checked(direct)).toEqual(['eks-demo']);
   });
 
+  // Ruling 24: one cluster's proxy failing (here its function Failed: no free address in its subnets) fails what needs that
+  // cluster, never an onboarding on another; the other clusters' proxies are made in every case. B comes first in the
+  // region's listing: the clusters after a failure are processed too.
+  describe('one cluster\'s proxy failing', () => {
+    const REASON = 'Lambda was unable to configure your environment variables because the subnet subnet-0aaa has no free IP addresses.';
+    const BAD = 'dmtr-dev-kube-eks-bad';
+    const FAILURE = `cluster eks-bad: the function ${BAD} failed: ${REASON} (SubnetOutOfIPAddresses)`;
+    const failing = (over: Parameters<typeof setup>[0] = {}) => {
+      const s = withClusters([privateCluster('eks-bad'), privateCluster()], over);
+      s.kube.state.failing.set(BAD, { code: 'SubnetOutOfIPAddresses', reason: REASON });
+      return s;
+    };
+    const madeA = (s: ReturnType<typeof setup>) => s.kube.state.functions.get(FN)?.config.State;
+
+    it('an onboarding on another cluster goes on, the failed cluster named in the step\'s detail and left out of the checks', async () => {
+      const s = failing({ candidates: [k8sCandidate()] });
+      const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      const step = await stepOf(s, op.id, 'kubernetes proxies');
+      expect(step).toMatchObject({ status: 'done', detail: `${FAILURE}; cluster eks-demo: proxy ${FN} in place` });
+      expect(madeA(s)).toBe('Active');
+      expect(checked(s)).toEqual(['eks-demo']);
+      expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(true);
+      // The failed proxy's records kept, for a later run or the removal.
+      expect((await s.records.getRouter(ACCOUNT, 'eu-west-3'))!.proxies!.map((p) => p.cluster)).toEqual(['eks-bad', 'eks-demo']);
+    });
+
+    it('an onboarding on the failed cluster fails, naming it', async () => {
+      const s = failing({ candidates: [k8sCandidate('eks-bad')] });
+      const op = await s.engine.create('onboard', { candidateId: TG }, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+      expect((await s.records.getOperation(op.id))!.error).toBe(`kubernetes proxies: ${FAILURE}`);
+      expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
+      expect(madeA(s)).toBe('Active');
+    });
+
+    it('an install, an upgrade and a cluster-access operation fail, naming every failed cluster', async () => {
+      const s = failing();
+      for (const type of ['install-router', 'upgrade-router', 'cluster-access'] as const) {
+        const op = await s.engine.create(type, { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+        expect(await s.drive(op.id), type).toEqual({ done: true, status: 'failed' });
+        expect((await s.records.getOperation(op.id))!.error, type).toBe(`kubernetes proxies: ${FAILURE}`);
+        expect(madeA(s), type).toBe('Active');
+      }
+      // Both failing: both named.
+      const both = withClusters([privateCluster('eks-bad'), privateCluster()]);
+      both.kube.state.failing.set(BAD, { code: 'SubnetOutOfIPAddresses', reason: REASON }).set(FN, { code: 'SubnetOutOfIPAddresses', reason: REASON });
+      const op = await both.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+      expect(await both.drive(op.id)).toEqual({ done: true, status: 'failed' });
+      expect((await both.records.getOperation(op.id))!.error).toBe(`kubernetes proxies: ${FAILURE}; cluster eks-demo: the function ${FN} failed: ${REASON} (SubnetOutOfIPAddresses)`);
+    });
+  });
+
   it('uninstalling a router removes every proxy recorded, after the access entries, waiting while Lambda holds their network interfaces', async () => {
     const s = withClusters([privateCluster(), privateCluster('eks-other')]);
     await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);

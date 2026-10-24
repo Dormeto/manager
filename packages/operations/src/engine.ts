@@ -3,7 +3,7 @@
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
-import { INSTALL_STEPS, RetryLater, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
+import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, Records, WorkflowType } from './records.js';
 import { ClusterAccessDenied, ensureClusterAccess, removeClusterAccess, type EksPort } from './cluster-access.js';
 import { KubeProxyAccessDenied, ensureKubernetesProxies, proxiesOf, removeKubernetesProxies, type KubeProxyPorts, type ProxyRecord } from './kube-proxies.js';
@@ -26,13 +26,8 @@ const slotMax = (key: string) => (key === ORG_SLOT ? ORG_SLOTS : SLOTS);
 // up to 24 hours after the operation started (about 13,000 workflow events of the 25,000 an execution can hold).
 const slotWait = (attempts: number) => Math.min(60, 10 * 2 ** Math.max(0, attempts - 1));
 const SLOT_WAIT_MAX = 24 * 60 * MINUTE;
-// Retries of a step on a transient error or RetryLater; its waits (a wait outcome) never count.
+// Retries of a step on a transient error (TRANSIENT) or RetryLater; its waits (a wait outcome) never count.
 const RETRY_MAX = 30;
-// AWS errors that pass: the step waits and runs again (a resource being updated, a throttled API).
-const TRANSIENT = new Set([
-  'ContinuousBackupsUnavailableException', 'ResourceInUseException', 'LimitExceededException', 'TooManyRequestsException', 'ThrottlingException', 'Throttling',
-  'ResourceConflictException', 'ConcurrentModificationException', 'ServiceUnavailableException', 'InternalFailure',
-]);
 const WAKE_GRACE = 2 * MINUTE;
 
 export interface RouterRef {
@@ -544,6 +539,15 @@ export function createEngine(deps: EngineDeps) {
         const changed = result.outcomes.some((o) => o.status === 'done' || o.changed);
         if (pending.length) return { status: 'wait', seconds: Math.min(...pending.map((o) => o.seconds ?? 10)), detail, changed };
         if (!result.outcomes.length) return { status: 'skipped', detail: 'no EKS cluster in the account and region' };
+        // A cluster's proxy that failed (ruling 24): the router's install, upgrade or cluster access fails naming every such
+        // cluster; an onboarding only when its candidate's cluster is one (the others are named in the detail, unchecked).
+        const failed = result.outcomes.filter((o) => o.status === 'failed');
+        if (failed.length) {
+          const own = kubernetes && failed.find((o) => o.cluster === kubernetes.cluster);
+          if (op.type !== 'onboard') throw new Error(failed.map((o) => o.detail).join('; '));
+          if (own) throw new Error(own.detail);
+          op.context.clusters = ((op.context.clusters as string[] | undefined) ?? []).filter((c) => !failed.some((o) => o.cluster === c));
+        }
         return { status: changed ? 'done' : 'skipped', detail };
       }
       case 'check clusters': {

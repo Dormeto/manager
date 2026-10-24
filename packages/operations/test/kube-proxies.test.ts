@@ -119,11 +119,11 @@ describe('the Kubernetes proxies step', () => {
     expect(s.account.state.functions.get(FN)!.config.State).toBe('Active');
   });
 
-  it('a function Lambda could not make (no free address in the subnets) fails the step with Lambda\'s reason, recorded; a later run makes it again', async () => {
+  it('a function Lambda could not make (no free address in the subnets) is its cluster\'s failure with Lambda\'s reason, recorded; a later run makes it again', async () => {
     const s = setup();
     const reason = 'Lambda was unable to configure your environment variables because the subnet subnet-0aaa has no free IP addresses.';
     s.account.state.failNext = { code: 'SubnetOutOfIPAddresses', reason };
-    await expect(s.step()).rejects.toThrow(`cluster eks-demo: the function ${FN} failed: ${reason} (SubnetOutOfIPAddresses)`);
+    expect((await s.step()).outcomes).toEqual([{ cluster: 'eks-demo', status: 'failed', detail: `cluster eks-demo: the function ${FN} failed: ${reason} (SubnetOutOfIPAddresses)` }]);
     // What it made stays recorded, for its removal.
     expect(s.proxies()).toEqual([RECORD]);
     // Addresses freed since: the next operation deletes the failed function and makes it again.
@@ -132,6 +132,54 @@ describe('the Kubernetes proxies step', () => {
     expect((await s.step()).proxies).toEqual([RECORD]);
     expect(s.account.writes()).toEqual(['deleteFunction', 'createFunction']);
     expect(s.account.state.functions.get(FN)!.config.State).toBe('Active');
+  });
+
+  // Ruling 24: one cluster's failure is that cluster's outcome, its records kept; the clusters after it are processed.
+  it('one cluster\'s proxy failing (its function Failed) leaves the other clusters\' proxies made', async () => {
+    const s = setup([privateCluster(), privateCluster('eks-other')]);
+    const reason = 'Lambda was unable to configure your environment variables because the subnet subnet-0aaa has no free IP addresses.';
+    s.account.state.failing.set(FN, { code: 'SubnetOutOfIPAddresses', reason });
+    const result = await s.step();
+    expect(result.outcomes).toEqual([
+      { cluster: 'eks-demo', status: 'failed', detail: `cluster eks-demo: the function ${FN} failed: ${reason} (SubnetOutOfIPAddresses)` },
+      { cluster: 'eks-other', status: 'skipped', detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other in place' },
+    ]);
+    expect(result.proxies.map((p) => p.cluster)).toEqual(['eks-demo', 'eks-other']);
+    expect(s.account.state.functions.get('dmtr-dev-kube-eks-other')!.config.State).toBe('Active');
+  });
+
+  it('an error of one cluster\'s calls (a subnet gone) is that cluster\'s failure; a passing error or a dependency not ready is the step\'s, to run it again', async () => {
+    const s = setup([privateCluster(), privateCluster('eks-other')]);
+    const createFunction = s.account.ports.lambda.createFunction;
+    s.account.ports.lambda.createFunction = async (input: { FunctionName: string }) => {
+      if (input.FunctionName === FN) throw ec2Error('InvalidParameterValueException', 'The subnet ID \'subnet-0aaa\' does not exist');
+      return createFunction(input);
+    };
+    const result = await s.step();
+    expect(result.outcomes).toEqual([
+      { cluster: 'eks-demo', status: 'failed', detail: 'cluster eks-demo: The subnet ID \'subnet-0aaa\' does not exist' },
+      { cluster: 'eks-other', status: 'skipped', detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other in place' },
+    ]);
+    // A throttled call is the step's: the engine runs it again.
+    const t = setup([privateCluster(), privateCluster('eks-other')]);
+    t.account.ports.lambda.createFunction = async () => { throw ec2Error('TooManyRequestsException', 'Rate exceeded'); };
+    await expect(t.once()).rejects.toMatchObject({ name: 'TooManyRequestsException' });
+  });
+
+  it('a removal whose network interfaces are still held an hour after its function was deleted is that cluster\'s failure; the other clusters go on', async () => {
+    const s = setup([privateCluster(), privateCluster('eks-other')]);
+    await s.step();
+    s.clusters.splice(0, 1);
+    s.account.state.groups.delete('sg-0cluster00');
+    s.account.state.held.add(FN);
+    await s.once();
+    s.advance(61 * 60_000);
+    const result = await s.once();
+    expect(result.outcomes).toEqual([
+      { cluster: 'eks-other', status: 'skipped', detail: 'cluster eks-other: proxy dmtr-dev-kube-eks-other in place' },
+      { cluster: 'eks-demo', status: 'failed', changed: true, detail: expect.stringMatching(new RegExp(`^cluster eks-demo: Lambda still holds the network interfaces eni-0\\w+, eni-0\\w+ of the proxy ${FN} an hour after its function was deleted$`)) },
+    ]);
+    expect(result.proxies.map((p) => [p.cluster, Boolean(p.deletedAt)])).toEqual([['eks-demo', true], ['eks-other', false]]);
   });
 
   it('a new endpoint or new code updates the function, and nothing else', async () => {
