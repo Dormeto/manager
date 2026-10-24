@@ -190,6 +190,56 @@ describe('a router description', () => {
   });
 });
 
+describe('GET …/description, from the manager\'s store only', () => {
+  // A router that cannot be reached: its status and details fail, its descriptions do not.
+  async function unreachable(groups: { name: string; description: string; grants: { tags: Record<string, string>; permissions: ('read' | 'wake' | 'nap')[] }[]; updatedAt: null; updatedBy: null }[] = []) {
+    const store = createFleetStore({ dynamo: fakeDynamo(), table: 't', now: () => NOW });
+    await store.putDescription({ kind: 'workload', account: ACCOUNT, region: 'eu-west-1', id: 'shop' }, { text: 'Shop', by: 'ops@example.com', at: '2026-10-24T10:00:00.000Z' });
+    await store.putDescription({ kind: 'workload', account: ACCOUNT, region: 'eu-west-1', id: 'secret' }, { text: 'Top secret', by: 'ops@example.com', at: '2026-10-24T10:00:00.000Z' });
+    await store.putDescription({ kind: 'router', account: ACCOUNT, region: 'eu-west-1' }, { text: 'Dev router', by: 'ops@example.com', at: '2026-10-24T10:00:00.000Z' });
+    const api = createApi({
+      routers: ROUTERS, now: () => NOW, newId: () => 'id-1', version: '0.19.0', managerAccount: ACCOUNT,
+      audit: { write: async () => {}, list: async () => [] },
+      invoke: async () => { throw new RouterError('Task timed out after 30.00 seconds'); },
+      fleet: {
+        listRouters: async () => [ROUTER_SUMMARY] as never, listWorkloads: async () => WORKLOADS as never, listGroups: async () => groups,
+        getWorkload: async (_a: string, _r: string, id: string) => (WORKLOADS.find((w) => w.workloadId === id) ?? null) as never,
+        getDescription: (k) => store.getDescription(k), listDescriptions: (kind) => store.listDescriptions(kind),
+      },
+    });
+    return api;
+  }
+
+  it('answers a workload\'s and a router\'s description while the router cannot be reached, and null without one', async () => {
+    const api = await unreachable();
+    expect((await api(viewer('GET', '/api/workloads/dmt-dev/shop'))).statusCode).toBe(502);
+    const w = await api(viewer('GET', W));
+    expect([w.statusCode, json(w)]).toEqual([200, { description: { text: 'Shop', by: 'ops@example.com', at: '2026-10-24T10:00:00.000Z' } }]);
+    expect(json(await api(viewer('GET', '/api/workloads/dmt-dev/other/description')))).toEqual({ description: null });
+    const r = await api(viewer('GET', R));
+    expect([r.statusCode, json(r).description.text]).toEqual([200, 'Dev router']);
+    expect((await api(viewer('GET', '/api/routers/nope/description'))).statusCode).toBe(404);
+  });
+
+  it('a member reads the description of a workload their grants cover, never another one\'s, nor a router\'s', async () => {
+    const api = await unreachable([{ name: 'team-a', description: '', grants: [{ tags: { team: 'a' }, permissions: ['read'] }], updatedAt: null, updatedBy: null }]);
+    const member = as('team-a');
+    const own = await api(member('GET', W));
+    expect([own.statusCode, json(own).description.text]).toEqual([200, 'Shop']);
+    const other = await api(member('GET', '/api/workloads/dmt-dev/secret/description'));
+    expect(other.statusCode).toBe(404);
+    expect(other.body).not.toContain('Top secret');
+    expect((await api(member('GET', R))).statusCode).toBe(403);
+  });
+
+  it('is reached through /iam/ too', async () => {
+    const api = await unreachable();
+    const iam = (path: string): ApiEvent => ({ rawPath: path, requestContext: { http: { method: 'GET' }, authorizer: { iam: { userArn: `arn:aws:iam::${ACCOUNT}:user/cli`, userId: 'AIDAX', accountId: ACCOUNT } } } });
+    expect(json(await api(iam('/iam/workloads/dmt-dev/shop/description'))).description.text).toBe('Shop');
+    expect(json(await api(iam('/iam/routers/dmt-dev/description'))).description.text).toBe('Dev router');
+  });
+});
+
 describe('a failing description read', () => {
   it('leaves the description key out of the details (null means none) and still answers 200', async () => {
     const api = createApi({

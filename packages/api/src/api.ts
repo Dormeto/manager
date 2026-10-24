@@ -857,6 +857,8 @@ export function createApi({
       return {};
     }
   };
+  // The description alone (GET …/description): a failed read fails the answer, so that nobody writes over an unread text.
+  const storedDescription = async (key: DescriptionKey): Promise<{ description: Description | null }> => ({ description: fleet?.getDescription ? await fleet.getDescription(key) : null });
   const summariesOf = async (kind: 'workload' | 'router') => {
     const found = fleet?.listDescriptions ? await fleet.listDescriptions(kind).catch(() => new Map<string, Description>()) : new Map<string, Description>();
     return (id: string) => {
@@ -1052,7 +1054,7 @@ export function createApi({
     if (extra !== undefined) return false;
     if (method === 'GET') {
       if (resource === 'settings') return a === 'workloads' && !b;
-      if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window'));
+      if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window' || action === 'description'));
       return (resource === 'savings' || resource === 'alerts') ? !a : resource === 'operations' && !b;
     }
     if (resource === 'workloads' && !!a && !!b && action === 'schedule') return method === 'PUT' || method === 'DELETE';
@@ -1188,6 +1190,7 @@ export function createApi({
         const description = await descriptionOf({ kind: 'router', account: accountOfRouter(router), region: router.region });
         return reply(200, { ...where(router), ...details, ...(configuration ? { configuration } : {}), ...description });
       }
+      if (method === 'GET' && b === 'description' && !action) return reply(200, await storedDescription({ kind: 'router', account: accountOfRouter(router), region: router.region }));
       if ((method === 'PUT' || method === 'DELETE') && b === 'description' && !action) {
         await needAudited(identity, 'admin', 'description', router.name);
         // The router is one of the manager's (routerOf above).
@@ -1330,9 +1333,11 @@ export function createApi({
         throw err;
       }));
       // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
-      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
+      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window' || action === 'description')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
       if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, await tagsNow(), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
       const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : await tagsNow(), permission);
+      // Its description alone, from the manager's store: read while its router cannot be reached.
+      if (method === 'GET' && action === 'description' && !parts[4]) return reply(200, await storedDescription({ kind: 'workload', account: accountOfRouter(router), region: router.region, id }));
       // Its state history over the last days (R8), from the manager's store: never the router.
       if (method === 'GET' && action === 'history' && !parts[4]) {
         const days = Number(event.queryStringParameters?.days ?? 7);
