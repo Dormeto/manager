@@ -728,10 +728,59 @@ describe('Workload view', () => {
       current = { ...status, description: null };
       dialogButton('Clear').click();
       await flushPromises();
+      expect(writes()).toHaveLength(0);
+      (document.querySelector('[data-test="confirm-clear"]') as HTMLButtonElement).click();
+      await flushPromises();
       expect(writes()).toHaveLength(1);
       expect(writes()[0]![1]).toMatchObject({ method: 'DELETE' });
       expect(isOpen(w)).toBe(false);
       expect(card(w).text()).toContain('No description');
+      w.unmount();
+      done();
+    });
+
+    it('reads it from GET …/description: shown while the router cannot be reached', async () => {
+      vi.mocked(api).mockImplementation((async (path: string) => {
+        if (path.endsWith('/description')) return { description: DESCRIPTION };
+        throw new Error('router dmtr-dev: Task timed out after 30.00 seconds');
+      }) as never);
+      const w = await mountView('operator');
+      expect(w.text()).toContain('Task timed out');
+      expect(card(w).find('h4').text()).toBe('Shop');
+      expect(vi.mocked(api).mock.calls.some(([path, init]) => path === '/workloads/dmtr-dev/5cdfbf844b925bf8/description' && !init)).toBe(true);
+      w.unmount();
+      done();
+    });
+
+    it('shows nothing when that read fails, never "Add a description" over a text it could not read', async () => {
+      current = { ...status, description: null };
+      vi.mocked(api).mockImplementation((async (path: string) => {
+        if (path.endsWith('/description')) throw new Error('internal error');
+        return structuredClone(current);
+      }) as never);
+      const w = await mountView('operator');
+      expect(card(w).exists()).toBe(false);
+      expect(w.text()).not.toContain('Add a description');
+      w.unmount();
+      done();
+    });
+
+    it('shows what the PUT answered at once, without reading the workload again', async () => {
+      const SAVED = { text: 'The shop', by: 'ops@example.com', at: minutesAgo(0) };
+      current = { ...status, description: DESCRIPTION };
+      const w = await mountView('operator');
+      await card(w).get('[data-test="edit-description"]').trigger('click');
+      await flushPromises();
+      vi.mocked(api).mockImplementation((async (path: string, init?: RequestInit) => (init?.method === 'PUT' ? { description: SAVED } : structuredClone(current))) as never);
+      vi.mocked(api).mockClear();
+      const area = document.querySelector('[data-test="description-text"] textarea') as HTMLTextAreaElement;
+      area.value = 'The shop';
+      area.dispatchEvent(new Event('input'));
+      await nextTick();
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(card(w).find('[data-test="description-text-drawn"]').text()).toBe('The shop');
+      expect(vi.mocked(api).mock.calls.map(([path]) => path)).toEqual(['/workloads/dmtr-dev/5cdfbf844b925bf8/description']);
       w.unmount();
       done();
     });

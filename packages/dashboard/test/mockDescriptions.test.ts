@@ -45,6 +45,19 @@ describe('the demo\'s descriptions', () => {
     await expect(put(`/workloads/${w.router}/nope/description`, 'x')).rejects.toMatchObject({ status: 404 });
   });
 
+  it('answers GET …/description of a workload and of a router, as the manager does from its store', async () => {
+    const { workloads } = await mockApi('/workloads') as { workloads: WorkloadSummary[] };
+    const w = workloads.find((x) => x.summary)!;
+    const status = await mockApi(`/workloads/${w.router}/${w.workloadId}`) as WorkloadStatus;
+    expect(await mockApi(`/workloads/${w.router}/${w.workloadId}/description`)).toEqual({ description: status.description });
+    const none = workloads.find((x) => !x.summary)!;
+    expect(await mockApi(`/workloads/${none.router}/${none.workloadId}/description`)).toEqual({ description: null });
+    const { routers } = await mockApi('/routers') as { routers: RouterInfo[] };
+    const r = routers.find((x) => x.summary)!;
+    expect(((await mockApi(`/routers/${r.name}/description`)) as { description: { text: string } }).description.text).toBe(((await mockApi(`/routers/${r.name}`)) as RouterDetails).description!.text);
+    await expect(mockApi('/routers/nope/description')).rejects.toMatchObject({ status: 404 });
+  });
+
   it('does the same for a router', async () => {
     const { routers } = await mockApi('/routers') as { routers: RouterInfo[] };
     const r = routers.find((x) => !x.summary)!;

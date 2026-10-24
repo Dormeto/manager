@@ -23,7 +23,7 @@ import RouterActions from '../components/RouterActions.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import RouterVersion from '../components/RouterVersion.vue';
 import TerraformChip from '../components/TerraformChip.vue';
-import type { AlarmInfo, AlertsInfo, DescriptionInfo, RouterDetails as RouterDetailsInfo, RouterInfo } from '../types';
+import type { AlarmInfo, AlertsInfo, DescriptionInfo, RouterInfo } from '../types';
 
 const props = defineProps<{ name: string }>();
 const now = useNow();
@@ -47,16 +47,17 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   loaded.value = true;
   watch.refreshed(result.routers.filter((r) => r.name === props.name).flatMap((r) => (r.operation ? [{ ...r.operation, subject: r.name }] : [])));
 });
-// The description (manager 0.19.0) comes with the router's details; undefined when the manager could not read it. Administrators write it.
+// The description (manager 0.19.0), read from the manager alone so that it shows while the router cannot be reached;
+// undefined until read, and when the read fails: the card shows nothing then. Administrators write it.
 const description = ref<DescriptionInfo | null | undefined>(undefined);
 const savingDescription = ref(false);
 const descriptionError = ref('');
 const descriptionPath = computed(() => `/routers/${encodeURIComponent(props.name)}/description`);
 onMounted(async () => {
   try {
-    description.value = (await api<RouterDetailsInfo>(`/routers/${encodeURIComponent(props.name)}`)).description;
+    description.value = (await api<{ description: DescriptionInfo | null }>(descriptionPath.value)).description;
   } catch {
-    // The router's own cards say what is wrong with the answer.
+    // Nothing rather than an invitation to write over a text that may exist.
   }
 });
 async function writeDescription(call: { method: 'PUT'; body: string } | { method: 'DELETE' }) {

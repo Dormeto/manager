@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useNow } from '../now';
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
@@ -36,7 +36,7 @@ import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
 import { useCountUp } from '../count-up';
-import type { Counts, WorkloadStatus } from '../types';
+import type { Counts, DescriptionInfo, WorkloadStatus } from '../types';
 
 const now = useNow();
 const props = defineProps<{ router: string; id: string }>();
@@ -99,15 +99,24 @@ async function setHibernate(hibernate: boolean | null) {
   }
 }
 
-// The description (manager 0.19.0): operators and administrators write it, as they rename; the refusal stays in the dialog.
+// The description (manager 0.19.0), read from the manager alone so that it shows while the router cannot be reached;
+// undefined until read, and when the read fails: the card shows nothing then. Operators and administrators write it, as
+// they rename; the refusal stays in the dialog, and a write shows what the manager answered.
+const description = ref<DescriptionInfo | null | undefined>(undefined);
 const savingDescription = ref(false);
 const descriptionError = ref('');
+onMounted(async () => {
+  try {
+    description.value = (await api<{ description: DescriptionInfo | null }>(`${path.value}/description`)).description;
+  } catch {
+    // Nothing rather than an invitation to write over a text that may exist.
+  }
+});
 async function writeDescription(call: { method: 'PUT'; body: string } | { method: 'DELETE' }) {
   savingDescription.value = true;
   descriptionError.value = '';
   try {
-    await api(`${path.value}/description`, call);
-    await run();
+    description.value = (await api<{ description: DescriptionInfo | null }>(`${path.value}/description`, call)).description;
   } catch (err) {
     descriptionError.value = (err as Error).message;
   } finally {
@@ -401,7 +410,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     {{ fallbackText }}: AWS had no capacity for their own types at the last wake; the next nap gives them back.
   </v-alert>
   <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
-  <DescriptionCard v-if="status" class="mb-4" :description="status.description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
+  <DescriptionCard class="mb-4" :description="description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
     @save="saveDescription" @clear="clearDescription" />
 
   <!-- Two columns of cards, 16 px apart: the backends, history and idle window (wide content) on the left; the summary, rules,

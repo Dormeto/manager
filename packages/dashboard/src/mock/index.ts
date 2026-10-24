@@ -85,6 +85,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (a && !action) {
       const router = routerOf(d, a);
       if (method === 'GET' && !b) return routerDetails(d, router, now);
+      if (method === 'GET' && b === 'description') return { description: router.description };
       if (method === 'PUT' && b === 'settings') return setRouterSettings(d, router, body, now);
       if (method === 'PUT' && b === 'description') return setRouterDescription(d, a, body, now);
       if (method === 'DELETE' && b === 'description') return setRouterDescription(d, a, null, now);
@@ -109,6 +110,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
         return workloadHistory(d, workloadOf(d, a, b), days, now);
       }
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
+      if (method === 'GET' && action === 'description') return { description: workloadOf(d, a, b).description };
       if (method === 'PUT' && action === 'settings') return setWorkloadSettings(d, a, b, body, now);
       if (method === 'PUT' && action === 'tags') return setTags(d, a, b, body);
       if (method === 'PUT' && action === 'description') return setWorkloadDescription(d, a, b, body, now);

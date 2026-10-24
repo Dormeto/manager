@@ -90,9 +90,53 @@ describe('DescriptionCard', () => {
     await flushPromises();
     expect(w.emitted('save')).toEqual([['  new text  '.trim()]]);
     expect(button('Clear')).toBeDefined();
+  });
+
+  it('asks before Clear, which removes the text for good', async () => {
+    const w = show({ description: DESCRIPTION, canEdit: true });
+    await w.get('[data-test="edit-description"]').trigger('click');
+    await flushPromises();
     button('Clear')!.click();
     await flushPromises();
+    expect(document.body.textContent).toContain('Remove the description?');
+    expect(document.body.textContent).toContain('It cannot be recovered.');
+    expect(w.emitted('clear')).toBeUndefined();
+    (document.body.querySelector('[data-test="confirm-clear"]') as HTMLButtonElement).click();
+    await flushPromises();
     expect(w.emitted('clear')).toHaveLength(1);
+  });
+
+  it('while saving, Cancel is disabled and the dialog stays (persistent)', async () => {
+    const w = show({ description: DESCRIPTION, canEdit: true });
+    await w.get('[data-test="edit-description"]').trigger('click');
+    await flushPromises();
+    await w.setProps({ saving: true });
+    expect(button('Cancel')!.disabled).toBe(true);
+    expect(w.findComponent({ name: 'VDialog' }).props('persistent')).toBe(true);
+    await w.setProps({ saving: false, error: 'throttled' });
+    expect(button('Cancel')!.disabled).toBe(false);
+    expect(w.findComponent({ name: 'VDialog' }).props('persistent')).toBe(false);
+  });
+
+  it('opens without the refusal of an earlier attempt', async () => {
+    const w = show({ description: DESCRIPTION, canEdit: true, error: 'text must be at most 4000 characters' });
+    await w.get('[data-test="edit-description"]').trigger('click');
+    await flushPromises();
+    expect(dialog()!.textContent).not.toContain('at most 4000 characters');
+    await w.setProps({ saving: true, error: '' });
+    await w.setProps({ saving: false, error: 'throttled' });
+    await flushPromises();
+    expect(dialog()!.textContent).toContain('throttled');
+  });
+
+  it('counts the trimmed text, with a thousands separator', async () => {
+    const w = show({ description: null, canEdit: true });
+    await w.get('[data-test="edit-description"]').trigger('click');
+    await flushPromises();
+    await type('  ab \n ');
+    expect(dialog()!.querySelector('[data-test="description-count"]')!.textContent).toBe('2 / 4,000');
+    await type(` ${'a'.repeat(1234)} `);
+    expect(dialog()!.querySelector('[data-test="description-count"]')!.textContent).toBe('1,234 / 4,000');
   });
 
   it('has no Clear without a description', async () => {
@@ -108,7 +152,7 @@ describe('DescriptionCard', () => {
     await w.get('[data-test="edit-description"]').trigger('click');
     await flushPromises();
     await type('a'.repeat(4001));
-    expect(dialog()!.textContent).toContain('4001 / 4,000');
+    expect(dialog()!.textContent).toContain('4,001 / 4,000');
     expect(button('Save')!.disabled).toBe(true);
     await type('ok');
     expect(button('Save')!.disabled).toBe(false);

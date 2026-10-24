@@ -32,6 +32,8 @@ let failSave = false;
 // The description the manager answers with (undefined: none readable, the key absent) and the refusal of its PUT.
 let described: { text: string; by: string; at: string } | null | undefined;
 let descriptionRefusal = '';
+// The router cannot be reached: its details fail, its description (the manager's) does not.
+let unreachable = false;
 const TERRAFORM_DETAILS = {
   ...DETAILS,
   settings: { hibernate: null, by: null, at: null }, managerSettings: { url: null, hibernate: null, readAt: null, error: null },
@@ -51,6 +53,7 @@ vi.mock('../src/api', () => ({
     }
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
+    if (unreachable && path.startsWith('/routers/')) throw new Error('router dmtr-dev-eu-west-3: Task timed out after 30.00 seconds');
     if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), ...(described === undefined ? {} : { description: described }), clusters: [
       { name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
       { name: 'eks-legacy', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: new Date(Date.now() - 3_600_000).toISOString() },
@@ -249,7 +252,7 @@ describe('Router view', () => {
     const card = (w: Awaited<ReturnType<typeof mountView>>) => w.find('[data-test="description-card"]');
     const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
     const isOpen = (w: Awaited<ReturnType<typeof mountView>>) => w.findComponent(DescriptionCard).findComponent({ name: 'VDialog' }).props('modelValue');
-    const writes = () => calls.filter((c) => c.path.endsWith('/description'));
+    const writes = () => calls.filter((c) => c.path.endsWith('/description') && c.init?.method);
     // Earlier tests leave their dialogs in the document: start from an empty one.
     beforeEach(() => { document.body.innerHTML = ''; });
     const reset = () => { described = undefined; descriptionRefusal = ''; calls.length = 0; document.body.innerHTML = ''; };
@@ -276,6 +279,17 @@ describe('Router view', () => {
       expect(card(viewer).text()).toContain('No description');
       expect(card(viewer).find('[data-test="edit-description"]').exists()).toBe(false);
       viewer.unmount();
+      reset();
+    });
+
+    it('reads it from GET …/description: shown while the router cannot be reached', async () => {
+      described = DESCRIPTION;
+      unreachable = true;
+      const w = await mountView('dmtr-dev-eu-west-3', 'viewer');
+      expect(card(w).find('h4').text()).toBe('Dev');
+      expect(calls.some((c) => c.path === '/routers/dmtr-dev-eu-west-3/description' && !c.init)).toBe(true);
+      w.unmount();
+      unreachable = false;
       reset();
     });
 
@@ -323,6 +337,9 @@ describe('Router view', () => {
       await flushPromises();
       described = null;
       dialogButton('Clear').click();
+      await flushPromises();
+      expect(writes()).toHaveLength(0);
+      (document.querySelector('[data-test="confirm-clear"]') as HTMLButtonElement).click();
       await flushPromises();
       expect(writes()).toHaveLength(1);
       expect(writes()[0]).toMatchObject({ path: '/routers/dmtr-dev-eu-west-3/description', init: { method: 'DELETE' } });
