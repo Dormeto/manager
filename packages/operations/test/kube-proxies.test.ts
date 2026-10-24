@@ -194,6 +194,15 @@ describe('the Kubernetes proxies step', () => {
     expect(s.account.writes()).toEqual([]);
   });
 
+  // EKS made a cluster security group for every cluster from platform eks.3 on (2019): an older one has none to admit the proxy.
+  it('a private cluster without a cluster security group is skipped, saying so', async () => {
+    const old = privateCluster();
+    delete (old.resourcesVpcConfig as { clusterSecurityGroupId?: string }).clusterSecurityGroupId;
+    const s = setup([old]);
+    expect((await s.step()).outcomes).toEqual([{ cluster: 'eks-demo', status: 'skipped', detail: 'cluster eks-demo: no cluster security group (resourcesVpcConfig.clusterSecurityGroupId) to admit its proxy' }]);
+    expect(s.account.writes()).toEqual([]);
+  });
+
   it('the proxy of a cluster that no longer exists is removed (its cluster security group went with it)', async () => {
     const s = setup([privateCluster(), cluster('open')]);
     await s.step();

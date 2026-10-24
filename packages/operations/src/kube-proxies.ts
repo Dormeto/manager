@@ -170,7 +170,8 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
   account: string; region: string; routerName: string; kubeProxy: KubeProxy; trust: Policy; boundaryArn: string; zip: Uint8Array; codeSha256: string; existing: ProxyRecord[];
   since?: number; now?: number;
 }): Promise<{ outcomes: ProxyOutcome[]; proxies: ProxyRecord[] }> {
-  const { kubeProxy: kp, iam, logs, lambda, ec2 } = { ...input, ...ports };
+  const kp = input.kubeProxy;
+  const { iam, logs, lambda, ec2 } = ports;
   const now = input.now ?? Date.now();
   const at = { since: input.since ?? now, now };
   const records = new Map(input.existing.map((p) => [p.cluster, p]));
@@ -196,6 +197,7 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     const roleName = kubeProxyName(kp.rolePrefix, c.name);
     const label = `cluster ${c.name}: proxy ${fn}`;
     if (!c.endpoint || !c.certificateAuthority?.data) return { cluster: c.name, status: 'skipped', detail: `cluster ${c.name}: no endpoint yet (${c.status ?? 'unknown'}): set up its access again once it is active` };
+    if (!vpc.clusterSecurityGroupId) return { cluster: c.name, status: 'skipped', detail: `cluster ${c.name}: no cluster security group (resourcesVpcConfig.clusterSecurityGroupId) to admit its proxy` };
     const changed: string[] = [];
     let old = records.get(c.name);
     // Made again in another VPC: the proxy in the earlier one goes first.
