@@ -92,7 +92,7 @@ resource "aws_iam_role" "discovery" {
 resource "aws_iam_role_policy" "discovery" {
   name   = "discovery"
   role   = aws_iam_role.discovery.id
-  policy = replace(replace(file("${path.module}/discovery-policy.json"), "$${account}", data.aws_caller_identity.current.account_id), "$${partition}", data.aws_partition.current.partition)
+  policy = file("${path.module}/discovery-policy.json")
 }
 
 module "command_role" {
