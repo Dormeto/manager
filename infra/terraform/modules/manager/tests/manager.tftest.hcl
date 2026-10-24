@@ -666,6 +666,21 @@ run "idle_window_requests" {
   }
 }
 
+# Private EKS endpoints (R10.6): discovery finds the router of an account and region (its proxies' name prefix) and reads
+# the clusters through them, with the router version the manager pins.
+run "discovery_knows_the_routers" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.discovery.environment[0].variables["ROUTERS"] == local.routers
+    error_message = "Discovery gets ROUTERS, as the operations and the API do."
+  }
+  assert {
+    condition     = aws_lambda_function.discovery.environment[0].variables["ROUTER_VERSION"] == local.router_version
+    error_message = "Discovery names the router version the manager pins (a proxy older than it)."
+  }
+}
+
 run "organization_conditions_by_default" {
   command = plan
 

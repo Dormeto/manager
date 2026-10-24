@@ -96,6 +96,10 @@ resource "aws_lambda_function" "discovery" {
       DISCOVERY_MODE = var.discovery_mode
       # The access check function checks the command role of each account.
       ACCESS_CHECK_FUNCTION = aws_lambda_function.access_check.function_name
+      # The routers (Terraform's here, the installed ones in the table): the proxy of a private cluster is named after the router
+      # of its account and region; the router version the manager pins names a proxy older than it.
+      ROUTERS        = local.routers
+      ROUTER_VERSION = local.router_version
       # Dev only: a synthetic organization added to the real one (acceptance at scale, scale design §7).
       SYNTHETIC_ACCOUNTS = tostring(var.discovery_synthetic_accounts)
     }

@@ -104,6 +104,7 @@ const demo = (extra = {}) => ({
   ...extra,
 });
 const PRIVATE = { endpointPublicAccess: false, endpointPrivateAccess: true, vpcId: 'vpc-1' };
+const NO_PROXY = error('KubernetesError', 'the cluster\'s endpoint is private and its proxy dmt-dev-kube-unproxied is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)', { status: 0, reason: 'NoProxy' });
 const UNAUTHORIZED = error('KubernetesError', 'Unauthorized', { status: 401, reason: 'Unauthorized' });
 const ready = (objects, more = {}) => ({ description: eksCluster('eks-demo'), objects, karpenter: true, ...more });
 const ARN = 'arn:aws:elasticloadbalancing:eu-west-1:111122223333:targetgroup';
@@ -181,11 +182,11 @@ const organizations = (call, input) => {
 export function cases(now) {
   const WHERE = { account: '111122223333', region: 'eu-west-1' };
   const BASE = ['elbv2', 'autoscaling', 'ecs', 'cloudwatch'];
-  const scan = (title, spec, { ports = BASE, reader, fails } = {}) => ({
-    name: `scanRegion: ${title}`, input: { function: 'scanRegion', where: WHERE, now, ports, ...(reader ? { reader } : {}) }, model: regionModel(spec), ...(fails ? { fails } : {}),
+  const scan = (title, spec, { ports = BASE, reader, router, fails } = {}) => ({
+    name: `scanRegion: ${title}`, input: { function: 'scanRegion', where: WHERE, now, ports, ...(reader ? { reader } : {}), ...(router ? { router } : {}) }, model: regionModel(spec), ...(fails ? { fails } : {}),
   });
   const K = [...BASE, 'kubernetes'];
-  const backend = (title, clusters, groups, reader) => ({ name: `kubernetesBackend: ${title}`, input: { function: 'kubernetesBackend', groups, ...(reader ? { reader } : {}) }, model: regionModel({ clusters }) });
+  const backend = (title, clusters, groups, reader) => ({ name: `kubernetesBackend: ${title}`, input: { function: 'kubernetesBackend', where: WHERE, groups, ...(reader ? { reader } : {}) }, model: regionModel({ clusters }) });
   const m = (title, criterion, account = A, r = rule()) => ({ name: `matches: ${title}`, input: { function: 'matches', criterion, account, rule: r, inventory: INVENTORY } });
   const decide = (title, cfg) => ({ name: `decide: ${title}`, input: { function: 'decide', config: cfg, account: A, rule: rule(), inventory: INVENTORY } });
   const plans = (title, cfg) => [
@@ -217,11 +218,17 @@ export function cases(now) {
     scan('an onboarded Ingress workload, asleep', ingressRegion(grouped(0, 1), false), { ports: K }),
     scan('a lone Ingress patched: its own rule forwards to its target group and the waker', ingressRegion(({ customer, waker, conditions, fwd }) => [{ RuleArn: 'r-solo', Priority: '1', Conditions: conditions, Actions: fwd([customer, 1], [waker, 0]) }]), { ports: K }),
     scan('a customer rule with other conditions is not the workload\'s', ingressRegion((r) => [...grouped(1, 0)(r), { RuleArn: 'r-other', Priority: '3', Conditions: other, Actions: r.fwd([r.customer, 1]) }]), { ports: K }),
-    { name: 'clustersOf: the region\'s clusters, those it cannot reach or read with the reason', input: { function: 'clustersOf' }, model: regionModel({ clusters: {
+    { name: 'clustersOf: the region\'s clusters, those it cannot reach or read with the reason', input: { function: 'clustersOf', where: WHERE }, model: regionModel({ clusters: {
       'eks-demo': ready(demo()),
       private: { description: eksCluster('private', PRIVATE), objects: {} },
       office: { description: eksCluster('office', { endpointPublicAccess: true, publicAccessCidrs: ['198.51.100.0/24'], vpcId: 'vpc-1' }), objects: {} },
       denied: { description: eksCluster('denied'), objects: {}, refuse: UNAUTHORIZED },
+    } }) },
+    { name: 'clustersOf: with the account\'s router, a private cluster is read through its proxy, one without its proxy says so', input: { function: 'clustersOf', where: WHERE, router: 'dmt-dev' }, model: regionModel({ clusters: {
+      proxied: { description: eksCluster('proxied', PRIVATE), objects: demo(), karpenter: true },
+      limited: { description: eksCluster('limited', { ...PRIVATE, endpointPublicAccess: true, publicAccessCidrs: ['198.51.100.0/24'] }), objects: demo() },
+      unproxied: { description: eksCluster('unproxied', PRIVATE), objects: {}, connect: NO_PROXY },
+      office: { description: eksCluster('office', { endpointPublicAccess: true, publicAccessCidrs: ['198.51.100.0/24'], vpcId: 'vpc-1' }), objects: {} },
     } }) },
     backend('an Ingress in a group: its Deployment, the switch through Dormeto\'s Ingress, HPA, Argo CD, Karpenter', { 'eks-demo': ready(demo()) },
       [group('k8s-demo-web', 'ip', ['10.0.1.1', '10.0.1.2'], controllerTags('demo/web-web:80'))]),
@@ -298,13 +305,13 @@ export function cases(now) {
 }
 
 const clusterView = (clusters) => clusters.map((c) => ({ name: c.name, reason: c.reason ?? null }));
-const kubernetesPorts = (ports, reader) => ({ eks: ports.eks, kubernetesOf: ports.kubernetesOf, ...(reader ? { reader } : {}) });
+const kubernetesPorts = (ports, { reader, router }) => ({ eks: ports.eks, kubernetesOf: ports.kubernetesOf, ...(router ? { router } : {}), ...(reader ? { reader } : {}) });
 
 export async function run(product, input, ports, context) {
   switch (input.function) {
     case 'scanRegion': {
       const given = Object.fromEntries(input.ports.filter((p) => p !== 'kubernetes').map((p) => [p, ports[p]]));
-      if (input.ports.includes('kubernetes')) given.kubernetes = kubernetesPorts(ports, input.reader);
+      if (input.ports.includes('kubernetes')) given.kubernetes = kubernetesPorts(ports, input);
       let clusters = [];
       try {
         const rules = await product.scanRegion(given, input.where, { now: () => Date.parse(input.now), onClusters: (found) => { clusters = clusterView(found); } });
@@ -314,9 +321,9 @@ export async function run(product, input, ports, context) {
         return { error: { name: err.name, message: err.message } };
       }
     }
-    case 'clustersOf': return clusterView(await product.clustersOf(kubernetesPorts(ports, input.reader)));
+    case 'clustersOf': return clusterView(await product.clustersOf(kubernetesPorts(ports, input), input.where));
     case 'kubernetesBackend': {
-      const clusters = await product.clustersOf(kubernetesPorts(ports, input.reader));
+      const clusters = await product.clustersOf(kubernetesPorts(ports, input), input.where);
       const out = [];
       for (const g of input.groups) out.push(await product.kubernetesBackend(clusters, g));
       return out;
@@ -338,11 +345,14 @@ Go \`internal/discover\`). \`input.function\` names the function:
   ports the scan is given: \`elbv2\` always, \`autoscaling\`, \`ecs\`, \`cloudwatch\`, \`ec2\`, \`kubernetes\` when listed
   (one not listed is absent from the Node \`ScanPorts\`: the scan reads nothing of it — no Auto Scaling groups, ECS
   services, idle hours, nodes or clusters). \`kubernetes\` is \`eks\` and the clusters' API (\`kubernetes.of\`, \`get\`,
-  \`list\`); \`reader\` names who reads the clusters in the reason of one refused (\`DmtDiscoveryRole\` when absent). Output: \`{rules, clusters}\` — the \`ScannedRule\`s in the scan's order, and the
+  \`list\`); \`router\`: as for \`clustersOf\`; \`reader\` names who reads the clusters in the reason of one refused (\`DmtDiscoveryRole\` when absent). Output: \`{rules, clusters}\` — the \`ScannedRule\`s in the scan's order, and the
   region's clusters as read (\`{name, reason}\`, \`reason\` null for one read); \`{error: {name, message}}\` when the scan
   fails.
-- \`clustersOf\`: \`{reader?}\`. Output: \`[{name, reason}]\`.
-- \`kubernetesBackend\`: \`{groups, reader?}\`: the clusters read once (\`clustersOf\`), then each group
+- \`clustersOf\`: \`{where: {account, region}, reader?, router?}\`; \`router\` (the name of the router of the account and region)
+  is on a kubernetes port when one is there: a cluster whose private access is on and whose public endpoint is not open to
+  \`0.0.0.0/0\` is read through its proxy (the recorded \`kubernetes.of\`), or, without \`router\`, not reached (\`where\` named in its
+  reason); private access off and the public endpoint limited: not reached either, with the router's \`UNREACHABLE\` text. Output: \`[{name, reason}]\`.
+- \`kubernetesBackend\`: \`{where, groups, reader?}\`: the clusters read once (\`clustersOf\`), then each group
   (\`{arn, type, vpcId, tags, targets}\`) traced in turn. Output: one result per group — the
   \`{kind: "k8s", id, kubernetes}\` backend, the reason it cannot be napped, or null (not Kubernetes).
 - \`matches\`: \`{criterion, account, rule, inventory}\`. Output: a boolean.

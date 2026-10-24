@@ -16,6 +16,7 @@ import {
   ElasticLoadBalancingV2Client,
 } from '@aws-sdk/client-elastic-load-balancing-v2';
 import { ListAccountsForParentCommand, ListOrganizationalUnitsForParentCommand, ListRootsCommand, ListTagsForResourceCommand } from '@aws-sdk/client-organizations';
+import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { AssumeRoleCommand } from '@aws-sdk/client-sts';
 import type { KubernetesPorts } from './kubernetes.js';
 import type { OrganizationsPort } from './org.js';
@@ -56,15 +57,42 @@ export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; 
   };
 }
 
+// The Lambda port of the router's Kubernetes client (router lambda/src/aws/lambda.mjs invoke): the parsed answer of a
+// synchronous invocation, with the discovery role's credentials; the SDK's errors as they are raised (ResourceNotFoundException
+// for an absent proxy), a function error thrown. A proxy answers within its 15 seconds: the SDK does not send a call twice.
+export function lambdaPort(credentials: Credentials | (() => Promise<Credentials>), region: string, client?: Sender) {
+  const sender: Sender = client ?? new LambdaClient({ region, credentials, maxAttempts: 2, requestHandler: { connectionTimeout: 3_000, requestTimeout: 20_000 } });
+  return {
+    invoke: async (functionName: string, payload: unknown) => {
+      const out = await sender.send(new InvokeCommand({ FunctionName: functionName, InvocationType: 'RequestResponse', Payload: Buffer.from(JSON.stringify(payload)) }));
+      const text = out.Payload?.length ? Buffer.from(out.Payload).toString() : '';
+      const value = text ? JSON.parse(text) : undefined;
+      if (out.FunctionError) throw Object.assign(new Error(`${value?.errorType ?? out.FunctionError}: ${value?.errorMessage ?? 'the function failed'}`), { name: 'FunctionError' });
+      return value;
+    },
+  };
+}
+
 // The region's EKS clusters (Kubernetes workloads, R10.5): listed and described with the discovery role; their API called
 // with an EKS token signed with the same credentials (the router's client: the role's access entry, AmazonEKSViewPolicy).
 // credentials: static, or a provider (the estimate's profile); reader: who reads, in the reason of a cluster it cannot read.
-export function kubernetesPorts(credentials: Credentials | (() => Promise<Credentials>), region: string, client: Sender = new EKSClient({ region, credentials, maxAttempts: 5 }), reader?: string): KubernetesPorts {
+// proxyPrefix: <router name>-kube- of the router of the account and region (its proxies serve the private clusters, with
+// lambda: invoke with the same credentials); none: no router there. version: the router version the manager pins.
+export function kubernetesPorts(
+  credentials: Credentials | (() => Promise<Credentials>),
+  region: string,
+  client: Sender = new EKSClient({ region, credentials, maxAttempts: 5 }),
+  reader?: string,
+  proxyPrefix?: string | null,
+  lambda: { invoke(functionName: string, payload: unknown): Promise<unknown> } = lambdaPort(credentials, region),
+  version: string | undefined = process.env.ROUTER_VERSION || undefined,
+): KubernetesPorts {
   const describeCluster = (input: { name: string }) => client.send(new DescribeClusterCommand(input));
   const resolved = async () => (typeof credentials === 'function' ? credentials() : credentials);
   return {
     eks: { listClusters: (input) => client.send(new ListEksClustersCommand(input)), describeCluster },
-    kubernetesOf: kubernetesConnector({ eks: { describeCluster, credentials: resolved }, region }),
+    kubernetesOf: kubernetesConnector({ eks: { describeCluster, credentials: resolved }, region, lambda, proxyPrefix: proxyPrefix ?? null, version }),
+    router: proxyPrefix ? proxyPrefix.replace(/-kube-$/, '') : null,
     ...(reader ? { reader } : {}),
   };
 }

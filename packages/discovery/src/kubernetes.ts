@@ -3,6 +3,9 @@
 // no Secrets, no Nodes), and a target group traced to the one Deployment or StatefulSet behind it, with how the waker is
 // switched in. The cluster client is the router's (router lambda/src/lib/k8s.mjs), wired in aws.ts.
 
+// @ts-expect-error the router's module has no type declarations
+import { UNREACHABLE, reachOf } from '../../../../router/lambda/src/lib/k8s.mjs';
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface KubeClient {
   get(path: string): Promise<any>;
@@ -15,6 +18,7 @@ export interface KubernetesPorts {
     describeCluster(input: { name: string }): Promise<{ cluster?: any }>;
   };
   kubernetesOf(cluster: string): Promise<KubeClient>;
+  router?: string | null; // the router of the account and region (its proxies serve the private clusters), none when absent
   reader?: string; // who reads the clusters, in the reason of one it cannot read (DmtDiscoveryRole by default)
 }
 
@@ -46,7 +50,11 @@ export interface Cluster {
 // The EKS calls discovery adds for clusters (its policy grants them, with DISCOVERY_ACTIONS).
 export const EKS_ACTIONS = ['eks:ListClusters', 'eks:DescribeCluster'];
 
-const PRIVATE = 'the cluster\'s endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)';
+// Why a private cluster is not read (private endpoints, spec §8): no router in its account and region, or a router without
+// the cluster's proxy. A public endpoint limited to some addresses with private access off is the router's UNREACHABLE.
+const noRouter = (where?: Where) => `the cluster's endpoint is private: Dormeto reaches it through a proxy function in its VPC, set up with the router of ${where ? `${where.account} ${where.region}` : 'its account and region'}: install it`;
+const NO_PROXY = 'the cluster\'s endpoint is private and its proxy is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)';
+export type Where = { account: string; region: string };
 const CLUSTER_TAG = 'elbv2.k8s.aws/cluster';
 const RESOURCE_TAG = 'ingress.k8s.aws/resource';
 const GROUP = 'alb.ingress.kubernetes.io/group.name';
@@ -58,7 +66,7 @@ const message = (err: unknown) => String((err as Error)?.message ?? err);
 
 // Every cluster of the region with what discovery can read of it: its pods (by IP) and whether a node autoscaler runs;
 // a cluster it cannot reach or read keeps the reason (its target groups are ineligible with it, the account goes on).
-export async function clustersOf(ports: KubernetesPorts): Promise<Cluster[]> {
+export async function clustersOf(ports: KubernetesPorts, where?: Where): Promise<Cluster[]> {
   const names: string[] = [];
   let next: string | undefined;
   do {
@@ -72,8 +80,13 @@ export async function clustersOf(ports: KubernetesPorts): Promise<Cluster[]> {
     const vpc = c.resourcesVpcConfig ?? {};
     const found: Cluster = { name, vpcId: vpc.vpcId };
     clusters.push(found);
-    if (!(vpc.endpointPublicAccess && (vpc.publicAccessCidrs ?? []).includes('0.0.0.0/0'))) {
-      found.reason = PRIVATE;
+    const reach: 'direct' | 'proxy' | 'none' = reachOf(vpc);
+    if (reach === 'none') {
+      found.reason = UNREACHABLE;
+      continue;
+    }
+    if (reach === 'proxy' && !ports.router) {
+      found.reason = noRouter(where);
       continue;
     }
     try {
@@ -82,9 +95,9 @@ export async function clustersOf(ports: KubernetesPorts): Promise<Cluster[]> {
       found.autoscaler = await autoscalerOf(found.client);
       found.lists = new Map();
     } catch (err) {
-      found.reason = status(err) === 401 || status(err) === 403
-        ? `the cluster does not let ${ports.reader ?? 'DmtDiscoveryRole'} read it (an access entry with AmazonEKSViewPolicy): ${message(err)}`
-        : `the cluster cannot be read: ${message(err)}`;
+      if ((err as { reason?: string })?.reason === 'NoProxy') found.reason = NO_PROXY;
+      else if (status(err) === 401 || status(err) === 403) found.reason = `the cluster does not let ${ports.reader ?? 'DmtDiscoveryRole'} read it (an access entry with AmazonEKSViewPolicy): ${message(err)}`;
+      else found.reason = `the cluster cannot be read: ${message(err)}`;
     }
   }
   return clusters;

@@ -258,7 +258,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   const visible = rows.filter((r) => tags.get(r.rule.RuleArn ?? '')?.[ROLE_TAG] !== 'admin');
   const owners = await backendOwners(ports);
   // A discovery role without EKS rights (accounts set up before 0.10.0) scans the region as before.
-  const clusters = ports.kubernetes ? await clustersOf(ports.kubernetes).catch((err) => {
+  const clusters = ports.kubernetes ? await clustersOf(ports.kubernetes, where).catch((err) => {
     if (/AccessDenied|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`)) return [];
     throw err;
   }) : [];

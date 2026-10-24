@@ -80,13 +80,14 @@ function demo(extra: Objects = {}): Objects {
 const CLUSTER = (name: string, vpc: Record<string, unknown> = { endpointPublicAccess: true, publicAccessCidrs: ['0.0.0.0/0'], vpcId: 'vpc-1' }) => ({
   name, endpoint: `https://${name}.example`, version: '1.36', certificateAuthority: { data: '' }, resourcesVpcConfig: vpc, accessConfig: { authenticationMode: 'API' },
 });
-function ports(clusters: Record<string, { cluster: ReturnType<typeof CLUSTER>; client: KubeClient }>): KubernetesPorts {
+function ports(clusters: Record<string, { cluster: ReturnType<typeof CLUSTER>; client: KubeClient }>, more: Partial<KubernetesPorts> = {}): KubernetesPorts {
   return {
     eks: {
       async listClusters() { return { clusters: Object.keys(clusters) }; },
       async describeCluster({ name }) { return { cluster: clusters[name]!.cluster }; },
     },
     kubernetesOf: async (name) => clusters[name]!.client,
+    ...more,
   };
 }
 const ARN = 'arn:aws:elasticloadbalancing:eu-west-1:111122223333:targetgroup';
@@ -94,19 +95,52 @@ const group = (name: string, type: string, targets: string[], tags: Record<strin
 const controllerTags = (resource: string) => ({ 'elbv2.k8s.aws/cluster': 'eks-demo', 'ingress.k8s.aws/stack': 'demo-group', 'ingress.k8s.aws/resource': resource });
 
 describe('Kubernetes discovery', () => {
+  const WHERE = { account: '111122223333', region: 'eu-west-1' };
+  const PRIVATE_VPC = { endpointPublicAccess: false, endpointPrivateAccess: true, vpcId: 'vpc-1' };
+  const OFFICE_VPC = { endpointPublicAccess: true, publicAccessCidrs: ['198.51.100.0/24'], endpointPrivateAccess: false, vpcId: 'vpc-1' };
+  const noProxy = () => Object.assign(new Error('the cluster\'s endpoint is private and its proxy dmt-dev-kube-private is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)'), { name: 'KubernetesError', status: 0, reason: 'NoProxy' });
+
   it('reads the clusters of the region, those it cannot reach with the reason', async () => {
     const found = await clustersOf(ports({
       'eks-demo': { cluster: CLUSTER('eks-demo'), client: cluster(demo()) },
-      private: { cluster: CLUSTER('private', { endpointPublicAccess: false, endpointPrivateAccess: true, vpcId: 'vpc-1' }), client: cluster({}) },
-      office: { cluster: CLUSTER('office', { endpointPublicAccess: true, publicAccessCidrs: ['198.51.100.0/24'], vpcId: 'vpc-1' }), client: cluster({}) },
+      private: { cluster: CLUSTER('private', PRIVATE_VPC), client: cluster({}) },
+      office: { cluster: CLUSTER('office', OFFICE_VPC), client: cluster({}) },
       denied: { cluster: CLUSTER('denied'), client: cluster({}, { refuse: Object.assign(new Error('Unauthorized'), { name: 'KubernetesError', status: 401 }) }) },
-    }));
+    }), WHERE);
     expect(found.map((c) => [c.name, c.reason ?? null])).toEqual([
       ['eks-demo', null],
-      ['private', 'the cluster\'s endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)'],
-      ['office', 'the cluster\'s endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)'],
+      ['private', 'the cluster\'s endpoint is private: Dormeto reaches it through a proxy function in its VPC, set up with the router of 111122223333 eu-west-1: install it'],
+      ['office', 'the cluster\'s public endpoint is limited to some addresses and its private access is off: turn on private access, and Dormeto reaches it from inside its VPC'],
       ['denied', 'the cluster does not let DmtDiscoveryRole read it (an access entry with AmazonEKSViewPolicy): Unauthorized'],
     ]);
+  });
+
+  it('a private cluster of an account with a router whose proxy is absent: the proxy is not set up', async () => {
+    const asked: string[] = [];
+    const found = await clustersOf(ports({ private: { cluster: CLUSTER('private', PRIVATE_VPC), client: cluster({}) } }, {
+      router: 'dmt-dev',
+      kubernetesOf: async (name) => { asked.push(name); throw noProxy(); },
+    }), WHERE);
+    expect(asked).toEqual(['private']);
+    expect(found[0]!.reason).toBe('the cluster\'s endpoint is private and its proxy is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)');
+  });
+
+  it('a private cluster with its proxy is read like an open one', async () => {
+    const found = await clustersOf(ports({ private: { cluster: CLUSTER('private', PRIVATE_VPC), client: cluster(demo()) } }, { router: 'dmt-dev' }), WHERE);
+    expect(found[0]!.reason).toBeUndefined();
+    expect(found[0]!.pods).toHaveLength(8);
+    expect(found[0]!.autoscaler).toBe('karpenter');
+  });
+
+  it('a limited public endpoint with private access on asks for its proxy (here absent); an open one with private access on is read as before', async () => {
+    const asked: string[] = [];
+    const open = cluster(demo());
+    const found = await clustersOf(ports({
+      limited: { cluster: CLUSTER('limited', { ...OFFICE_VPC, endpointPrivateAccess: true }), client: cluster(demo()) },
+      open: { cluster: CLUSTER('open', { endpointPublicAccess: true, publicAccessCidrs: ['0.0.0.0/0'], endpointPrivateAccess: true, vpcId: 'vpc-1' }), client: open },
+    }, { router: 'dmt-dev', kubernetesOf: async (name) => { asked.push(name); if (name === 'open') return open; throw noProxy(); } }), WHERE);
+    expect(asked).toEqual(['limited', 'open']);
+    expect(found.map((c) => [c.name, c.reason === undefined])).toEqual([['limited', false], ['open', true]]);
   });
 
   it('a target group of an Ingress in a group: its Deployment, the switch through Dormeto\'s Ingress, HPA, Argo CD, the autoscaler', async () => {
@@ -173,9 +207,9 @@ describe('Kubernetes discovery', () => {
   it('a target group of a cluster Dormeto cannot reach or read is ineligible with the cluster\'s reason', async () => {
     const clusters = await clustersOf(ports({
       'eks-demo': { cluster: CLUSTER('eks-demo', { endpointPublicAccess: false, endpointPrivateAccess: true, vpcId: 'vpc-1' }), client: cluster(demo()) },
-    }));
+    }), { account: '111122223333', region: 'eu-west-1' });
     expect(await kubernetesBackend(clusters, group('k8s-demo-web', 'ip', ['10.0.1.1'], controllerTags('demo/web-web:80')))).toBe(
-      'cluster eks-demo: the cluster\'s endpoint is private (or limited to some addresses): Dormeto reaches it with the in-cluster agent (R10.6)',
+      'cluster eks-demo: the cluster\'s endpoint is private: Dormeto reaches it through a proxy function in its VPC, set up with the router of 111122223333 eu-west-1: install it',
     );
   });
 });

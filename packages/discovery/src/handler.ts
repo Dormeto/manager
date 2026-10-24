@@ -9,6 +9,8 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { commandCheck, createAssumeRole, discoveryOnlyOf, ec2For, enabledRegionsOf, kubernetesPorts, organizationsPort, regionalClients, scanPorts, trailCovers, trailsPort, type Credentials } from './aws.js';
 import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSummary, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
+import { createRecords } from '../../operations/src/records.js';
+import { proxyPrefixOf } from './proxy-prefix.js';
 import { requestMinutes } from './requests.js';
 import { routeOf } from './route.js';
 import { createStore } from './store.js';
@@ -26,12 +28,23 @@ const invokeCheck = async (payload: Record<string, unknown>) => {
   return JSON.parse(text) as unknown;
 };
 // A run holds its lock for the state machine's whole time limit (3 hours).
-const store = createStore({ dynamo: new DynamoDBClient({}), table: process.env.TABLE ?? '', lockMs: 3 * 3_600_000 });
+const dynamo = new DynamoDBClient({});
+const store = createStore({ dynamo, table: process.env.TABLE ?? '', lockMs: 3 * 3_600_000 });
 const sts = new STSClient({ region });
 // Organizations is a global service served from us-east-1.
 const organizations = organizationsPort(new OrganizationsClient({ region: 'us-east-1' }));
 const write = (level: string) => (event: string, data: object = {}) => console.log(JSON.stringify({ level, event, ...data }));
 const log: Logger = { info: write('info'), warn: write('warn'), error: write('error') };
+// The routers the manager knows (Terraform's in ROUTERS, the installed ones in the table), whose proxies serve the private
+// clusters: read once a minute at most, for the accounts of a run.
+const records = createRecords({ dynamo, table: process.env.TABLE ?? '' });
+const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof proxyPrefixOf>[0];
+let known: { at: number; routers: ReturnType<typeof records.listRouters> } | undefined;
+const proxyPrefix = (where: { account: string; region: string }) => {
+  if (!known || Date.now() - known.at > 60_000) known = { at: Date.now(), routers: records.listRouters() };
+  const routers = known.routers;
+  return proxyPrefixOf(terraformRouters, { listRouters: () => routers }, where);
+};
 // Dev only: a synthetic organization of this many accounts added to the real one (acceptance at scale).
 const synthetic = Number(process.env.SYNTHETIC_ACCOUNTS ?? 0);
 let managerAccount: string | undefined;
@@ -69,7 +82,10 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     assumeRole: assumeDiscovery,
     ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
-    scan: (credentials, where) => scanRegion({ ...scanPorts(regionalClients(credentials as Credentials, where.region)), kubernetes: kubernetesPorts(credentials as Credentials, where.region) }, where),
+    scan: async (credentials, where) => scanRegion({
+      ...scanPorts(regionalClients(credentials as Credentials, where.region)),
+      kubernetes: kubernetesPorts(credentials as Credentials, where.region, undefined, undefined, await proxyPrefix(where)),
+    }, where),
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
