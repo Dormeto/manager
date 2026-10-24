@@ -459,6 +459,24 @@ describe('the Kubernetes proxies step', () => {
     expect(s.account.state.groups.get('sg-0proxy001')!.egress).toEqual([toBlock('10.1.0.0/16')]);
   });
 
+  it('a cluster made again in another VPC whose earlier proxy\'s interfaces are still held an hour later: that cluster\'s failure, its earlier record and group kept', async () => {
+    const s = setup();
+    await s.step();
+    s.account.state.groups.delete('sg-0cluster00');
+    s.clusters[0] = privateCluster('eks-demo', { vpc: 'vpc-0e5f6a7b', group: 'sg-0cluster02' });
+    s.account.addClusterGroup(s.clusters[0]);
+    s.account.state.held.add(FN);
+    await s.once();
+    s.advance(61 * 60_000);
+    const result = await s.once();
+    expect(result.outcomes).toEqual([
+      { cluster: 'eks-demo', status: 'failed', changed: true, detail: expect.stringMatching(new RegExp(`^cluster eks-demo: Lambda still holds the network interfaces eni-0\\w+, eni-0\\w+ of the proxy ${FN} an hour after its function was deleted$`)) },
+    ]);
+    expect(result.proxies.map((p) => [p.vpcId, p.securityGroupId, Boolean(p.deletedAt)])).toEqual([['vpc-0a1b2c3d', 'sg-0proxy000', true]]);
+    expect(s.account.state.groups.has('sg-0proxy000')).toBe(true);
+    expect([...s.account.state.groups.values()].some((g) => g.VpcId === 'vpc-0e5f6a7b' && g.GroupName === FN)).toBe(false);
+  });
+
   it('names the function, its security group and its role by the rule the router shares (kube-proxy-names.json)', async () => {
     for (const c of names) {
       const s = setup([privateCluster(c.cluster)]);

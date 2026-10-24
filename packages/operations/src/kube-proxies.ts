@@ -263,7 +263,8 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
     // Made again in another VPC: the proxy in the earlier one goes first.
     if (old && old.vpcId !== vpc.vpcId) {
       const removed = await removal(old, `cluster ${c.name} is now in ${vpc.vpcId}:`);
-      if (removed.status === 'pending') return removed;
+      // Pending while Lambda holds its interfaces, failed past the hour: the earlier proxy and its record stay.
+      if (removed.status !== 'done') return removed;
       changed.push(`proxy in ${old.vpcId} removed`);
       old = undefined;
     }
