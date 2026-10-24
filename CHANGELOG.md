@@ -7,9 +7,24 @@ CLI script, of the same release).
 
 ## Unreleased
 
-Router 0.32.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
-boundary and Kubernetes rights are unchanged).
+Router 0.33.0. Access: apply the member accounts' access again (the access and organization modules, or the AWS CLI
+script, of the same release) before the routers there are upgraded: `DmtRouterBoundary` gains the network-interface
+rights of the proxies' role, `DmtCommandRole` the EC2 rights for the proxies' security groups, and `DmtDiscoveryRole`
+may invoke the proxies.
 
+- Private EKS endpoints. A cluster whose Kubernetes endpoint is private, or public but limited to some addresses with
+  private access on, is now eligible: Dormeto reaches it through a small proxy function in the cluster's VPC, one per
+  cluster (`<router>-kube-<cluster>`), which forwards the calls to the endpoint and nothing else. A cluster whose public
+  endpoint is open to every address keeps direct calls. A cluster with private access off and a public endpoint limited
+  to some addresses stays ineligible: turn on private access. The manager creates, updates and removes the proxies of
+  the routers it installs, in a `kubernetes proxies` step of the router's install, upgrade, onboarding and cluster
+  access operations (and `remove kubernetes proxies` at uninstall); apply the access again, then upgrade the routers.
+  An account whose access was not applied again goes on without the proxies, with "apply the organization access of
+  manager 0.20.0". A router written in Terraform gets its proxies from the router repository's module
+  `kubernetes-proxy`, one instance per cluster beside `eks-access`. Discovery reads such clusters through the proxy and
+  says why one is not eligible (no router in the account and region, a router without its proxy, or private access
+  off); the router's page and `GET /api/routers/{router}` say for each cluster "directly" or "through its proxy <name>
+  (<version>)". The proxy costs Lambda invocations only (a few cents a month): no NAT gateway, no VPC endpoint.
 - EC2 hibernation. A nap hibernates a standalone EC2 instance that was launched with hibernation, instead of stopping
   it, so it wakes with its memory and processes as they were. It is on by default: an instance launched without
   hibernation, or one AWS refuses to hibernate, is stopped as before, so no nap fails. The most specific setting wins:
