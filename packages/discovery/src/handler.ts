@@ -10,7 +10,7 @@ import { commandCheck, createAssumeRole, discoveryOnlyOf, ec2For, enabledRegions
 import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSummary, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { createRecords } from '../../operations/src/records.js';
-import { proxyPrefixOf } from './proxy-prefix.js';
+import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestMinutes } from './requests.js';
 import { routeOf } from './route.js';
 import { createStore } from './store.js';
@@ -38,13 +38,8 @@ const log: Logger = { info: write('info'), warn: write('warn'), error: write('er
 // The routers the manager knows (Terraform's in ROUTERS, the installed ones in the table), whose proxies serve the private
 // clusters: read once a minute at most, for the accounts of a run.
 const records = createRecords({ dynamo, table: process.env.TABLE ?? '' });
-const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof proxyPrefixOf>[0];
-let known: { at: number; routers: ReturnType<typeof records.listRouters> } | undefined;
-const proxyPrefix = (where: { account: string; region: string }) => {
-  if (!known || Date.now() - known.at > 60_000) known = { at: Date.now(), routers: records.listRouters() };
-  const routers = known.routers;
-  return proxyPrefixOf(terraformRouters, { listRouters: () => routers }, where);
-};
+const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof createProxyPrefixes>[0]['terraform'];
+const proxyPrefix = createProxyPrefixes({ terraform: terraformRouters, records, log });
 // Dev only: a synthetic organization of this many accounts added to the real one (acceptance at scale).
 const synthetic = Number(process.env.SYNTHETIC_ACCOUNTS ?? 0);
 let managerAccount: string | undefined;

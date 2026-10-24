@@ -8,3 +8,28 @@ export async function proxyPrefixOf(terraform: TerraformRouter[], records: Pick<
   const router = (await routersOf(terraform, records)).find((r) => r.account === where.account && r.region === where.region);
   return router ? `${router.name}-kube-` : null;
 }
+
+// The handler's lookup: the table's routers read once a minute at most (never a failed read: the next scan reads again); a
+// failed read costs that scan its proxies (no prefix: a private cluster gets the "install the router" reason), never the scan.
+export function createProxyPrefixes({ terraform, records, log, now = Date.now }: {
+  terraform: TerraformRouter[];
+  records: Pick<Records, 'listRouters'>;
+  log: { warn(event: string, data?: object): void };
+  now?: () => number;
+}) {
+  let known: { at: number; routers: ReturnType<Records['listRouters']> } | undefined;
+  return async (where: { account: string; region: string }): Promise<string | null> => {
+    try {
+      if (!known || now() - known.at > 60_000) {
+        const entry = { at: now(), routers: records.listRouters() };
+        known = entry;
+        entry.routers.catch(() => { if (known === entry) known = undefined; });
+      }
+      const routers = await known.routers;
+      return await proxyPrefixOf(terraform, { listRouters: async () => routers }, where);
+    } catch (err) {
+      log.warn('router-lookup-failed', { account: where.account, region: where.region, error: String((err as Error)?.message ?? err) });
+      return null;
+    }
+  };
+}
