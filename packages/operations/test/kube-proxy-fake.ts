@@ -121,6 +121,7 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
       return;
     }
     Object.assign(c, { State: 'Active', LastUpdateStatus: 'Successful' });
+    for (const key of ['StateReason', 'StateReasonCode', 'LastUpdateStatusReason', 'LastUpdateStatusReasonCode']) delete c[key];
     const groupId = c.VpcConfig.SecurityGroupIds[0];
     for (const [id, eni] of state.interfaces) if (eni.function === c.FunctionName && eni.groupId !== groupId && eni.releaseIn === undefined) state.interfaces.set(id, { ...eni, releaseIn: state.releaseReads });
     if (![...state.interfaces.values()].some((eni) => eni.function === c.FunctionName && eni.groupId === groupId && eni.releaseIn === undefined)) {
@@ -243,7 +244,7 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
       checkVpc(input.VpcConfig);
       const { Code, Tags, ...config } = input;
       state.functions.set(fn, {
-        config: { ...structuredClone(config), FunctionArn: arns.fn(fn), CodeSha256: sha(Code.ZipFile), State: 'Pending', StateReason: 'The function is being created.', LastUpdateStatus: 'InProgress', LastModified: new Date(now()).toISOString().replace('Z', '+0000') },
+        config: { ...structuredClone(config), FunctionArn: arns.fn(fn), CodeSha256: sha(Code.ZipFile), State: 'Pending', StateReason: 'The function is being created.', StateReasonCode: 'Creating', LastUpdateStatus: 'InProgress', LastModified: new Date(now()).toISOString().replace('Z', '+0000') },
         tags: { ...Tags }, reads: state.pendingReads, ...((state.failing.get(fn) ?? state.failNext) ? { failure: state.failing.get(fn) ?? state.failNext! } : {}),
       });
       state.failNext = null;
@@ -256,7 +257,7 @@ export function fakeKubeAccount(clusters: Cluster[], { now = () => Date.now() }:
       if (!f) throw error('ResourceNotFoundException');
       if (f.config.State === 'Pending' || f.config.LastUpdateStatus === 'InProgress') throw error('ResourceConflictException', `The operation cannot be performed at this time. An update is in progress for resource: ${arns.fn(fn)}`);
       if (input.VpcConfig) checkVpc(input.VpcConfig);
-      Object.assign(f.config, structuredClone(input), { LastUpdateStatus: 'InProgress', LastModified: new Date(now()).toISOString().replace('Z', '+0000') });
+      Object.assign(f.config, structuredClone(input), { LastUpdateStatus: 'InProgress', LastUpdateStatusReason: 'The function is being updated.', LastUpdateStatusReasonCode: 'Updating', LastModified: new Date(now()).toISOString().replace('Z', '+0000') });
       f.reads = state.pendingReads;
       return {};
     },

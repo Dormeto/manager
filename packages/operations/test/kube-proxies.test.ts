@@ -182,6 +182,31 @@ describe('the Kubernetes proxies step', () => {
     expect(result.proxies.map((p) => [p.cluster, Boolean(p.deletedAt)])).toEqual([['eks-demo', true], ['eks-other', false]]);
   });
 
+  // A function that never settles (minor 5): waited for 15 minutes from its last change, then its cluster's failure with its
+  // state and Lambda's reason.
+  it('a function still Pending, or still updating, 15 minutes after its last change is its cluster\'s failure, with its state and reason', async () => {
+    const s = setup();
+    s.account.state.pendingReads = 1000;
+    await s.once().catch((err: unknown) => expect(err).toBeInstanceOf(RetryLater));
+    s.advance(10_000);
+    const createdAt = s.now();
+    expect((await s.once()).outcomes[0]!.status).toBe('pending');
+    s.advance(15 * 60_000);
+    expect((await s.once()).outcomes[0]!.status).toBe('pending');
+    s.advance(1_000);
+    expect((await s.once()).outcomes).toEqual([{ cluster: 'eks-demo', status: 'failed', detail: `cluster eks-demo: the function ${FN} is still Pending 15 minutes after its last change: The function is being created. (Creating)` }]);
+    expect(s.now() - createdAt).toBeGreaterThan(15 * 60_000);
+
+    // Settled, then a new endpoint: its update stays InProgress.
+    const u = setup();
+    await u.step();
+    u.account.state.pendingReads = 1000;
+    u.clusters[0]!.endpoint = 'https://EKSDEMO0A1C.gr7.eu-west-1.eks.amazonaws.com';
+    expect((await u.once()).outcomes[0]!.status).toBe('pending');
+    u.advance(15 * 60_000 + 1_000);
+    expect((await u.once()).outcomes).toEqual([{ cluster: 'eks-demo', status: 'failed', detail: `cluster eks-demo: the function ${FN} is still updating 15 minutes after its last change (state Active): The function is being updated. (Updating)` }]);
+  });
+
   it('a new endpoint or new code updates the function, and nothing else', async () => {
     const s = setup();
     await s.step();

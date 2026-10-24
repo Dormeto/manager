@@ -68,6 +68,10 @@ const PENDING_SECONDS = 10;
 const RELEASE_SECONDS = 30;
 // Lambda can take minutes to release a deleted VPC function's network interfaces: waited for up to an hour.
 const RELEASE_MAX_MS = 60 * 60_000;
+// A function Pending or updating (Lambda makes its network interfaces first) is waited for this long after its last change
+// (LastModified, so a later operation does not start the wait again), then its cluster's failure with its state.
+const SETTLE_MAX_MS = 15 * 60_000;
+const why = (reason?: string, code?: string) => [reason, code ? `(${code})` : ''].filter(Boolean).join(' ') || 'no reason given';
 // What to apply where the command role refuses the proxies' calls: the organization access of the manager running (its
 // VERSION), of this manager's release when unknown (ruling 19: no release number in the code, it is chosen at release).
 export const organizationAccess = (version?: string) => `apply the organization access of ${version && /^\d+\.\d+\.\d+/.test(version) ? `manager ${version}` : 'this manager\'s release'}`;
@@ -346,7 +350,14 @@ export async function ensureKubernetesProxies(ports: KubeProxyPorts, input: {
       changed.push('function deleted (it failed earlier)');
       return pending();
     }
-    if (fnState.State === 'Pending' || fnState.LastUpdateStatus === 'InProgress') return pending(`function ${fnState.State === 'Pending' ? 'Pending' : 'updating'}`);
+    if (fnState.State === 'Pending' || fnState.LastUpdateStatus === 'InProgress') {
+      if (at.now - Date.parse(fnState.LastModified ?? '') > SETTLE_MAX_MS) {
+        const late = `cluster ${c.name}: the function ${fn} is still ${fnState.State === 'Pending' ? 'Pending' : 'updating'} ${SETTLE_MAX_MS / 60_000} minutes after its last change`;
+        throw new Error(fnState.State === 'Pending' ? `${late}: ${why(fnState.StateReason, fnState.StateReasonCode)}`
+          : `${late} (state ${fnState.State}): ${why(fnState.LastUpdateStatusReason ?? fnState.StateReason, fnState.LastUpdateStatusReasonCode ?? fnState.StateReasonCode)}`);
+      }
+      return pending(`function ${fnState.State === 'Pending' ? 'Pending' : 'updating'}`);
+    }
     if (fnState.LastUpdateStatus === 'Failed' && recent) throw new Error(`cluster ${c.name}: the update of the function ${fn} failed: ${fnState.LastUpdateStatusReason} (${fnState.LastUpdateStatusReasonCode})`);
     const sorted = (ids: string[] = []) => [...ids].sort();
     const actual = {

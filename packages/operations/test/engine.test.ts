@@ -821,6 +821,15 @@ describe('Kubernetes proxies', () => {
     });
   });
 
+  // Minor 5: the step waits for a function to settle 15 minutes at most, then fails with its state.
+  it('an install whose proxy function never settles fails 15 minutes after its creation, with the function\'s state', async () => {
+    const s = withClusters([privateCluster()]);
+    s.kube.state.pendingReads = 10_000;
+    const op = await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toBe(`kubernetes proxies: cluster eks-demo: the function ${FN} is still Pending 15 minutes after its last change: The function is being created. (Creating)`);
+  });
+
   it('uninstalling a router removes every proxy recorded, after the access entries, waiting while Lambda holds their network interfaces', async () => {
     const s = withClusters([privateCluster(), privateCluster('eks-other')]);
     await s.drive((await s.engine.create('install-router', { account: ACCOUNT, region: 'eu-west-3' }, 'admin')).id);
