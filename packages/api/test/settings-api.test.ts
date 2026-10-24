@@ -7,6 +7,8 @@ const NOW = Date.UTC(2026, 9, 24, 12, 0);
 const MANAGER = '121014831971';
 const ROUTERS = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: MANAGER }];
 const TF = 'workload tf was written by Terraform: set hibernate in its workload module';
+const ROUTER_SETTINGS = { hibernate: false, by: 'a@example.com', at: '2026-10-24T11:00:00.000Z' };
+const MANAGER_SETTINGS = { url: 's3://dmt-prd-manager-ip-lists-121014831971/settings.json', hibernate: true, readAt: '2026-10-24T11:57:00.000Z', error: null };
 
 function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; noStore?: boolean; read?: () => Promise<unknown> } = {}) {
   const audit: AuditEntry[] = [];
@@ -19,7 +21,13 @@ function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; no
       calls.push(payload);
       if (opts.invoke) return opts.invoke(router, payload, options);
       if (payload.action === 'settings') return { level: payload.workloadId ? 'workload' : 'router', settings: payload.settings };
-      if (payload.action === 'router') return { router: { version: '0.32.0', settings: { hibernate: false, by: 'a', at: 1 }, managerSettings: { hibernate: true, readAt: 2, error: null } }, pauses: [], workloads: { total: 0, byState: {}, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } };
+      // As router 0.32.0 answers: its settings and what it read of the manager's beside `router`, with ISO times.
+      if (payload.action === 'router') {
+        return {
+          router: { name: 'dmt-dev', version: '0.32.0', build: 'b1' }, settings: ROUTER_SETTINGS, managerSettings: MANAGER_SETTINGS,
+          pauses: [], workloads: { total: 0, byState: {}, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null },
+        };
+      }
       if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', hibernation: { hibernate: true, from: 'router' } };
       return null;
     },
@@ -185,8 +193,8 @@ describe('PUT /api/routers/:router/settings', () => {
 
   it('relays the router\'s settings and managerSettings in its details', async () => {
     const res = json(await setup().api(event('GET', '/api/routers/dmt-dev', 'dmt-admin')));
-    expect(res.router.settings).toEqual({ hibernate: false, by: 'a', at: 1 });
-    expect(res.router.managerSettings).toEqual({ hibernate: true, readAt: 2, error: null });
+    expect(res.settings).toEqual(ROUTER_SETTINGS);
+    expect(res.managerSettings).toEqual(MANAGER_SETTINGS);
   });
 });
 
