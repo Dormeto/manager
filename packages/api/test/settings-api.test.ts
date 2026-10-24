@@ -1,6 +1,6 @@
 // The hibernation setting at its three levels (EC2 hibernation design §3 and §5): the manager's global settings.json,
 // the router's and the workload's settings through the router, who may, their audit, and the router before 0.32.0.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createApi, RouterError, type ApiEvent, type AuditEntry, type Invoke } from '../src/api.js';
 
 const NOW = Date.UTC(2026, 9, 24, 12, 0);
@@ -8,7 +8,7 @@ const MANAGER = '121014831971';
 const ROUTERS = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: MANAGER }];
 const TF = 'workload tf was written by Terraform: set hibernate in its workload module';
 
-function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; noStore?: boolean } = {}) {
+function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; noStore?: boolean; read?: () => Promise<unknown> } = {}) {
   const audit: AuditEntry[] = [];
   const calls: Record<string, unknown>[] = [];
   const store = { doc: opts.doc ?? null, writes: [] as Record<string, unknown>[] };
@@ -23,7 +23,7 @@ function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; no
       if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', hibernation: { hibernate: true, from: 'router' } };
       return null;
     },
-    ...(opts.noStore ? {} : { globalSettings: { read: async () => store.doc, write: async (d: Record<string, unknown>) => { store.writes.push(d); store.doc = d; } } }),
+    ...(opts.noStore ? {} : { globalSettings: { read: (opts.read ?? (async () => store.doc)) as () => Promise<Record<string, unknown> | null>, write: async (d: Record<string, unknown>) => { store.writes.push(d); store.doc = d; } } }),
   });
   return { api, audit, calls, store };
 }
@@ -112,6 +112,47 @@ describe('PUT /api/settings/workloads', () => {
     const res = await s.api(iam('PUT', '/iam/settings/workloads', { hibernate: false }));
     expect(res.statusCode).toBe(200);
     expect(json(res).updatedBy).toBe(`arn:aws:iam::${MANAGER}:user/cli`);
+  });
+});
+
+describe('a corrupt settings.json (not JSON, or not an object)', () => {
+  const corrupt = [
+    async () => { throw new SyntaxError('Unexpected token \'<\', "<html>" is not valid JSON'); },
+    async () => [1, 2], async () => 'on', async () => 7,
+  ];
+
+  it('GET answers the defaults and says it is unreadable', async () => {
+    for (const read of corrupt) {
+      const res = await setup({ read }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'));
+      expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' }]);
+    }
+  });
+
+  it('PUT starts from an empty document, logged, so that an administrator can repair it', async () => {
+    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const read of corrupt) {
+        const s = setup({ read });
+        const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
+        expect([res.statusCode, s.store.writes]).toEqual([200, [{ workloads: { hibernate: false }, updatedAt: new Date(NOW).toISOString(), updatedBy: 'dmt-admin@example.com' }]]);
+      }
+      expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)).event)).toEqual(Array(corrupt.length).fill('GlobalSettingsReplaced'));
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('another read error still fails the answer', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const read = async () => { throw Object.assign(new Error('Access Denied'), { name: 'AccessDenied' }); };
+      expect((await setup({ read }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).statusCode).toBe(500);
+      const s = setup({ read });
+      expect((await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }))).statusCode).toBe(500);
+      expect(s.store.writes).toEqual([]);
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });
 

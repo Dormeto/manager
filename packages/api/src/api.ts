@@ -1110,21 +1110,36 @@ export function createApi({
 
     // The hibernation default of every router (EC2 hibernation §3): everyone reads it, administrators set it.
     if (resource === 'settings' && a === 'workloads' && !b && (method === 'GET' || method === 'PUT')) {
-      const shown = (doc: Record<string, unknown> | null) => {
+      // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
+      // by hand): read as never set, and replaced by the next write so that an administrator can repair it.
+      const read = async (): Promise<Record<string, unknown> | null | 'unreadable'> => {
+        let doc: unknown;
+        try {
+          doc = globalSettings ? await globalSettings.read() : null;
+        } catch (err) {
+          if (err instanceof SyntaxError) return 'unreadable';
+          throw err;
+        }
+        return doc === null || (typeof doc === 'object' && !Array.isArray(doc)) ? doc as Record<string, unknown> | null : 'unreadable';
+      };
+      const shown = (doc: Record<string, unknown> | null | 'unreadable') => {
+        if (doc === 'unreadable') return { hibernate: true, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
         const hibernate = (doc?.workloads as { hibernate?: unknown } | undefined)?.hibernate;
         return {
           hibernate: typeof hibernate === 'boolean' ? hibernate : true,
           updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         };
       };
-      if (method === 'GET') return reply(200, shown(globalSettings ? await globalSettings.read() : null));
+      if (method === 'GET') return reply(200, shown(await read()));
       await needAudited(identity, 'admin', 'settings', 'workloads');
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
       const hibernate = bodyOf(event).hibernate;
       if (typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
-        const doc = (await globalSettings.read()) ?? {};
+        const found = await read();
+        if (found === 'unreadable') console.warn(JSON.stringify({ level: 'warn', event: 'GlobalSettingsReplaced', reason: 'settings.json is unreadable', by: identity.email }));
+        const doc = found === 'unreadable' ? {} : found ?? {};
         const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
         const updatedAt = new Date(now()).toISOString();
         await globalSettings.write({ ...doc, workloads: { ...workloads, hibernate }, updatedAt, updatedBy: identity.email });
