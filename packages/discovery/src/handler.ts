@@ -10,6 +10,7 @@ import { commandCheck, createAssumeRole, discoveryOnlyOf, ec2For, enabledRegions
 import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSummary, scanAccount, type Logger, type RunDeps, type RunPlan } from './run.js';
 import { scanRegion } from './scan.js';
 import { createRecords } from '../../operations/src/records.js';
+import { createFleetStore } from '../../fleet/src/store.js';
 import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestMinutes } from './requests.js';
 import { routeOf } from './route.js';
@@ -35,11 +36,12 @@ const sts = new STSClient({ region });
 const organizations = organizationsPort(new OrganizationsClient({ region: 'us-east-1' }));
 const write = (level: string) => (event: string, data: object = {}) => console.log(JSON.stringify({ level, event, ...data }));
 const log: Logger = { info: write('info'), warn: write('warn'), error: write('error') };
-// The routers the manager knows (Terraform's in ROUTERS, the installed ones in the table), whose proxies serve the private
-// clusters: read once a minute at most, for the accounts of a run.
+// The routers the manager knows (Terraform's in ROUTERS, the installed ones in the table, those that report to it in the
+// fleet's summaries), whose proxies serve the private clusters: read once a minute at most, for the accounts of a run.
 const records = createRecords({ dynamo, table: process.env.TABLE ?? '' });
+const fleet = createFleetStore({ dynamo, table: process.env.TABLE ?? '' });
 const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof createProxyPrefixes>[0]['terraform'];
-const proxyPrefix = createProxyPrefixes({ terraform: terraformRouters, records, log });
+const proxyPrefix = createProxyPrefixes({ terraform: terraformRouters, records, fleet, log });
 // Dev only: a synthetic organization of this many accounts added to the real one (acceptance at scale).
 const synthetic = Number(process.env.SYNTHETIC_ACCOUNTS ?? 0);
 let managerAccount: string | undefined;
