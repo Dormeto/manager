@@ -7,12 +7,6 @@ CLI script, of the same release).
 
 ## Unreleased
 
-Router 0.33.0. Access: apply the member accounts' access again (the access and organization modules, or the AWS CLI
-script, of the same release) before the routers there are upgraded: `DmtRouterBoundary` gains the network-interface
-rights of the proxies' role, `DmtCommandRole` the EC2 rights for the proxies' security groups, the authorization and
-revocation of ingress rules on the EKS cluster security groups (those tagged `aws:eks:cluster-name`) and the reading of
-the routers' functions' tags (`lambda:ListTags`), and `DmtDiscoveryRole` may invoke the proxies.
-
 - Private EKS endpoints. A cluster whose Kubernetes endpoint is private, or public but limited to some addresses with
   private access on, is now eligible: Dormeto reaches it through a small proxy function in the cluster's VPC, one per
   cluster (`<router>-kube-<cluster>`), which forwards the calls to the endpoint and nothing else. A cluster whose public
