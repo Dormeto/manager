@@ -47,7 +47,7 @@ test('creates the roles and the boundary of a fresh account with the access modu
     Effect: 'Allow', Action: 'sts:AssumeRole', Principal: { AWS: 'arn:aws:iam::111111111111:root' },
     Condition: { ArnLike: { 'aws:PrincipalArn': ['arn:aws:iam::111111111111:role/dmt-prod-manager-discovery', 'arn:aws:iam::111111111111:role/dmt-staging-manager-discovery'] }, StringEquals: { 'aws:PrincipalOrgID': 'o-abcdefghij' } },
   }]);
-  assert.deepEqual(JSON.parse(option(find(calls, 'put-role-policy', 'DmtDiscoveryRole'), 'policy-document')), JSON.parse(read('access/discovery-policy.json')));
+  assert.deepEqual(JSON.parse(option(find(calls, 'put-role-policy', 'DmtDiscoveryRole'), 'policy-document')), JSON.parse(read('access/discovery-policy.json').replaceAll('${account}', '222222222222').replaceAll('${partition}', 'aws')));
   const command = find(calls, 'create-role', 'DmtCommandRole');
   assert.equal(option(command, 'path'), '/');
   assert.deepEqual(JSON.parse(option(command, 'assume-role-policy-document')).Statement[0].Condition, { ArnLike: { 'aws:PrincipalArn': ['arn:aws:iam::111111111111:role/dmt-prod-manager-operations', 'arn:aws:iam::111111111111:role/dmt-staging-manager-operations'] } });

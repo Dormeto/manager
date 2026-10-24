@@ -83,3 +83,17 @@ run "with_the_command_role_no_such_tag" {
     error_message = "With the command role, the discovery role carries no discovery-only tag."
   }
 }
+
+# The Kubernetes proxies of private EKS endpoints (R10.6, manager 0.20.0): the statements, in the account's partition.
+run "discovery_invokes_only_the_kubernetes_proxies" {
+  command = plan
+
+  assert {
+    condition = [for s in jsondecode(aws_iam_role_policy.discovery.policy).Statement : s if s.Sid == "InvokeKubernetesProxies"] == [{
+      Sid = "InvokeKubernetesProxies", Effect = "Allow", Action = "lambda:InvokeFunction"
+      Resource  = "arn:aws-us-gov:lambda:*:222222222222:function:*-kube-*"
+      Condition = { StringEquals = { "aws:ResourceTag/dormeto:role" = "kubernetes-proxy" } }
+    }]
+    error_message = "Discovery invokes functions named *-kube-* and tagged dormeto:role = kubernetes-proxy only."
+  }
+}

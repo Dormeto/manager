@@ -1,6 +1,6 @@
 // The command role's policy against the calls the operations make in a member account (packaging design §5).
 import { describe, expect, it } from 'vitest';
-import { ACCOUNT, FORWARDER_CALLS, allows, role } from './command-policy.js';
+import { ACCOUNT, FORWARDER_CALLS, KUBE_PROXY_CALLS, KUBE_REGION, allows, clusterGroup, kubeFunction, proxyGroup, role, vpc } from './command-policy.js';
 import { ensureClusterAccess, removeClusterAccess, type EksPort } from '../src/cluster-access.js';
 
 describe('the command role\'s policy', () => {
@@ -11,6 +11,38 @@ describe('the command role\'s policy', () => {
     expect(allows('iam:PassRole', role, { 'iam:PassedToService': 'ec2.amazonaws.com' })).toBe(false);
     expect(allows('iam:CreateRole', role)).toBe(false);
     expect(allows('events:PutRule', `arn:aws:events:eu-west-3:${ACCOUNT}:rule/customer-rule`)).toBe(false);
+  });
+});
+
+describe('the command role\'s Kubernetes proxies (R10.6)', () => {
+  it('allows every call that creates, updates and removes a proxy', () => {
+    for (const [action, resource, context] of KUBE_PROXY_CALLS) expect(allows(action, resource, context), `${action} ${resource}`).toBe(true);
+  });
+
+  it('touches only the security groups it tags, and the cluster groups EKS tags', () => {
+    const group = (id: string) => `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:security-group/${id}`;
+    for (const action of ['ec2:RevokeSecurityGroupEgress', 'ec2:AuthorizeSecurityGroupEgress', 'ec2:DeleteSecurityGroup']) {
+      expect(allows(action, proxyGroup), action).toBe(false);
+      expect(allows(action, group('sg-0other'), { 'aws:ResourceTag/dormeto:role': 'something-else' }), action).toBe(false);
+    }
+    for (const action of ['ec2:AuthorizeSecurityGroupIngress', 'ec2:RevokeSecurityGroupIngress']) {
+      expect(allows(action, clusterGroup), action).toBe(false);
+      // The proxy's own group is not a cluster group, and tagged for the proxy it gets no ingress.
+      expect(allows(action, proxyGroup, { 'aws:ResourceTag/dormeto:role': 'kubernetes-proxy' }), action).toBe(false);
+    }
+    // A group is created tagged for the proxy only, and tagged at creation only.
+    expect(allows('ec2:CreateSecurityGroup', group('sg-new'))).toBe(false);
+    expect(allows('ec2:CreateSecurityGroup', group('sg-new'), { 'aws:RequestTag/dormeto:role': 'other' })).toBe(false);
+    expect(allows('ec2:CreateTags', proxyGroup)).toBe(false);
+    expect(allows('ec2:CreateTags', proxyGroup, { 'ec2:CreateAction': 'RunInstances' })).toBe(false);
+    expect(allows('ec2:CreateTags', `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:instance/i-0abc`, { 'ec2:CreateAction': 'CreateSecurityGroup' })).toBe(false);
+    expect(allows('ec2:DeleteVpc', vpc)).toBe(false);
+  });
+
+  it('manages only the routers\' functions', () => {
+    const other = `arn:aws:lambda:${KUBE_REGION}:${ACCOUNT}:function:customer-kube-eks-demo`;
+    for (const action of ['lambda:CreateFunction', 'lambda:UpdateFunctionCode', 'lambda:DeleteFunction']) expect(allows(action, other), action).toBe(false);
+    expect(allows('lambda:CreateFunction', kubeFunction)).toBe(true);
   });
 });
 

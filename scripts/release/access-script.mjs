@@ -56,7 +56,7 @@ ORG_CONDITION=""
 [[ -n $ORGANIZATION ]] && ORG_CONDITION=",\\"StringEquals\\":{\\"aws:PrincipalOrgID\\":\\"$ORGANIZATION\\"}"
 put_role "$DISCOVERY_ROLE" \\
   "{\\"Version\\":\\"2012-10-17\\",\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"sts:AssumeRole\\",\\"Principal\\":{\\"AWS\\":\\"arn:$PARTITION:iam::$MANAGER_ACCOUNT:root\\"},\\"Condition\\":{\\"ArnLike\\":{\\"aws:PrincipalArn\\":$(principals discovery)}$ORG_CONDITION}}]}" \\
-  discovery ${quoted(compact(discoveryPolicy))} \\
+  discovery "$(fill ${quoted(compact(discoveryPolicy))})" \\
   --description "Dormeto discovery (read-only)" --tags Key=dormeto:component,Value=discovery
 
 # Without a command role, the account says it is set up for discovery only (the manager counts it apart).

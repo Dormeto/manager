@@ -36,6 +36,17 @@
           "aws:ResourceTag/dormeto:component": "discovery"
         }
       }
+    },
+    {
+      "Sid": "InvokeKubernetesProxies",
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "arn:${partition}:lambda:*:${account}:function:*-kube-*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/dormeto:role": "kubernetes-proxy"
+        }
+      }
     }
   ]
 }

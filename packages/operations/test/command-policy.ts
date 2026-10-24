@@ -46,3 +46,39 @@ export const ACTIONS: Record<string, [string, Record<string, string>?][]> = {
   describeRule: [['events:DescribeRule']], putRule: [['events:PutRule'], ['events:TagResource']], listTargetsByRule: [['events:ListTargetsByRule']],
   putTargets: [['events:PutTargets'], ['iam:PassRole', { 'iam:PassedToService': 'events.amazonaws.com' }]], removeTargets: [['events:RemoveTargets']], deleteEventRule: [['events:DeleteRule']],
 };
+
+// A private cluster's proxy (R10.6, M2's per-cluster operations): router dmtr-dev, region eu-west-1, cluster eks-demo (its
+// part of the names is the cluster's name), created in the order below and removed in the reverse one.
+export const KUBE_REGION = 'eu-west-1';
+export const kubeRole = `arn:aws:iam::${ACCOUNT}:role/dormeto/router/dmtr-dev-${KUBE_REGION}-kube-eks-demo`;
+export const kubeFunction = `arn:aws:lambda:${KUBE_REGION}:${ACCOUNT}:function:dmtr-dev-kube-eks-demo`;
+export const kubeLogGroup = `arn:aws:logs:${KUBE_REGION}:${ACCOUNT}:log-group:/aws/lambda/dmtr-dev-kube-eks-demo`;
+export const vpc = `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:vpc/vpc-0a1b2c3d`;
+export const proxyGroup = `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:security-group/sg-0proxy000`;
+export const clusterGroup = `arn:aws:ec2:${KUBE_REGION}:${ACCOUNT}:security-group/sg-0cluster00`;
+const proxyTag = { 'aws:ResourceTag/dormeto:role': 'kubernetes-proxy' };
+const clusterTag = { 'aws:ResourceTag/aws:eks:cluster-name': 'eks-demo' };
+
+export const KUBE_PROXY_CALLS: [string, string, Record<string, string>?][] = [
+  // The network it reads (and Lambda reads on creating a VPC function), and the interfaces it waits to see released.
+  ['ec2:DescribeSecurityGroups', '*'], ['ec2:DescribeSubnets', '*'], ['ec2:DescribeVpcs', '*'], ['ec2:DescribeNetworkInterfaces', '*'],
+  // Its security group: created tagged, its default egress revoked, then 443 to the cluster's group.
+  ['ec2:CreateSecurityGroup', vpc], ['ec2:CreateSecurityGroup', proxyGroup, { 'aws:RequestTag/dormeto:role': 'kubernetes-proxy' }],
+  ['ec2:CreateTags', proxyGroup, { 'ec2:CreateAction': 'CreateSecurityGroup' }],
+  ['ec2:RevokeSecurityGroupEgress', proxyGroup, proxyTag], ['ec2:AuthorizeSecurityGroupEgress', proxyGroup, proxyTag],
+  // The rule on the cluster's own group (the one EKS tags), from the proxy's.
+  ['ec2:AuthorizeSecurityGroupIngress', clusterGroup, clusterTag], ['ec2:RevokeSecurityGroupIngress', clusterGroup, clusterTag],
+  // Its role, with the boundary, passed to Lambda.
+  ['iam:GetRole', kubeRole], ['iam:ListRolePolicies', kubeRole], ['iam:CreateRole', kubeRole, boundary], ['iam:TagRole', kubeRole],
+  ['iam:PutRolePolicy', kubeRole, boundary], ['iam:GetRolePolicy', kubeRole], ['iam:DeleteRolePolicy', kubeRole, boundary], ['iam:DeleteRole', kubeRole],
+  ['iam:PassRole', kubeRole, { 'iam:PassedToService': 'lambda.amazonaws.com' }],
+  // Its log group.
+  ['logs:DescribeLogGroups', '*'], ['logs:CreateLogGroup', kubeLogGroup], ['logs:TagResource', kubeLogGroup], ['logs:PutRetentionPolicy', kubeLogGroup],
+  ['logs:DeleteLogGroup', kubeLogGroup],
+  // Its function (state Active read from its configuration).
+  ['lambda:CreateFunction', kubeFunction], ['lambda:TagResource', kubeFunction], ['lambda:GetFunction', kubeFunction],
+  ['lambda:GetFunctionConfiguration', kubeFunction], ['lambda:UpdateFunctionCode', kubeFunction], ['lambda:UpdateFunctionConfiguration', kubeFunction],
+  ['lambda:InvokeFunction', kubeFunction], ['lambda:DeleteFunction', kubeFunction],
+  // Removal: its group deleted last.
+  ['ec2:DeleteSecurityGroup', proxyGroup, proxyTag],
+];

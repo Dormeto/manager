@@ -212,6 +212,76 @@
       ]
     },
     {
+      "Sid": "KubeProxyNetworkRead",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeNetworkInterfaces"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KubeProxyCreateSecurityGroup",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:${partition}:ec2:*:${account}:vpc/*"
+    },
+    {
+      "Sid": "KubeProxyCreateTaggedSecurityGroup",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": "arn:${partition}:ec2:*:${account}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/dormeto:role": "kubernetes-proxy"
+        }
+      }
+    },
+    {
+      "Sid": "KubeProxyTagAtCreation",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:${partition}:ec2:*:${account}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": "CreateSecurityGroup"
+        }
+      }
+    },
+    {
+      "Sid": "KubeProxySecurityGroups",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:DeleteSecurityGroup"
+      ],
+      "Resource": "arn:${partition}:ec2:*:${account}:security-group/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/dormeto:role": "kubernetes-proxy"
+        }
+      }
+    },
+    {
+      "Sid": "KubeProxyClusterGroups",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": [
+        "arn:${partition}:ec2:*:${account}:security-group/*"
+      ],
+      "Condition": {
+        "Null": {
+          "aws:ResourceTag/aws:eks:cluster-name": "false"
+        }
+      }
+    },
+    {
       "Sid": "EksClusters",
       "Effect": "Allow",
       "Action": [
