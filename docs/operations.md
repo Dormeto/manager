@@ -28,6 +28,13 @@ time per target group, router or workload, one per load balancer (lock), three p
   `status.json`. Routers 0.24.0 read them (installed routers get the catalog in their blueprint, routers written in
   Terraform `ip_lists_catalog`); the Routers view shows them (`GET /api/ip-lists`), the watchdog alarms on a list that
   failed or grew old.
+- **Workload defaults:** the same bucket holds `settings.json`, the administrators' defaults for every router (EC2
+  hibernation: `{"workloads": {"hibernate": …}, "updatedAt", "updatedBy"}`), written by the API only
+  (`PUT /api/settings/workloads`, Routers › Workload defaults), never by Terraform, so an apply keeps it; the bucket's
+  `force_destroy` removes it with the bucket at uninstall. Routers 0.32.0 read it beside `catalog.json` (within 5
+  minutes); a router without `ip_lists_catalog` reads none and uses its own level or the built-in default. A
+  `settings.json` that is not a JSON object reads as never set (the API says it is unreadable) and the next write
+  replaces it.
 - **MFA:** `mfa` sets the user pool's MFA (`ON` only for `required`) and the API's policy (`MFA_MODE`): the API reads each
   user's MFA with `AdminGetUser` (cached 5 minutes when on, 30 seconds when off, `/api/me?fresh=1`), and lowers an
   administrator or operator without it to viewer under `operators`; in that mode a group's grant giving `wake` or `nap` also needs a

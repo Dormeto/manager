@@ -9,10 +9,16 @@ A user's role comes from their Cognito groups; the highest one wins.
 
 | Role | Group | Workloads | Fleet |
 |---|---|---|---|
-| Administrator | `dmt-admin` | all: read, wake, nap | everything, including users, groups, audit, updates, tags and onboarding |
-| Operator | `dmt-operator` | all: read, wake, nap | routers, discovery, exclusions, operations |
+| Administrator | `dmt-admin` | all: read, wake, nap | everything, including users, groups, audit, updates, tags and onboarding; routers' descriptions, the routers' Hibernate and the manager's (Workload defaults) |
+| Operator | `dmt-operator` | all: read, wake, nap | routers, discovery, exclusions, operations; workloads' descriptions and Hibernate |
 | Viewer | `dmt-viewer` | all: read | read-only views |
 | Member | none of the above | only what their groups' grants give | Overview, Workloads and their workload views; nothing else |
+
+Descriptions and hibernation settings are read by whoever reads what they describe: a workload's description (and its
+Hibernate row) by everyone who reads the workload, members included; a router's by the built-in roles. Every signed-in
+user reads the manager's Hibernate default (`GET /api/settings/workloads`). Writing them follows the table: a
+workload's description and Hibernate, operators and administrators (a Terraform workload's Hibernate is set in its
+`workload` module); a router's description and Hibernate, and the manager's default, administrators.
 
 A user in no built-in group is a **member**. The built-in roles' rights are unchanged: existing users in a built-in group see no
 difference.
@@ -27,8 +33,9 @@ invitation may expire unused. Such a caller can give the admin role back.
 **Upgrading to 0.14.0:** before 0.14.0 a user in no built-in group was a viewer; they are now a member and see nothing until
 a group grants them access. Users invited through the dashboard always have a built-in group, so only users created by hand
 in Cognito are concerned: add them to `dmt-viewer`, or to a custom group.
-Grants cover workloads only; routers, discovery, exclusions, organization access, onboarding, renaming, users, audit and
-updates stay with the built-in roles (a member does not see their entries in the dashboard, and the API refuses them).
+Grants cover workloads only; routers, discovery, exclusions, organization access, onboarding, renaming, writing
+descriptions and hibernation settings, users, audit and updates stay with the built-in roles (a member does not see their
+entries in the dashboard, and the API refuses them).
 
 ## Workload tags
 

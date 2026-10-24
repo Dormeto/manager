@@ -1,6 +1,8 @@
 # IP lists distributed by the manager (vision docs/specs/2026-10-08-reliability-security-design.md, R6b): the catalog
 # (ip_lists) in a bucket the organization's routers read; the list function, from the router bundle, downloads each list
-# once for every router, checks it and publishes it with its manifest, hourly.
+# once for every router, checks it and publishes it with its manifest, hourly. The bucket also holds settings.json, the
+# administrators' workload defaults that the routers read beside the catalog (EC2 hibernation), written by the API only:
+# no resource here manages it, so an apply never resets it.
 locals {
   lists_bucket = "${local.name}-ip-lists-${local.account_id}"
   # Lists of the catalog given as s3:// URIs: the list function reads their objects.
@@ -9,7 +11,8 @@ locals {
 
 resource "aws_s3_bucket" "lists" {
   bucket = local.lists_bucket
-  # The lists are downloaded again by the list function: nothing to keep at uninstall.
+  # The lists are downloaded again by the list function; the administrators' settings.json (workload defaults, written by
+  # the API) is dropped with the bucket at uninstall.
   force_destroy = true
 }
 

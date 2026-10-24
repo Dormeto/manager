@@ -16,18 +16,27 @@ boundary and Kubernetes rights are unchanged).
   the workload, then the router, then the manager's default (Routers › Workload defaults, on when never set). A
   workload with fallback instance types does not hibernate unless its own setting says on, because a hibernated
   instance cannot change type. A workload hibernated for 59 days is woken for maintenance, and the nap after that wake
-  stops the instance, since AWS keeps a hibernation 60 days at most. The workload's and the router's pages show the
-  setting, where it comes from and which instances can hibernate; the history shows "hibernated N instances". The
-  onboard dialog has a Hibernate choice (Inherit, On, Off). New API routes (and the same under `/iam/`):
-  `GET|PUT /api/settings/workloads` (administrators write), `PUT /api/routers/{router}/settings` (administrators) and
+  stops the instance, since AWS keeps a hibernation 60 days at most; a pause that keeps the workload asleep holds that
+  wake, as it holds a schedule's maintenance wake. The workload's and the router's pages show the setting, where it
+  comes from and which instances can hibernate; the history shows "hibernated N instances". The onboard dialog has a
+  Hibernate choice (Inherit, On, Off). New API routes (and the same under `/iam/`): `GET|PUT /api/settings/workloads`
+  (administrators write), `PUT /api/routers/{router}/settings` (administrators) and
   `PUT /api/workloads/{router}/{id}/settings` (operators and administrators; refused for a workload written by
-  Terraform, whose module has the `hibernate` variable). Upgrade the routers to 0.32.0; set Hibernate off in Routers ›
-  Workload defaults first if instances launched with hibernation must keep stopping. The manager's API role gains read
+  Terraform, whose module has the `hibernate` variable). A router before 0.32.0 answers 409 "upgrade the router to
+  0.32.0" on the two settings routes, and an onboarding with Hibernate on such a router is refused with a 409 that
+  says so. Upgrade the routers to 0.32.0; set Hibernate off in Routers › Workload defaults first if instances launched
+  with hibernation must keep stopping. A router just upgraded stops its instances plainly until it has read the
+  manager's settings (within 5 minutes; its health warns while its reads fail), so an administrator's off holds from
+  the first nap. A router written in Terraform without `ip_lists_catalog` reads no manager settings and ignores the
+  manager's default (built-in default on): set its own Hibernate on its page instead. The manager's API role gains read
   and write on `settings.json` of the lists bucket (the manager's own Terraform, applied by the update).
 - Descriptions of routers and workloads: an optional Markdown text (up to 4,000 characters) for people. Administrators
   write a router's, operators and administrators a workload's. It shows in a Description card on the router's and the
-  workload's page and as one line under the name in the Routers and Workloads lists. `PUT|DELETE
-  /api/workloads/{router}/{id}/description` and `PUT|DELETE /api/routers/{router}/description` (and under `/iam/`).
+  workload's page, read even while the router cannot be reached, and as one line under the name in the Routers and
+  Workloads lists. `PUT|DELETE /api/workloads/{router}/{id}/description` and `PUT|DELETE
+  /api/routers/{router}/description`; `GET` of the same routes answers `{description}` from the manager alone; the
+  details (`GET /api/workloads/{router}/{id}`, `GET /api/routers/{router}`) carry `description` (null without one) and
+  the rows of `GET /api/workloads` and `GET /api/routers` a one-line `summary` (all under `/iam/` too).
 - Fix: a dashboard test no longer depends on the real date.
 
 ## 0.18.0 — 2026-10-21
