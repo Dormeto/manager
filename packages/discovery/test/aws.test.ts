@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAssumeRole, enabledRegionsOf, kubernetesPorts, organizationsPort, scanPorts } from '../src/aws.js';
+import { clustersOf } from '../src/kubernetes.js';
 
 function recorder(answer: (name: string, input: any) => unknown = () => ({})) {
   const sent: [string, any][] = [];
@@ -50,6 +51,18 @@ describe('AWS adapters', () => {
     const client = await ports.kubernetesOf('eks-demo');
     expect(await client.list('/api/v1/pods')).toEqual([]);
     expect(calls.map((c) => [c.functionName, c.payload.path, c.payload.query])).toEqual([['dmtr-dev-kube-eks-demo', '/api/v1/pods', { limit: '100' }]]);
+  });
+
+  // Ruling 23: the invoke of an absent proxy is refused (the discovery role's tag condition), not ResourceNotFoundException.
+  it('a private cluster whose proxy invocation Lambda refuses (AccessDeniedException): its proxy is not set up, or the access to apply again', async () => {
+    const lambda = {
+      invoke: async (functionName: string) => {
+        throw Object.assign(new Error(`User: arn:aws:sts::111122223333:assumed-role/DmtDiscoveryRole/dmt-dev-discovery is not authorized to perform: lambda:InvokeFunction on resource: arn:aws:lambda:eu-west-1:111122223333:function:${functionName} because no identity-based policy allows the lambda:InvokeFunction action`), { name: 'AccessDeniedException' });
+      },
+    };
+    const ports = kubernetesPorts(CREDENTIALS, 'eu-west-1', privateEks(), undefined, 'dmtr-dev-kube-', lambda);
+    const [found] = await clustersOf(ports, { account: '111122223333', region: 'eu-west-1' });
+    expect(found!.reason).toBe('the cluster\'s endpoint is private and its proxy is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy) (or apply the organization access again)');
   });
 
   it('a private cluster without a router (no prefix) is NoProxy', async () => {

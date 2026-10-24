@@ -54,6 +54,12 @@ export const EKS_ACTIONS = ['eks:ListClusters', 'eks:DescribeCluster'];
 // the cluster's proxy. A public endpoint limited to some addresses with private access off is the router's UNREACHABLE.
 const noRouter = (where?: Where) => `the cluster's endpoint is private: Dormeto reaches it through a proxy function in its VPC, set up with the router of ${where ? `${where.account} ${where.region}` : 'its account and region'}: install it`;
 const NO_PROXY = 'the cluster\'s endpoint is private and its proxy is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)';
+// The discovery role refused the proxy's invocation (ruling 23): it may invoke only functions tagged dormeto:role =
+// kubernetes-proxy and Lambda checks the rights before the function's existence, so an absent proxy (no tag) answers
+// AccessDeniedException, never ResourceNotFoundException; so does an organization access older than the proxies.
+const NO_PROXY_OR_ACCESS = `${NO_PROXY} (or apply the organization access again)`;
+const invokeDenied = (err: unknown) => (err as { reason?: string })?.reason === 'AccessDeniedException' || (err as Error)?.name === 'AccessDeniedException'
+  || /not authorized to perform: lambda:InvokeFunction/i.test(message(err));
 export type Where = { account: string; region: string };
 const CLUSTER_TAG = 'elbv2.k8s.aws/cluster';
 const RESOURCE_TAG = 'ingress.k8s.aws/resource';
@@ -96,6 +102,7 @@ export async function clustersOf(ports: KubernetesPorts, where?: Where): Promise
       found.lists = new Map();
     } catch (err) {
       if ((err as { reason?: string })?.reason === 'NoProxy') found.reason = NO_PROXY;
+      else if (reach === 'proxy' && invokeDenied(err)) found.reason = NO_PROXY_OR_ACCESS;
       else if (status(err) === 401 || status(err) === 403) found.reason = `the cluster does not let ${ports.reader ?? 'DmtDiscoveryRole'} read it (an access entry with AmazonEKSViewPolicy): ${message(err)}`;
       else found.reason = `the cluster cannot be read: ${message(err)}`;
     }

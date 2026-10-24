@@ -125,6 +125,15 @@ describe('Kubernetes discovery', () => {
     expect(found[0]!.reason).toBe('the cluster\'s endpoint is private and its proxy is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)');
   });
 
+  // Ruling 23: DmtDiscoveryRole may invoke only functions tagged dormeto:role = kubernetes-proxy, and Lambda checks the rights
+  // before the function's existence: an absent proxy (no tag) answers AccessDeniedException, never ResourceNotFoundException;
+  // so does an account whose organization access predates the proxies.
+  it('a private cluster whose proxy discovery may not invoke (absent, or an older organization access): the proxy is not set up, or the access to apply again', async () => {
+    const refused = Object.assign(new Error('LIST /api/v1/pods: the proxy dmt-dev-kube-private failed: User: arn:aws:sts::111122223333:assumed-role/DmtDiscoveryRole/dmt-dev-discovery is not authorized to perform: lambda:InvokeFunction on resource: arn:aws:lambda:eu-west-1:111122223333:function:dmt-dev-kube-private because no identity-based policy allows the lambda:InvokeFunction action'), { name: 'KubernetesError', status: 0, reason: 'AccessDeniedException' });
+    const found = await clustersOf(ports({ private: { cluster: CLUSTER('private', PRIVATE_VPC), client: cluster({}, { refuse: refused }) } }, { router: 'dmt-dev' }), WHERE);
+    expect(found[0]!.reason).toBe('the cluster\'s endpoint is private and its proxy is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy) (or apply the organization access again)');
+  });
+
   it('a private cluster with its proxy is read like an open one', async () => {
     const found = await clustersOf(ports({ private: { cluster: CLUSTER('private', PRIVATE_VPC), client: cluster(demo()) } }, { router: 'dmt-dev' }), WHERE);
     expect(found[0]!.reason).toBeUndefined();

@@ -106,6 +106,9 @@ const demo = (extra = {}) => ({
 const PRIVATE = { endpointPublicAccess: false, endpointPrivateAccess: true, vpcId: 'vpc-1' };
 const NO_PROXY = error('KubernetesError', 'the cluster\'s endpoint is private and its proxy dmt-dev-kube-unproxied is not set up: upgrade the router or set up its cluster access (Terraform: module kubernetes-proxy)', { status: 0, reason: 'NoProxy' });
 const UNAUTHORIZED = error('KubernetesError', 'Unauthorized', { status: 401, reason: 'Unauthorized' });
+// The discovery role may invoke only functions tagged as proxies, and Lambda checks the rights first: an absent proxy (no tag)
+// or an older organization access answers AccessDeniedException, as the router's transport maps it (ruling 23).
+const INVOKE_DENIED = error('KubernetesError', 'GET /api/v1/pods: the proxy dmt-dev-kube-refused failed: User: arn:aws:sts::111122223333:assumed-role/DmtDiscoveryRole/dmt-dev-discovery is not authorized to perform: lambda:InvokeFunction on resource: arn:aws:lambda:eu-west-1:111122223333:function:dmt-dev-kube-refused because no identity-based policy allows the lambda:InvokeFunction action', { status: 0, reason: 'AccessDeniedException' });
 const ready = (objects, more = {}) => ({ description: eksCluster('eks-demo'), objects, karpenter: true, ...more });
 const ARN = 'arn:aws:elasticloadbalancing:eu-west-1:111122223333:targetgroup';
 const group = (groupName, type, targets, tags = {}) => ({ arn: `${ARN}/${groupName}/1`, type, vpcId: 'vpc-1', tags, targets });
@@ -230,6 +233,10 @@ export function cases(now) {
       unproxied: { description: eksCluster('unproxied', PRIVATE), objects: {}, connect: NO_PROXY },
       office: { description: eksCluster('office', { endpointPublicAccess: true, publicAccessCidrs: ['198.51.100.0/24'], vpcId: 'vpc-1' }), objects: {} },
     } }) },
+    { name: 'clustersOf: with the account\'s router, a proxy the discovery role may not invoke (absent, or an older organization access) is not set up', input: { function: 'clustersOf', where: WHERE, router: 'dmt-dev' }, model: regionModel({ clusters: {
+      refused: { description: eksCluster('refused', PRIVATE), objects: {}, refuse: INVOKE_DENIED },
+      proxied: { description: eksCluster('proxied', PRIVATE), objects: demo(), karpenter: true },
+    } }) },
     backend('an Ingress in a group: its Deployment, the switch through Dormeto\'s Ingress, HPA, Argo CD, Karpenter', { 'eks-demo': ready(demo()) },
       [group('k8s-demo-web', 'ip', ['10.0.1.1', '10.0.1.2'], controllerTags('demo/web-web:80'))]),
     backend('a lone Ingress (instance targets): its StatefulSet on Fargate, the switch by patching it, Flux', { 'eks-demo': ready(demo(), { karpenter: false }) },
@@ -351,7 +358,10 @@ Go \`internal/discover\`). \`input.function\` names the function:
 - \`clustersOf\`: \`{where: {account, region}, reader?, router?}\`; \`router\` (the name of the router of the account and region)
   is on a kubernetes port when one is there: a cluster whose private access is on and whose public endpoint is not open to
   \`0.0.0.0/0\` is read through its proxy (the recorded \`kubernetes.of\`), or, without \`router\`, not reached (\`where\` named in its
-  reason); private access off and the public endpoint limited: not reached either, with the router's \`UNREACHABLE\` text. Output: \`[{name, reason}]\`.
+  reason); private access off and the public endpoint limited: not reached either, with the router's \`UNREACHABLE\` text. With
+  \`router\`, a private cluster whose proxy the role may not invoke (a call failing with the reason \`AccessDeniedException\`, or a
+  message saying \`not authorized to perform: lambda:InvokeFunction\`: an absent proxy has no tag, and Lambda checks the rights
+  first) has the reason of a proxy not set up followed by \` (or apply the organization access again)\`. Output: \`[{name, reason}]\`.
 - \`kubernetesBackend\`: \`{where, groups, reader?}\`: the clusters read once (\`clustersOf\`), then each group
   (\`{arn, type, vpcId, tags, targets}\`) traced in turn. Output: one result per group — the
   \`{kind: "k8s", id, kubernetes}\` backend, the reason it cannot be napped, or null (not Kubernetes).
