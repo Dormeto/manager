@@ -18,8 +18,9 @@ const value = (): boolean | null => (choice.value === 'inherit' ? null : choice.
     <v-card :title="`Hibernate ${subject}`">
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiPowerSleep" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-4 text-medium-emphasis">Decides whether the EC2 instances that were launched with hibernation are hibernated instead of stopped when the workload naps.
-          Dormeto never launches or reconfigures instances. A workload with fallback instance types does not hibernate unless it is set to On on the workload itself.</p>
+        <p class="mb-4 text-medium-emphasis">Decides whether the standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are
+          hibernated instead of stopped when the workload naps. Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched.
+          A workload with fallback instance types does not hibernate unless it is set to On on the workload itself.</p>
         <v-radio-group v-model="choice" hide-details>
           <v-radio v-if="inheritable" value="inherit" :label="inheritText ? `Inherit (${inheritText})` : 'Inherit'" />
           <v-radio value="on" label="On" />

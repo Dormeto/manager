@@ -503,9 +503,11 @@ describe('Workload view', () => {
     const row = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="hibernate"]');
     const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
     const puts = () => vi.mocked(api).mock.calls.filter(([, init]) => init?.method === 'PUT');
+    // Its standalone EC2 instances: the only backends hibernation applies to.
+    const ec2 = { backends: [{ kind: 'instance', id: 'i-0b', status: 'running' }] };
 
     it('shows the line and which instances can hibernate', async () => {
-      current = { ...status, source: 'manager', hibernation: hibernation() };
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation() };
       const wrapper = await mountView('operator');
       expect(row(wrapper).text()).toContain('On, from the router');
       expect(row(wrapper).text()).toContain('2 of 3 instances were launched with hibernation; i-0abc is stopped instead');
@@ -514,7 +516,7 @@ describe('Workload view', () => {
     });
 
     it('leaves out the readiness line when the value is off', async () => {
-      current = { ...status, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'fallback-types' }) };
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'fallback-types' }) };
       const wrapper = await mountView('admin');
       expect(row(wrapper).text()).toContain('Off: the workload has fallback instance types');
       expect(row(wrapper).text()).not.toContain('launched with hibernation');
@@ -530,7 +532,7 @@ describe('Workload view', () => {
     });
 
     it("Inherit sends {hibernate: null}, Off sends false; the choice starts at the workload's own value", async () => {
-      current = { ...status, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'workload', workload: false }) };
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'workload', workload: false }) };
       const wrapper = await mountView('operator');
       vi.mocked(api).mockClear();
       await row(wrapper).find('[data-test="edit-hibernate"]').trigger('click');
@@ -548,7 +550,7 @@ describe('Workload view', () => {
     });
 
     it('sends false for Off', async () => {
-      current = { ...status, source: 'manager', hibernation: hibernation() };
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation() };
       const wrapper = await mountView('admin');
       vi.mocked(api).mockClear();
       await row(wrapper).find('[data-test="edit-hibernate"]').trigger('click');
@@ -563,7 +565,7 @@ describe('Workload view', () => {
     });
 
     it('has no Edit for a Terraform workload, which says where to set it', async () => {
-      current = { ...status, source: 'terraform', hibernation: hibernation() };
+      current = { ...status, ...ec2, source: 'terraform', hibernation: hibernation() };
       const wrapper = await mountView('admin');
       expect(row(wrapper).find('[data-test="edit-hibernate"]').exists()).toBe(false);
       expect(row(wrapper).text()).toContain('set hibernate in its workload module');
@@ -572,7 +574,7 @@ describe('Workload view', () => {
     });
 
     it('has no Edit for a viewer', async () => {
-      current = { ...status, source: 'manager', hibernation: hibernation() };
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation() };
       const wrapper = await mountView('viewer');
       expect(row(wrapper).text()).toContain('On, from the router');
       expect(row(wrapper).find('[data-test="edit-hibernate"]').exists()).toBe(false);
@@ -580,8 +582,55 @@ describe('Workload view', () => {
       current = status;
     });
 
+    it('says it does not apply, with no Edit, to a workload without a standalone EC2 instance', async () => {
+      // An Auto Scaling group, ECS, a database alone: the router still answers a resolution, with no instances or none listed.
+      for (const backends of [[{ kind: 'asg', id: 'shop-asg', status: 'running' }], [{ kind: 'ecs', id: 'arn:aws:ecs:eu-west-3:1:service/main/shop', status: 'running' }], [{ kind: 'rds-instance', id: 'shop-db', status: 'running' }]]) {
+        current = { ...status, backends, source: 'manager', hibernation: hibernation({ instances: backends[0]!.kind === 'asg' ? [] : null }) };
+        const wrapper = await mountView('admin');
+        expect(row(wrapper).text()).toContain('Hibernate: does not apply (standalone EC2 instances only)');
+        expect(row(wrapper).text()).not.toContain('On, from the router');
+        expect(row(wrapper).find('[data-test="edit-hibernate"]').exists()).toBe(false);
+        wrapper.unmount();
+      }
+      current = status;
+    });
+
+    it("says Off for now while the router has not read the manager's settings", async () => {
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation({ hibernate: false, from: 'manager', router: null, unknown: true, manager: { hibernate: null, readAt: null, error: null } }) };
+      const wrapper = await mountView('viewer');
+      expect(row(wrapper).text()).toContain("Off for now: the router has not read the manager's settings yet (naps stop)");
+      wrapper.unmount();
+      current = status;
+    });
+
+    it('says the next nap stops the instances after 59 days hibernated', async () => {
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation({ freshBoot: true }) };
+      const wrapper = await mountView('viewer');
+      expect(row(wrapper).text()).toContain('The next nap stops the instances (a fresh boot after 59 days hibernated)');
+      wrapper.unmount();
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation() };
+      const plain = await mountView('viewer');
+      expect(row(plain).text()).not.toContain('fresh boot');
+      plain.unmount();
+      current = status;
+    });
+
+    it('its dialog says which instances it concerns, and that hibernation is chosen at launch', async () => {
+      current = { ...status, ...ec2, source: 'manager', hibernation: hibernation() };
+      const wrapper = await mountView('operator');
+      await row(wrapper).find('[data-test="edit-hibernate"]').trigger('click');
+      await flushPromises();
+      const text = document.querySelector('.v-overlay--active.v-dialog')!.textContent;
+      expect(text).toContain('standalone EC2 instances (not Auto Scaling groups or ECS)');
+      expect(text).toContain('Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched.');
+      expect(text).not.toContain('never launches');
+      wrapper.unmount();
+      document.body.innerHTML = '';
+      current = status;
+    });
+
     it('says hibernated beside the state while asleep with a hibernated instance', async () => {
-      current = { ...status, state: 'ASLEEP', source: 'manager', hibernation: hibernation({ instances: [{ id: 'i-0b', configured: true, hibernated: true }] }) };
+      current = { ...status, ...ec2, state: 'ASLEEP', source: 'manager', hibernation: hibernation({ instances: [{ id: 'i-0b', configured: true, hibernated: true }] }) };
       const wrapper = await mountView('viewer');
       expect(wrapper.find('[data-test="hibernated"]').text()).toBe('hibernated');
       wrapper.unmount();

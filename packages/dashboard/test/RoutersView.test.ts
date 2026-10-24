@@ -11,6 +11,8 @@ import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
 let failPut = false;
+// The workload defaults as never set by an administrator (no who, no when).
+let neverChanged = false;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
@@ -32,7 +34,7 @@ vi.mock('../src/api', () => ({
     if (path === '/settings/workloads') {
       if (init?.method === 'PUT' && failPut) throw new Error('settings.json: access denied');
       if (init?.method === 'PUT') return { ...JSON.parse(String(init.body)), updatedAt: new Date().toISOString(), updatedBy: 'ops@example.com', note: 'routers apply it at their next check, within 5 minutes' };
-      return { hibernate: true, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
+      return neverChanged ? { hibernate: true, updatedAt: null, updatedBy: null } : { hibernate: true, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
     }
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
@@ -290,6 +292,16 @@ describe('Routers view', () => {
       wrapper.unmount();
     });
 
+    it('says "Never changed." while no administrator set it, and which instances it concerns', async () => {
+      neverChanged = true;
+      const wrapper = await mountView();
+      expect(card(wrapper).text()).toContain('Never changed.');
+      expect(card(wrapper).text()).not.toContain('Never changed: on.');
+      expect(card(wrapper).text()).toContain('standalone EC2 instances (not Auto Scaling groups or ECS)');
+      wrapper.unmount();
+      neverChanged = false;
+    });
+
     it('hides the switch from an operator', async () => {
       const wrapper = await mountView('/routers', 'operator');
       expect(card(wrapper).text()).toContain('On');
@@ -302,7 +314,9 @@ describe('Routers view', () => {
       await card(wrapper).find('input[type="checkbox"]').setValue(false);
       await flushPromises();
       expect(calls.some((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')).toBe(false);
-      expect(document.body.textContent).toContain("instances launched with hibernation, in every router that reads the manager's settings, from their next check");
+      expect(document.body.textContent).toContain("standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation, in every router that reads the manager's settings, from their next check");
+      expect(document.body.textContent).toContain('Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched.');
+      expect(document.body.textContent).not.toContain('never launches');
       dialogButton('Turn off').click();
       await flushPromises();
       const put = calls.find((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')!;

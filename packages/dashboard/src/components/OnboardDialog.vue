@@ -126,7 +126,7 @@ function submit() {
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
         <v-select v-if="!kubernetes" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
           :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
-          hint="EC2 instances launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On" />
+          hint="Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On" />
         <template v-if="session.isAdmin">
         <div class="dm-eyebrow mt-6 mb-1">Tags</div>
         <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not AWS tags: the groups' grants pick workloads by them. Administrators can change them later.</p>

@@ -14,8 +14,10 @@ export const fromText = (from: Hibernation['from']): string => FROM[from];
 
 const onOff = (value: boolean) => (value ? 'On' : 'Off');
 
-// "On, from the router"; the fallback types' text already says "off:" and reads as one sentence (capitalised).
-export function hibernationLine(h: Pick<Hibernation, 'hibernate' | 'from'>): string {
+// "On, from the router"; the fallback types' text already says "off:" and reads as one sentence (capitalised). A router that
+// has not read the manager's settings yet (or whose reads all failed) stops the instances plainly until it has.
+export function hibernationLine(h: Pick<Hibernation, 'hibernate' | 'from' | 'unknown'>): string {
+  if (h.unknown) return "Off for now: the router has not read the manager's settings yet (naps stop)";
   const text = fromText(h.from);
   return h.from === 'fallback-types' ? `${text[0]!.toUpperCase()}${text.slice(1)}` : `${onOff(h.hibernate)}, ${text}`;
 }
@@ -30,9 +32,13 @@ export function readinessLine(h: Pick<Hibernation, 'hibernate' | 'instances'>): 
   return `${instances.length - without.length} of ${instances.length} instances were launched with hibernation; ${without.map((i) => i.id).join(', ')} ${without.length === 1 ? 'is' : 'are'} stopped instead`;
 }
 
-// What Inherit means for a router: the manager's value as it last read it, or the built-in default without manager settings.
+// After 59 days hibernated the run asks for a fresh boot (AWS keeps a hibernation 60 days at most): the next nap is a plain stop.
+export const freshBootLine = (h: Pick<Hibernation, 'freshBoot'>): string => (h.freshBoot ? 'The next nap stops the instances (a fresh boot after 59 days hibernated)' : '');
+
+// What Inherit means for a router: the manager's value as it last read it, unknown (naps stop) while it has read none, or
+// the built-in default without manager settings. `readAt` is its last attempt: the failed one when there is an error.
 export function routerInheritText(m: ManagerSettings, now = Date.now()): string {
   if (m.url === null) return 'built-in default: On';
-  if (m.hibernate === null) return 'manager: not read yet';
-  return `manager: ${onOff(m.hibernate)}, read ${relative(m.readAt, now)}${m.error ? `; the last read failed: ${m.error}` : ''}`;
+  if (m.hibernate === null) return `manager: unknown (${m.error ?? 'not read yet'}): naps stop`;
+  return m.error ? `manager: ${onOff(m.hibernate)} (last read failed ${relative(m.readAt, now)}: ${m.error})` : `manager: ${onOff(m.hibernate)}, read ${relative(m.readAt, now)}`;
 }

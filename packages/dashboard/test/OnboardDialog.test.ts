@@ -55,6 +55,7 @@ describe('OnboardDialog', () => {
     const wrapper = await openDialog();
     const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Hibernate')!;
     expect(select.props('modelValue')).toBe('inherit');
+    expect(select.props('hint')).toContain('Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation');
     onboardButton().click();
     expect((wrapper.emitted('submit')![0]![0] as { settings: Record<string, unknown> }).settings).not.toHaveProperty('hibernate');
     select.vm.$emit('update:modelValue', 'off');

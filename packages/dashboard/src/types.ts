@@ -22,13 +22,15 @@ import type { Failure, Fallback } from './failures';
 import type { NextEvent, Schedule } from './schedule';
 import type { Energy, FleetEnergy } from './energy';
 
-// EC2 hibernation (router 0.32.0 and later): the value a workload gets, from which level, and its instances.
 // A description (Markdown, up to 4,000 characters) of a router or a workload, with who wrote it and when (manager 0.19.0).
 export interface DescriptionInfo { text: string; by: string; at: string }
 
+// EC2 hibernation (router 0.32.0 and later): the value a workload gets, from which level, and its instances. `unknown`: the
+// router has a manager settings URL but has read no value yet (or every read failed): off, from the manager, until it has.
 export interface Hibernation {
   hibernate: boolean;
   from: 'workload' | 'fallback-types' | 'router' | 'manager' | 'default';
+  unknown?: true;
   workload: boolean | null;
   router: boolean | null;
   manager: { hibernate: boolean | null; readAt: string | null; error: string | null } | null;

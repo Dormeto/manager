@@ -58,8 +58,8 @@ async function confirm() {
     <v-card-text v-else-if="defaults" class="d-flex flex-wrap align-center ga-4">
       <div>
         <div class="font-weight-medium">Hibernate</div>
-        <div class="text-body-small text-medium-emphasis">Whether EC2 instances that were launched with hibernation are hibernated instead of stopped when a workload naps; a router or a workload can override this (a workload with fallback instance types hibernates only if set On on itself).
-          {{ defaults.updatedAt ? `Changed by ${defaults.updatedBy ?? 'someone'} ${relative(defaults.updatedAt, now)}.` : 'Never changed: on.' }}</div>
+        <div class="text-body-small text-medium-emphasis">Whether standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are hibernated instead of stopped when a workload naps; a router or a workload can override this (a workload with fallback instance types hibernates only if set On on itself).
+          {{ defaults.updatedAt ? `Changed by ${defaults.updatedBy ?? 'someone'} ${relative(defaults.updatedAt, now)}.` : 'Never changed.' }}</div>
       </div>
       <v-spacer />
       <v-switch v-if="session.isAdmin" :key="switchKey" :model-value="defaults.hibernate" :label="defaults.hibernate ? 'On' : 'Off'" color="primary" hide-details inset aria-label="Hibernate by default"
@@ -69,8 +69,9 @@ async function confirm() {
   </v-card>
   <v-dialog :model-value="asked !== null" max-width="480" @update:model-value="cancel">
     <v-card :title="`Turn hibernation ${asked ? 'on' : 'off'} by default?`">
-      <v-card-text class="text-medium-emphasis">It applies to instances launched with hibernation, in every router that reads the manager's settings, from their next
-        check (within 5 minutes). A router or a workload that sets its own value keeps it. Dormeto never launches or reconfigures instances.</v-card-text>
+      <v-card-text class="text-medium-emphasis">It applies to standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation, in every router that
+        reads the manager's settings, from their next check (within 5 minutes). A router or a workload that sets its own value keeps it. Dormeto does not enable
+        hibernation on an instance: it is chosen when the instance is launched.</v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />
         <v-btn variant="text" @click="cancel">Cancel</v-btn>

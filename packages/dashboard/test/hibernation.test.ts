@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromText, hibernationLine, readinessLine, routerInheritText } from '../src/hibernation';
+import { freshBootLine, fromText, hibernationLine, readinessLine, routerInheritText } from '../src/hibernation';
 import { causeText } from '../src/history';
 import { mockApi } from '../src/mock';
 import { state } from '../src/mock/state';
@@ -24,6 +24,15 @@ describe('hibernation texts', () => {
     expect(hibernationLine({ ...base, hibernate: true, from: 'default' })).toBe('On, built-in default');
   });
 
+  it("says Off for now while the router has not read the manager's settings (router 0.32.0's unknown)", () => {
+    expect(hibernationLine({ ...base, hibernate: false, from: 'manager', unknown: true })).toBe("Off for now: the router has not read the manager's settings yet (naps stop)");
+  });
+
+  it('says the next nap stops the instances after 59 days hibernated (a fresh boot)', () => {
+    expect(freshBootLine({ freshBoot: true })).toBe('The next nap stops the instances (a fresh boot after 59 days hibernated)');
+    expect(freshBootLine({ freshBoot: false })).toBe('');
+  });
+
   it('says which instances were launched with hibernation, only while the value is on', () => {
     const on = (instances: { id: string; configured: boolean; hibernated: boolean }[] | null) => readinessLine({ hibernate: true, instances });
     const i = (id: string, configured: boolean) => ({ id, configured, hibernated: false });
@@ -39,8 +48,10 @@ describe('hibernation texts', () => {
   it("shows a router's inherited value: the manager's, as it last read it, or the built-in default", () => {
     const now = Date.parse('2026-10-24T12:00:00.000Z');
     expect(routerInheritText({ url: 's3://b/settings.json', hibernate: true, readAt: '2026-10-24T11:57:00.000Z', error: null }, now)).toBe('manager: On, read 3 min ago');
-    expect(routerInheritText({ url: 's3://b/settings.json', hibernate: false, readAt: '2026-10-24T11:57:00.000Z', error: 'AccessDenied' }, now)).toBe('manager: Off, read 3 min ago; the last read failed: AccessDenied');
-    expect(routerInheritText({ url: 's3://b/settings.json', hibernate: null, readAt: null, error: null }, now)).toBe('manager: not read yet');
+    expect(routerInheritText({ url: 's3://b/settings.json', hibernate: false, readAt: '2026-10-24T11:57:00.000Z', error: 'AccessDenied' }, now)).toBe('manager: Off (last read failed 3 min ago: AccessDenied)');
+    // Nothing read yet (just upgraded), or every read failed: unknown, and naps stop plainly.
+    expect(routerInheritText({ url: 's3://b/settings.json', hibernate: null, readAt: null, error: null }, now)).toBe('manager: unknown (not read yet): naps stop');
+    expect(routerInheritText({ url: 's3://b/settings.json', hibernate: null, readAt: '2026-10-24T11:57:00.000Z', error: 'settings.json: not JSON' }, now)).toBe('manager: unknown (settings.json: not JSON): naps stop');
     expect(routerInheritText({ url: null, hibernate: null, readAt: null, error: null }, now)).toBe('built-in default: On');
   });
 });

@@ -146,9 +146,9 @@ const columns = computed<Section[][]>(() => {
         <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="34"><v-icon :icon="mdiCogOutline" size="19" /></v-avatar></template>
         <v-card-title>Configuration</v-card-title>
       </v-card-item>
-      <p v-if="source === 'manager'" class="dm-detail__note text-body-small text-medium-emphasis">Set by the manager when it installs or upgrades the router: an idle
-        check every 5 minutes, the built-in no-wake rules, no metrics, and the manager's IP lists (<code>ip_lists</code> in the manager's Terraform).
-        Not editable from the dashboard yet.</p>
+      <p v-if="source === 'manager'" class="dm-detail__note text-body-small text-medium-emphasis">Set by the manager when it installs or upgrades the router, and
+        not editable from the dashboard yet: an idle check every 5 minutes, the built-in no-wake rules, no metrics, and the manager's IP lists
+        (<code>ip_lists</code> in the manager's Terraform).</p>
       <p v-else-if="source === 'terraform'" class="dm-detail__note text-body-small text-medium-emphasis">Set in this router's Terraform (the router module's
         <code>check_schedule</code>, <code>no_wake_rules</code>, <code>ip_lists</code> and <code>metrics_enabled</code>): change them there and apply.</p>
       <v-table density="compact" class="dm-facts dm-facts--config">

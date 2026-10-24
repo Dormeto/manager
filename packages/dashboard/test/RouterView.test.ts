@@ -163,6 +163,27 @@ describe('Router view', () => {
       wrapper.unmount();
     });
 
+    it("says the manager's value is unknown while the router has read none, and when its last read failed", async () => {
+      const old = HIBERNATION.managerSettings;
+      HIBERNATION.managerSettings = { url: 's3://b/settings.json', hibernate: null, readAt: null, error: null };
+      const fresh = await mountView('dmtr-dev-eu-west-3');
+      expect(row(fresh).text()).toContain('Inherit (manager: unknown (not read yet): naps stop)');
+      fresh.unmount();
+      HIBERNATION.managerSettings = { url: 's3://b/settings.json', hibernate: false, readAt: minutesAgo(3), error: 'AccessDenied' };
+      const failed = await mountView('dmtr-dev-eu-west-3');
+      expect(row(failed).text()).toContain('manager: Off (last read failed 3 min ago: AccessDenied)');
+      failed.unmount();
+      HIBERNATION.managerSettings = old;
+    });
+
+    it('keeps "not editable from the dashboard yet" for the settings the manager sets, not above the editable Hibernate', async () => {
+      const wrapper = await mountView('dmtr-dev-eu-west-3');
+      const note = wrapper.find('.dm-wide .dm-detail__note').text();
+      expect(note).not.toContain('Not editable from the dashboard yet.');
+      expect(note).toContain('not editable from the dashboard yet: an idle check every 5 minutes');
+      wrapper.unmount();
+    });
+
     it('says built-in default for a router that reads no manager settings', async () => {
       const wrapper = await mountView('dmt-dev');
       expect(row(wrapper).text()).toContain('Inherit');

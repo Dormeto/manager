@@ -3,7 +3,7 @@ import { useNow } from '../now';
 import { computed, ref } from 'vue';
 import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
 import { settingRows } from '../settings';
-import { hibernationLine, readinessLine } from '../hibernation';
+import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
 import { backendIcon } from '../icons';
 import { api } from '../api';
@@ -82,6 +82,8 @@ async function rename(name: string) {
 // Hibernation: operators and administrators change a manager workload's own value (null: inherit); the router's refusals
 // (a Terraform workload, a router before 0.32.0) come back as the notice.
 const hibernated = computed(() => status.value?.state === 'ASLEEP' && (status.value.hibernated === true || Boolean(status.value.hibernation?.instances?.some((i) => i.hibernated))));
+// Hibernation applies to standalone EC2 instances only (never Auto Scaling groups, ECS, Kubernetes or databases).
+const standalone = computed(() => Boolean(status.value?.backends.some((b) => b.kind === 'instance')));
 async function setHibernate(hibernate: boolean | null) {
   savingHibernate.value = true;
   try {
@@ -557,7 +559,10 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <v-spacer />
           <span class="text-medium-emphasis dm-version">Router {{ status.router.version }} ({{ status.router.build }})</span>
         </v-card-text>
-        <v-card-text v-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
+        <v-card-text v-if="status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
+          Hibernate: <strong>does not apply</strong> (standalone EC2 instances only)
+        </v-card-text>
+        <v-card-text v-else-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
           <div class="d-flex flex-wrap align-center ga-2">
             <span>Hibernate <strong>{{ hibernationLine(status.hibernation) }}</strong></span>
             <v-spacer />
@@ -565,6 +570,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
             <v-btn v-else-if="session.canOperate && status.source === 'manager'" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="hibernateOpen = true">Edit</v-btn>
           </div>
           <div v-if="readinessLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ readinessLine(status.hibernation) }}</div>
+          <div v-if="freshBootLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ freshBootLine(status.hibernation) }}</div>
         </v-card-text>
       </v-card>
     </div>
