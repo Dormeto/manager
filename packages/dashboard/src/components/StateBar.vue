@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A workload's time in each state over the last 7 days, from its history (user request): the bar of its Workloads row and
-// of its view's header, in the history's colors and order. Its tooltip gives each state's share of the time with history,
+// of its view's header, in the history's colors, awake first and asleep last with the short states between them. Its tooltip gives each state's share of the time with history,
 // its time and what it means, the time without history, the hours without requests (discovery), the base cost of what the
 // naps stop, what they saved in the last 30 days and a month's saving at that rate (user request). With a title and a
 // note, the bar of all workloads. block: as wide as its parent; legend: each state's share under the bar.
@@ -8,7 +8,7 @@ import { computed } from 'vue';
 import { idleText } from '../discovery';
 import { MONTH_HOURS, discountText, type BarSavings } from '../costs';
 import { longDuration, stateColor, usd, usdHourly } from '../format';
-import { STATE_ORDER, stateLabel } from '../history';
+import { stateLabel } from '../history';
 import { stateBrief } from '../state';
 
 const props = withDefaults(defineProps<{
@@ -26,6 +26,8 @@ const props = withDefaults(defineProps<{
 
 // The narrowest a state is drawn, in percent of the bar: a few minutes of waking in a week stay visible.
 const MIN_WIDTH = 1;
+// Awake to asleep: a failure next to the time awake, the wakes and naps where one turns into the other.
+const ORDER = ['AWAKE', 'FAILED', 'WAKING', 'NAPPING', 'ASLEEP'];
 const share = (part: number, total: number) => {
   const p = Math.round((100 * part) / total);
   return part > 0 && p < 1 ? '<1 %' : `${p} %`;
@@ -34,7 +36,7 @@ const share = (part: number, total: number) => {
 const unknown = computed(() => props.states?.totals.UNKNOWN ?? 0);
 const rows = computed(() => {
   const totals = props.states?.totals ?? {};
-  const known = STATE_ORDER.filter((state) => state !== 'UNKNOWN' && (totals[state] ?? 0) > 0).map((state) => ({ state, seconds: totals[state]! }));
+  const known = ORDER.filter((state) => (totals[state] ?? 0) > 0).map((state) => ({ state, seconds: totals[state]! }));
   const total = known.reduce((n, r) => n + r.seconds, 0);
   // The short ones drawn at the narrowest width, the others share the rest in proportion.
   const short = known.filter((r) => (100 * r.seconds) / total < MIN_WIDTH);
@@ -42,6 +44,16 @@ const rows = computed(() => {
   return known.map((r) => ({
     ...r, share: share(r.seconds, total), width: short.includes(r) ? MIN_WIDTH : (r.seconds / rest) * (100 - MIN_WIDTH * short.length),
   }));
+});
+// The legend: each state of 1 % or more, then the shorter ones together.
+const legendItems = computed(() => {
+  const total = rows.value.reduce((n, r) => n + r.seconds, 0);
+  const big = rows.value.filter((r) => r.seconds / total >= 0.01);
+  const small = rows.value.filter((r) => r.seconds / total < 0.01);
+  return [
+    ...big.map((r) => ({ key: r.state, colors: [stateColor(r.state)], label: stateLabel(r.state), share: r.share })),
+    ...(small.length ? [{ key: 'short', colors: small.map((r) => stateColor(r.state)), label: small.map((r) => stateLabel(r.state)).join(', '), share: share(small.reduce((n, r) => n + r.seconds, 0), total) }] : []),
+  ];
 });
 const title = computed(() => (rows.value.length
   ? `${props.title}${unknown.value ? ', of the time with history' : ''}`
@@ -94,8 +106,8 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
       <div v-if="note" class="mt-1 note">{{ note }}</div>
     </v-tooltip>
     <div v-if="legend && rows.length" class="legend" aria-hidden="true">
-      <span v-for="r in rows" :key="r.state" class="legend__item">
-        <span :class="['legend__dot', `bg-${stateColor(r.state)}`]" />{{ stateLabel(r.state) }}<span class="legend__share">{{ r.share }}</span>
+      <span v-for="item in legendItems" :key="item.key" :class="['legend__item', { 'legend__item--short': item.key === 'short' }]">
+        <span class="legend__swatch"><span v-for="c in item.colors" :key="c" :class="`bg-${c}`" /></span>{{ item.label }}<span class="legend__share">{{ item.share }}</span>
       </span>
     </div>
   </div>
@@ -106,19 +118,23 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
 .dm-sb--block { flex: 1 1 auto; width: 100%; }
 .state-bar { padding: 6px 0; border-radius: 6px; outline: none; cursor: default; }
 .state-bar:focus-visible { box-shadow: 0 0 0 2px rgb(var(--v-theme-secondary)); }
-/* Rounded segments a hair apart; the short ones keep a few pixels, the long ones give them up. */
-.track { display: flex; gap: 2px; border-radius: 999px; overflow: hidden; }
+/* One seamless rounded bar, a soft light along its top: the short states are thin bands where awake turns into asleep,
+   not separate beads; the short ones keep a few pixels, the long ones give them up. */
+.track { position: relative; display: flex; border-radius: 999px; overflow: hidden; background: rgba(var(--v-theme-on-surface), 0.06); }
+.track::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 60%); box-shadow: inset 0 0 0 1px rgba(var(--v-theme-on-surface), 0.05); }
 .track--empty { background: repeating-linear-gradient(90deg, rgba(var(--v-theme-on-surface), 0.12) 0 6px, transparent 6px 10px); }
-.segment { flex: 0 1 auto; min-width: 3px; height: 100%; border-radius: 3px; transform-origin: left center;
+.track--empty::after { display: none; }
+.segment { flex: 0 1 auto; min-width: 2px; height: 100%; transform-origin: left center;
   animation: dm-seg-in 0.8s var(--dm-ease) both; animation-delay: calc(var(--i) * 70ms); transition: filter 0.2s; }
-.segment:first-child { border-top-left-radius: 999px; border-bottom-left-radius: 999px; }
-.segment:last-child { border-top-right-radius: 999px; border-bottom-right-radius: 999px; }
 .state-bar:hover .segment, .state-bar:focus-visible .segment { filter: brightness(1.12) saturate(1.1); }
 @keyframes dm-seg-in { from { opacity: 0; transform: scaleX(0.2); } }
-.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 0.78rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
-.legend__item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.legend__dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.legend__share { font-variant-numeric: tabular-nums; color: rgba(var(--v-theme-on-surface), var(--v-high-emphasis-opacity)); font-weight: 500; }
+.legend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; margin-top: 8px; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.legend__item { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.legend__item--short { opacity: 0.8; }
+.legend__swatch { display: inline-flex; width: 14px; height: 6px; border-radius: 3px; overflow: hidden; flex: none; }
+.legend__swatch > span { flex: 1; }
+.legend__share { margin-left: 1px; font-variant-numeric: tabular-nums; color: rgba(var(--v-theme-on-surface), var(--v-high-emphasis-opacity)); font-weight: 600; }
 .rows td { padding: 1px 12px 1px 0; vertical-align: middle; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
