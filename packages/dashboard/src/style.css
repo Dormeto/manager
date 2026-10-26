@@ -65,6 +65,16 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
 .v-chip--label { border-radius: 8px !important; }
 .v-btn--variant-flat.bg-primary, .v-btn--variant-elevated.bg-primary { box-shadow: 0 10px 24px -14px rgba(var(--v-theme-primary), 0.9); }
 .v-btn { letter-spacing: 0 !important; font-weight: 600; }
+/* Toggles (the History's and Requests' periods, the schedules' kinds and views): one rounded track with the chosen
+   choice lit inside it. Each button's own rounded corners (the VBtn default) made outlined buttons look glued together. */
+.v-btn-toggle.v-btn-group { height: auto !important; padding: 3px; gap: 3px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)) !important;
+  border-radius: 12px !important; background: rgba(var(--v-theme-on-surface), 0.04); }
+.v-btn-toggle.v-btn-group > .v-btn { height: 28px !important; padding: 0 12px !important; border: 0 !important; border-radius: 9px !important; font-weight: 500;
+  color: rgba(var(--v-theme-on-surface), 0.68); transition: background-color 0.2s, color 0.2s, box-shadow 0.2s; }
+.v-btn-toggle.v-btn-group > .v-btn:hover { color: rgb(var(--v-theme-on-surface)); }
+.v-btn-toggle.v-btn-group > .v-btn.v-btn--active { color: rgb(var(--v-theme-on-surface)); background: rgba(var(--v-theme-primary), 0.18);
+  box-shadow: inset 0 0 0 1px rgba(var(--v-theme-primary), 0.35); }
+.v-btn-toggle.v-btn-group > .v-btn.v-btn--active > .v-btn__overlay { opacity: 0; }
 
 /* Loading bars: the dawn, from the night's blue to the sun. */
 .v-progress-linear__indeterminate { background: linear-gradient(90deg, #4589ca, #ff9b55) !important; }
