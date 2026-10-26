@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { causeText, collapseRows, dayRows, MIN_WIDTH } from '../src/history';
+import { causeText, collapseRows, dayRows, dayWave, MIN_WIDTH, wavePaths } from '../src/history';
 
 // Local times: the rows follow the viewer's days.
 const local = (d: number, h: number, m = 0, s = 0) => new Date(2026, 9, d, h, m, s).toISOString();
@@ -58,3 +58,36 @@ describe('days without history', () => {
   });
 });
 
+
+describe('the History waves', () => {
+  const day = new Date(2026, 9, 8);
+  const phases = [
+    { state: 'ASLEEP', from: local(8, 0), to: local(8, 9) },
+    { state: 'WAKING', from: local(8, 9), to: local(8, 9, 7, 30) },
+    { state: 'AWAKE', from: local(8, 9, 7, 30), to: local(8, 12) },
+    { state: 'NAPPING', from: local(8, 12), to: local(8, 12, 3) },
+    { state: 'ASLEEP', from: local(8, 12, 3), to: local(8, 18) },
+    { state: 'FAILED', from: local(8, 18), to: local(8, 18, 30) },
+  ];
+
+  it('the share of each quarter hour awake (waking, napping and failed count), unknown where the history knows nothing', () => {
+    const w = dayWave(phases, day, local(8, 0), local(8, 20));
+    expect(w.shares).toHaveLength(96);
+    expect(w.shares[0]).toBe(0);
+    expect(w.shares[36]).toBe(1); // 09:00-09:15: waking, then awake
+    expect(w.shares[48]).toBeCloseTo(0.2); // 12:00-12:15: napping 3 of its 15 minutes, then asleep
+    expect(w.shares[72]).toBe(1); // 18:00: failed
+    expect(w.shares[74]).toBeNull(); // 18:30-18:45: no phase covers it
+    expect(w.shares[80]).toBeNull(); // 20:00: after the period
+    expect(w.wakes).toEqual([9 / 24]);
+    expect(w.failures).toEqual([18 / 24]);
+  });
+
+  it('paths: a curve and its area per run of known slices, the line of sleep where slices are wholly asleep', () => {
+    const p = wavePaths([0, 0, 1, 1, null, null, 0.5, 0], 80, 27, 3);
+    expect(p.line.match(/M/g)).toHaveLength(2);
+    expect(p.area.match(/Z/g)).toHaveLength(2);
+    expect(p.sleep).toBe('M0 27 L20 27 M70 27 L80 27');
+    expect(wavePaths([null, null], 80)).toEqual({ line: '', area: '', sleep: '' });
+  });
+});

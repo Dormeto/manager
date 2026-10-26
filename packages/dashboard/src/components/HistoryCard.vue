@@ -1,12 +1,13 @@
 <script setup lang="ts">
-// A workload's state history (R8): the time in each state over a period, a row per local day of its phases, and its
-// transitions with what started them. Read from the manager's store, polled with the page.
-import { computed, ref, watch } from 'vue';
+// A workload's state history (R8): the time in each state over a period, a row per local day drawn as a wave of its
+// activity (the share of each quarter hour awake, over the line of sleep, the wakes as dots; each phase explained when
+// pointed at), and its transitions with what started them. Read from the manager's store, polled with the page.
+import { computed, ref, useId, watch } from 'vue';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { duration, stateColor, usd } from '../format';
 import DmLoader from './DmLoader.vue';
-import { STATE_ORDER, causeText, collapseRows, dayRows, stateLabel, type Phase } from '../history';
+import { causeText, collapseRows, dayRows, dayWave, stateLabel, wavePaths, type Phase } from '../history';
 import type { WorkloadHistory } from '../types';
 
 const props = defineProps<{ router: string; id: string; now: number }>();
@@ -44,7 +45,19 @@ const summary = computed(() => {
   ];
 });
 const transitions = computed(() => [...(history.value?.entries ?? [])].reverse().slice(0, 50));
-const LEGEND = STATE_ORDER;
+// Each day's wave, by the day's time.
+const waves = computed(() => {
+  const h = history.value;
+  const out = new Map<number, ReturnType<typeof wavePaths> & { wakes: number[]; failures: number[] }>();
+  if (!h?.phases) return out;
+  for (const item of rows.value) {
+    if (item.kind !== 'day') continue;
+    const w = dayWave(h.phases, item.row.day, h.from, h.to);
+    out.set(item.row.day.getTime(), { ...wavePaths(w.shares), wakes: w.wakes, failures: w.failures });
+  }
+  return out;
+});
+const fill = `dm-wave-${useId()}`;
 </script>
 
 <template>
@@ -67,6 +80,9 @@ const LEGEND = STATE_ORDER;
         <span class="day-label" />
         <div class="ticks"><span v-for="(h, i) in ['00:00', '06:00', '12:00', '18:00']" :key="h" :style="{ left: `${i * 25}%` }">{{ h }}</span></div>
       </div>
+      <svg width="0" height="0" class="dm-history__defs" aria-hidden="true">
+        <defs><linearGradient :id="fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" class="wave__stop wave__stop--top" /><stop offset="1" class="wave__stop" /></linearGradient></defs>
+      </svg>
       <div class="dm-history__days">
         <template v-for="(item, index) in rows" :key="item.kind === 'day' ? item.row.day.getTime() : `gap-${item.first.getTime()}`">
           <div v-if="item.kind === 'gap'" data-test="gap" class="d-flex align-center ga-3 dm-history__row text-body-small text-medium-emphasis">
@@ -75,11 +91,18 @@ const LEGEND = STATE_ORDER;
           </div>
           <div v-else data-test="day" class="d-flex align-center ga-3 dm-history__row">
             <span class="text-body-small text-medium-emphasis day-label">{{ dayLabel(item.row.day) }}</span>
-            <div class="bar" :style="{ '--row': index }">
+            <div class="wave" :style="{ '--row': index }">
+              <svg v-if="waves.get(item.row.day.getTime())" class="wave__svg" viewBox="0 0 1440 30" preserveAspectRatio="none" aria-hidden="true">
+                <path :d="waves.get(item.row.day.getTime())!.area" :fill="`url(#${fill})`" />
+                <path :d="waves.get(item.row.day.getTime())!.line" class="wave__line" />
+                <path :d="waves.get(item.row.day.getTime())!.sleep" class="wave__sleep" />
+              </svg>
+              <span v-for="x in waves.get(item.row.day.getTime())?.wakes" :key="`w${x}`" class="wave__dot bg-warning" :style="{ left: `${x * 100}%` }" />
+              <span v-for="x in waves.get(item.row.day.getTime())?.failures" :key="`f${x}`" class="wave__dot wave__dot--failed bg-error" :style="{ left: `${x * 100}%` }" />
               <v-tooltip v-for="(s, i) in item.row.segments" :key="i" location="top" :text="segmentLabel(s.phase, s.merged)">
                 <template #activator="{ props: tip }">
-                  <div v-bind="tip" data-test="segment" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
-                    :class="['segment', `bg-${stateColor(s.state)}`]" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
+                  <div v-bind="tip" data-test="segment" :data-state="s.state" :aria-label="segmentLabel(s.phase, s.merged)" tabindex="0"
+                    class="wave__hit" :style="{ left: `${s.left}%`, width: `${s.width}%` }" />
                 </template>
               </v-tooltip>
             </div>
@@ -87,7 +110,11 @@ const LEGEND = STATE_ORDER;
         </template>
       </div>
       <div class="dm-history__legend">
-        <span v-for="state in LEGEND" :key="state" class="d-inline-flex align-center ga-2"><span :class="['swatch', `bg-${stateColor(state)}`]" />{{ stateLabel(state) }}</span>
+        <span class="d-inline-flex align-center ga-2"><span class="swatch swatch--area" />Share of each quarter hour awake</span>
+        <span class="d-inline-flex align-center ga-2"><span class="swatch swatch--line bg-info" />{{ stateLabel('ASLEEP') }}</span>
+        <span class="d-inline-flex align-center ga-2"><span class="swatch bg-warning" />Wake</span>
+        <span class="d-inline-flex align-center ga-2"><span class="swatch bg-error" />Failed</span>
+        <span class="text-medium-emphasis">Point at a day for each change</span>
       </div>
       <div v-if="transitions.length" class="dm-history__changes">
         <v-table density="compact" fixed-header>
@@ -118,16 +145,27 @@ const LEGEND = STATE_ORDER;
 .ticks { position: relative; flex: 1; height: 14px; }
 .ticks span { position: absolute; top: 0; }
 .ticks span::before { content: ""; position: absolute; left: 0; top: 12px; width: 1px; height: 4px; background: rgba(var(--v-theme-on-surface), 0.25); }
-/* A day's phases on a rounded track; napping shares waking's hue, lighter, to tell them apart. Each row is revealed from
-   the left, one after the other. */
-.bar { position: relative; flex: 1; height: 12px; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.06); overflow: hidden;
-  animation: dm-reveal 0.9s var(--dm-ease) both; animation-delay: calc(var(--row, 0) * 45ms); }
-.segment { position: absolute; top: 0; bottom: 0; border-radius: 3px; outline: none; transition: filter 0.2s, box-shadow 0.2s; }
-.segment:hover { filter: brightness(1.18); }
-.segment:focus-visible { box-shadow: inset 0 0 0 2px rgb(var(--v-theme-on-surface)); }
+/* A day's wave: the share of each quarter hour awake as a green curve and the area under it, the line of sleep in blue
+   where it slept, the wakes (and failures) as dots on it. Over it, a zone per phase explains it when pointed at. Each
+   row is revealed from the left, one after the other. */
+.wave { position: relative; flex: 1; height: 30px; animation: dm-reveal 0.9s var(--dm-ease) both; animation-delay: calc(var(--row, 0) * 45ms); }
+.wave__svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.wave__line { fill: none; stroke: rgb(var(--v-theme-success)); stroke-width: 1.8; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.wave__sleep { fill: none; stroke: rgb(var(--v-theme-info)); stroke-opacity: 0.8; stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.wave__stop { stop-color: rgb(var(--v-theme-success)); stop-opacity: 0.04; }
+.wave__stop--top { stop-opacity: 0.5; }
+.wave__dot { position: absolute; bottom: 0; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 2px rgb(var(--v-theme-surface)); }
+.wave__dot--failed { width: 8px; height: 8px; margin-left: -4px; bottom: -1px; }
+.wave__hit { position: absolute; top: -2px; bottom: -2px; border-radius: 4px; outline: none; transition: background-color 0.15s; }
+.wave__hit:hover { background: rgba(var(--v-theme-on-surface), 0.07); }
+.wave__hit:focus-visible { box-shadow: inset 0 0 0 2px rgb(var(--v-theme-on-surface)); }
+.dm-history__defs { position: absolute; }
 @keyframes dm-reveal { from { clip-path: inset(0 100% 0 0 round 999px); } to { clip-path: inset(0 0 0 0 round 999px); } }
 .dm-history__legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 14px; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 .swatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.swatch--line { width: 14px; height: 2px; border-radius: 2px; }
+.swatch--area { width: 14px; height: 10px; border-radius: 2px 2px 0 0; border-top: 2px solid rgb(var(--v-theme-success));
+  background: linear-gradient(180deg, rgba(var(--v-theme-success), 0.6), rgba(var(--v-theme-success), 0.08)); }
 .dm-history__changes { margin-top: 18px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 14px; overflow: hidden; }
 .dm-history__changes :deep(.v-table__wrapper) { max-height: 340px; }
 .dm-history__changes :deep(thead th) { background: rgb(var(--v-theme-surface)) !important; }
@@ -135,6 +173,6 @@ const LEGEND = STATE_ORDER;
 .dm-change { font: 500 0.74rem/1 var(--dm-mono); letter-spacing: 0.02em; }
 .dm-change__arrow { opacity: 0.5; }
 .dm-period :deep(.v-btn) { font-weight: 500; }
-@media (prefers-reduced-motion: reduce) { .bar { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .wave { animation: none; } }
 @media (max-width: 600px) { .day-label { width: 74px; } }
 </style>
