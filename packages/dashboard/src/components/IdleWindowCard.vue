@@ -3,9 +3,9 @@
 // minutes, each window's savings a month (or hours asleep), wakes and wait a day, and the window at the knee recommended.
 // The API computes it at most once a day: read once with the page.
 import { computed, onMounted, ref } from 'vue';
-import { api } from '../api';
 import { duration, usd } from '../format';
 import { adviceSentence, hoursText, perDay } from '../idle';
+import { readIdleWindow } from '../idle-window';
 import { mdiLightbulbOnOutline } from '@mdi/js';
 import DmLoader from './DmLoader.vue';
 import type { IdleWindowAdvice, IdleWindowRow } from '../types';
@@ -16,7 +16,7 @@ const error = ref('');
 const loading = ref(true);
 onMounted(async () => {
   try {
-    const answer = await api<IdleWindowAdvice>(`/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}/idle-window`);
+    const answer = await readIdleWindow(props.router, props.id);
     // An answer without windows is not drawn (it would fail the whole card).
     if (!Array.isArray(answer?.windows)) throw new Error('the manager answered something else');
     advice.value = answer;

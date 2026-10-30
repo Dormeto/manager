@@ -26,15 +26,15 @@ const hover = async (wrapper: ReturnType<typeof render>) => {
 const widths = (wrapper: ReturnType<typeof render>) => wrapper.findAll('[data-test="state-segment"]').map((s) => Number.parseFloat(s.attributes('style')!.match(/width: ([\d.]+)%/)![1]!));
 
 describe('StateBar', () => {
-  it('draws the time with history in each state, in the history\'s colors and order; a short one stays visible', () => {
+  it('draws the time with history in each state, in the history\'s colors, awake first and asleep last; a short one stays visible', () => {
     const wrapper = render({ states: STATES });
     const segments = wrapper.findAll('[data-test="state-segment"]');
-    expect(segments.map((s) => s.classes().find((c) => c.startsWith('bg-')))).toEqual(['bg-success', 'bg-info', 'bg-warning']);
-    const [awake, asleep, waking] = widths(wrapper);
+    expect(segments.map((s) => s.classes().find((c) => c.startsWith('bg-')))).toEqual(['bg-success', 'bg-warning', 'bg-info']);
+    const [awake, waking, asleep] = widths(wrapper);
     expect(awake! + asleep! + waking!).toBeCloseTo(100, 5);
     expect(asleep! / awake!).toBeCloseTo(432_000 / 86_000, 0);
     expect(waking).toBeGreaterThanOrEqual(1);
-    expect(wrapper.find('[data-test="state-bar"]').attributes('aria-label')).toBe('Last 7 days: awake 17 %, asleep 83 %, waking <1 %');
+    expect(wrapper.find('[data-test="state-bar"]').attributes('aria-label')).toBe('Last 7 days: awake 17 %, waking <1 %, asleep 83 %');
     wrapper.unmount();
   });
 

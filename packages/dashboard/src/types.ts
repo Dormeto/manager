@@ -412,4 +412,6 @@ export interface IdleWindowAdvice {
   windows: IdleWindowRow[];
   actual: { wakes: number; replayedWakes: number; noisy: boolean };
   wakerTargetGroup: boolean;
+  // The replayed requests per UTC hour from `from` (managers before 0.20.0, or an answer kept from before: absent).
+  hours?: { from: string; counts: number[] };
 }

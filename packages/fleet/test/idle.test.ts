@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
 import { createFleetStore } from '../src/index.js';
-import { IDLE_WINDOWS, checkMinutesOf, idleWindowAdvice, recommendWindow, replayIdle, windowsFor, type IdleWindowAdvice, type RequestMinutes } from '../src/idle.js';
+import { IDLE_WINDOWS, checkMinutesOf, idleWindowAdvice, recommendWindow, replayIdle, requestHours, windowsFor, type IdleWindowAdvice, type RequestMinutes } from '../src/idle.js';
 import { baselineHours } from '../src/savings.js';
 import type { StoppedItem } from '../src/prices.js';
 
@@ -219,5 +219,28 @@ describe('the advice kept a day', () => {
     // DynamoDB deletes an expired item within days: past its expiresAt it is not read.
     t += 86_401_000;
     expect(await store.getIdleWindow('121014831971', 'eu-west-1', 'demo')).toBeNull();
+  });
+});
+
+describe('the requests per hour (the workload page heatmap)', () => {
+  it('adds up the minutes of each UTC hour, every hour of the period present, quiet ones at 0', () => {
+    const h = requestHours(requests([[600, 3], [659, 2], [660, 1], [END - 1, 4]]));
+    expect(h.from).toBe(FROM);
+    expect(h.counts).toHaveLength(DAYS * 24);
+    expect(h.counts[10]).toBe(5);
+    expect(h.counts[11]).toBe(1);
+    expect(h.counts.at(-1)).toBe(4);
+    expect(h.counts.reduce((a, b) => a + b, 0)).toBe(10);
+  });
+
+  it('a period starting within an hour: the first hour is that hour, in part', () => {
+    const h = requestHours({ from: '2026-09-26T00:42:00.000Z', to: '2026-09-26T03:10:00.000Z', minutes: [[0, 1], [17, 2], [18, 6], [147, 1]] });
+    expect(h).toEqual({ from: FROM, counts: [3, 6, 0, 1] });
+  });
+
+  it('comes with the advice', async () => {
+    const a = await advice();
+    expect(a.hours?.from).toBe(FROM);
+    expect(a.hours?.counts.filter((n) => n > 0)).toEqual(Array(DAYS).fill(1));
   });
 });

@@ -43,6 +43,9 @@ describe('HistoryCard', () => {
     expect(wrapper.text()).toContain('1 wake, median 41 s, longest 41 s');
     const waking = wrapper.findAll('[data-test="segment"]').find((s) => s.attributes('aria-label')?.startsWith('Waking'))!;
     expect(waking.attributes('aria-label')).toMatch(/Waking .*1 min.*woken from the manager by ops@example\.com/);
+    // Each day a wave: the wake as a dot on it.
+    expect(wrapper.findAll('.wave__line')).toHaveLength(2);
+    expect(wrapper.findAll('.wave__dot')).toHaveLength(1);
     wrapper.unmount();
   });
 
@@ -62,7 +65,7 @@ describe('HistoryCard', () => {
     expect(wrapper.text()).toContain('Asleep 75% of the time with history');
     expect(wrapper.find('[data-test="gap"]').exists()).toBe(true);
     const napping = wrapper.findAll('[data-test="segment"]').find((x) => x.attributes('aria-label')?.startsWith('Napping'))!;
-    expect(napping.classes()).toContain('bg-napping');
+    expect(napping.attributes('data-state')).toBe('NAPPING');
     wrapper.unmount();
   });
 
