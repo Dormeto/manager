@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Onboard a discovered candidate: its name (for people; the router derives the workload id from the target group), idle
 // window, wake mode, companion databases, fallback instance types (R7b). A Kubernetes candidate (R10.5): what Dormeto adds,
-// the GitOps snippet, the router's access to its cluster.
+// the GitOps snippet, the router's access to its cluster. Any other: the lines its Terraform must keep.
 import { computed, ref, watch } from 'vue';
 import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
 import { nameRule } from '../format';
@@ -9,8 +9,9 @@ import { copiedTags, rowsOf, rowsProblem, tagsOf, type TagRow, type Tags } from 
 import TagsEditor from './TagsEditor.vue';
 import { useSession } from '../stores/session';
 import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
+import { terraformSnippet } from '../terraform';
 
-const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]> }>();
+const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null }>();
 const access = computed(() => (props.kubernetes ? accessText(props.kubernetes.cluster, props.access) : null));
 const snippet = computed(() => (props.kubernetes ? gitopsSnippet(props.kubernetes) : null));
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Tags }] }>();
@@ -37,6 +38,7 @@ function copyAws() {
 }
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
 const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.trim()).filter(Boolean));
+const terraform = computed(() => (props.kubernetes ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
 const fallbackRule = () => (fallbackTypes.value.length <= 5 && fallbackTypes.value.every((t) => INSTANCE_TYPE.test(t))) || 'At most 5 EC2 instance types, for example t3a.medium, m6i.large';
 watch(() => props.modelValue, (open) => {
   if (!open) return;
@@ -96,7 +98,7 @@ function submit() {
             <li v-else class="dm-change">
               <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
               <span>The router of its account and region (installed first if needed) tags its backends, adds the waker before every rule
-                forwarding to its target group (traffic unchanged) and naps it once idle.</span>
+                forwarding to its target group (traffic unchanged) and naps it once idle. A rule it cannot cover, such as one that acts before its forward, gets the waker itself: the operation's steps name it.</span>
             </li>
             <li class="dm-change">
               <v-avatar color="secondary" variant="tonal" size="28"><v-icon :icon="mdiUndoVariant" size="16" /></v-avatar>
@@ -110,6 +112,10 @@ function submit() {
             <p class="dm-lead mt-4 mb-2">Its GitOps tool would set the replicas back while it naps: keep this in its configuration.</p>
             <pre data-test="gitops" class="gitops">{{ snippet }}</pre>
           </template>
+        </template>
+        <template v-if="terraform">
+          <p class="dm-lead mt-4 mb-2">If Terraform writes these resources, keep this in its configuration: an apply would otherwise remove what onboarding adds, until the router repairs it.</p>
+          <pre data-test="terraform" class="gitops">{{ terraform }}</pre>
         </template>
         <div class="dm-eyebrow mt-6 mb-3">Settings</div>
         <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" hint="Shown in the manager; the target group name if empty. It can be changed later." persistent-hint autofocus class="mb-3" />

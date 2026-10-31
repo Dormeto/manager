@@ -505,7 +505,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" :backend-kind="(single?.backend as { kind?: string } | null | undefined)?.kind ?? null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">

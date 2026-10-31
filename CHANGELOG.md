@@ -5,6 +5,13 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- The Onboard dialog gives the lines a Terraform that writes the workload's resources must keep: the AWS provider's
+  `ignore_tags` for `dormeto:`, `ignore_changes = [action]` on a rule Dormeto changes in place, and the backend's own fields.
+  Without them every apply removes what onboarding added, until the router repairs it. It also says that a rule Dormeto
+  cannot cover, such as one that acts before its forward, gets the waker itself, and that the operation's steps name it.
+
 ## 0.19.0 — 2026-10-24
 
 Router 0.33.0. Access: apply the access module (or the organization configuration) or the AWS CLI script of this release

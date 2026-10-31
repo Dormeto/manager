@@ -92,6 +92,47 @@ describe('OnboardDialog', () => {
     wrapper.unmount();
   });
 
+  it('gives the Terraform lines of the backend, and says a rule that acts first gets the waker itself', async () => {
+    const lines = () => document.querySelector('[data-test="terraform"]')?.textContent ?? '';
+    for (const [kind, wanted] of [
+      ['ecs', 'aws_ecs_service'], ['asg', 'aws_autoscaling_group'],
+    ] as const) {
+      const wrapper = await openDialog({ backendKind: kind });
+      expect(lines()).toContain('key_prefixes = ["dormeto:"]');
+      expect(lines()).toContain('resource "aws_lb_listener_rule"');
+      expect(lines()).toContain('ignore_changes = [action]');
+      expect(lines()).toContain(wanted);
+      wrapper.unmount();
+    }
+    const asg = await openDialog({ backendKind: 'asg' });
+    expect(lines()).toContain('ignore_changes = [min_size, max_size, desired_capacity, suspended_processes]');
+    expect(document.querySelector('.v-dialog')!.textContent).toContain('acts before its forward');
+    asg.unmount();
+    const ecs = await openDialog({ backendKind: 'ecs' });
+    expect(lines()).toContain('ignore_changes = [desired_count]');
+    ecs.unmount();
+    expect(document.querySelector('[data-test="terraform"]')).toBeNull();
+  });
+
+  it('adds an instance\'s type to the Terraform lines only with fallback types', async () => {
+    const wrapper = await openDialog({ backendKind: 'instance' });
+    const lines = () => document.querySelector('[data-test="terraform"]')!.textContent!;
+    expect(lines()).not.toContain('aws_instance');
+    const field = input('Fallback instance types');
+    field.value = 't3a.medium';
+    field.dispatchEvent(new Event('input'));
+    await flushPromises();
+    expect(lines()).toContain('resource "aws_instance"');
+    expect(lines()).toContain('ignore_changes = [instance_type]');
+    wrapper.unmount();
+  });
+
+  it('gives no Terraform lines for a Kubernetes workload: its GitOps snippet says what to keep', async () => {
+    const wrapper = await openDialog({ backendKind: 'k8s', kubernetes: kube({ gitops: 'flux' }) });
+    expect(document.querySelector('[data-test="terraform"]')).toBeNull();
+    wrapper.unmount();
+  });
+
   it('gives the GitOps snippet that keeps Argo CD or Flux from undoing a nap', async () => {
     const argo = await openDialog({ kubernetes: kube({ gitops: 'argocd', switch: 'patched-ingress', ingress: { name: 'solo', ruleIndex: 0, service: { name: 'solo', port: { number: 80 } } } }) });
     const snippet = document.querySelector('[data-test="gitops"]')!.textContent!;
