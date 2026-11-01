@@ -854,6 +854,28 @@ describe('Schedules view: notifications', () => {
     expect(toast()).toBe('Schedule of Shop cleared');
   });
 
+  const JOINED: Schedule = { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }, { kind: 'awake', days: ['mon'], start: '12:10', end: '18:00' }] };
+  it('draws at the value the status answers, one bar for a joined gap; two on a router that answers none', async () => {
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', JOINED), joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };
+    const { wrapper } = await open('?view=week&date=2026-10-19');
+    await enable(wrapper, 'dmt-dev/a');
+    expect(eventTitles(wrapper).filter((t) => t.includes('Shop'))).toHaveLength(1);
+    wrapper.unmount();
+    h.status['/workloads/dmt-dev/a'] = status('Shop', JOINED);
+    const older = await open('?view=week&date=2026-10-19');
+    await enable(older.wrapper, 'dmt-dev/a');
+    expect(eventTitles(older.wrapper).filter((t) => t.includes('Shop'))).toHaveLength(2);
+  });
+
+  it('a new window keeps the schedule\'s own value, 0 included', async () => {
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', { ...shopSchedule, joinMinutes: 0 }), joinMinutes: 0, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-24', '12:00'), at('2026-10-24', '13:00'));
+    await click('[data-test="nw-save"]');
+    expect(JSON.parse(h.calls.find((c) => c.method === 'PUT')!.body!).joinMinutes).toBe(0);
+  });
+
   it('names the workload after a new window', async () => {
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');
@@ -954,6 +976,38 @@ describe('Schedules view: moving a window by dragging it', () => {
     expect(revert).toHaveBeenCalledOnce();
     expect(puts()).toEqual([]);
     expect(toast()).toContain('changed since');
+  });
+
+  it('a schedule with its own value keeps it through a drag, 0 included', async () => {
+    for (const joinMinutes of [0, 30]) {
+      h.status['/workloads/dmt-dev/a'] = { ...status('Shop', { ...shopSchedule, joinMinutes }), joinMinutes, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };
+      const { wrapper } = await open();
+      await enable(wrapper, 'dmt-dev/a');
+      h.calls.length = 0;
+      await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+      expect(JSON.parse(h.calls.find((c) => c.method === 'PUT')!.body!).joinMinutes).toBe(joinMinutes);
+    }
+  });
+
+  it('a schedule without one is sent without it', async () => {
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', shopSchedule), joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    h.calls.length = 0;
+    await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(JSON.parse(h.calls.find((c) => c.method === 'PUT')!.body!)).not.toHaveProperty('joinMinutes');
+  });
+
+  it('puts back when the value in force changed since it was drawn: the bar was drawn with another', async () => {
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', shopSchedule), joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', shopSchedule), joinMinutes: 60, joinFrom: 'organization', joinInherited: { joinMinutes: 60, joinFrom: 'organization' } };
+    h.calls.length = 0;
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(revert).toHaveBeenCalled();
+    expect(h.calls.some((c) => c.method === 'PUT')).toBe(false);
+    expect(toast()).toContain('changed since it was read');
   });
 
   it('puts back a drop that moves nothing, in silence', async () => {

@@ -5,7 +5,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import ScheduleDialog from '../src/components/ScheduleDialog.vue';
-import type { Schedule } from '../src/schedule';
+import type { JoinAnswer, Schedule } from '../src/schedule';
 
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 Object.defineProperty(window, 'visualViewport', {
@@ -17,10 +17,10 @@ const schedule: Schedule = { timeZone: 'Europe/Paris', windows: [{ kind: 'awake'
 const mounted: VueWrapper[] = [];
 const emitted: string[] = [];
 let submitted: Schedule | null = null;
-async function open(s: Schedule | null, error = '') {
+async function open(s: Schedule | null, error = '', join?: JoinAnswer) {
   emitted.length = 0;
   submitted = null;
-  const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(ScheduleDialog, { modelValue: true, schedule: s, name: 'Shop', error, onClear: () => emitted.push('clear'), onSubmit: (body: Schedule) => { emitted.push('submit'); submitted = body; } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+  const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(ScheduleDialog, { modelValue: true, schedule: s, name: 'Shop', error, ...(join ? { join } : {}), onClear: () => emitted.push('clear'), onSubmit: (body: Schedule) => { emitted.push('submit'); submitted = body; } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
   mounted.push(wrapper);
   await flushPromises();
   return wrapper;
@@ -454,5 +454,121 @@ describe('Schedule dialog: Do not repeat', () => {
     expect(button('Save')!.disabled).toBe(true);
     await set(wrapper, 'w-once-date', '2099-01-01');
     expect(q('w-once-past')).toBeNull();
+  });
+});
+
+describe('Schedule dialog: joined windows', () => {
+  const JOIN: JoinAnswer = { joinMinutes: 15, joinFrom: 'organization', joinInherited: { joinMinutes: 15, joinFrom: 'organization' } };
+  const field = () => document.querySelector('[data-test="join"]') as HTMLElement | null;
+  const number = () => field()!.querySelector('input[type="number"]') as HTMLInputElement;
+  const inherit = () => field()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  const save = async () => { button('Save')!.click(); await flushPromises(); };
+  const type = async (value: string) => { number().value = value; number().dispatchEvent(new Event('input')); await flushPromises(); };
+
+  it('says the inherited value and level, with the words asked', async () => {
+    await open(schedule, '', JOIN);
+    expect(field()!.textContent).toContain('Join windows of one kind up to');
+    expect(field()!.textContent).toContain('minutes apart');
+    expect(field()!.textContent).toContain('Inherit (15 min, from the organization)');
+    expect(inherit().checked).toBe(true);
+    expect(number().disabled).toBe(true);
+    expect(number().value).toBe('15');
+  });
+
+  it('is there for a first schedule, whose status answers what it would inherit', async () => {
+    await open(null, '', { joinMinutes: 30, joinFrom: 'router', joinInherited: { joinMinutes: 30, joinFrom: 'router' } });
+    expect(field()!.textContent).toContain('Inherit (30 min, from the router)');
+  });
+
+  it('is not offered on a router that answers no value', async () => {
+    await open(schedule);
+    expect(field()).toBeNull();
+  });
+
+  it('a schedule without one is sent without it', async () => {
+    await open(schedule, '', JOIN);
+    await save();
+    expect(submitted).not.toHaveProperty('joinMinutes');
+  });
+
+  it('a read-back schedule saved again keeps it, 0 included', async () => {
+    for (const joinMinutes of [0, 30]) {
+      await open({ ...schedule, joinMinutes }, '', { joinMinutes, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' } });
+      expect(inherit().checked).toBe(false);
+      expect(number().value).toBe(String(joinMinutes));
+      await save();
+      expect(submitted!.joinMinutes).toBe(joinMinutes);
+      mounted.splice(0).forEach((w) => w.unmount());
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('sets its own from the inherited value, and Inherit removes it', async () => {
+    await open(schedule, '', JOIN);
+    inherit().click();
+    await flushPromises();
+    expect(number().disabled).toBe(false);
+    expect(number().value).toBe('15');
+    await type('30');
+    await save();
+    expect(submitted!.joinMinutes).toBe(30);
+    mounted.splice(0).forEach((w) => w.unmount());
+    document.body.innerHTML = '';
+    await open({ ...schedule, joinMinutes: 30 }, '', JOIN);
+    inherit().click();
+    await flushPromises();
+    await save();
+    expect(submitted).not.toHaveProperty('joinMinutes');
+  });
+
+  it('a value it refuses says so under the field, in the router\'s words, and keeps Save off', async () => {
+    await open({ ...schedule, joinMinutes: 30 }, '', JOIN);
+    for (const bad of ['7', '125', '']) {
+      await type(bad);
+      expect(field()!.textContent, bad).toContain('joinMinutes: a whole number from 0 to 120, a multiple of 5');
+      expect(button('Save')!.disabled, bad).toBe(true);
+    }
+    await type('0');
+    expect(button('Save')!.disabled).toBe(false);
+  });
+
+  const TWO: Schedule = { timeZone: 'UTC', windows: [
+    { kind: 'nap', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: '2099-01-04', wake: 'never' },
+    { kind: 'nap', start: '12:10', end: '18:00', repeat: { pattern: 'daily' }, from: '2099-01-04', wake: 'never' },
+  ] };
+  const firstNext = () => document.querySelector('[data-test="w-next-line"]')!.textContent;
+
+  it('the next occurrence in the helper uses the value in force, and the schedule\'s other windows', async () => {
+    await open(TWO, '', { joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } });
+    expect(firstNext()).toContain('08:00–12:10');
+    inherit().click();
+    await flushPromises();
+    await type('0');
+    expect(firstNext()).toContain('08:00–12:00');
+  });
+
+  it('an older router does not join: the helper says the window as written', async () => {
+    await open(TWO);
+    expect(firstNext()).toContain('08:00–12:00');
+  });
+
+  it('adds the hint to the refusal of a router that does not know it', async () => {
+    await open(schedule, 'joinMinutes: unknown field');
+    expect(document.querySelector('[data-test="schedule-error"]')!.textContent).toContain('Joined windows need router 0.36.0 or later.');
+  });
+
+  it('explains it in the help, and draws one sample: two nap windows 10 minutes apart', async () => {
+    await open(schedule, '', JOIN);
+    const hover = async (name: string) => {
+      document.querySelector(`[data-test="${name}"]`)!.dispatchEvent(new MouseEvent('mouseenter'));
+      await new Promise((r) => setTimeout(r, 300));
+      await flushPromises();
+    };
+    await hover('schedule-help');
+    expect(document.querySelector('[data-test="schedule-help-text"]')!.textContent).toContain('Joined windows');
+    await hover('overlap-help');
+    const sample = [...document.querySelectorAll('[data-test="overlap-sample"]')].find((x) => x.textContent?.includes('Joined'))!;
+    expect(sample.textContent).toContain('10 minutes apart');
+    expect(sample.querySelectorAll('.dm-bar--nap')).toHaveLength(3);
   });
 });

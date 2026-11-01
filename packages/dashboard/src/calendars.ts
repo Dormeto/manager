@@ -84,6 +84,8 @@ export interface Calendar {
   next?: NextEvent[];
   // Whether the user may edit it: only then can its windows be dragged.
   canEdit?: boolean;
+  // The value of joined windows in force, from the status answer. None: 0, a router that does not join.
+  joinMinutes?: number;
 }
 
 export interface CalendarEvent {
@@ -124,6 +126,7 @@ function spanText(o: Occurrence, timeZone: string): string {
 const CAN_DRAG = 'Drag to move every occurrence of this window.';
 const CRON_STAYS = 'A cron window can\'t be dragged: edit it in the dialog.';
 const READ_ONLY = 'You may not edit this workload: it can\'t be dragged.';
+const JOINED_STAYS = 'Joined with another window: edit them in the dialog.';
 
 // What the calendar draws of one workload in a view. In a month view it puts every event in the page, hidden or not, about 0.1 s
 // for each 1,000 (the demo in Edge: 1,008 in 0.13 s, 5,040 in 0.5 s, 20,160 in 1.9 to 2.3 s, 30,240 in 2.6 to 4.4 s, 120,960 in
@@ -131,21 +134,36 @@ const READ_ONLY = 'You may not edit this workload: it can\'t be dragged.';
 // cron window (1,008), and 20 calendars at the most stay near 2 s.
 export const CALENDAR_EVENTS_MAX = 1200;
 
+// A bar: its occurrences as one, with the windows they are of, the first's above all.
+type Bar = Occurrence & { windows: Set<number> };
+
 // The bars of a schedule in [from, to), the first CALENDAR_EVENTS_MAX, and whether there are more. Occurrences of a cron window
-// that touch or overlap are one bar: every 5 minutes for 5 minutes draws the hours it holds, not a tile for each start. Others
-// stay one a day, as they always were. It reads no further than it draws.
-function barsOf(s: Schedule, from: number, to: number): { bars: Occurrence[]; more: boolean } {
+// that touch or overlap are one bar: every 5 minutes for 5 minutes draws the hours it holds, not a tile for each start. So is a
+// gap that joins, across two windows too, and its wake is never when either says so, as the router's union. Others stay one a
+// day, as they always were. It reads no further than it draws.
+function barsOf(s: Schedule, from: number, to: number, joinMinutes: number): { bars: Bar[]; more: boolean } {
   const windows = s.windows ?? [];
-  const bars: Occurrence[] = [];
-  const last = new Map<number, Occurrence>();
-  for (const day of occurrencesByDay(s, from, to)) {
+  const bars: Bar[] = [];
+  const last = new Map<number, Bar>();
+  // The bars whose joined end waits for a start of their kind.
+  const joining = new Map<string, Bar>();
+  const reaching = (o: Occurrence) => `${o.kind} ${o.end}`;
+  for (const day of occurrencesByDay(s, from, to, { joinMinutes })) {
     for (const o of day) {
-      const bar = windows[o.window]?.repeat?.pattern === 'cron' ? last.get(o.window) : undefined;
-      if (bar && o.start <= bar.end) {
+      const touched = windows[o.window]?.repeat?.pattern === 'cron' ? last.get(o.window) : undefined;
+      const started = `${o.kind} ${o.start}`;
+      const bar = joining.get(started) ?? (touched && o.start <= touched.end ? touched : undefined);
+      if (bar) {
+        joining.delete(started);
         bar.end = Math.max(bar.end, o.end);
+        bar.windows.add(o.window);
+        if (o.wake === 'never') bar.wake = 'never';
+        if (o.joined) { bar.joined = true; joining.set(reaching(o), bar); }
+        last.set(o.window, bar);
         continue;
       }
-      const copy = { ...o };
+      const copy = { ...o, windows: new Set([o.window]) };
+      if (o.joined) joining.set(reaching(o), copy);
       last.set(o.window, copy);
       bars.push(copy);
     }
@@ -174,7 +192,7 @@ export function calendarEvents(calendars: Calendar[], from: number, to: number, 
     const s = c.schedule;
     if (!s) continue;
     const windows = s.windows ?? [];
-    const { bars, more } = barsOf(s, from, to);
+    const { bars, more } = barsOf(s, from, to, c.joinMinutes ?? 0);
     if (more) capped.push({ key: c.key, name: c.name, until: new Date(bars.at(-1)!.start) });
     for (const o of bars) {
       const nap = o.kind === 'nap';
@@ -182,16 +200,19 @@ export function calendarEvents(calendars: Calendar[], from: number, to: number, 
       const title = `${c.name} · ${label}`;
       const w = windows[o.window]!;
       const cron = w.repeat?.pattern === 'cron';
+      // A drag moves one window: a bar of two would not stay what was dragged.
+      const several = o.windows.size > 1;
       const tip = () => [
-        title, recurrenceText(w),
+        title, recurrenceText(w), ...[...o.windows].filter((i) => i !== o.window).map((i) => recurrenceText(windows[i]!)),
         `${spanText(o, here)}${s.timeZone && s.timeZone !== here ? ` here, ${spanText(o, s.timeZone)} ${s.timeZone}` : ''}`,
-        cron ? CRON_STAYS : c.canEdit ? CAN_DRAG : READ_ONLY,
+        ...(o.joined ? [`Windows of one kind up to ${c.joinMinutes} min apart read as one.`] : []),
+        cron ? CRON_STAYS : !c.canEdit ? READ_ONLY : several ? JOINED_STAYS : CAN_DRAG,
       ];
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
         classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake', ...(o.end < now ? ['dm-past'] : [])],
         backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
-        startEditable: Boolean(c.canEdit) && !cron, durationEditable: false,
+        startEditable: Boolean(c.canEdit) && !cron && !several, durationEditable: false,
         extendedProps: { key: c.key, kind: o.kind, window: o.window, tip },
       });
     }

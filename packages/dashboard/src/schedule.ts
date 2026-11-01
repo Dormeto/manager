@@ -9,11 +9,29 @@ export type Repeat =
   | { pattern: 'cron'; cron: string; minutes: number };
 // `days` or `repeat`, never both; `start` and `end` but with a cron repeat, whose `minutes` say how long.
 export interface ScheduleWindow { kind: 'awake' | 'nap'; days?: Day[]; start?: string; end?: string; repeat?: Repeat; from?: string; until?: string; wake?: 'never' | 'header' }
-export interface Schedule { timeZone: string; windows?: ScheduleWindow[]; exceptions?: string[]; maxNapDays?: number; by?: string; at?: string }
+// `joinMinutes`: the workload's own level of joined windows; null is the same as absent, 0 is kept.
+export interface Schedule { timeZone: string; windows?: ScheduleWindow[]; exceptions?: string[]; maxNapDays?: number; joinMinutes?: number | null; by?: string; at?: string }
 export interface NextEvent { at: string; kind: 'awake-start' | 'awake-end' | 'nap-start' | 'nap-end'; window: number }
-export interface ScheduleView { schedule: Schedule | null; next: NextEvent[]; maintenanceDue: string | null }
+// Joined windows (router 0.36.0): the value in force and its level, and what removing the workload's own would give.
+export type JoinFrom = 'workload' | 'router' | 'organization' | 'default';
+export interface JoinLevel { joinMinutes: number; joinFrom: JoinFrom }
+export interface JoinAnswer { joinMinutes?: number; joinFrom?: JoinFrom; joinInherited?: JoinLevel }
+export interface ScheduleView extends JoinAnswer { schedule: Schedule | null; next: NextEvent[]; maintenanceDue: string | null }
 
 export const DAYS: Day[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+// Two occurrences of one kind with a gap of at most this count as one (schedule recurrence design, section 11).
+export const JOIN_DEFAULT_MINUTES = 15;
+export const JOIN_MINUTES_MAX = 120;
+export const JOIN_PROBLEM = `joinMinutes: a whole number from 0 to ${JOIN_MINUTES_MAX}, a multiple of 5`;
+export const isJoinMinutes = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= JOIN_MINUTES_MAX && (value as number) % 5 === 0;
+const JOIN_FROM: Record<JoinFrom, string> = { workload: 'set on this workload', router: 'from the router', organization: 'from the organization', default: 'the default' };
+// "15 min, from the organization".
+export const joinText = ({ joinMinutes, joinFrom }: JoinLevel): string => `${joinMinutes} min, ${JOIN_FROM[joinFrom]}`;
+// What a router inherits: the organization's as it last read it, else the default.
+export const routerJoinInherited = (m: { joinMinutes?: number | null }): JoinLevel => (isJoinMinutes(m.joinMinutes) ? { joinMinutes: m.joinMinutes, joinFrom: 'organization' } : { joinMinutes: JOIN_DEFAULT_MINUTES, joinFrom: 'default' });
+// The value a calendar and a helper compute with: the status answer's. A router that answers none does not join.
+export const joinInForce = (answer: JoinAnswer | null | undefined): number => answer?.joinMinutes ?? 0;
 const LABEL: Record<Day, string> = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
 export const dayLabel = (d: Day): string => LABEL[d];
 
@@ -283,7 +301,8 @@ export function windowBody(w: ScheduleWindow): ScheduleWindow {
 }
 
 // The body of the PUT: the zone in its canonical form (none without windows), the wake mode of nap windows only, the
-// exceptions and the maximum nap only when set. `maxNap` is the form field (blank for none).
+// exceptions, the maximum nap and the joined windows' value (0 is one) only when set, so that a schedule without them still
+// reads on an older router. `maxNap` is the form field (blank for none).
 export function scheduleBody(s: Schedule, maxNap: string): Schedule {
   const windows = (s.windows ?? []).map(windowBody);
   const zone = canonicalZone(s.timeZone) ?? String(s.timeZone ?? '').trim();
@@ -293,6 +312,7 @@ export function scheduleBody(s: Schedule, maxNap: string): Schedule {
     windows,
     ...(s.exceptions?.length ? { exceptions: s.exceptions } : {}),
     ...(max ? { maxNapDays: Number(max) } : {}),
+    ...(isEmpty(s.joinMinutes) ? {} : { joinMinutes: s.joinMinutes }),
   } as Schedule;
 }
 
@@ -306,8 +326,9 @@ export function formProblem(s: Schedule, maxNap: string): string {
   return '';
 }
 
-// The refusal of a router as it words it, with what it takes when it is a router before recurrences: it does not know their
-// fields.
+// The refusal of a router as it words it, with what it takes when it is a router before recurrences or joined windows: it does
+// not know their fields.
 export function recurrenceError(message: string): string {
-  return /\.(repeat|from|until): unknown field/.test(message) ? `${message.replace(/\.$/, '')}. Recurrences need router 0.36.0 or later.` : message;
+  if (/\.(repeat|from|until): unknown field/.test(message)) return `${message.replace(/\.$/, '')}. Recurrences need router 0.36.0 or later.`;
+  return /(^|; )(joinMinutes: unknown field|settings: unknown setting joinMinutes)/.test(message) ? `${message.replace(/\.$/, '')}. Joined windows need router 0.36.0 or later.` : message;
 }

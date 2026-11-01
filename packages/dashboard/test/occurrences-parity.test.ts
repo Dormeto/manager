@@ -11,17 +11,21 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { moveWindow, nextEvents, occurrencesIn, windowProblems, type Occurrence } from '../src/occurrences';
-import { DAYS, isOnce, type Day, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { DAYS, JOIN_PROBLEM, isJoinMinutes, isOnce, type Day, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { OVERLAP_SAMPLES } from '../src/overlap-samples';
 import { state } from '../src/mock/state';
+import { joinLevelsOf, scheduleView } from '../src/mock/schedule';
+import { AVAILABLE } from '../src/mock/fixtures';
 
 const ROUTER_SCHEDULE = '../../../../router/lambda/src/lib/schedule.mjs';
 const file = resolve(import.meta.dirname, ROUTER_SCHEDULE);
 
 interface RouterOccurrence { kind: 'awake' | 'nap'; window: number; id: string; start: number; end: number; wake?: string }
 interface RouterSchedule {
-  occurrenceAt(s: Schedule, t: number): RouterOccurrence | null;
-  nextEvents(s: Schedule, t: number, options: { count: number; horizonDays?: number }): { at: string; kind: string; window: number }[];
+  occurrenceAt(s: Schedule, t: number, options?: { joinMinutes?: number }): RouterOccurrence | null;
+  nextEvents(s: Schedule, t: number, options: { count: number; horizonDays?: number; joinMinutes?: number }): { at: string; kind: string; window: number }[];
+  isJoinMinutes(value: unknown): boolean;
+  resolveJoin(levels: { workload?: unknown; router?: unknown; manager?: unknown }): { joinMinutes: number; from: string };
   scheduleProblems(s: unknown, options?: { now: number }): string[];
   normalizeSchedule(s: Schedule): Schedule;
 }
@@ -31,6 +35,7 @@ const router = (existsSync(file) ? await import(/* @vite-ignore */ file) : null)
 const SEED = Number(process.env.PARITY_SEED ?? 20261020);
 const SCHEDULES = 500;
 const RECURRING = 400;
+const JOINED = 150;
 const ZONES = ['Europe/Paris', 'America/New_York', 'Australia/Lord_Howe', 'Asia/Kathmandu'];
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -153,6 +158,39 @@ function randomRecurringSchedule(random: () => number, r: RouterSchedule, zone: 
   return r.normalizeSchedule({ timeZone: zone, windows, ...(exceptions.length ? { exceptions } : {}) });
 }
 
+// Windows that a value of joinMinutes can join: two of one kind with a chosen gap, a third of the other kind in the gap or not,
+// a range or an exception date taking the second start away, or a cron chain with gaps of its own. Half the time around the hours
+// clocks change, and past midnight when the times fall so.
+const GAPS = [0, 5, 10, 15, 20, 25, 30, 60, 115, 120, 125];
+function randomJoinedSchedule(random: () => number, r: RouterSchedule, zone: string, anchor: number): Schedule {
+  const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)]!;
+  const kind = pick(['awake', 'nap'] as const);
+  const other = kind === 'nap' ? 'awake' as const : 'nap' as const;
+  const wake = (k: 'awake' | 'nap') => (k === 'nap' ? { wake: pick(['never', 'header'] as const) } : {});
+  const near = (days: number) => iso(anchor + days * DAY).slice(0, 10);
+  const time = (minutes: number) => hhmm(((minutes % 1440) + 1440) % 1440);
+  if (random() < 0.25) {
+    const [cron, minutes] = pick([['*/15 * * * *', 5], ['*/15 1-3 * * *', 5], ['*/30 1-3 * * *', 15], ['0 1-5 * * *', 50], ['*/15 2 * * *', 5], ['0,20 22,23 * * *', 15]] as const);
+    return r.normalizeSchedule({ timeZone: zone, windows: [{ kind, repeat: { pattern: 'cron', cron, minutes }, ...wake(kind) }] });
+  }
+  const start = random() < 0.5 ? 60 + Math.floor(random() * 31) * 5 : Math.floor(random() * 288) * 5;
+  const firstEnd = start + pick([30, 55, 110, 115, 240]);
+  const gap = pick(GAPS);
+  const second = firstEnd + gap;
+  const secondEnd = second + pick([5, 60, 120, 300]);
+  const on = random() < 0.5 ? { days: DAYS } : { repeat: { pattern: 'daily' as const } };
+  const windows: ScheduleWindow[] = [{ kind, ...on, start: time(start), end: time(firstEnd), ...wake(kind) }];
+  const add = (w: ScheduleWindow) => { if (!r.scheduleProblems({ timeZone: zone, windows: [...windows, w] }, { now: anchor - 12 * DAY }).length) windows.push(w); };
+  const range = random() < 0.15 ? { from: near(1) } : random() < 0.15 ? { until: near(-1) } : {};
+  add({ kind, ...on, start: time(second), end: time(secondEnd), ...range, ...wake(kind) });
+  if (gap >= 10 && random() < 0.3) {
+    const from = firstEnd + pick([0, 5]);
+    add({ kind: other, ...on, start: time(from), end: time(Math.min(second, from + 5)), ...wake(other) });
+  }
+  const exceptions = random() < 0.2 ? [near(Math.floor(random() * 5) - 2)] : [];
+  return r.normalizeSchedule({ timeZone: zone, windows, ...(exceptions.length ? { exceptions } : {}) });
+}
+
 // What the router's own tests take and refuse, the two tables' expressions: its words have to come back.
 const VALID_CRONS = [
   '30 8 * * *', '0,30 8 * * *', '*/30 8 * * *', '0-30/15 8 * * *', '0 8-10 * * *', '0 */12 * * *', '0 1-2,20-22/2 * * *', '0 8 *,5 * *', '0 8 15 * *', '0 8 15 3 *', '0 8 15 MAR *', '0 8 15 mAr *',
@@ -192,7 +230,7 @@ if (!router) {
   const r = router;
   const newCounts = () => ({ schedules: 0, overnight: 0, allDay: 0, exceptions: 0, occurrences: 0, edges: 0, instants: 0, inside: 0, nearChange: 0, ranges: 0 });
   // One schedule against the router, around its anchor: the edges, every sampled instant, and a range.
-  const compare = (s: Schedule, n: number, anchor: number, near: number[], random: () => number, counts: ReturnType<typeof newCounts>, mismatches: string[]) => {
+  const compare = (s: Schedule, n: number, anchor: number, near: number[], random: () => number, counts: ReturnType<typeof newCounts>, mismatches: string[], join: { joinMinutes?: number } = {}) => {
     counts.schedules += 1;
     counts.overnight += s.windows!.filter((w) => w.end! < w.start!).length;
     counts.allDay += s.windows!.filter((w) => w.start && w.end === w.start).length;
@@ -200,13 +238,13 @@ if (!router) {
 
     const [from, to] = [anchor - 3 * DAY, anchor + 3 * DAY];
     // Every occurrence that holds an instant of [from, to) overlaps this wider range.
-    const ours = occurrencesIn(s, anchor - 4 * DAY, anchor + 4 * DAY);
+    const ours = occurrencesIn(s, anchor - 4 * DAY, anchor + 4 * DAY, join);
     counts.occurrences += ours.length;
     const context = (t: number) => `seed ${SEED}, schedule ${n} ${JSON.stringify(s)} at ${iso(t)}`;
 
     // The edges in (from, to]: the router's next events, and ours as it counts them (each start; an end that no
     // occurrence of its kind holds). They also show an occurrence no instant is inside.
-    const events = r.nextEvents(s, from, { count: 10_000, horizonDays: 6 });
+    const events = r.nextEvents(s, from, { count: 10_000, horizonDays: 6, ...join });
     const theirEdges = [...new Set(events.map((e) => `${e.at} ${e.kind}`))].sort();
     const held = (kind: string, t: number) => ours.some((o) => o.kind === kind && o.start <= t && t < o.end);
     const within = (t: number) => t > from && t <= to;
@@ -228,7 +266,7 @@ if (!router) {
       counts.instants += 1;
       if (near.some((c) => Math.abs(c - t) <= HOUR)) counts.nearChange += 1;
       const active: Occurrence[] = ours.filter((o) => o.start <= t && t < o.end);
-      const theirs = r.occurrenceAt(s, t);
+      const theirs = r.occurrenceAt(s, t, join);
       if (active.length) counts.inside += 1;
       if (active.length && !theirs) mismatches.push(`${context(t)}: ours ${JSON.stringify(active)}, the router's none`);
       else if (!active.length && theirs) mismatches.push(`${context(t)}: ours none, the router's ${JSON.stringify(theirs)}`);
@@ -238,13 +276,16 @@ if (!router) {
         if (latest !== theirs.start || !active.some((o) => o.start === theirs.start && o.window === theirs.window)) {
           mismatches.push(`${context(t)}: the router's occurrence ${JSON.stringify(theirs)} is not our latest of ${JSON.stringify(active)}`);
         }
+        // A nap's wake mode, in a joined gap the first occurrence's: never when any active one says so.
+        const wake = theirs.kind === 'nap' ? (active.some((o) => o.wake === 'never') ? 'never' : 'header') : undefined;
+        if (wake !== theirs.wake) mismatches.push(`${context(t)}: the wake of ${JSON.stringify(active)} is ${wake}, the router's ${JSON.stringify(theirs)}`);
       }
     }
 
     // A range inside the wider one: exactly its occurrences that overlap the range.
     const a = from + Math.floor(random() * (to - from));
     const b = Math.min(a + Math.floor(random() * 2 * DAY), anchor + 4 * DAY);
-    const inRange = occurrencesIn(s, a, b);
+    const inRange = occurrencesIn(s, a, b, join);
     const expected = ours.filter((o) => o.start < b && o.end > a);
     counts.ranges += 1;
     if (JSON.stringify(inRange) !== JSON.stringify(expected)) mismatches.push(`seed ${SEED}, schedule ${n} ${JSON.stringify(s)} in [${iso(a)}, ${iso(b)}): ${JSON.stringify(inRange)} instead of ${JSON.stringify(expected)}`);
@@ -308,6 +349,131 @@ if (!router) {
       for (const [key, seen] of Object.entries(patterns)) expect(seen, key).toBeGreaterThan(20);
     }, 180_000);
 
+    for (const joinMinutes of [0, 15, 30, 120]) {
+      it(`${JOINED} schedules with gaps agree at joinMinutes ${joinMinutes}, across clock changes, with its next events too (seed ${SEED})`, () => {
+        const random = generator(SEED + 2 + joinMinutes);
+        const zoneChanges = new Map(ZONES.map((zone) => [zone, changes(zone)]));
+        const mismatches: string[] = [];
+        const counts = newCounts();
+        let joined = 0;
+        let nextChecked = 0;
+        for (let n = 0; n < JOINED; n++) {
+          const zone = ZONES[n % ZONES.length]!;
+          const near = zoneChanges.get(zone)!;
+          const anchor = near.length && random() < 0.7 ? near[Math.floor(random() * near.length)]! : FROM + Math.floor(random() * (TO - FROM - 8 * DAY)) + 4 * DAY;
+          const s = randomJoinedSchedule(random, r, zone, anchor);
+          joined += occurrencesIn(s, anchor - DAY, anchor + DAY, { joinMinutes }).filter((o) => o.joined).length;
+          compare(s, n, anchor, near, random, counts, mismatches, { joinMinutes });
+          for (const count of [1, 5, 40]) {
+            const t = anchor - Math.floor(random() * 3 * DAY);
+            const [ours, theirs] = [nextEvents(s, t, { count, joinMinutes }), r.nextEvents(s, t, { count, joinMinutes })];
+            nextChecked += theirs.length;
+            if (JSON.stringify(ours) !== JSON.stringify(theirs)) mismatches.push(`seed ${SEED}, schedule ${n} ${JSON.stringify(s)} next ${count} from ${iso(t)}: ours ${JSON.stringify(ours)}, the router's ${JSON.stringify(theirs)}`);
+          }
+        }
+        console.info(`joined parity at ${joinMinutes} (seed ${SEED}): ${JSON.stringify({ ...counts, joined, nextChecked })}`);
+        expect(mismatches.slice(0, 5), `${mismatches.length} mismatches, the first 5 shown`).toEqual([]);
+        // Not vacuous: gaps joined at any value but 0, near clock changes, and instants inside what they make.
+        if (joinMinutes) expect(joined).toBeGreaterThan(200);
+        else expect(joined).toBe(0);
+        for (const key of ['edges', 'inside', 'nearChange'] as const) expect(counts[key], key).toBeGreaterThan(100);
+      }, 180_000);
+    }
+
+    // The router's own cases: each is read at the instant that tells, on both sides.
+    const at = (s: Schedule, text: string, join: { joinMinutes?: number } = {}) => {
+      const t = Date.parse(text);
+      const theirs = r.occurrenceAt(s, t, join);
+      const active = occurrencesIn(s, t - 1, t + 1, join).filter((o) => o.start <= t && t < o.end);
+      expect(active.length > 0, `${JSON.stringify(s)} at ${text}: ours ${JSON.stringify(active)}, the router's ${JSON.stringify(theirs)}`).toBe(theirs !== null);
+      if (theirs) expect(active.some((o) => o.start === theirs.start && o.window === theirs.window)).toBe(true);
+      return theirs;
+    };
+    const window = (kind: 'awake' | 'nap', start: string, end: string, more: Partial<ScheduleWindow> = {}): ScheduleWindow => ({ kind, days: ['sun'], start, end, ...more });
+
+    it('the gap is elapsed time: across the spring change 70 wall minutes are 10 and join, a second start in the skipped hour is the change', () => {
+      const s = { timeZone: 'Europe/Paris', windows: [window('awake', '00:00', '01:55'), window('awake', '03:05', '05:00')] };
+      expect(at(s, '2027-03-28T01:58:00+01:00')?.window).toBe(0);
+      expect(at(s, '2027-03-28T01:58:00+01:00', { joinMinutes: 5 })).toBeNull();
+      expect(at(s, '2027-03-28T01:58:00+01:00', { joinMinutes: 10 })?.window).toBe(0);
+      const skipped = { timeZone: 'Europe/Paris', windows: [window('awake', '00:00', '01:50'), window('awake', '02:30', '05:00')] };
+      expect(at(skipped, '2027-03-28T01:55:00+01:00')?.window).toBe(0);
+    });
+
+    it('the gap is elapsed time: across the autumn change 15 wall minutes are 75 and do not join', () => {
+      const s = { timeZone: 'Europe/Paris', windows: [window('awake', '01:00', '02:50'), window('awake', '03:05', '05:00')] };
+      expect(at(s, '2027-10-31T02:55:00+02:00')).toBeNull();
+      expect(at(s, '2027-10-31T02:55:00+02:00', { joinMinutes: 70 })).toBeNull();
+      expect(at(s, '2027-10-31T02:55:00+02:00', { joinMinutes: 75 })?.window).toBe(0);
+      const after = { timeZone: 'Europe/Paris', windows: [window('awake', '03:30', '04:00'), window('awake', '04:15', '05:00')] };
+      expect(at(after, '2027-10-31T04:05:00+01:00')?.window).toBe(0);
+    });
+
+    it('only the other kind starting in [end, next start) blocks a join: at its first minute, up to its last, not with the second start', () => {
+      const around = (start: string, end: string): Schedule => ({ timeZone: 'UTC', windows: [window('awake', '08:00', '12:00'), window('nap', start, end), window('awake', '12:15', '18:00')] });
+      const gap = '2026-10-18T12:02:00Z';
+      expect(at(around('12:05', '12:10'), gap)).toBeNull();
+      expect(at(around('12:00', '12:05'), gap)?.kind).toBe('nap');
+      expect(at(around('12:10', '12:15'), gap)).toBeNull();
+      expect(at(around('12:15', '12:30'), gap)?.kind).toBe('awake');
+      // One the range removes holds nothing: a nap that ended before.
+      const gone: Schedule = { timeZone: 'UTC', windows: [window('awake', '08:00', '12:00'), window('nap', '12:05', '12:10', { until: '2026-10-17' }), window('awake', '12:15', '18:00')] };
+      expect(at(gone, gap)?.kind).toBe('awake');
+    });
+
+    it('a second start an exception date or a range removes joins nothing', () => {
+      const windows: ScheduleWindow[] = [window('nap', '20:00', '23:55', { days: ['mon'] }), window('nap', '00:05', '07:00', { days: ['tue'] })];
+      const gap = '2026-10-19T23:58:00Z';
+      expect(at({ timeZone: 'UTC', windows }, gap)?.window).toBe(0);
+      expect(at({ timeZone: 'UTC', windows, exceptions: ['2026-10-20'] }, gap)).toBeNull();
+      expect(at({ timeZone: 'UTC', windows: [windows[0]!, { ...windows[1]!, from: '2026-10-21' }] }, gap)).toBeNull();
+      expect(at({ timeZone: 'UTC', windows: [windows[0]!, { ...windows[1]!, until: '2026-10-19' }] }, gap)).toBeNull();
+      expect(at({ timeZone: 'UTC', windows, exceptions: ['2026-10-19'] }, gap)).toBeNull();
+    });
+
+    it('a chain such as */15 lasting 5 is one, and at 0 is not', () => {
+      const s: Schedule = { timeZone: 'UTC', windows: [{ kind: 'nap', repeat: { pattern: 'cron', cron: '*/15 * * * *', minutes: 5 }, wake: 'header' }] };
+      expect(at(s, '2027-01-04T10:07:00Z')?.start).toBe(Date.parse('2027-01-04T10:00:00Z'));
+      expect(at(s, '2027-01-04T10:07:00Z', { joinMinutes: 0 })).toBeNull();
+      expect(at(s, '2027-01-04T10:07:00Z', { joinMinutes: 5 })).toBeNull();
+      expect(at(s, '2027-01-04T10:07:00Z', { joinMinutes: 10 })?.start).toBe(Date.parse('2027-01-04T10:00:00Z'));
+      const t = Date.parse('2027-01-04T10:01:00Z');
+      for (const joinMinutes of [0, 15]) expect(nextEvents(s, t, { count: 12, joinMinutes })).toEqual(r.nextEvents(s, t, { count: 12, joinMinutes }));
+    });
+
+    it('the option wins over the schedule\'s value, which wins over 15; an invalid option is ignored', () => {
+      const s = (more: Partial<Schedule> = {}): Schedule => ({ timeZone: 'UTC', windows: [window('awake', '08:00', '12:00'), window('awake', '12:20', '18:00')], ...more });
+      const gap = '2026-10-18T12:05:00Z';
+      expect(at(s(), gap)).toBeNull();
+      expect(at(s({ joinMinutes: 30 }), gap)?.window).toBe(0);
+      expect(at(s({ joinMinutes: 30 }), gap, { joinMinutes: 0 })).toBeNull();
+      expect(at(s({ joinMinutes: 0 }), gap, { joinMinutes: 20 })?.window).toBe(0);
+      expect(at(s({ joinMinutes: 'x' as unknown as number }), gap)).toBeNull();
+      expect(at(s({ joinMinutes: null }), gap)).toBeNull();
+      expect(at(s({ joinMinutes: 30 }), gap, { joinMinutes: 7 })?.window).toBe(0);
+      expect(at(s(), gap, { joinMinutes: 7 })).toBeNull();
+    });
+
+    it('takes and refuses a value in the router\'s words', () => {
+      for (const value of [-5, 0, 3, 5, 15, 2.5, 120, 125, '15', true, null, undefined, NaN]) expect(isJoinMinutes(value), String(value)).toBe(r.isJoinMinutes(value));
+      expect(r.scheduleProblems({ timeZone: 'UTC', windows: [window('awake', '08:00', '12:00')], joinMinutes: 7 })).toEqual([JOIN_PROBLEM]);
+      expect(r.scheduleProblems({ timeZone: 'UTC', windows: [window('awake', '08:00', '12:00')], joinMinutes: null })).toEqual([]);
+    });
+
+    it('a window as it is dragged starts in the same place whatever the value in force: only an end moves', () => {
+      const w: ScheduleWindow = { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' } };
+      const other: ScheduleWindow = { kind: 'awake', start: '12:10', end: '18:00', repeat: { pattern: 'daily' } };
+      const starts = (joinMinutes: number) => r.nextEvents({ timeZone: 'UTC', windows: [moveWindow(w, 60, '2027-01-01')!, other] }, Date.parse('2027-01-04T00:00:00Z'), { count: 12, joinMinutes }).filter((e) => e.kind.endsWith('-start')).map((e) => e.at);
+      expect(starts(120)).toEqual(starts(0));
+    });
+
+    it('the demo resolves a value as the router does, at each level', () => {
+      for (const levels of [{}, { manager: 20 }, { router: 30, manager: 20 }, { workload: 0, router: 30, manager: 20 }, { workload: 45 }, { router: 0 }]) {
+        const { joinMinutes, joinFrom } = joinLevelsOf(levels);
+        expect({ joinMinutes, from: joinFrom }, JSON.stringify(levels)).toEqual(r.resolveJoin(levels));
+      }
+    });
+
     it('refuses a window in the router\'s words, every pattern and every cron expression of its tables', () => {
       const cases = [...WINDOWS, ...[...VALID_CRONS, ...REFUSED_CRONS].map((cron) => ({ kind: 'awake', repeat: { pattern: 'cron', cron, minutes: 60 } }))];
       let refused = 0;
@@ -350,6 +516,11 @@ if (!router) {
 
     it('the samples the dialog draws say what the router does', () => {
       const now = Date.parse('2026-11-01T12:00:00Z');
+      // Two nap windows 10 minutes apart read as one, at the default; not at 0.
+      const joined = OVERLAP_SAMPLES.find((x) => x.id === 'joined')!;
+      const s = { timeZone: 'UTC', windows: joined.schedules[0]! };
+      expect(r.occurrenceAt(s, Date.parse('2027-01-04T12:00:00Z'))?.kind).toBe('nap');
+      expect(r.occurrenceAt(s, Date.parse('2027-01-04T12:00:00Z'), { joinMinutes: 0 })).toBeNull();
       for (const sample of OVERLAP_SAMPLES) {
         for (const windows of sample.schedules) {
           const found = r.scheduleProblems({ timeZone: 'UTC', windows }, { now });
@@ -391,6 +562,12 @@ if (!router) {
       const scheduled = state().workloads.filter((w) => w.schedule);
       expect(scheduled.length).toBeGreaterThan(6);
       for (const w of scheduled) expect(r.scheduleProblems(w.schedule), JSON.stringify(w.schedule)).toEqual([]);
+      // What the demo answers of each up-to-date workload is what the router would: its next events at the value in force.
+      for (const w of scheduled.filter((x) => state().routers.find((y) => y.name === x.router)!.version === AVAILABLE.version)) {
+        const now = Date.now();
+        const { joinMinutes } = scheduleView(state(), w, now);
+        expect(scheduleView(state(), w, now).next).toEqual(r.nextEvents(w.schedule!, now, { count: 5, joinMinutes: joinMinutes! }));
+      }
     });
   });
 }

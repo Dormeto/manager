@@ -14,7 +14,7 @@ import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventC
 import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
 import { api } from '../api';
 import { MAX_CALENDARS, calendarEvents, calendarKey, cappedText, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
-import { DAYS, browserZone, movedText, recurrenceError, scheduleBody, windowBody, type Day, type Schedule } from '../schedule';
+import { DAYS, browserZone, joinInForce, movedText, recurrenceError, scheduleBody, windowBody, type Day, type Schedule } from '../schedule';
 import { localDate, moveWindow, wallOffset, windowFromSelection } from '../occurrences';
 import type { WorkloadStatus, WorkloadSummary } from '../types';
 import { useSession } from '../stores/session';
@@ -168,7 +168,7 @@ const nameOf = (key: string) => reads[key]?.data?.name ?? rows.value.find((w) =>
 const calendars = computed<Calendar[]>(() => enabled.value.flatMap((e) => {
   const data = reads[e.key]?.data;
   if (!data) return [];
-  return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next, canEdit: canEdit(e.key) }];
+  return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next, canEdit: canEdit(e.key), joinMinutes: joinInForce(data) }];
 }));
 const drawing = computed(() => (range.value ? calendarEvents(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark, Date.now()) : { events: [], capped: [] }));
 const events = computed(() => drawing.value.events);
@@ -257,7 +257,7 @@ const editable = computed<Candidate[]>(() => enabled.value.flatMap((e) => {
   const r = reads[e.key];
   const can = r?.data?.can;
   if (r?.status !== 'ok' || !r.data || !(can?.wake && can.nap)) return [];
-  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ?? null }];
+  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ?? null, joinMinutes: joinInForce(r.data) }];
 }));
 function openNew(selection: Selection) {
   notice.value = '';
@@ -320,7 +320,8 @@ async function eventDrop(arg: EventDropArg) {
     const schedule = fresh.schedule;
     const window = schedule?.windows?.[index];
     const known = reads[key]?.data?.schedule?.windows?.[index];
-    if (!schedule || !window || !known || JSON.stringify(windowBody(window)) !== JSON.stringify(windowBody(known))) {
+    // The bar was drawn with the value in force too: another one could have drawn another bar.
+    if (!schedule || !window || !known || JSON.stringify(windowBody(window)) !== JSON.stringify(windowBody(known)) || joinInForce(fresh) !== joinInForce(reads[key]?.data)) {
       arg.revert();
       said('warning', `The schedule of ${name} changed since it was read: look at it again before moving this window.`);
       await readOne(key);
@@ -391,6 +392,7 @@ const options = computed<CalendarOptions>(() => ({
 const drawer = ref(false);
 watch(smAndDown, (small) => { if (!small) drawer.value = false; });
 const dialogSchedule = computed(() => (dialogKey.value ? reads[dialogKey.value]?.data?.schedule ?? null : null));
+const dialogJoin = computed(() => (dialogKey.value ? reads[dialogKey.value]?.data ?? null : null));
 const eventLabel = (arg: EventContentArg) => arg.event.title;
 </script>
 
@@ -452,7 +454,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
   </v-tooltip>
   <NoticeToast :notice="toast" @close="toast = null" />
   <NewWindowDialog v-model="newOpen" :candidates="editable" :selection="newSelection" :last="last" :error="newError" :saving="newSaving" @submit="saveNew" />
-  <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
+  <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :join="dialogJoin" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
 </template>
 
 <style scoped>

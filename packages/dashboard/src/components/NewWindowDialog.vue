@@ -13,7 +13,8 @@ import { browserZone, recurrenceError, scheduleBody, windowBody, type Day, type 
 import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
-export interface Candidate { key: string; name: string; schedule: Schedule | null }
+// joinMinutes: the value in force, from its status answer.
+export interface Candidate { key: string; name: string; schedule: Schedule | null; joinMinutes?: number }
 export interface Selection { start: Date; end: Date; month: boolean; days?: Day[] }
 
 const props = defineProps<{ modelValue: boolean; candidates: Candidate[]; selection: Selection | null; last?: string; error?: string; saving?: boolean }>();
@@ -51,6 +52,8 @@ const window_ = computed<ScheduleWindow | null>(() => {
 });
 
 const edit = (w: ScheduleWindow) => { draft.value = w; edited.value = true; };
+// The helper's window is of the kind chosen above it, which decides what it joins.
+const drafted = computed<ScheduleWindow>(() => ({ ...draft.value, kind: kind.value }));
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   options.value = props.candidates.map((c) => ({ ...c, schedule: c.schedule ? JSON.parse(JSON.stringify(c.schedule)) as Schedule : null })).sort((a, b) => naturalCompare(a.name, b.name));
@@ -90,6 +93,7 @@ function save() {
     timeZone: zone.value,
     windows: [...(current?.windows ?? []), w],
     ...(current?.exceptions?.length ? { exceptions: current.exceptions } : {}),
+    joinMinutes: current?.joinMinutes,
   }, current?.maxNapDays ? String(current.maxNapDays) : '');
   emit('submit', { key: c.key, schedule });
 }
@@ -113,7 +117,7 @@ function save() {
           </div>
           <v-select v-if="kind === 'nap'" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
           <v-alert v-if="problem" data-test="nw-problem" type="warning" variant="tonal" density="compact" class="mb-3" :text="problem" />
-          <WindowRecurrence :key="opening" :model-value="draft" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" :date="selectedDate" test="nw" class="mb-3" @update:model-value="edit" />
+          <WindowRecurrence :key="opening" :model-value="drafted" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" :date="selectedDate" :others="chosen?.schedule?.windows" :join-minutes="chosen?.joinMinutes" test="nw" class="mb-3" @update:model-value="edit" />
           <div data-test="nw-summary" class="mb-3">
             <div><span class="text-medium-emphasis">Time zone</span> <strong data-test="nw-zone">{{ zone }}</strong><span v-if="chosen && !chosen.schedule?.timeZone" class="text-medium-emphasis"> (a first schedule: your browser's zone)</span></div>
           </div>

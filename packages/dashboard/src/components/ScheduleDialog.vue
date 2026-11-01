@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // Edit a workload's schedule (R12): a row per window with how it repeats (WindowRecurrence), the time zone (the browser's by
-// default), exceptions and the maximum nap. The router's refusals are shown as it words them.
+// default), exceptions, the maximum nap and how far apart windows join. The router's refusals are shown as it words them.
 import { computed, ref, watch } from 'vue';
 import { mdiCalendarClock, mdiDeleteOutline, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import { editProblems } from '../occurrences';
-import { browserZone, formProblem, newWindow, recurrenceError, scheduleBody, type Schedule, type ScheduleWindow } from '../schedule';
+import { browserZone, formProblem, isJoinMinutes, joinText, newWindow, recurrenceError, scheduleBody, type JoinAnswer, type Schedule, type ScheduleWindow } from '../schedule';
+import JoinField from './JoinField.vue';
 import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
-const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; error?: string; saving?: boolean }>();
+// join: the status answer's value and what is inherited; a router that answers none does not join, and is not asked.
+const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; error?: string; saving?: boolean; join?: JoinAnswer | null }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule]; clear: [] }>();
 const windows = ref<ScheduleWindow[]>([]);
 // A stable key for each row, beside its window: a window is replaced as it is edited, and a row keeps its helper's memory when
@@ -20,6 +22,12 @@ const exceptions = ref<string[]>([]);
 // What is typed in the exceptions field and not yet committed with Enter: kept on blur when it is a date.
 const typed = ref<string | null>('');
 const maxNap = ref('');
+// The workload's own value: null inherits, NaN is a field left blank.
+const joinMinutes = ref<number | null>(null);
+const inherited = computed(() => props.join?.joinInherited ?? null);
+const joinInvalid = computed(() => joinMinutes.value !== null && !isJoinMinutes(joinMinutes.value));
+// What the helpers compute with: an own value being typed counts once it reads.
+const inForce = computed(() => (!inherited.value ? 0 : isJoinMinutes(joinMinutes.value) ? joinMinutes.value : inherited.value.joinMinutes));
 const zones = (() => {
   try { return Intl.supportedValuesOf('timeZone'); } catch { return []; }
 })();
@@ -31,9 +39,10 @@ watch(() => props.modelValue, (open) => {
   timeZone.value = s?.timeZone || browserZone();
   exceptions.value = [...(s?.exceptions ?? [])];
   maxNap.value = s?.maxNapDays ? String(s.maxNapDays) : '';
+  joinMinutes.value = s?.joinMinutes ?? null;
   typed.value = '';
 }, { immediate: true });
-const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: windows.value, exceptions: exceptions.value }));
+const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: windows.value, exceptions: exceptions.value, joinMinutes: joinMinutes.value }));
 const problem = computed(() => formProblem(form.value, maxNap.value));
 // A window's own problems are shown under its fields, and keep Save off.
 const windowsInvalid = computed(() => windows.value.some((w) => Object.keys(editProblems(w)).length));
@@ -74,7 +83,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
               <span data-test="remove-window-tip">Remove this window</span>
             </v-tooltip>
           </div>
-          <WindowRecurrence v-model="windows[i]!" :time-zone="timeZone" :exceptions="exceptions">
+          <WindowRecurrence v-model="windows[i]!" :time-zone="timeZone" :exceptions="exceptions" :others="windows.filter((_, j) => j !== i)" :join-minutes="inForce">
             <v-select v-if="w.kind === 'nap'" :model-value="w.wake ?? 'never'" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" hide-details class="dm-wake" @update:model-value="w.wake = $event" />
           </WindowRecurrence>
         </div>
@@ -84,6 +93,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
         </div>
         <v-combobox v-model="exceptions" v-model:search="typed" @blur="commitTyped" label="Dates without a window (YYYY-MM-DD)" multiple chips closable-chips density="compact" :items="[]" :hint="badDate ? `${badDate} is not a date as YYYY-MM-DD` : 'A window that starts on one of these dates does not apply.'" persistent-hint :error="Boolean(badDate)" />
         <v-text-field v-model="maxNap" label="Maximum nap (days, 1 to 60)" density="compact" type="number" min="1" max="60" class="mt-3" hint="Past it, the workload wakes for maintenance, then naps again. Blank for none." persistent-hint />
+        <JoinField v-if="inherited" v-model="joinMinutes" :inherited="inherited.joinMinutes" :inherit-label="`Inherit (${joinText(inherited)})`" class="mt-3" />
         <v-alert v-if="problem && windows.length + Number(Boolean(maxNap)) > 0" type="warning" variant="tonal" density="compact" class="mt-3" :text="problem" />
         <v-alert v-if="error" data-test="schedule-error" type="error" variant="tonal" density="compact" class="mt-3" :text="recurrenceError(error)" />
       </v-card-text>
@@ -92,7 +102,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
         <v-btn v-if="clearing" data-test="dialog-clear" color="error" variant="flat" :disabled="saving" @click="confirmClear = true">Clear schedule</v-btn>
-        <v-btn v-else color="primary" variant="flat" :disabled="Boolean(problem) || windowsInvalid || Boolean(badDate) || saving" @click="submit">Save</v-btn>
+        <v-btn v-else color="primary" variant="flat" :disabled="Boolean(problem) || windowsInvalid || Boolean(badDate) || joinInvalid || saving" @click="submit">Save</v-btn>
       </v-card-actions>
     </v-card>
     <v-dialog v-model="confirmClear" max-width="440">

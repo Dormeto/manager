@@ -110,7 +110,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (method === 'GET' && a === 'states' && !b) return fleetStates(d, now);
     if (method === 'GET' && !a) return workloads(d, q, now);
     if (a && b && !parts[4]) {
-      if (method === 'GET' && !action) { const w = workloadOf(d, a, b); return { ...workloadStatus(d, w, now), ...scheduleView(w, now) }; }
+      if (method === 'GET' && !action) { const w = workloadOf(d, a, b); return { ...workloadStatus(d, w, now), ...scheduleView(d, w, now) }; }
       if (method === 'GET' && action === 'history') {
         const days = Number(q.get('days') ?? 7);
         if (!Number.isInteger(days) || days < 1 || days > 31) fail(400, 'bad_request', 'days must be a whole number from 1 to 31');

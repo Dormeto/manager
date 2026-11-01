@@ -91,7 +91,7 @@ describe("the demo's hibernation answers", () => {
     const first = state().routers[0]!;
     expect(first.source).toBe('terraform');
     const details = await get(`/routers/${first.name}`);
-    expect(details.managerSettings).toEqual({ url: null, hibernate: null, readAt: null, error: null });
+    expect(details.managerSettings).toEqual({ url: null, hibernate: null, joinMinutes: null, readAt: null, error: null });
     expect(details.configuration).not.toHaveProperty('ipListsCatalog');
     for (const w of state().workloads) {
       const h = workloadStatus(state(), w, Date.now()).hibernation;
@@ -112,7 +112,7 @@ describe("the demo's hibernation answers", () => {
   it("carries a router's settings at the top level of its answer, and refuses a Terraform workload", async () => {
     const router = state().routers[1]!;
     const details = await get(`/routers/${router.name}`);
-    expect(details.settings).toEqual({ hibernate: null, by: null, at: null });
+    expect(details.settings).toEqual({ hibernate: null, joinMinutes: null, by: null, at: null });
     expect(details.managerSettings).toMatchObject({ url: expect.any(String), hibernate: true, error: null });
     await mockApi(`/routers/${router.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: false }) });
     expect((await get(`/routers/${router.name}`)).settings).toMatchObject({ hibernate: false, by: expect.any(String) });

@@ -27,6 +27,7 @@ defineProps<{ overlaps?: boolean }>();
           <li><strong>A manager's Wake</strong> wakes it at once, even in a nap window. That window does not nap it again; an idle nap can, and so does the next nap window's start.</li>
           <li><strong>A manager's Nap</strong> naps it at once, even in an awake window. That window does not wake it again; a request can, and so does the next awake window's start.</li>
         </ul>
+        <p><strong>Joined windows.</strong> Two windows of one kind with a short gap read as one (15 minutes by default, 0 never), so the gap neither wakes nor naps it. A start of the other kind in the gap keeps them apart. A manager's Nap or Wake in between lasts until the second start.</p>
       </div>
     </v-tooltip>
     <v-tooltip location="bottom" max-width="min(94vw, 580px)" open-on-focus>

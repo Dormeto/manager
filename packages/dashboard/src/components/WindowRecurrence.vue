@@ -11,8 +11,9 @@ import {
   type Day, type Repeat, type RepeatChoice, type ScheduleWindow,
 } from '../schedule';
 
-// date: the day of a calendar selection, where a Do not repeat starts.
-const props = withDefaults(defineProps<{ modelValue: ScheduleWindow; timeZone?: string | null; exceptions?: string[]; test?: string; date?: string | null }>(), { timeZone: null, exceptions: () => [], test: 'w', date: null });
+// date: the day of a calendar selection, where a Do not repeat starts. others and joinMinutes: the schedule's other windows and the
+// value in force, what its next occurrences may join (none, a window as written).
+const props = withDefaults(defineProps<{ modelValue: ScheduleWindow; timeZone?: string | null; exceptions?: string[]; test?: string; date?: string | null; others?: ScheduleWindow[]; joinMinutes?: number }>(), { timeZone: null, exceptions: () => [], test: 'w', date: null, others: () => [], joinMinutes: 0 });
 const emit = defineEmits<{ 'update:modelValue': [ScheduleWindow] }>();
 
 const CHOICES: { value: RepeatChoice; title: string }[] = [
@@ -91,7 +92,7 @@ const setEnd = (kind: string) => {
 const sentence = computed(() => (daysProblem.value || w.value.until === '' ? '' : recurrenceText(body.value)));
 const head = computed(() => repeatText(body.value));
 const tail = computed(() => sentence.value.slice(head.value.length));
-const next = computed(() => (valid.value ? nextOccurrences({ timeZone: zone.value, windows: [body.value], exceptions: props.exceptions }, Date.now(), 5) : []));
+const next = computed(() => (valid.value ? nextOccurrences({ timeZone: zone.value, windows: [body.value, ...props.others], exceptions: props.exceptions }, Date.now(), 5, { joinMinutes: props.joinMinutes, window: 0 }) : []));
 // A problem that has no field of its own here: a stored window nothing else shows it for.
 const SHOWN = ['days', 'repeat.days', 'repeat.interval', 'repeat.day', 'repeat.nth', 'repeat.weekday', 'repeat', 'repeat.cron', 'repeat.minutes', 'from', 'until'];
 const other = computed(() => Object.entries(problems.value).filter(([field]) => !SHOWN.includes(field)).map(([field, why]) => `${field}: ${why}`));

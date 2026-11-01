@@ -43,6 +43,18 @@ const json = (res: { body?: string }) => JSON.parse(res.body ?? 'null');
 const PUT = '/api/workloads/dmt-dev/pay/schedule';
 
 describe('PUT /api/workloads/:router/:id/schedule', () => {
+  it('passes joinMinutes on with the schedule, 0 included, says it in the audit, and relays the router\'s refusal', async () => {
+    const s = setup();
+    for (const joinMinutes of [0, 30]) {
+      const res = await s.api(event('PUT', PUT, 'dmt-operator', { ...SCHEDULE, joinMinutes }));
+      expect(res.statusCode).toBe(200);
+      expect((s.calls.at(-1)!.schedule as { joinMinutes: number }).joinMinutes).toBe(joinMinutes);
+      expect(s.audit.at(-1)!.result).toContain(`joinMinutes ${joinMinutes}`);
+    }
+    await s.api(event('PUT', PUT, 'dmt-operator', SCHEDULE));
+    expect(s.audit.at(-1)!.result).not.toContain('joinMinutes');
+  });
+
   it('sets the schedule through the router and answers its schedule, next events and maintenance, audited', async () => {
     const s = setup();
     const res = await s.api(event('PUT', PUT, 'dmt-operator', SCHEDULE));

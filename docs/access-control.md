@@ -20,6 +20,11 @@ user reads the manager's Hibernate default (`GET /api/settings/workloads`). Writ
 workload's description and Hibernate, operators and administrators (a Terraform workload's Hibernate is set in its
 `workload` module); a router's description and Hibernate, and the manager's default, administrators.
 
+**Joined windows** (routers 0.36.0) follow the same rights at the organization and the router: every signed-in user reads the
+organization's `joinMinutes` (`GET /api/settings/workloads`), the built-in roles a router's; administrators set them
+(`PUT /api/settings/workloads`, `PUT /api/routers/{router}/settings`, each write keeping what it does not send). A workload's is on
+its schedule (`joinMinutes`, written with the schedule by whoever may both wake and nap it), and its settings route refuses one.
+
 The **waiting page** (routers 0.35.0) is read at the organization (`/api/settings/waiting-page`, by every signed-in user, as
 the Hibernate default is), the router (`/api/routers/{router}/waiting-page`, by the built-in roles) and the workload
 (`/api/workloads/{router}/{id}/waiting-page`) level; a member reads a workload's page when their groups' grants read that

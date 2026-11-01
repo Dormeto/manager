@@ -1,6 +1,7 @@
 // What the dashboard's actions change in the demo (npm run dev:mock), validated and audited as the API does.
 import type { Candidate, DiscoveryConfig } from '@dormeto/discovery/types';
 import type { DescriptionInfo, Pause } from '../types';
+import { JOIN_PROBLEM, isJoinMinutes } from '../schedule';
 import { AVAILABLE } from './fixtures';
 import { descriptionProblem } from '@dormeto/fleet/description';
 import { groupNameProblem, tagsProblem } from '../tags';
@@ -10,6 +11,7 @@ import { ACCOUNTS, ME, accountName } from './org';
 import {
   addOperation, audited, change, fail, hasHibernation, hibernationOf, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
   type Demo, type DemoGroup, type DemoOperation, type DemoRouter, type DemoWorkload, type WorkflowType,
+  knowsRecurrences, routerSettingsView,
 } from './state';
 import { operationView } from './views';
 import { MINUTE, SECOND, iso } from './util';
@@ -140,7 +142,7 @@ const commandRole = (account: string) => {
 const newRouterName = (account: string, region: string) => `dmtr-${accountName(account)}-${region}`;
 const newRouter = (account: string, region: string, at: number): DemoRouter => ({
   name: newRouterName(account, region), account, region, source: 'manager', ...AVAILABLE, installedAt: at, metrics: false,
-  concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null, page: null,
+  concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, description: null, page: null,
 });
 
 export function startOperation(d: Demo, body: Body, now: number) {
@@ -522,28 +524,45 @@ const hibernateIn = (body: Body, nullable: boolean): boolean | null => {
   return fail(400, 'bad_request', nullable ? 'hibernate must be true, false or null' : 'hibernate must be true or false');
 };
 
-// The manager's default for every workload (administrators; the routers read it at their next check).
+const joinIn = (body: Body): number | null => {
+  const v = body.joinMinutes;
+  return v === null || isJoinMinutes(v) ? v as number | null : fail(400, 'bad_request', JOIN_PROBLEM);
+};
+const joinText = (join: number | null, unset: string) => `joinMinutes ${join === null ? unset : join}`;
+
+// The manager's defaults for every workload (administrators; the routers read them at their next check): what is not sent stays.
 export function putWorkloadDefaults(d: Demo, body: Body, now: number) {
-  const hibernate = hibernateIn(body, false) as boolean;
+  if (body.hibernate === undefined && body.joinMinutes === undefined) fail(400, 'bad_request', 'hibernate must be true or false, or joinMinutes given');
+  const hibernate = body.hibernate === undefined ? undefined : hibernateIn(body, false) as boolean;
+  const joinMinutes = body.joinMinutes === undefined ? undefined : joinIn(body);
   return audited(d, 'settings', 'workloads', () => {
-    d.hibernation = { hibernate, updatedAt: iso(now), updatedBy: ME };
-    return { result: `hibernate ${hibernate ? 'on' : 'off'}`, response: { ...d.hibernation, note: 'routers apply it at their next check, within 5 minutes' } };
+    d.hibernation = { hibernate: hibernate ?? d.hibernation.hibernate, joinMinutes: joinMinutes === undefined ? d.hibernation.joinMinutes : joinMinutes, updatedAt: iso(now), updatedBy: ME };
+    const said = [...(hibernate === undefined ? [] : [`hibernate ${hibernate ? 'on' : 'off'}`]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, 'default')])];
+    return { result: said.join(', '), response: { ...d.hibernation, note: 'routers apply it at their next check, within 5 minutes' } };
   });
 }
 
+// A router's own settings: what is not sent stays, and neither set leaves no record.
 export function setRouterSettings(d: Demo, router: DemoRouter, body: Body, now: number) {
-  const hibernate = hibernateIn(body, true);
+  if (body.hibernate === undefined && body.joinMinutes === undefined) fail(400, 'bad_request', 'hibernate must be true, false or null, or joinMinutes given');
+  const hibernate = body.hibernate === undefined ? undefined : hibernateIn(body, true);
+  const joinMinutes = body.joinMinutes === undefined ? undefined : joinIn(body);
   return audited(d, 'router-settings', router.name, () => {
     if (!hasHibernation(router)) fail(409, 'conflict', 'upgrade the router to 0.32.0');
-    router.hibernate = hibernate;
-    router.hibernateBy = hibernate === null ? null : ME;
-    router.hibernateAt = hibernate === null ? null : now;
-    return { result: `hibernate ${hibernate === null ? 'inherit' : hibernate ? 'on' : 'off'}`, response: { level: 'router', settings: { hibernate, by: router.hibernateBy, at: router.hibernateAt === null ? null : iso(router.hibernateAt) } } };
+    if (joinMinutes !== undefined && !knowsRecurrences(router.version)) fail(400, 'bad_request', 'settings: unknown setting joinMinutes');
+    if (hibernate !== undefined) router.hibernate = hibernate;
+    if (joinMinutes !== undefined) router.joinMinutes = joinMinutes;
+    const unset = router.hibernate === null && router.joinMinutes === null;
+    router.settingsBy = unset ? null : ME;
+    router.settingsAt = unset ? null : now;
+    const said = [...(hibernate === undefined ? [] : [`hibernate ${hibernate === null ? 'inherit' : hibernate ? 'on' : 'off'}`]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, 'inherit')])];
+    return { result: said.join(', '), response: { level: 'router', settings: routerSettingsView(router) } };
   });
 }
 
 export function setWorkloadSettings(d: Demo, router: string, id: string, body: Body, now: number) {
   const w = workloadOf(d, router, id);
+  if (body.joinMinutes !== undefined) fail(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
   const hibernate = hibernateIn(body, true);
   return audited(d, 'workload-settings', `${router}/${id}`, () => {
     if (!hasHibernation(d.routers.find((r) => r.name === router)!)) fail(409, 'conflict', 'upgrade the router to 0.32.0');

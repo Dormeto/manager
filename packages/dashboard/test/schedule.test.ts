@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalZone, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { JOIN_PROBLEM, canonicalZone, isJoinMinutes, joinInForce, joinText, routerJoinInherited, recurrenceError as joinError, scheduleBody as bodyOfSchedule, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { causeText } from '../src/history';
 
 describe('schedule formatting', () => {
@@ -433,5 +433,53 @@ describe('the demo\'s schedule events', () => {
       ['2026-10-20T05:00:00.000Z', 'nap-end', 1],
       ['2026-10-20T06:30:00.000Z', 'awake-start', 0],
     ]);
+  });
+});
+
+describe('joined windows: the value', () => {
+  const windows = [{ kind: 'awake' as const, days: ['mon' as const], start: '08:00', end: '12:00' }];
+
+  it('sends joinMinutes only when set, 0 included, so a schedule without it still reads on an older router', () => {
+    expect(bodyOfSchedule({ timeZone: 'UTC', windows }, '')).not.toHaveProperty('joinMinutes');
+    expect(bodyOfSchedule({ timeZone: 'UTC', windows, joinMinutes: null }, '')).not.toHaveProperty('joinMinutes');
+    expect(bodyOfSchedule({ timeZone: 'UTC', windows, joinMinutes: 0 }, '').joinMinutes).toBe(0);
+    expect(bodyOfSchedule({ timeZone: 'UTC', windows, joinMinutes: 30 }, '').joinMinutes).toBe(30);
+  });
+
+  it('takes a whole number from 0 to 120, a multiple of 5, and says so in the router\'s words', () => {
+    for (const good of [0, 5, 15, 120]) expect(isJoinMinutes(good), String(good)).toBe(true);
+    for (const bad of [-5, 3, 2.5, 125, '15', null, undefined, NaN]) expect(isJoinMinutes(bad), String(bad)).toBe(false);
+    expect(JOIN_PROBLEM).toBe('joinMinutes: a whole number from 0 to 120, a multiple of 5');
+  });
+
+  it('says a value and its level', () => {
+    expect(joinText({ joinMinutes: 15, joinFrom: 'organization' })).toBe('15 min, from the organization');
+    expect(joinText({ joinMinutes: 30, joinFrom: 'router' })).toBe('30 min, from the router');
+    expect(joinText({ joinMinutes: 15, joinFrom: 'default' })).toBe('15 min, the default');
+    expect(joinText({ joinMinutes: 0, joinFrom: 'workload' })).toBe('0 min, set on this workload');
+  });
+
+  it('computes with the status answer\'s value, and 0 for a router that answers none: it does not join', () => {
+    expect(joinInForce({ joinMinutes: 30 })).toBe(30);
+    expect(joinInForce({ joinMinutes: 0 })).toBe(0);
+    expect(joinInForce({})).toBe(0);
+    expect(joinInForce(null)).toBe(0);
+  });
+
+  it('what a router inherits: the organization\'s as it last read it, else the default', () => {
+    const m = { url: 's3://b/settings.json', hibernate: true, readAt: null, error: null };
+    expect(routerJoinInherited({ ...m, joinMinutes: 20 })).toEqual({ joinMinutes: 20, joinFrom: 'organization' });
+    expect(routerJoinInherited({ ...m, joinMinutes: 0 })).toEqual({ joinMinutes: 0, joinFrom: 'organization' });
+    expect(routerJoinInherited({ ...m, joinMinutes: null })).toEqual({ joinMinutes: 15, joinFrom: 'default' });
+    expect(routerJoinInherited({ ...m, joinMinutes: undefined })).toEqual({ joinMinutes: 15, joinFrom: 'default' });
+  });
+
+  it('adds the hint to both refusals of a router that does not know it', () => {
+    const hint = 'Joined windows need router 0.36.0 or later.';
+    expect(joinError('joinMinutes: unknown field')).toBe(`joinMinutes: unknown field. ${hint}`);
+    expect(joinError('settings: unknown setting joinMinutes')).toBe(`settings: unknown setting joinMinutes. ${hint}`);
+    expect(joinError('windows[0].days: x; joinMinutes: unknown field')).toContain(hint);
+    expect(joinError('joinMinutes: a whole number from 0 to 120, a multiple of 5')).not.toContain(hint);
+    expect(joinError('windows[0].repeat: unknown field')).toContain('Recurrences need router 0.36.0');
   });
 });

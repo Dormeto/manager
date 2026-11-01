@@ -2,9 +2,12 @@
 // dates) expanded into occurrences (instants, epoch ms), a window's refusals and a calendar selection turned into a window.
 // Ported from the router's lambda/src/lib/schedule.mjs (R12 and the schedule recurrence design) with its names, held to it by
 // test/occurrences-parity.test.ts. Pure: local wall times come from Intl only.
-import { DAYS, canonicalZone, isOnce, windowBody, type Day, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
+import { DAYS, JOIN_DEFAULT_MINUTES, canonicalZone, isJoinMinutes, isOnce, windowBody, type Day, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
 
-export type Occurrence = { kind: 'awake' | 'nap'; window: number; start: number; end: number; wake?: 'never' | 'header' };
+// `joined`: its end is the next start of its kind, across a gap the value in force joins (schedule recurrence design, section 11).
+export type Occurrence = { kind: 'awake' | 'nap'; window: number; start: number; end: number; wake?: 'never' | 'header'; joined?: true };
+// `joinMinutes`: the value the levels resolve to, in the status answer; without a valid one, the schedule's own or the default.
+export interface JoinOption { joinMinutes?: number }
 
 const MINUTE = 60_000;
 const DAY = 86_400_000;
@@ -13,6 +16,8 @@ const STEP = 5;
 const HORIZON_DAYS = 8;
 // What nextEvents reads when a window has a repeat or a from, long enough for a yearly one.
 const REPEAT_HORIZON_DAYS = 400;
+// At least what a clock change moves a wall time by: how far a joined gap's local day can be from its minutes.
+const CLOCK_CHANGE_MINUTES = 120;
 // What the helper reads for its next occurrences: five of a yearly window are five years away.
 const PREVIEW_DAYS = 3660;
 const INTERVAL_MAX = 99;
@@ -96,16 +101,18 @@ function wallClock(t: number, timeZone: string): number {
 const offsetAt = (t: number, timeZone: string): number => wallClock(t, timeZone) - Math.floor(t / 1000) * 1000;
 const localDay = (t: number, timeZone: string): number => Math.floor(wallClock(t, timeZone) / DAY);
 
+// The zone's offset at a UTC midnight, read once per plan.
+function midnightOffset(plan: Plan, day: number): number {
+  let offset = plan.midnights.get(day);
+  if (offset === undefined) plan.midnights.set(day, offset = offsetAt(day * DAY, plan.timeZone));
+  return offset;
+}
+
 // The offset of a local day's every wall time when no clock change is near it (the day before to the day after), or
 // null. Most days are like this, so a day costs one read of the zone however many occurrences it has.
 function steadyOffset(plan: Plan, day: number): number | null {
-  const midnight = (d: number): number => {
-    let offset = plan.midnights.get(d);
-    if (offset === undefined) plan.midnights.set(d, offset = offsetAt(d * DAY, plan.timeZone));
-    return offset;
-  };
-  const before = midnight(day - 1);
-  return before === midnight(day + 2) ? before : null;
+  const before = midnightOffset(plan, day - 1);
+  return before === midnightOffset(plan, day + 2) ? before : null;
 }
 
 // The instant of the local wall time `minutes` after midnight of local day `day`, past that day's end when it is over a
@@ -209,7 +216,8 @@ interface PlanWindow {
   window: number; kind: 'awake' | 'nap'; from: number | null; until: number | null; pattern: string; interval: number;
   days: Set<Day>; day?: number; nth?: number; weekday: number; cron: ParsedCron | null; starts: number[]; length: number; wake?: 'never' | 'header';
 }
-interface Plan { timeZone: string; exceptions: Set<string>; windows: PlanWindow[]; midnights: Map<number, number>; lookback: number; horizonDays: number }
+interface Written { all: Occurrence[]; awake: Occurrence[]; nap: Occurrence[] }
+interface Plan { timeZone: string; exceptions: Set<string>; windows: PlanWindow[]; midnights: Map<number, number>; written: Map<number, Written>; joinMs: number; lookback: number; horizonDays: number }
 
 // A window ready for arithmetic: plain days are a weekly pattern, and an occurrence is a start minute and a length in wall
 // minutes, from `end` (up to 24 hours) or from a cron's `minutes`. Null for a pattern or a cron it cannot read, which has no
@@ -232,19 +240,23 @@ function prepareWindow(w: ScheduleWindow, window: number): PlanWindow | null {
 }
 
 // How many days before a day an occurrence of this length can have started and still run on that day.
-const lookbackOf = (w: PlanWindow): number => Math.max(1, Math.ceil(w.length / 1440));
+const lookbackOf = (w: PlanWindow, join = 0): number => Math.max(1, Math.ceil((w.length + (join ? join + CLOCK_CHANGE_MINUTES : 0)) / 1440));
 
 // A schedule's windows ready for arithmetic, or null when it has none (or a zone Intl does not know). A window prepareWindow
-// gives nothing for is left out; the others keep their index.
-function prepare(s: Schedule): Plan | null {
+// gives nothing for is left out; the others keep their index. `joinMinutes`: the value its levels resolve to; without one, the
+// schedule's own or the default.
+function prepare(s: Schedule, { joinMinutes }: JoinOption = {}): Plan | null {
   if (!s?.timeZone || !s.windows?.length || !canonicalZone(s.timeZone)) return null;
   const windows = s.windows.flatMap((w, window) => prepareWindow(w, window) ?? []);
+  const join = isJoinMinutes(joinMinutes) ? joinMinutes : isJoinMinutes(s.joinMinutes) ? s.joinMinutes : JOIN_DEFAULT_MINUTES;
   return {
     timeZone: s.timeZone,
     exceptions: new Set(s.exceptions ?? []),
     windows,
     midnights: new Map(),
-    lookback: Math.max(1, ...windows.map(lookbackOf)),
+    written: new Map(),
+    joinMs: join * MINUTE,
+    lookback: Math.max(1, ...windows.map((w) => lookbackOf(w, join))),
     horizonDays: s.windows.some((w) => !absent(w.repeat) || !absent(w.from)) ? REPEAT_HORIZON_DAYS : HORIZON_DAYS,
   };
 }
@@ -270,29 +282,71 @@ function startsOn(w: PlanWindow, day: number): number[] {
   return patternHas(w, day) ? w.starts : NO_STARTS;
 }
 
-// The occurrences of the windows that start on local day `day`: an occurrence ends at `end` the same day, the next day
-// when `end` <= `start` (24 hours of wall time when equal), or `minutes` of wall time later. None on an exception date,
-// and none that a clock change leaves empty.
-function occurrencesOn(plan: Plan, day: number): Occurrence[] {
-  if (plan.exceptions.has(dateOf(day))) return [];
-  const occurrences: Occurrence[] = [];
-  for (const w of plan.windows) {
-    for (const minutes of startsOn(w, day)) {
-      const start = instantOf(plan, day, minutes);
-      const end = instantOf(plan, day, minutes + w.length);
-      if (end > start) occurrences.push({ kind: w.kind, window: w.window, start, end, ...(w.wake ? { wake: w.wake } : {}) });
-    }
-  }
-  return occurrences;
-}
-
 const byStart = (a: Occurrence, b: Occurrence): number => a.start - b.start;
 
+// The occurrences of the windows that start on local day `day`, as written, once per plan: an occurrence ends at `end` the
+// same day, the next day when `end` <= `start` (24 hours of wall time when equal), or `minutes` of wall time later. None on an
+// exception date, and none that a clock change leaves empty. `all` in the windows' order, each kind by start.
+function writtenOn(plan: Plan, day: number): Written {
+  let written = plan.written.get(day);
+  if (written) return written;
+  const all: Occurrence[] = [];
+  if (!plan.exceptions.has(dateOf(day))) {
+    for (const w of plan.windows) {
+      for (const minutes of startsOn(w, day)) {
+        const start = instantOf(plan, day, minutes);
+        const end = instantOf(plan, day, minutes + w.length);
+        if (end > start) all.push({ kind: w.kind, window: w.window, start, end, ...(w.wake ? { wake: w.wake } : {}) });
+      }
+    }
+  }
+  written = { all, awake: all.filter((o) => o.kind === 'awake').sort(byStart), nap: all.filter((o) => o.kind === 'nap').sort(byStart) };
+  plan.written.set(day, written);
+  return written;
+}
+
+// The first start of a kind from `from` to `to`, both included, or null. Starts are in the order of their days. The
+// offset at the UTC day's midnight gives the local day of `from` within a day either way, and a gap ends within two more.
+function firstStart(plan: Plan, kind: Occurrence['kind'], from: number, to: number): number | null {
+  const near = Math.floor((from + midnightOffset(plan, Math.floor(from / DAY))) / DAY);
+  for (let day = near - 1; day <= near + 2; day++) {
+    const starts = writtenOn(plan, day)[kind];
+    let [lo, hi] = [0, starts.length];
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid]!.start < from) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo < starts.length) return starts[lo]!.start <= to ? starts[lo]!.start : null;
+  }
+  return null;
+}
+
+// Where an occurrence ends once joined: at the next start of its kind when the gap, in elapsed time, is within the value,
+// unless the other kind starts in the gap. A start an exception date or a range removes is no start.
+function joinedEnd(plan: Plan, o: Occurrence): number {
+  const next = firstStart(plan, o.kind, o.end, o.end + plan.joinMs);
+  if (next === null) return o.end;
+  return firstStart(plan, o.kind === 'nap' ? 'awake' : 'nap', o.end, next - 1) === null ? next : o.end;
+}
+
+// The occurrences (of one window, when given) that start on local day `day`, joined. What handles overlapping windows of one
+// kind then applies to the gap: the union's end, nextEvents, a nap's wake mode.
+function occurrencesOn(plan: Plan, day: number, window?: number): Occurrence[] {
+  const { all } = writtenOn(plan, day);
+  const occurrences = window === undefined ? all : all.filter((o) => o.window === window);
+  if (!plan.joinMs) return occurrences;
+  return occurrences.map((o) => {
+    const end = joinedEnd(plan, o);
+    return end === o.end ? o : { ...o, end, joined: true };
+  });
+}
+
 // The occurrences that overlap [from, to), exceptions applied, a local day at a time in order of start (then window): each
-// window's own occurrences, as the router computes them, not the union its occurrenceAt reports. A reader who has enough stops
-// there, and the days after it cost nothing.
-export function* occurrencesByDay(s: Schedule, from: number, to: number): Generator<Occurrence[]> {
-  const plan = prepare(s);
+// window's own occurrences, joined, as the router computes them, not the union its occurrenceAt reports. A reader who has enough
+// stops there, and the days after it cost nothing.
+export function* occurrencesByDay(s: Schedule, from: number, to: number, join: JoinOption = {}): Generator<Occurrence[]> {
+  const plan = prepare(s, join);
   if (!plan || !(from < to)) return;
   // An occurrence ends within its look back of the local day it starts on, so those of the days before the range's first
   // run into it; one more day each side covers a clock going back over midnight.
@@ -303,20 +357,21 @@ export function* occurrencesByDay(s: Schedule, from: number, to: number): Genera
 }
 
 // Every occurrence that overlaps [from, to), in order of start (then window).
-export function occurrencesIn(s: Schedule, from: number, to: number): Occurrence[] {
-  return [...occurrencesByDay(s, from, to)].flat().sort((a, b) => a.start - b.start || a.window - b.window);
+export function occurrencesIn(s: Schedule, from: number, to: number, join: JoinOption = {}): Occurrence[] {
+  return [...occurrencesByDay(s, from, to, join)].flat().sort((a, b) => a.start - b.start || a.window - b.window);
 }
 
 // The next `count` occurrences that start after t, within 10 years of the later of t and the windows' from dates, exceptions
 // applied: what the helper shows, so a recurrence can be checked before saving, however far ahead it starts. It stops as
-// soon as it has them.
-export function nextOccurrences(s: Schedule, t: number, count = 5): Occurrence[] {
-  const plan = prepare(s);
+// soon as it has them. `window`: those of this window alone, the schedule's others only joining it.
+export function nextOccurrences(s: Schedule, t: number, count = 5, { window, ...join }: JoinOption & { window?: number } = {}): Occurrence[] {
+  const plan = prepare(s, join);
   if (!plan?.windows.length) return [];
-  const first = Math.max(localDay(t, plan.timeZone), Math.min(...plan.windows.map((w) => w.from ?? -Infinity)));
+  const own = plan.windows.filter((w) => window === undefined || w.window === window);
+  const first = Math.max(localDay(t, plan.timeZone), Math.min(...own.map((w) => w.from ?? -Infinity)));
   const found: Occurrence[] = [];
   for (let day = first; day <= first + PREVIEW_DAYS && found.length < count; day++) {
-    found.push(...occurrencesOn(plan, day).filter((o) => o.start > t));
+    if (own.some((w) => startsOn(w, day).length)) found.push(...occurrencesOn(plan, day, window).filter((o) => o.start > t));
   }
   return found.sort((a, b) => a.start - b.start || a.window - b.window).slice(0, count);
 }
@@ -352,8 +407,8 @@ function edgesOf(occurrences: Occurrence[], t: number, last: number): Edge[] {
 // at one instant, an end comes first. Windows of one kind count as their union, as in occurrenceAt: an end that another
 // occurrence of that kind holds (including one starting then) is not an end, while each start stays (a new occurrence);
 // identical events are the lowest window's. It reads day by day and stops once `count` events can no longer change.
-export function nextEvents(s: Schedule, t: number, { count = 5, horizonDays }: { count?: number; horizonDays?: number } = {}): NextEvent[] {
-  const plan = prepare(s);
+export function nextEvents(s: Schedule, t: number, { count = 5, horizonDays, joinMinutes }: { count?: number; horizonDays?: number } & JoinOption = {}): NextEvent[] {
+  const plan = prepare(s, { joinMinutes });
   if (!plan) return [];
   const shown = (edges: Edge[]): NextEvent[] => edges.slice(0, count).map((e) => ({ ...e, at: iso(e.at) }));
   const last = t + (horizonDays ?? plan.horizonDays) * DAY;

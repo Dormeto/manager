@@ -390,6 +390,20 @@ function hibernateOf(body: Record<string, unknown>): boolean | null {
   if (h !== true && h !== false && h !== null) throw new HttpError(400, 'bad_request', 'hibernate must be true, false or null');
   return h;
 }
+// Joined windows (schedule recurrence design, section 11): the largest gap that joins, in the router's words.
+const isJoinMinutes = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 120 && (value as number) % 5 === 0;
+// A level's joinMinutes in a body: its minutes, or null to unset it.
+function joinMinutesOf(body: Record<string, unknown>): number | null {
+  const join = body.joinMinutes;
+  if (join !== null && !isJoinMinutes(join)) throw new HttpError(400, 'bad_request', 'joinMinutes: a whole number from 0 to 120, a multiple of 5');
+  return join;
+}
+// The body of a router's settings: only the keys it holds, each to set or unset, so that one never rewrites the other. An empty
+// one is refused here: the router would take it and change nothing.
+function routerSettingsOf(body: Record<string, unknown>): { hibernate?: boolean | null; joinMinutes?: number | null } {
+  if (body.hibernate === undefined && body.joinMinutes === undefined) throw new HttpError(400, 'bad_request', 'hibernate or joinMinutes is required');
+  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }) };
+}
 // The body of a waiting page write: its page, an object (the validator or the router says what is wrong with it).
 function pageIn(body: Record<string, unknown>): Record<string, unknown> {
   const page = body.page;
@@ -408,6 +422,11 @@ function pageText(level: string, page: Record<string, unknown> | null, before: u
   return gone ? `${base} (removed custom page: ${gone})` : base;
 }
 const hibernateText = (h: boolean | null) => `hibernate ${h === null ? 'inherit' : h ? 'on' : 'off'}`;
+const joinText = (join: number | null, unset: string) => `joinMinutes ${join === null ? unset : join}`;
+// What the audit keeps of a settings write, each key sent.
+const settingsText = ({ hibernate, joinMinutes }: { hibernate?: boolean | null; joinMinutes?: number | null }, unset: string) => [
+  ...(hibernate === undefined ? [] : [hibernateText(hibernate)]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, unset)]),
+].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
   fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
@@ -1204,21 +1223,26 @@ export function createApi({
       });
     }
 
-    // The hibernation default of every router (EC2 hibernation §3): everyone reads it, administrators set it.
+    // The defaults of every router, hibernation (EC2 hibernation §3) and joined windows (schedule recurrence design, section 11):
+    // everyone reads them, administrators set them. What a write does not send stays.
     if (resource === 'settings' && a === 'workloads' && !b && (method === 'GET' || method === 'PUT')) {
       const shown = (doc: Record<string, unknown> | null | 'unreadable') => {
-        if (doc === 'unreadable') return { hibernate: true, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
-        const hibernate = (doc?.workloads as { hibernate?: unknown } | undefined)?.hibernate;
+        if (doc === 'unreadable') return { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
+        const { hibernate, joinMinutes } = (doc?.workloads ?? {}) as { hibernate?: unknown; joinMinutes?: unknown };
         return {
           hibernate: typeof hibernate === 'boolean' ? hibernate : true,
+          joinMinutes: isJoinMinutes(joinMinutes) ? joinMinutes : null,
           updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         };
       };
       if (method === 'GET') return reply(200, shown(await readSettings()));
       await needAudited(identity, 'admin', 'settings', 'workloads');
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
-      const hibernate = bodyOf(event).hibernate;
-      if (typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
+      const body = bodyOf(event);
+      const { hibernate } = body;
+      if (hibernate === undefined && body.joinMinutes === undefined) throw new HttpError(400, 'bad_request', 'hibernate or joinMinutes is required');
+      if (hibernate !== undefined && typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
+      const joinMinutes = body.joinMinutes === undefined ? undefined : joinMinutesOf(body);
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
         const found = await readSettings();
@@ -1226,8 +1250,11 @@ export function createApi({
         const doc = found === 'unreadable' ? {} : found ?? {};
         const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
         const updatedAt = new Date(now()).toISOString();
-        await globalSettings.write({ ...doc, workloads: { ...workloads, hibernate }, updatedAt, updatedBy: identity.email });
-        return { result: hibernate ? 'hibernate on' : 'hibernate off', response: reply(200, { hibernate, updatedAt, updatedBy: identity.email, note: 'routers apply it at their next check, within 5 minutes' }) };
+        const { joinMinutes: stored, ...others } = workloads;
+        const join = joinMinutes === undefined ? stored : joinMinutes;
+        const next = { ...doc, workloads: { ...others, ...(hibernate === undefined ? {} : { hibernate }), ...(join === undefined || join === null ? {} : { joinMinutes: join }) }, updatedAt, updatedBy: identity.email };
+        await globalSettings.write(next);
+        return { result: settingsText({ ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }) }, 'default'), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
     }
 
@@ -1336,10 +1363,10 @@ export function createApi({
       if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && b === 'waiting-page' && !action) return waitingPageRoute(identity, event, method, router);
       if (method === 'PUT' && b === 'settings' && !action) {
         await needAudited(identity, 'admin', 'router-settings', router.name);
-        const hibernate = hibernateOf(bodyOf(event));
+        const settings = routerSettingsOf(bodyOf(event));
         return audited(identity, 'router-settings', router.name, async () => {
-          const result = await settingsCall(router, { settings: { hibernate } }, identity.email);
-          return { result: hibernateText(hibernate), response: reply(200, result) };
+          const result = await settingsCall(router, { settings }, identity.email);
+          return { result: settingsText(settings, 'inherit'), response: reply(200, result) };
         });
       }
     }
@@ -1601,7 +1628,9 @@ export function createApi({
       if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && action === 'waiting-page' && !parts[4]) return waitingPageRoute(identity, event, method, router, id);
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
-        const hibernate = hibernateOf(bodyOf(event));
+        const body = bodyOf(event);
+        if (body.joinMinutes !== undefined) throw new HttpError(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
+        const hibernate = hibernateOf(body);
         return audited(identity, 'workload-settings', `${router.name}/${id}`, async () => {
           const result = await settingsCall(router, { workloadId: id, settings: { hibernate } }, identity.email);
           return { result: hibernateText(hibernate), response: reply(200, result) };
@@ -1648,8 +1677,9 @@ export function createApi({
             if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
             const windows = Array.isArray(schedule!.windows) ? schedule!.windows.length : 0;
             const maxNap = Number((schedule as { maxNapDays?: unknown }).maxNapDays);
+            const join = (schedule as { joinMinutes?: unknown }).joinMinutes;
             const text = windows ? `${windows} windows, ${String(schedule!.timeZone ?? '').slice(0, 64)}` : `maximum nap ${Number.isFinite(maxNap) ? maxNap : '?'} days`;
-            return { result: text, response: reply(200, result) };
+            return { result: isJoinMinutes(join) ? `${text}, ${joinText(join, '')}` : text, response: reply(200, result) };
           } catch (err) {
             if (unknownAction(err, clearing ? 'clear-schedule' : 'schedule')) throw new HttpError(409, 'conflict', `router ${router.name} too old for schedules, upgrade the router to 0.31.0 or later`);
             if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);

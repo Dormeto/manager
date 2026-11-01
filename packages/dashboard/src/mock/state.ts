@@ -42,8 +42,10 @@ export interface DemoRouter {
   pauses: Pause[];
   // EC2 hibernation (router 0.32.0): its own value (null: inherit), and whether it reads the manager's settings (a catalog).
   hibernate: boolean | null;
-  hibernateBy: string | null;
-  hibernateAt: number | null;
+  // Joined windows (router 0.36.0): its own value (null: inherit); `by` and `at` are the record's, either setting's last write.
+  joinMinutes: number | null;
+  settingsBy: string | null;
+  settingsAt: number | null;
   readsManager: boolean;
   description: DescriptionInfo | null; // Markdown, by people (manager 0.19.0)
   page: StoredWaitingPage | null; // its waiting page (router 0.35.0)
@@ -216,7 +218,7 @@ export interface Demo {
   preferences: { refreshSeconds: number; dismissedUpdate?: string };
   updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
-  hibernation: { hibernate: boolean; updatedAt: string | null; updatedBy: string | null }; // the manager's default for every workload
+  hibernation: { hibernate: boolean; joinMinutes: number | null; updatedAt: string | null; updatedBy: string | null }; // the manager's defaults for every workload
   waitingPage: { page: StoredPage | null; at: string | null; by: string | null }; // the organization's waiting page
   routers: DemoRouter[];
   workloads: DemoWorkload[];
@@ -241,7 +243,7 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
     name: spec.name, account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
     clusters: (spec.clusters ?? []).map((name, i) => ({ name, reachable: true, allowed: true, missing: [], ...(i === 0 ? { via: 'direct' as const } : { via: 'proxy' as const, proxy: { name: `${spec.name}-kube-${name}`, version: spec.version } }), checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
-    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null, page: null,
+    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, description: null, page: null,
   };
 }
 
@@ -312,6 +314,41 @@ const RECURRENCES: (() => Schedule)[] = [
     { kind: 'nap', repeat: { pattern: 'cron', cron: '0 22 * * FRI', minutes: 600 }, wake: 'header' },
   ], ...BY }),
 ];
+
+// Joined windows (router 0.36.0): the organization's default, and a schedule with a gap the value in force joins, a morning into
+// an afternoon and an evening into a night, given at each level on a workload of an up-to-date router (seedJoins).
+const ORGANIZATION_JOIN = 20;
+const ROUTER_JOIN = 30;
+const WORKLOAD_JOIN = 45;
+const clock = (minutes: number): string => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+const gapped = (gap: number, more: Partial<Schedule> = {}): Schedule => ({ timeZone: 'Europe/Paris', windows: [
+  { kind: 'awake', days: WEEK, start: '08:00', end: '12:00' },
+  { kind: 'awake', days: WEEK, start: clock(12 * 60 + gap), end: '18:00' },
+  { kind: 'nap', days: WEEK, start: '20:00', end: '22:00', wake: 'never' },
+  { kind: 'nap', days: WEEK, start: clock(22 * 60 + gap), end: '07:00', wake: 'never' },
+], ...more, ...BY });
+function seedJoins(routers: DemoRouter[], workloads: DemoWorkload[]): void {
+  const current = routers.filter((r) => r.version === AVAILABLE.version);
+  const taken = new Set<DemoWorkload>();
+  // In the place of a plain schedule: the recurrences above have the workloads with none.
+  const place = (router: DemoRouter | undefined, schedule: Schedule) => {
+    const w = router && [...workloads].reverse().find((x) => x.router === router.name && !taken.has(x) && x.schedule?.windows?.length && !x.schedule.windows.some((y) => y.repeat));
+    if (!w) return;
+    taken.add(w);
+    w.schedule = schedule;
+  };
+  const reader = current.find((r) => r.readsManager);
+  place(reader, gapped(ORGANIZATION_JOIN - 5));
+  place(reader, gapped(WORKLOAD_JOIN - 5, { joinMinutes: WORKLOAD_JOIN }));
+  // A router that reads no manager settings: the organization's value would not reach it anyway.
+  const own = current.find((r) => !r.readsManager);
+  if (own) {
+    own.joinMinutes = ROUTER_JOIN;
+    own.settingsBy = ME;
+    own.settingsAt = Date.now() - 3 * DAY;
+    place(own, gapped(ROUTER_JOIN - 5));
+  }
+}
 
 // R11: the demo's teams, whose workloads the groups below pick by their team tag.
 const TEAMS = ['payments', 'platform', 'data', 'web'];
@@ -569,6 +606,7 @@ function build(now: number): Demo {
   workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
   const current = workloads.filter((w) => !w.schedule && routers.find((r) => r.name === w.router)?.version === AVAILABLE.version);
   RECURRENCES.forEach((make, i) => { if (current[i]) current[i]!.schedule = make(); });
+  seedJoins(routers, workloads);
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {
     t0: now,
@@ -576,7 +614,7 @@ function build(now: number): Demo {
     preferences: { refreshSeconds: 10 },
     updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
-    hibernation: { hibernate: true, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
+    hibernation: { hibernate: true, joinMinutes: ORGANIZATION_JOIN, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
     waitingPage: { page: null, at: null, by: null },
     routers,
     workloads,
@@ -1043,6 +1081,15 @@ export const managerReadAt = (now: number): number => Math.floor((now - 7 * SECO
 
 // The order of the spec: the workload, its fallback types (off), the router, the manager, the built-in default (on).
 // Routers before 0.32.0 know nothing of it.
+// Recurrences and joined windows: routers 0.36.0 and later.
+export const knowsRecurrences = (version: string): boolean => {
+  const [major, minor] = version.split('.').map(Number);
+  return major! > 0 || minor! >= 36;
+};
+// A router's settings as it answers them: all null when unset; before joined windows, without joinMinutes.
+export const routerSettingsView = (r: DemoRouter) => ({
+  hibernate: r.hibernate, ...(knowsRecurrences(r.version) ? { joinMinutes: r.joinMinutes } : {}), by: r.settingsBy, at: r.settingsAt === null ? null : iso(r.settingsAt),
+});
 export const hasHibernation = (r: DemoRouter): boolean => {
   const [major, minor] = r.version.split('.').map(Number);
   return major! > 0 || minor! >= 32;

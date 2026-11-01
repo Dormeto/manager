@@ -3,14 +3,19 @@
 // exceptions, the maximum nap and the next events. Edited with the wake and nap permissions (both).
 import { computed, ref } from 'vue';
 import { mdiCalendarClock, mdiPencilOutline } from '@mdi/js';
-import { eventText, recurrenceText, type NextEvent, type Schedule, type ScheduleWindow } from '../schedule';
+import { eventText, joinText, recurrenceText, type JoinAnswer, type NextEvent, type Schedule, type ScheduleWindow } from '../schedule';
 import { relative } from '../format';
 
 // schedule: undefined when the router does not report schedules (before 0.31.0), null when it has none.
-const props = defineProps<{ schedule: Schedule | null | undefined; next?: NextEvent[]; maintenanceDue?: string | null; canEdit: boolean }>();
+const props = defineProps<{ schedule: Schedule | null | undefined; next?: NextEvent[]; maintenanceDue?: string | null; canEdit: boolean; join?: JoinAnswer | null }>();
 const emit = defineEmits<{ edit: []; clear: [] }>();
 const confirm = ref(false);
 const zone = computed(() => props.schedule?.timeZone ?? '');
+// A router that answers none does not join (before 0.36.0).
+const joinLine = computed(() => {
+  const { joinMinutes, joinFrom } = props.join ?? {};
+  return joinMinutes === undefined || !joinFrom ? '' : joinText({ joinMinutes, joinFrom });
+});
 const wakeText = (w: ScheduleWindow) => (w.kind === 'nap' ? (w.wake === 'header' ? 'wakes with the header' : 'no wake') : '');
 </script>
 
@@ -32,6 +37,7 @@ const wakeText = (w: ScheduleWindow) => (w.kind === 'nap' ? (w.wake === 'header'
           <span v-if="wakeText(w)" class="text-medium-emphasis">{{ wakeText(w) }}</span>
         </div>
         <div v-if="schedule.exceptions?.length" class="text-body-medium mt-2"><span class="text-medium-emphasis">No window on</span> {{ schedule.exceptions.join(', ') }}</div>
+        <div v-if="joinLine" data-test="join-line" class="text-body-medium mt-2"><span class="text-medium-emphasis">Joins windows of one kind up to</span> {{ joinLine }}</div>
         <div v-if="schedule.maxNapDays" class="text-body-medium mt-2">
           <span class="text-medium-emphasis">Maximum nap</span> {{ schedule.maxNapDays }} days<template v-if="maintenanceDue">, <span class="text-medium-emphasis">maintenance wake due</span> {{ relative(maintenanceDue, Date.now()) }}</template>
         </div>

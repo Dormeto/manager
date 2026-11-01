@@ -13,6 +13,7 @@ const calls: { path: string; init?: RequestInit }[] = [];
 let failPut = false;
 // The workload defaults as never set by an administrator (no who, no when).
 let neverChanged = false;
+let defaultsJoin: number | null = null;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
@@ -34,7 +35,7 @@ vi.mock('../src/api', () => ({
     if (path === '/settings/workloads') {
       if (init?.method === 'PUT' && failPut) throw new Error('settings.json: access denied');
       if (init?.method === 'PUT') return { ...JSON.parse(String(init.body)), updatedAt: new Date().toISOString(), updatedBy: 'ops@example.com', note: 'routers apply it at their next check, within 5 minutes' };
-      return neverChanged ? { hibernate: true, updatedAt: null, updatedBy: null } : { hibernate: true, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
+      return neverChanged ? { hibernate: true, joinMinutes: defaultsJoin, updatedAt: null, updatedBy: null } : { hibernate: true, joinMinutes: defaultsJoin, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
     }
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
@@ -300,6 +301,47 @@ describe('Routers view', () => {
       expect(card(wrapper).text()).toContain('standalone EC2 instances (not Auto Scaling groups or ECS)');
       wrapper.unmount();
       neverChanged = false;
+    });
+
+    const joinButton = (w: Awaited<ReturnType<typeof mountView>>) => card(w).find('[data-test="edit-join"]');
+    const joinDialog = () => document.querySelector('[data-test="join-dialog"]') as HTMLElement;
+
+    it('says the joined windows\' default and what it means, the built-in value while unset', async () => {
+      const wrapper = await mountView();
+      const row = card(wrapper).find('[data-test="default-join"]');
+      expect(row.text()).toContain('Join windows');
+      expect(row.text()).toContain('count as one');
+      expect(row.text()).toContain('15 min, the default');
+      expect(joinButton(wrapper).exists()).toBe(true);
+      wrapper.unmount();
+    });
+
+    it('hides its Edit from an operator, who reads the value', async () => {
+      defaultsJoin = 30;
+      const wrapper = await mountView('/routers', 'operator');
+      expect(card(wrapper).find('[data-test="default-join"]').text()).toContain('30 min');
+      expect(joinButton(wrapper).exists()).toBe(false);
+      wrapper.unmount();
+      defaultsJoin = null;
+    });
+
+    it('sends only joinMinutes, says when routers apply it, and null for the default', async () => {
+      const wrapper = await mountView();
+      await joinButton(wrapper).trigger('click');
+      await flushPromises();
+      expect(joinDialog().textContent).toContain('Default (15 min)');
+      expect(joinDialog().textContent).toContain('within 5 minutes');
+      (joinDialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await flushPromises();
+      const input = joinDialog().querySelector('input[type="number"]') as HTMLInputElement;
+      input.value = '30';
+      input.dispatchEvent(new Event('input'));
+      await flushPromises();
+      dialogButton('Save').click();
+      await flushPromises();
+      const put = calls.find((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')!;
+      expect(JSON.parse(String(put.init!.body))).toEqual({ joinMinutes: 30 });
+      wrapper.unmount();
     });
 
     it('hides the switch from an operator', async () => {

@@ -51,19 +51,19 @@ describe('GET /api/settings/workloads', () => {
     const s = setup();
     for (const groups of ['dmt-viewer', 'dmt-operator', 'dmt-admin', 'payments']) {
       const res = await s.api(event('GET', '/api/settings/workloads', groups));
-      expect([res.statusCode, json(res)], groups).toEqual([200, { hibernate: true, updatedAt: null, updatedBy: null }]);
+      expect([res.statusCode, json(res)], groups).toEqual([200, { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null }]);
     }
   });
 
   it('answers what the object holds, and true when it holds no hibernate', async () => {
     const doc = { workloads: { hibernate: false }, updatedAt: '2026-10-20T10:00:00.000Z', updatedBy: 'a@example.com', other: 1 };
-    expect(json(await setup({ doc }).api(event('GET', '/api/settings/workloads', 'dmt-viewer')))).toEqual({ hibernate: false, updatedAt: doc.updatedAt, updatedBy: 'a@example.com' });
+    expect(json(await setup({ doc }).api(event('GET', '/api/settings/workloads', 'dmt-viewer')))).toEqual({ hibernate: false, joinMinutes: null, updatedAt: doc.updatedAt, updatedBy: 'a@example.com' });
     expect(json(await setup({ doc: { other: 1 } }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).hibernate).toBe(true);
   });
 
   it('answers the defaults in a manager without a lists bucket', async () => {
     const res = await setup({ noStore: true }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'));
-    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, updatedAt: null, updatedBy: null }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null }]);
   });
 
   it('is reached through /iam/ too', async () => {
@@ -76,7 +76,7 @@ describe('PUT /api/settings/workloads', () => {
     const s = setup({ doc: { other: 1 } });
     const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
     const at = new Date(NOW).toISOString();
-    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, joinMinutes: null, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
     expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, updatedAt: at, updatedBy: 'dmt-admin@example.com', other: 1 }]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'hibernate off', who: 'dmt-admin@example.com' });
   });
@@ -123,6 +123,79 @@ describe('PUT /api/settings/workloads', () => {
   });
 });
 
+const JOIN_PROBLEM = 'joinMinutes: a whole number from 0 to 120, a multiple of 5';
+const BAD_JOINS = [-5, 7, 2.5, 125, '15', true, {}, []];
+
+describe('the organization\'s joinMinutes in /api/settings/workloads', () => {
+  const read = async (doc: Record<string, unknown>) => json(await setup({ doc }).api(event('GET', '/api/settings/workloads', 'dmt-viewer')));
+
+  it('reads what the object holds, 0 included, and null when it is unset or not a value', async () => {
+    expect((await read({ workloads: { joinMinutes: 30 } })).joinMinutes).toBe(30);
+    expect((await read({ workloads: { joinMinutes: 0 } })).joinMinutes).toBe(0);
+    for (const joinMinutes of [...BAD_JOINS, null]) expect((await read({ workloads: { joinMinutes } })).joinMinutes, JSON.stringify(joinMinutes)).toBeNull();
+    const none = await read({ workloads: { hibernate: false } });
+    expect(Object.keys(none)).toContain('joinMinutes');
+    expect(none.joinMinutes).toBeNull();
+  });
+
+  it('writing it alone keeps hibernate, the other keys of workloads and of the file, and never adds a hibernate', async () => {
+    const s = setup({ doc: { workloads: { hibernate: false, later: 2 }, waitingPage: { mode: 'template' }, other: 1 } });
+    const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: 30 }));
+    const at = new Date(NOW).toISOString();
+    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, joinMinutes: 30, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
+    expect(s.store.writes).toEqual([{ workloads: { hibernate: false, later: 2, joinMinutes: 30 }, waitingPage: { mode: 'template' }, other: 1, updatedAt: at, updatedBy: 'dmt-admin@example.com' }]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'joinMinutes 30' });
+    const fresh = setup();
+    const answer = await fresh.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: 0 }));
+    expect(fresh.store.writes[0]!.workloads).toEqual({ joinMinutes: 0 });
+    expect(json(answer)).toMatchObject({ hibernate: true, joinMinutes: 0 });
+  });
+
+  it('writing hibernate alone keeps it, and both can be written at once', async () => {
+    const s = setup({ doc: { workloads: { hibernate: true, joinMinutes: 45 } } });
+    const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
+    expect(s.store.writes[0]!.workloads).toEqual({ hibernate: false, joinMinutes: 45 });
+    expect(json(res)).toMatchObject({ hibernate: false, joinMinutes: 45 });
+    expect(s.audit.at(-1)!.result).toBe('hibernate off');
+    await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: true, joinMinutes: 60 }));
+    expect(s.store.writes[1]!.workloads).toEqual({ hibernate: true, joinMinutes: 60 });
+    expect(s.audit.at(-1)!.result).toBe('hibernate on, joinMinutes 60');
+  });
+
+  it('null unsets it, removing the key, and answers null', async () => {
+    const s = setup({ doc: { workloads: { hibernate: false, joinMinutes: 45, later: 2 } } });
+    const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: null }));
+    expect(s.store.writes[0]!.workloads).toEqual({ hibernate: false, later: 2 });
+    expect(json(res)).toMatchObject({ hibernate: false, joinMinutes: null });
+    expect(Object.keys(json(res))).toContain('joinMinutes');
+    expect(s.audit.at(-1)!.result).toBe('joinMinutes default');
+  });
+
+  it('refuses another value in the router\'s words, nothing written, and only administrators may', async () => {
+    const s = setup({ doc: { workloads: { hibernate: true } } });
+    for (const joinMinutes of BAD_JOINS) {
+      const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes }));
+      expect([res.statusCode, json(res).message], JSON.stringify(joinMinutes)).toEqual([400, JOIN_PROBLEM]);
+    }
+    for (const groups of ['dmt-viewer', 'dmt-operator']) expect((await s.api(event('PUT', '/api/settings/workloads', groups, { joinMinutes: 15 }))).statusCode, groups).toBe(403);
+    expect(s.store.writes).toEqual([]);
+    expect((await s.api(iam('PUT', '/iam/settings/workloads', { joinMinutes: 15 }))).statusCode).toBe(200);
+  });
+
+  it('a corrupt file reads null, and a write of joinMinutes alone repairs it', async () => {
+    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const corrupt = async () => [1];
+      expect(json(await setup({ read: corrupt }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).joinMinutes).toBeNull();
+      const s = setup({ read: corrupt });
+      await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: 30 }));
+      expect(s.store.writes[0]!.workloads).toEqual({ joinMinutes: 30 });
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
 describe('a corrupt settings.json (not JSON, or not an object)', () => {
   const corrupt = [
     async () => { throw new SyntaxError('Unexpected token \'<\', "<html>" is not valid JSON'); },
@@ -132,7 +205,7 @@ describe('a corrupt settings.json (not JSON, or not an object)', () => {
   it('GET answers the defaults and says it is unreadable', async () => {
     for (const read of corrupt) {
       const res = await setup({ read }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'));
-      expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' }]);
+      expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' }]);
     }
   });
 
@@ -198,6 +271,61 @@ describe('PUT /api/routers/:router/settings', () => {
   });
 });
 
+describe('a router\'s joinMinutes in PUT /api/routers/:router/settings', () => {
+  const PUT = '/api/routers/dmt-dev/settings';
+
+  it('passes on only the keys it received, as the same right, audited', async () => {
+    const s = setup();
+    for (const groups of ['dmt-viewer', 'dmt-operator', 'payments']) expect((await s.api(event('PUT', PUT, groups, { joinMinutes: 30 }))).statusCode, groups).toBe(403);
+    expect(s.calls).toEqual([]);
+    const by = 'dmt-admin@example.com';
+    await s.api(event('PUT', PUT, 'dmt-admin', { joinMinutes: 30 }));
+    expect(s.calls.at(-1)).toEqual({ action: 'settings', settings: { joinMinutes: 30 }, by });
+    expect(s.audit.at(-1)).toMatchObject({ action: 'router-settings', target: 'dmt-dev', result: 'joinMinutes 30' });
+    await s.api(event('PUT', PUT, 'dmt-admin', { joinMinutes: 0 }));
+    expect(s.calls.at(-1)).toEqual({ action: 'settings', settings: { joinMinutes: 0 }, by });
+    await s.api(event('PUT', PUT, 'dmt-admin', { joinMinutes: null }));
+    expect(s.calls.at(-1)).toEqual({ action: 'settings', settings: { joinMinutes: null }, by });
+    expect(s.audit.at(-1)!.result).toBe('joinMinutes inherit');
+    await s.api(event('PUT', PUT, 'dmt-admin', { hibernate: false }));
+    expect(s.calls.at(-1)).toEqual({ action: 'settings', settings: { hibernate: false }, by });
+    await s.api(event('PUT', PUT, 'dmt-admin', { hibernate: null, joinMinutes: 45 }));
+    expect(s.calls.at(-1)).toEqual({ action: 'settings', settings: { hibernate: null, joinMinutes: 45 }, by });
+    expect(s.audit.at(-1)!.result).toBe('hibernate inherit, joinMinutes 45');
+    expect((await s.api(iam('PUT', '/iam/routers/dmt-dev/settings', { joinMinutes: 15 }))).statusCode).toBe(200);
+  });
+
+  it('never sends the router an empty settings, which would change nothing: a body with neither is a 400', async () => {
+    const s = setup();
+    for (const body of [{}, { other: 1 }]) expect((await s.api(event('PUT', PUT, 'dmt-admin', body))).statusCode, JSON.stringify(body)).toBe(400);
+    expect(s.calls).toEqual([]);
+  });
+
+  it('refuses another value in the router\'s words before calling', async () => {
+    const s = setup();
+    for (const joinMinutes of BAD_JOINS) {
+      const res = await s.api(event('PUT', PUT, 'dmt-admin', { joinMinutes }));
+      expect([res.statusCode, json(res).message], JSON.stringify(joinMinutes)).toEqual([400, JOIN_PROBLEM]);
+    }
+    expect(s.calls).toEqual([]);
+  });
+
+  it('relays an older router\'s refusal as a 400', async () => {
+    const s = setup({ invoke: async () => ({ problems: ['settings: unknown setting joinMinutes'] }) });
+    const res = await s.api(event('PUT', PUT, 'dmt-admin', { joinMinutes: 30 }));
+    expect([res.statusCode, json(res).message]).toEqual([400, 'settings: unknown setting joinMinutes']);
+  });
+
+  it('relays the settings and the managerSettings with joinMinutes in its details', async () => {
+    const managerSettings = { ...MANAGER_SETTINGS, joinMinutes: 20 };
+    const settings = { ...ROUTER_SETTINGS, joinMinutes: 30 };
+    const s = setup({ invoke: async () => ({ router: { name: 'dmt-dev', version: '0.36.0', build: 'b1' }, settings, managerSettings, pauses: [], workloads: { total: 0, byState: {}, paused: 0, lastActivityAt: null }, health: { status: 'ok', problems: [], checkSchedule: null, lastScheduledCheckAt: null } }) });
+    const res = json(await s.api(event('GET', '/api/routers/dmt-dev', 'dmt-admin')));
+    expect(res.settings).toEqual(settings);
+    expect(res.managerSettings).toEqual(managerSettings);
+  });
+});
+
 describe('PUT /api/workloads/:router/:id/settings', () => {
   const PUT = '/api/workloads/dmt-dev/pay/settings';
   it('sets the workload level through the controller, operators and administrators, audited', async () => {
@@ -236,6 +364,21 @@ describe('PUT /api/workloads/:router/:id/settings', () => {
     expect((await s.api(event('PUT', PUT, 'dmt-admin', {}))).statusCode).toBe(400);
     expect(s.calls).toEqual([]);
     expect((await s.api(iam('PUT', '/iam/workloads/dmt-dev/pay/settings', { hibernate: true }))).statusCode).toBe(200);
+  });
+
+  it('refuses joinMinutes in the router\'s words: a workload\'s is on its schedule', async () => {
+    const s = setup();
+    for (const body of [{ joinMinutes: 30 }, { hibernate: true, joinMinutes: 30 }, { joinMinutes: null }]) {
+      const res = await s.api(event('PUT', PUT, 'dmt-admin', body));
+      expect([res.statusCode, json(res).message], JSON.stringify(body)).toEqual([400, 'settings: a workload\'s joinMinutes is on its schedule']);
+    }
+    expect(s.calls).toEqual([]);
+  });
+
+  it('relays the value in force, its level and what is inherited in the workload\'s view', async () => {
+    const answer = { joinMinutes: 30, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' }, schedule: { timeZone: 'UTC', joinMinutes: 30 }, next: [] };
+    const s = setup({ invoke: async (_r, payload) => (payload.action === 'status' ? { workloadId: 'pay', state: 'AWAKE', ...answer } : null) });
+    expect(json(await s.api(event('GET', PUT.replace('/settings', ''), 'dmt-admin')))).toMatchObject(answer);
   });
 
   it('relays hibernation in the workload\'s view', async () => {

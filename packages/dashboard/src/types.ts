@@ -19,7 +19,7 @@ export interface Pause {
 }
 
 import type { Failure, Fallback } from './failures';
-import type { NextEvent, Schedule } from './schedule';
+import type { JoinFrom, JoinLevel, NextEvent, Schedule } from './schedule';
 import type { Energy, FleetEnergy } from './energy';
 
 // A description (Markdown, up to 4,000 characters) of a router or a workload, with who wrote it and when (manager 0.19.0).
@@ -38,8 +38,9 @@ export interface Hibernation {
   freshBoot: boolean;
 }
 // What a router last read of the manager's settings (url null: it reads none).
-export interface ManagerSettings { url: string | null; hibernate: boolean | null; readAt: string | null; error: string | null }
-export interface WorkloadDefaults { hibernate: boolean; updatedAt: string | null; updatedBy: string | null }
+// `joinMinutes` (joined windows): router 0.36.0 and later, null when the organization sets none.
+export interface ManagerSettings { url: string | null; hibernate: boolean | null; joinMinutes?: number | null; readAt: string | null; error: string | null }
+export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | null; updatedAt: string | null; updatedBy: string | null }
 
 export interface WorkloadSummary {
   router: string;
@@ -154,6 +155,10 @@ export interface WorkloadStatus {
   schedule?: Schedule | null; // R12: absent for routers before 0.31.0, null when none
   next?: NextEvent[];
   maintenanceDue?: string | null;
+  // Joined windows (routers 0.36.0 and later): the value in force, its level, and what removing the workload's own would give.
+  joinMinutes?: number;
+  joinFrom?: JoinFrom;
+  joinInherited?: JoinLevel;
   hibernation?: Hibernation; // routers 0.32.0 and later
   hibernated?: true;
   description?: DescriptionInfo | null; // manager 0.19.0: null when none, absent when it could not be read
@@ -289,7 +294,7 @@ export interface RouterDetails {
     metrics: Configured<boolean | null>;
   };
   pauses: Pause[];
-  settings?: { hibernate: boolean | null; by: string | null; at: string | null }; // routers 0.32.0 and later
+  settings?: { hibernate: boolean | null; joinMinutes?: number | null; by: string | null; at: string | null }; // routers 0.32.0 and later, joinMinutes 0.36.0
   description?: DescriptionInfo | null; // manager 0.19.0: null when none, absent when it could not be read
   managerSettings?: ManagerSettings;
   workloads: { total: number; byState: Record<string, number>; paused: number; lastActivityAt: string | null };

@@ -447,3 +447,62 @@ describe('moving a whole window by dragging an occurrence', () => {
     expect(moveWindow({ kind: 'nap', days: ['mon'], start: '20:00', end: '07:00', wake: 'header' }, HOUR, TODAY)).toEqual({ kind: 'nap', days: ['mon'], start: '21:00', end: '08:00', wake: 'header' });
   });
 });
+
+describe('joined windows', () => {
+  const utc = (windows: ScheduleWindow[], more: Partial<Schedule> = {}): Schedule => ({ timeZone: 'UTC', windows, ...more });
+  const two = (second: string): ScheduleWindow[] => [{ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }, { kind: 'awake', days: ['mon'], start: second, end: '18:00' }];
+  const MONDAY = at('2026-10-19T00:00:00Z');
+  const ends = (s: Schedule, join = {}) => occurrencesIn(s, MONDAY, MONDAY + 24 * HOUR, join).map((o) => new Date(o.end).toISOString().slice(11, 16));
+
+  it('reaches the next start of its kind within the value, both ends included, and says so', () => {
+    expect(ends(utc(two('12:15')))).toEqual(['12:15', '18:00']);
+    expect(occurrencesIn(utc(two('12:15')), MONDAY, MONDAY + 24 * HOUR)[0]!.joined).toBe(true);
+    expect(occurrencesIn(utc(two('12:15')), MONDAY, MONDAY + 24 * HOUR)[1]!.joined).toBeUndefined();
+    expect(ends(utc(two('12:20')))).toEqual(['12:00', '18:00']);
+  });
+
+  it('touching windows are not joined: their end moves nowhere', () => {
+    expect(occurrencesIn(utc(two('12:00')), MONDAY, MONDAY + 24 * HOUR)[0]!.joined).toBeUndefined();
+  });
+
+  it('the option wins over the schedule\'s value, which wins over 15; an invalid option is ignored', () => {
+    expect(ends(utc(two('12:20'), { joinMinutes: 30 }))).toEqual(['12:20', '18:00']);
+    expect(ends(utc(two('12:20'), { joinMinutes: 30 }), { joinMinutes: 0 })).toEqual(['12:00', '18:00']);
+    expect(ends(utc(two('12:20'), { joinMinutes: 0 }), { joinMinutes: 20 })).toEqual(['12:20', '18:00']);
+    expect(ends(utc(two('12:20'), { joinMinutes: 30 }), { joinMinutes: 7 })).toEqual(['12:20', '18:00']);
+    expect(ends(utc(two('12:15')), { joinMinutes: 7 })).toEqual(['12:15', '18:00']);
+    expect(ends(utc(two('12:15'), { joinMinutes: null }))).toEqual(['12:15', '18:00']);
+  });
+
+  it('a start of the other kind in the gap blocks it; a nap\'s wake stays its own', () => {
+    const blocked = utc([two('12:15')[0]!, { kind: 'nap', days: ['mon'], start: '12:05', end: '12:10' }, two('12:15')[1]!]);
+    expect(ends(blocked)).toEqual(['12:00', '12:10', '18:00']);
+    const naps = occurrencesIn(utc([{ kind: 'nap', days: ['mon'], start: '08:00', end: '12:00', wake: 'header' }, { kind: 'nap', days: ['mon'], start: '12:10', end: '18:00', wake: 'never' }]), MONDAY, MONDAY + 24 * HOUR);
+    expect(naps.map((o) => o.wake)).toEqual(['header', 'never']);
+  });
+
+  it('nextEvents takes the value: no end around a joined gap', () => {
+    const t = MONDAY + 7 * HOUR;
+    const kinds = (join = {}) => nextEvents(utc(two('12:20')), t, { horizonDays: 1, ...join }).map((e) => e.kind);
+    expect(kinds()).toEqual(['awake-start', 'awake-end', 'awake-start', 'awake-end']);
+    expect(kinds({ joinMinutes: 20 })).toEqual(['awake-start', 'awake-start', 'awake-end']);
+  });
+
+  it('nextOccurrences takes the value, and one window alone, the others only joining it', () => {
+    const t = MONDAY + 7 * HOUR;
+    const s = utc(two('12:10'));
+    expect(nextOccurrences(s, t, 2, { joinMinutes: 0 }).map((o) => o.window)).toEqual([0, 1]);
+    const own = nextOccurrences(s, t, 2, { joinMinutes: 15, window: 0 });
+    expect(own.map((o) => o.window)).toEqual([0, 0]);
+    expect(new Date(own[0]!.end).toISOString().slice(11, 16)).toBe('12:10');
+    expect(new Date(nextOccurrences(s, t, 1, { joinMinutes: 0, window: 0 })[0]!.end).toISOString().slice(11, 16)).toBe('12:00');
+    // Its own range decides from when it looks, not the other window's.
+    const later = utc([{ ...two('12:10')[0]!, from: '2099-01-05' }, two('12:10')[1]!]);
+    expect(new Date(nextOccurrences(later, t, 1, { window: 0 })[0]!.start).toISOString().slice(0, 10)).toBe('2099-01-05');
+  });
+
+  it('a window dragged is compared by its starts: what joins it changes nothing', () => {
+    const w: ScheduleWindow = { kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' };
+    expect(moveWindow(w, 60, '2026-10-19')).toMatchObject({ start: '09:00', end: '13:00' });
+  });
+});

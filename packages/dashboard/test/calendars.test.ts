@@ -197,3 +197,66 @@ describe('eventsFor', () => {
     expect(eventsFor([{ key: 'r/b', name: 'B', color: '#000', schedule: null }], day, day + 86_400_000)).toEqual([]);
   });
 });
+
+describe('joined windows on the calendar', () => {
+  const FROM = Date.UTC(2027, 0, 4);
+  const hhmm = (d: Date) => d.toISOString().slice(11, 16);
+  const bars = (c: Calendar) => eventsFor([c], FROM, FROM + 86_400_000, 'UTC', false, FROM).map((e) => [hhmm(e.start), hhmm(e.end)]);
+  const naps: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', canEdit: true, schedule: { timeZone: 'UTC', windows: [
+    { kind: 'nap', days: ['mon'], start: '08:00', end: '12:00', wake: 'never' }, { kind: 'nap', days: ['mon'], start: '12:10', end: '18:00', wake: 'never' },
+  ] } };
+
+  it('draws a joined gap as one bar, at the value in force', () => {
+    expect(bars({ ...naps, joinMinutes: 15 })).toEqual([['08:00', '18:00']]);
+    expect(bars({ ...naps, joinMinutes: 10 })).toEqual([['08:00', '18:00']]);
+    expect(bars({ ...naps, joinMinutes: 5 })).toEqual([['08:00', '12:00'], ['12:10', '18:00']]);
+    expect(bars({ ...naps, joinMinutes: 0 })).toEqual([['08:00', '12:00'], ['12:10', '18:00']]);
+  });
+
+  it('a router that answers no value does not join: two bars, even with the schedule\'s own value', () => {
+    expect(bars(naps)).toEqual([['08:00', '12:00'], ['12:10', '18:00']]);
+    expect(bars({ ...naps, schedule: { ...naps.schedule!, joinMinutes: 30 } })).toEqual([['08:00', '12:00'], ['12:10', '18:00']]);
+  });
+
+  it('joins across midnight, and a chain as long as it lasts', () => {
+    const night: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', days: ['mon'], start: '20:00', end: '23:55' }, { kind: 'nap', days: ['tue'], start: '00:05', end: '07:00' }] } };
+    const drawn = eventsFor([night], FROM, FROM + 2 * 86_400_000, 'UTC', false, FROM);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]!.end.toISOString()).toBe('2027-01-05T07:00:00.000Z');
+    const chain: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', repeat: { pattern: 'cron', cron: '*/15 8-9 * * *', minutes: 5 } }] } };
+    expect(bars(chain)).toEqual([['08:00', '09:50']]);
+    expect(bars({ ...chain, joinMinutes: 0 })).toHaveLength(8);
+  });
+
+  it('keeps two kinds, and a gap holding the other kind, apart; touching windows stay two bars as they always drew', () => {
+    const kinds: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }, { kind: 'nap', days: ['mon'], start: '12:05', end: '18:00' }] } };
+    expect(bars(kinds)).toHaveLength(2);
+    const held: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', days: ['mon'], start: '08:00', end: '12:00' }, { kind: 'awake', days: ['mon'], start: '12:05', end: '12:10' }, { kind: 'nap', days: ['mon'], start: '12:15', end: '18:00' }] } };
+    expect(bars(held)).toHaveLength(3);
+    const touching: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', days: ['mon'], start: '08:00', end: '12:00' }, { kind: 'nap', days: ['mon'], start: '12:00', end: '18:00' }] } };
+    expect(bars(touching)).toHaveLength(2);
+  });
+
+  it('a bar of two windows says both, cannot be dragged (a drag moves one window), and tells why', () => {
+    const [bar] = eventsFor([{ ...naps, joinMinutes: 15 }], FROM, FROM + 86_400_000, 'UTC', false, FROM);
+    expect(bar!.startEditable).toBe(false);
+    expect(bar!.extendedProps.tip()).toEqual([
+      'Blog · Nap', 'Mon, 08:00–12:00', 'Mon, 12:10–18:00', 'Mon 08:00–18:00', 'Windows of one kind up to 15 min apart read as one.', 'Joined with another window: edit them in the dialog.',
+    ]);
+    expect(bar!.id).toBe('r/b#0@' + Date.UTC(2027, 0, 4, 8));
+  });
+
+  it('a window that joins itself moves as a whole, so it can still be dragged', () => {
+    const daily: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', repeat: { pattern: 'daily' }, start: '00:00', end: '23:50' }] } };
+    const [bar] = eventsFor([daily], FROM, FROM + 3 * 86_400_000, 'UTC', false, FROM);
+    expect(bar!.startEditable).toBe(true);
+    expect(bar!.extendedProps.tip().at(-1)).toBe('Drag to move every occurrence of this window.');
+  });
+
+  it('a bar\'s wake: never when either part says so, as the router\'s union', () => {
+    const titles = (first: 'never' | 'header', second: 'never' | 'header') => eventsFor([{ ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', days: ['mon'], start: '08:00', end: '12:00', wake: first }, { kind: 'nap', days: ['mon'], start: '12:10', end: '18:00', wake: second }] } }], FROM, FROM + 86_400_000, 'UTC', false, FROM)[0]!.title;
+    expect(titles('header', 'header')).toBe('Blog · Nap (wake: header)');
+    expect(titles('header', 'never')).toBe('Blog · Nap');
+    expect(titles('never', 'header')).toBe('Blog · Nap');
+  });
+});

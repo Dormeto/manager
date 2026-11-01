@@ -9,9 +9,11 @@ import { CLUSTER_ROLE } from '../kubernetes';
 import { useNow } from '../now';
 import { terraformSettingHelp } from '../router-actions';
 import { routerInheritText } from '../hibernation';
+import { joinText, recurrenceError, routerJoinInherited } from '../schedule';
 import { useSession } from '../stores/session';
 import DmLoader from './DmLoader.vue';
 import HibernateDialog from './HibernateDialog.vue';
+import JoinDialog from './JoinDialog.vue';
 import TerraformChip from './TerraformChip.vue';
 import type { RouterDetails } from '../types';
 
@@ -24,6 +26,9 @@ const error = ref('');
 const editOpen = ref(false);
 const saving = ref(false);
 const saveError = ref('');
+const joinOpen = ref(false);
+const savingJoin = ref(false);
+const joinError = ref('');
 const path = computed(() => `/routers/${encodeURIComponent(props.name)}`);
 
 async function load() {
@@ -49,6 +54,24 @@ async function saveHibernate(hibernate: boolean | null) {
     saveError.value = (err as Error).message;
   } finally {
     saving.value = false;
+  }
+}
+// How far apart windows join, for the workloads that set none of their own (admins; routers 0.36.0 and later). Only this key is
+// sent: the router keeps the other.
+const joinKnown = computed(() => details.value?.settings?.joinMinutes !== undefined && Boolean(details.value?.managerSettings));
+const joinInherited = computed(() => routerJoinInherited(details.value?.managerSettings ?? {}));
+async function saveJoin(joinMinutes: number | null) {
+  savingJoin.value = true;
+  joinError.value = '';
+  try {
+    await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify({ joinMinutes }) });
+    joinOpen.value = false;
+    await load();
+  } catch (err) {
+    joinOpen.value = false;
+    joinError.value = recurrenceError((err as Error).message);
+  } finally {
+    savingJoin.value = false;
   }
 }
 // Layout only: two columns that end at about the same height. The parent's card (the router's health, short) heads the
@@ -166,6 +189,14 @@ const columns = computed<Section[][]>(() => {
               <div v-if="saveError" class="text-error text-body-small">{{ saveError }}</div>
             </td>
             <td class="dm-facts__src"><v-btn v-if="session.isAdmin" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="saveError = ''; editOpen = true">Edit</v-btn></td></tr>
+          <tr v-if="joinKnown" data-test="join"><th>Join windows</th>
+            <td>
+              <template v-if="details.settings!.joinMinutes === null">Inherit <span class="text-medium-emphasis">({{ joinText(joinInherited) }})</span></template>
+              <template v-else>{{ details.settings!.joinMinutes }} min<span v-if="details.settings!.by" class="text-medium-emphasis"> (set by {{ details.settings!.by }}, {{ relative(details.settings!.at, now) }})</span></template>
+              <div class="text-body-small text-medium-emphasis">Windows of one kind this close read as one, for the workloads that set none.</div>
+              <div v-if="joinError" class="text-error text-body-small">{{ joinError }}</div>
+            </td>
+            <td class="dm-facts__src"><v-btn v-if="session.isAdmin" data-test="edit-join" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="joinError = ''; joinOpen = true">Edit</v-btn></td></tr>
           <tr><th>IP lists</th>
             <td>
               <div v-for="l in details.configuration.ipLists.value" :key="l.name" class="dm-facts__item">
@@ -193,6 +224,10 @@ const columns = computed<Section[][]>(() => {
     </v-card>
     <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now)" :saving="saving" @submit="saveHibernate" />
+    <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"
+      :inherit-label="`Inherit (${joinText(joinInherited)})`" :saving="savingJoin" @submit="saveJoin">
+      Two windows of one kind with a gap of at most this count as one, on the workloads of this router that set no value of their own.
+    </JoinDialog>
   </template>
 </template>
 

@@ -12,6 +12,7 @@ import { ACCOUNTS, ORG } from './org';
 import { historyView, replayWindows, timeIn, type Burst } from './history';
 import {
   activeExclusions, ecsCluster, hasHibernation, hibernationOf, lastRequest, managerReadAt, operationStatus, pausesOf, routerIn, type Demo, type DemoOperation, type DemoRouter, type DemoWorkload,
+  knowsRecurrences, routerSettingsView,
 } from './state';
 import { DAY, HOUR, MINUTE, SECOND, day, hash, hex, iso, lastCheck, round } from './util';
 
@@ -80,10 +81,14 @@ export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetail
     pauses: r.pauses,
     description: r.description,
     ...(hasHibernation(r) ? {
-      settings: { hibernate: r.hibernate, by: r.hibernateBy, at: r.hibernateAt === null ? null : iso(r.hibernateAt) },
-      managerSettings: r.readsManager
-        ? { url: ORG.catalogUrl.replace(/[^/]*$/, 'settings.json'), hibernate: d.hibernation.hibernate, readAt: iso(managerReadAt(now)), error: null }
-        : { url: null, hibernate: null, readAt: null, error: null },
+      settings: routerSettingsView(r),
+      managerSettings: {
+        ...(r.readsManager
+          ? { url: ORG.catalogUrl.replace(/[^/]*$/, 'settings.json'), hibernate: d.hibernation.hibernate, readAt: iso(managerReadAt(now)), error: null }
+          : { url: null, hibernate: null, readAt: null, error: null }),
+        // A router before joined windows answers none.
+        ...(knowsRecurrences(r.version) ? { joinMinutes: r.readsManager ? d.hibernation.joinMinutes : null } : {}),
+      },
     } : {}),
     workloads: { total: list.length, byState: byState(list), paused: pausedCount(r, list), lastActivityAt: lastActivity(list) },
     health: {

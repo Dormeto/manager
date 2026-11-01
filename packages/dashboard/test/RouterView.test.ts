@@ -1,7 +1,7 @@
 // A router's own view (user request): its version, health, workloads, configuration with where each setting is changed,
 // and its actions, reached from the Routers list as a workload is from Workloads.
 import { nextTick } from 'vue';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
@@ -22,13 +22,13 @@ const DETAILS = {
 };
 // Routers 0.32.0 and later: the router's own hibernate setting and the manager's settings as it last read them.
 const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
-const HIBERNATION: { settings: { hibernate: boolean | null; by: string | null; at: string | null }; managerSettings: Record<string, unknown> } = {
+const HIBERNATION: { settings: { hibernate: boolean | null; joinMinutes?: number | null; by: string | null; at: string | null }; managerSettings: Record<string, unknown> } = {
   settings: { hibernate: null, by: null, at: null },
   managerSettings: { url: 's3://b/settings.json', hibernate: true, readAt: minutesAgo(3), error: null },
 };
 const calls: { path: string; init?: RequestInit }[] = [];
 let withHibernation = true;
-let failSave = false;
+let failSave: boolean | string = false;
 // The description the manager answers with (undefined: none readable, the key absent) and the refusal of its PUT.
 let described: { text: string; by: string; at: string } | null | undefined;
 let descriptionRefusal = '';
@@ -48,7 +48,7 @@ vi.mock('../src/api', () => ({
       return { description: init?.method === 'DELETE' ? null : described };
     }
     if (init?.method === 'PUT') {
-      if (failSave) throw new Error('upgrade the router to 0.32.0');
+      if (failSave) throw new Error(typeof failSave === 'string' ? failSave : 'upgrade the router to 0.32.0');
       return {};
     }
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
@@ -158,6 +158,96 @@ describe('Router view', () => {
     const wrapper = await mountView('nope');
     expect(wrapper.text()).toContain('Unknown router: nope');
     wrapper.unmount();
+  });
+
+  describe('the Join windows row', () => {
+    const row = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="join"]');
+    const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
+    const dialog = () => document.querySelector('[data-test="join-dialog"]') as HTMLElement;
+    const type = async (value: string) => {
+      const input = dialog().querySelector('input[type="number"]') as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+      await flushPromises();
+    };
+    const known = () => {
+      withHibernation = true;
+      HIBERNATION.settings = { hibernate: null, joinMinutes: null, by: null, at: null };
+      HIBERNATION.managerSettings = { url: 's3://b/settings.json', hibernate: true, joinMinutes: 20, readAt: minutesAgo(3), error: null };
+    };
+
+    it('is not there on a router that answers no value, and says Inherit with the organization\'s, or its own', async () => {
+      withHibernation = true;
+      HIBERNATION.settings = { hibernate: null, by: null, at: null };
+      const older = await mountView('dmtr-dev-eu-west-3');
+      expect(row(older).exists()).toBe(false);
+      older.unmount();
+      known();
+      const inherits = await mountView('dmtr-dev-eu-west-3');
+      expect(row(inherits).text()).toContain('Inherit (20 min, from the organization)');
+      inherits.unmount();
+      HIBERNATION.settings = { hibernate: null, joinMinutes: 0, by: 'ops@example.com', at: minutesAgo(90) };
+      const own = await mountView('dmtr-dev-eu-west-3');
+      expect(row(own).text()).toContain('0 min');
+      expect(row(own).text()).toContain('set by ops@example.com');
+      own.unmount();
+    });
+
+    it('sends only joinMinutes, its value then null for Inherit, as an administrator; a viewer has no Edit', async () => {
+      known();
+      const admin = await mountView('dmtr-dev-eu-west-3');
+      calls.length = 0;
+      await row(admin).find('[data-test="edit-join"]').trigger('click');
+      await flushPromises();
+      expect(dialog().textContent).toContain('Inherit (20 min, from the organization)');
+      (dialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await flushPromises();
+      await type('45');
+      dialogButton('Save').click();
+      await flushPromises();
+      const put = calls.find((c) => c.init?.method === 'PUT')!;
+      expect(put.path).toBe('/routers/dmtr-dev-eu-west-3/settings');
+      expect(JSON.parse(String(put.init!.body))).toEqual({ joinMinutes: 45 });
+      admin.unmount();
+      document.body.innerHTML = '';
+      HIBERNATION.settings = { hibernate: true, joinMinutes: 45, by: 'a@example.com', at: minutesAgo(1) };
+      const again = await mountView('dmtr-dev-eu-west-3');
+      calls.length = 0;
+      await row(again).find('[data-test="edit-join"]').trigger('click');
+      await flushPromises();
+      (dialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await flushPromises();
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(JSON.parse(String(calls.find((c) => c.init?.method === 'PUT')!.init!.body))).toEqual({ joinMinutes: null });
+      again.unmount();
+      document.body.innerHTML = '';
+      const viewer = await mountView('dmtr-dev-eu-west-3', 'viewer');
+      expect(row(viewer).exists()).toBe(true);
+      expect(row(viewer).find('[data-test="edit-join"]').exists()).toBe(false);
+      viewer.unmount();
+    });
+
+    it('keeps Save off on a value it refuses, and shows a refusal in the row with what it needs', async () => {
+      known();
+      const admin = await mountView('dmtr-dev-eu-west-3');
+      await row(admin).find('[data-test="edit-join"]').trigger('click');
+      await flushPromises();
+      (dialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await flushPromises();
+      await type('7');
+      expect(dialog().textContent).toContain('joinMinutes: a whole number from 0 to 120, a multiple of 5');
+      expect(dialogButton('Save').disabled).toBe(true);
+      await type('30');
+      failSave = 'settings: unknown setting joinMinutes';
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(row(admin).text()).toContain('Joined windows need router 0.36.0 or later.');
+      admin.unmount();
+      failSave = false;
+    });
+
+    afterEach(() => { HIBERNATION.settings = { hibernate: null, by: null, at: null }; HIBERNATION.managerSettings = { url: 's3://b/settings.json', hibernate: true, readAt: minutesAgo(3), error: null }; });
   });
 
   describe('the Hibernate row (EC2 hibernation)', () => {

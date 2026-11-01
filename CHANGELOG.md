@@ -33,6 +33,14 @@ The dialogs' help moved to tooltips: what a schedule overrides, what wins over i
 window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip. The Workload field of New window
 autocompletes, and workloads are sorted by name.
 
+Windows of one kind with a short gap read as one (routers 0.36.0 and later), so a workload is neither woken nor napped for the
+gap. The gap is 15 minutes at most by default, 0 never joins. Set it at the organization (Workload defaults), the router (its
+Configuration) or the workload (its schedule): the most specific wins, and routers read the organization's within 5 minutes. A
+joined gap draws as one bar on the calendars, and the next occurrence and the card say the value in force. A bar of two windows
+can't be dragged: edit them in the dialog. An older router does not join, and refuses a value. The organization's and the
+router's routes (`PUT /api/settings/workloads`, `PUT /api/routers/{router}/settings`) take `joinMinutes` without `hibernate`,
+and keep what a write does not send.
+
 A first tap on a tooltip no longer opens and closes it at once on a phone (a pause, a setting, a router's health, an
 organization's access).
 

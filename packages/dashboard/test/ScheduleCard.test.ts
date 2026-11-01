@@ -63,6 +63,20 @@ describe('ScheduleCard', () => {
     once.unmount();
   });
 
+  it('says the value in force and its level, once a router answers one', () => {
+    const line = (props: Record<string, unknown>) => {
+      const wrapper = mountCard(props);
+      const found = wrapper.find('[data-test="join-line"]');
+      const text = found.exists() ? found.text() : null;
+      wrapper.unmount();
+      return text;
+    };
+    expect(line({ join: { joinMinutes: 30, joinFrom: 'router', joinInherited: { joinMinutes: 30, joinFrom: 'router' } } })).toBe('Joins windows of one kind up to 30 min, from the router');
+    expect(line({ join: { joinMinutes: 0, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' } } })).toBe('Joins windows of one kind up to 0 min, set on this workload');
+    expect(line({})).toBeNull();
+    expect(line({ join: {} })).toBeNull();
+  });
+
   it('hides Edit and Clear without the permission', () => {
     const wrapper = mountCard({ canEdit: false });
     expect(wrapper.find('[data-test="edit-schedule"]').exists()).toBe(false);
