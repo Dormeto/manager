@@ -5,7 +5,10 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
-## Unreleased
+## 0.20.0 — 2026-11-01
+
+Router 0.35.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
+boundary and Kubernetes rights are unchanged).
 
 - Branded waiting page (router 0.35.0). While a workload wakes, its visitors see a page you set at three levels, each
   overriding the one above: the organization (Routers, beside Workload defaults), a router and a workload. A template
