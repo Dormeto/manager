@@ -12,7 +12,7 @@ const label = computed(() => pauseLabel(props.pauses));
 </script>
 
 <template>
-  <v-tooltip v-if="label" location="top" max-width="420" open-on-click open-on-focus>
+  <v-tooltip v-if="label" location="top" max-width="420" open-on-focus>
     <template #activator="{ props: activator }">
       <v-chip v-bind="activator" :prepend-icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" variant="tonal" label tabindex="0" class="dm-pause">{{ label }}</v-chip>
     </template>

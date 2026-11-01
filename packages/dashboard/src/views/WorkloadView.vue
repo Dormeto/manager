@@ -552,7 +552,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
             <div class="text-body-small text-medium-emphasis mb-2">Lists of scanner and cloud networks, public or stored in S3, set on the router and applied to all its workloads; the router downloads them again daily by default.</div>
             <div v-for="l in status.ipLists" :key="l.name" class="text-body-medium">
               <a v-if="listSourceHref(l.url)" :href="listSourceHref(l.url) ?? undefined" target="_blank" rel="noopener" :title="l.url">{{ l.name }}</a><span v-else>{{ l.name }}</span>
-              <v-tooltip location="top" max-width="340" open-on-click open-on-focus>
+              <v-tooltip location="top" max-width="340" open-on-focus>
                 <template #activator="{ props }"><span v-bind="props" class="setting text-medium-emphasis" tabindex="0"> ({{ l.action }})</span></template>
                 {{ l.action === 'ignore'
                   ? 'Requests from a listed address never wake the workload, the waiting page probe included.'
@@ -565,7 +565,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card>
       <v-card title="Settings">
         <v-card-text class="d-flex flex-wrap align-center ga-2 text-body-medium">
-          <v-tooltip v-for="row in settingRows(status.settings)" :key="row.key" location="top" max-width="380" open-on-click open-on-focus>
+          <v-tooltip v-for="row in settingRows(status.settings)" :key="row.key" location="top" max-width="380" open-on-focus>
             <template #activator="{ props }">
               <span v-bind="props" class="setting dm-setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
                 {{ row.label }} <strong>{{ row.value }}</strong><v-icon :icon="mdiInformationOutline" size="x-small" class="ml-1 text-medium-emphasis" />

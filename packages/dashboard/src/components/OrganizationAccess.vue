@@ -29,7 +29,7 @@ const impossible = computed(() => (allImpossible.value ? notConnected.value : no
     <v-card-title class="d-flex flex-wrap align-center ga-2">
       Organization access
       <span class="dm-access__status" :class="`text-${STATUS[status].color}`">
-        <v-tooltip location="top" max-width="440" open-on-click open-on-focus>
+        <v-tooltip location="top" max-width="440" open-on-focus>
           <template #activator="{ props: tip }">
             <v-icon v-bind="tip" :icon="STATUS[status].icon" :color="STATUS[status].color" size="small" tabindex="0" role="img"
               :aria-label="`Organization access: ${STATUS[status].label}`" />

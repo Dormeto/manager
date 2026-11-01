@@ -108,7 +108,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
       <template #[`item.health`]="{ item }">
         <div class="dm-health">
           <v-chip v-if="item.error" color="error" variant="tonal" label :prepend-icon="mdiLanDisconnect">unreachable</v-chip>
-          <v-tooltip v-else-if="item.health" location="top" max-width="420" open-on-click open-on-focus :disabled="!item.health.problems.length">
+          <v-tooltip v-else-if="item.health" location="top" max-width="420" open-on-focus :disabled="!item.health.problems.length">
             <template #activator="{ props }">
               <span v-bind="props" class="dm-health__line" tabindex="0">
                 <v-chip :color="healthColor(item.health.status)" variant="tonal" label :prepend-icon="HEALTH_ICONS[item.health.status]">{{ item.health.status }}</v-chip>

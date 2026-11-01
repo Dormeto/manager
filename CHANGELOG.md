@@ -33,6 +33,9 @@ The dialogs' help moved to tooltips: what a schedule overrides, what wins over i
 window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip. The Workload field of New window
 autocompletes, and workloads are sorted by name.
 
+A first tap on a tooltip no longer opens and closes it at once on a phone (a pause, a setting, a router's health, an
+organization's access).
+
 ## 0.20.0 — 2026-11-01
 
 Router 0.35.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
