@@ -9,7 +9,7 @@ Building, testing and running the manager in a development environment, and rele
 | `dev` | `https://app.dev.dormeto.com` | `https://auth.app.dev.dormeto.com` | `dmt-dev` |
 
 Roles come from the Cognito groups: `dmt-viewer` (read), `dmt-operator` (nap, wake), `dmt-admin` (users, audit).
-Users are invited by administrators; the first administrators are the install's `--admin-emails` (kept in `dev/install.json` in the install bucket; `dormeto install --admin-emails …` changes them).
+Users are invited by administrators; the first administrators are the install's `--admin-emails` (kept in `dev/install.json` in the install bucket; `dormeto aws install --admin-emails …` changes them).
 
 ## Usage
 
@@ -50,15 +50,15 @@ this repository.
 
 A local build: a clean tree, a version newer than the one running, then the install from the release directory (the
 settings come from the install's `install.json`; `--var` changes them). The plan is read, then confirmed (or
-`dormeto install apply` without a terminal):
+`dormeto aws install apply` without a terminal):
 
 ```bash
 node scripts/release/release.mjs --version <x.y.z-dev.N> --out <dir>
-dormeto install --profile kloudy-dormeto-prd --region eu-west-1 --env dev --release <dir>/<version>
+dormeto aws install --profile kloudy-dormeto-prd --region eu-west-1 --env dev --release <dir>/<version>
 ```
 
 A published release: from dev's dashboard (Administration, Update), or
-`dormeto install --profile kloudy-dormeto-prd --region eu-west-1 --env dev --version <v>`.
+`dormeto aws install --profile kloudy-dormeto-prd --region eu-west-1 --env dev --version <v>`.
 
 The certificate stays in `infra/terraform/platform` (`certificate_arn` output, given to the install): plan with `-out`,
 read it, apply the saved plan. It only renews with ACM. Never apply an old checkout's platform configuration that still

@@ -11,7 +11,7 @@ export const DEFAULT_CONFIG: DiscoveryConfig = {
   filters: [],
 };
 
-// The default of an installation outside an organization (dormeto install, account deployment) is its own account.
+// The default of an installation outside an organization (dormeto aws install, account deployment) is its own account.
 export const defaultConfig = (mode?: string): DiscoveryConfig => ({ ...DEFAULT_CONFIG, mode: mode === 'account' ? 'account' : 'organization' });
 
 const MAX_FILTERS = 50;

@@ -17,11 +17,11 @@ output "dormeto" {
 ```
 
 The provider you configure sets the account and region. Outside any organization, leave `organization_id` out (null) and set `discovery_mode = "account"`: the manager then
-assumes roles and accepts router events within its own account only (`dormeto install` deploys it this way). Optional
+assumes roles and accepts router events within its own account only (`dormeto aws install` deploys it this way). Optional
 inputs: `discovery_mode` (the mode of the discovery perimeter's default configuration, the one an administrator has not
 saved yet: `organization` by default, or `account`; `account` is required without `organization_id`), `domain` (a custom domain with its
 certificate in us-east-1 and the Route 53 zone), `ses_identity` and `email_from` (Cognito sends the invitations through
-your SES identity; without, it sends them itself, about 50 a day), `install` (`{ bucket, project, log_group }`: set by `dormeto install`; leave unset), `discovery_role_name` and `command_role_name` (the
+your SES identity; without, it sends them itself, about 50 a day), `install` (`{ bucket, project, log_group }`: set by `dormeto aws install`; leave unset), `discovery_role_name` and `command_role_name` (the
 roles the manager assumes in each account, `DmtDiscoveryRole` and `DmtCommandRole` by default), `create_organization_roles`
 (false for a second environment in an account whose roles another one creates), `deletion_protection` (true: the users and the table are protected; set
 it to false and apply before `terraform destroy`), `log_retention_days`, `mfa` (two-step verification with an
@@ -45,13 +45,13 @@ accounts get their roles from the `dormeto-access` module or the AWS CLI procedu
 
 ## From the CLI
 
-The Dormeto CLI (`dormeto routers list|upgrade`, `dormeto workloads list`) calls the API on its `/iam/*` routes, signed
+The Dormeto CLI (`dormeto aws routers list|upgrade`, `dormeto aws workloads list`) calls the API on its `/iam/*` routes, signed
 with the caller's AWS credentials (SigV4). An HTTP API has no resource policy: only the principals of the manager's
 account that an IAM policy allows `execute-api:Invoke` on the routes can call them. A caller from another account
 assumes a role in the manager's account that has this permission. Such a caller acts as an administrator, outside the
 MFA policy; the audit and the operations name its ARN.
 
-`dormeto routers upgrade` needs every method (it posts), so allow the `api_iam_arn` output,
+`dormeto aws routers upgrade` needs every method (it posts), so allow the `api_iam_arn` output,
 `arn:aws:execute-api:<region>:<account>:<api id>/*/*/iam/*`:
 
 ```json
@@ -65,7 +65,7 @@ MFA policy; the audit and the operations name its ARN.
 }
 ```
 
-`GET` alone is enough for `dormeto routers list` and `dormeto workloads list`, but it still reads everything an
+`GET` alone is enough for `dormeto aws routers list` and `dormeto aws workloads list`, but it still reads everything an
 administrator reads through the `/iam/*` routes: the users and their emails, the audit, the update state:
 
 ```json

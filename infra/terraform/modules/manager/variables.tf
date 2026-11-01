@@ -150,7 +150,7 @@ variable "ses_identity" {
 }
 
 variable "install" {
-  description = "Set by `dormeto install`; leave unset. The CLI's install bucket, build project and its log group: the API then updates the manager from its dashboard (requests, results, builds, logs)."
+  description = "Set by `dormeto aws install`; leave unset. The CLI's install bucket, build project and its log group: the API then updates the manager from its dashboard (requests, results, builds, logs)."
   type = object({
     bucket    = string
     project   = string

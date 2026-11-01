@@ -7,7 +7,7 @@
 //          [--version <version>] [--out <directory>] [--publish --bucket <bucket>] (AWS_PROFILE: the release account)
 //        node scripts/release/release.mjs --versions --bucket <bucket> [--region <region>]
 //          writes only manager/versions.json for package.json's version, already published (finishes a stopped publication)
-// --version and --out build a release locally, before it is published (dormeto install --release <out>/<version>): the
+// --version and --out build a release locally, before it is published (dormeto aws install --release <out>/<version>): the
 // files are named with that version, the release lands in <out>/<version>/ (dist/release by default), and the changelog's
 // Unreleased section stands for a version without its own. --publish only publishes package.json's version.
 import { createHash } from 'node:crypto';

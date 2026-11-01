@@ -60,9 +60,9 @@ const items = computed(() => (state.value?.versions ?? []).map((v) => ({ ...v, v
 // The CLI's options for this install, and the update command: the selected target, else the newest on offer, else the latest.
 const where = computed(() => (current.value ? `--region ${current.value.region} --env ${current.value.env}` : ''));
 const version = computed(() => target.value ?? state.value?.versions[0]?.version ?? null);
-const updateCommand = computed(() => `dormeto install --profile <your profile> ${where.value}${version.value ? ` --version ${version.value}` : ''}`);
-const statusCommand = computed(() => `dormeto install status --profile <your profile> ${where.value}`);
-const notSetUpCommand = computed(() => `dormeto install --profile <your profile> ${where.value} --version <version>`);
+const updateCommand = computed(() => `dormeto aws install --profile <your profile> ${where.value}${version.value ? ` --version ${version.value}` : ''}`);
+const statusCommand = computed(() => `dormeto aws install status --profile <your profile> ${where.value}`);
+const notSetUpCommand = computed(() => `dormeto aws install --profile <your profile> ${where.value} --version <version>`);
 
 const lastCheck = computed(() => {
   const r = daily.value?.result;
@@ -250,10 +250,10 @@ onBeforeUnmount(() => {
     <v-card v-if="current && !current.installedWithCli">
       <v-card-text>
         <p class="text-title-medium mb-2">Updates from this page are not set up for this manager.</p>
-        <p class="mb-3">It was installed without <code>dormeto install</code>, or with a CLI older than 0.2.0, or with <code>--build-role</code>.</p>
+        <p class="mb-3">It was installed without <code>dormeto aws install</code>, or with a CLI older than 0.2.0, or with <code>--build-role</code>.</p>
         <ul class="dm-ways">
           <li>
-            Installed with the CLI: run <code>dormeto install</code> again with the CLI 0.2.0 or later (without <code>--build-role</code>) to set up updates
+            Installed with the CLI: run <code>dormeto aws install</code> again with the CLI 0.2.0 or later (without <code>--build-role</code>) to set up updates
             from this page, or <code>{{ notSetUpCommand }}</code> from a laptop.
             <a :href="UPDATING" rel="noopener" target="_blank">Updating the manager<v-icon :icon="mdiOpenInNew" size="14" /></a>
           </li>
@@ -298,7 +298,7 @@ onBeforeUnmount(() => {
             <p v-else-if="failedStep" class="mt-3 mb-2">The step that failed: <strong>{{ failedStep }}</strong></p>
             <pre v-if="failed.tail.length" class="dm-tail">{{ failed.tail.join('\n') }}</pre>
             <p v-if="failedBy === 'apply'" class="mt-3 mb-0">
-              The manager is as the failure left it: prepare the update again, or run <code>dormeto install</code> from a laptop.
+              The manager is as the failure left it: prepare the update again, or run <code>dormeto aws install</code> from a laptop.
             </p>
           </template>
         </v-card-text>

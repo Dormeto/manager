@@ -5,6 +5,12 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+The commands the dashboard's Update page and the docs tell you to run are `dormeto aws install` and the like
+(`dormeto aws estimate`, `dormeto aws install status`): they need a CLI that has `aws`, which comes with the CLI after
+0.8.0. The old names (`dormeto install`) go on working with that CLI, with a notice, until a later release removes them.
+
 ## 0.20.0 — 2026-11-01
 
 Router 0.35.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

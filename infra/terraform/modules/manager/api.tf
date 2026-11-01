@@ -288,7 +288,7 @@ resource "aws_apigatewayv2_route" "api" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
-# The Dormeto CLI's routes (dormeto routers, dormeto workloads): signed with SigV4, so only the principals of this account
+# The Dormeto CLI's routes (dormeto aws routers, dormeto aws workloads): signed with SigV4, so only the principals of this account
 # allowed execute-api:Invoke on them (an HTTP API has no resource policy). The handler acts as an administrator for them.
 resource "aws_apigatewayv2_route" "iam" {
   api_id             = aws_apigatewayv2_api.api.id

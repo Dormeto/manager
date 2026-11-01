@@ -125,7 +125,7 @@ laptop with read access, with the [Dormeto CLI](https://github.com/Dormeto/cli):
 
 ```bash
 brew install dormeto/tap/dormeto        # or: curl -fsSL https://dormeto.com/install.sh | sh
-dormeto estimate --profile <your-aws-profile> --uptime
+dormeto aws estimate --profile <your-aws-profile> --uptime
 ```
 
 It writes a summary and a Markdown and JSON report; the options, phases, reports and permissions are in the
@@ -165,7 +165,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | [Access control](docs/access-control.md) | Roles, members, workload tags, groups and grants, permissions, when changes apply |
 | [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced, Spot, discounts, the daily job, the idle window advisor |
-| [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto estimate`: accounts, filters, uptime, companion databases, cache, permissions |
+| [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto aws estimate`: accounts, filters, uptime, companion databases, cache, permissions |
 | [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules |
 | [Development](docs/development.md) | Build, test, a development environment, screenshots, releases |
 

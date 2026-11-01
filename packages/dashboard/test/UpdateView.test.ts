@@ -290,7 +290,7 @@ describe('Update', () => {
     await mountView();
     expect(wrapper.text()).toContain('The step that failed: apply');
     expect(wrapper.find('pre').text()).toBe('Error: boom\nexit 1');
-    expect(wrapper.text()).toContain('The manager is as the failure left it: prepare the update again, or run dormeto install from a laptop.');
+    expect(wrapper.text()).toContain('The manager is as the failure left it: prepare the update again, or run dormeto aws install from a laptop.');
   });
 
   it('says a failed or refused dashboard plan was not prepared, with its last step, and nothing about the manager', async () => {
@@ -381,8 +381,8 @@ describe('Update', () => {
     const text = wrapper.text();
     expect(text).toContain('0.11.0');
     expect(text).toContain('Updates from this page are not set up for this manager.');
-    expect(text).toContain('It was installed without dormeto install, or with a CLI older than 0.2.0, or with --build-role.');
-    expect(text).toContain('Installed with the CLI: run dormeto install again with the CLI 0.2.0 or later (without --build-role) to set up updates from this page, or dormeto install --profile <your profile> --region eu-west-1 --env dev --version <version> from a laptop.');
+    expect(text).toContain('It was installed without dormeto aws install, or with a CLI older than 0.2.0, or with --build-role.');
+    expect(text).toContain('Installed with the CLI: run dormeto aws install again with the CLI 0.2.0 or later (without --build-role) to set up updates from this page, or dormeto aws install --profile <your profile> --region eu-west-1 --env dev --version <version> from a laptop.');
     expect(text).toContain('Installed with the Terraform module: raise the module\'s version in the configuration that installed it, and apply.');
     expect(text).not.toContain('was not installed with');
     expect(text).not.toContain('new install');
@@ -406,8 +406,8 @@ describe('Update', () => {
       expect(commands()).toEqual([
         'brew install dormeto/tap/dormeto',
         'curl -fsSL https://dormeto.com/install.sh | sh',
-        'dormeto install --profile <your profile> --region eu-west-1 --env dev --version 0.13.0',
-        'dormeto install status --profile <your profile> --region eu-west-1 --env dev',
+        'dormeto aws install --profile <your profile> --region eu-west-1 --env dev --version 0.13.0',
+        'dormeto aws install status --profile <your profile> --region eu-west-1 --env dev',
       ]);
       expect(text).toContain('administrator rights in this account');
       expect(text).toContain('plans first and asks before applying');
@@ -416,11 +416,11 @@ describe('Update', () => {
     it('uses the selected target, and no --version when nothing is on offer', async () => {
       await mountView();
       await select('0.12.0');
-      expect(commands()[2]).toBe('dormeto install --profile <your profile> --region eu-west-1 --env dev --version 0.12.0');
+      expect(commands()[2]).toBe('dormeto aws install --profile <your profile> --region eu-west-1 --env dev --version 0.12.0');
       wrapper.unmount();
       h.answer = () => state({ versions: [] });
       await mountView();
-      expect(commands()[2]).toBe('dormeto install --profile <your profile> --region eu-west-1 --env dev');
+      expect(commands()[2]).toBe('dormeto aws install --profile <your profile> --region eu-west-1 --env dev');
     });
 
     it('copies a command with its button', async () => {
