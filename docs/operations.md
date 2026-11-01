@@ -34,7 +34,9 @@ time per target group, router or workload, one per load balancer (lock), three p
   `force_destroy` removes it with the bucket at uninstall. Routers 0.32.0 read it beside `catalog.json` (within 5
   minutes); a router without `ip_lists_catalog` reads none and uses its own level or the built-in default. A
   `settings.json` that is not a JSON object reads as never set (the API says it is unreadable) and the next write
-  replaces it.
+  replaces it. The same object holds the organization's waiting page under `waitingPage`
+  (`GET|PUT|DELETE /api/settings/waiting-page`; routers 0.35.0 copy it within 5 minutes). Each setting's write keeps the
+  other's key, and the file is rewritten whole, so two administrators saving at the same moment lose one of the writes.
 - **MFA:** `mfa` sets the user pool's MFA (`ON` only for `required`) and the API's policy (`MFA_MODE`): the API reads each
   user's MFA with `AdminGetUser` (cached 5 minutes when on, 30 seconds when off, `/api/me?fresh=1`), and lowers an
   administrator or operator without it to viewer under `operators`; in that mode a group's grant giving `wake` or `nap` also needs a

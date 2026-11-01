@@ -1,5 +1,6 @@
 // Manager API: HTTP API (payload 2.0) behind the Cognito JWT authorizer. The routers answer through their controller;
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
+import { createHash } from 'node:crypto';
 import {
   CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, lint, rescope, restatus, validateConfig, withExclusions,
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
@@ -9,6 +10,7 @@ import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Desc
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
+import { cleanPage, pageWarnings, validatePage } from './page-settings.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
@@ -29,6 +31,7 @@ export interface ApiEvent {
   queryStringParameters?: Record<string, string>;
   requestContext: { http: { method: string }; authorizer?: { jwt?: { claims?: Record<string, string> }; iam?: { userArn?: string; userId?: string; accountId?: string } } };
   body?: string;
+  isBase64Encoded?: boolean; // the gateway hands a body over as base64 when the request's content type is not text or JSON
 }
 
 export interface ApiResponse {
@@ -322,7 +325,8 @@ const ROLES = new Set<Role>(['member', 'viewer', 'operator', 'admin']);
 
 function bodyOf(event: ApiEvent): Record<string, unknown> {
   try {
-    const body = JSON.parse(event.body ?? '{}') as unknown;
+    const text = event.isBase64Encoded && event.body !== undefined ? Buffer.from(event.body, 'base64').toString('utf8') : event.body ?? '{}';
+    const body = JSON.parse(text) as unknown;
     if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
   } catch {
     // Reported below.
@@ -385,6 +389,19 @@ function hibernateOf(body: Record<string, unknown>): boolean | null {
   const h = body.hibernate;
   if (h !== true && h !== false && h !== null) throw new HttpError(400, 'bad_request', 'hibernate must be true, false or null');
   return h;
+}
+// The body of a waiting page write: its page, an object (the validator or the router says what is wrong with it).
+function pageIn(body: Record<string, unknown>): Record<string, unknown> {
+  const page = body.page;
+  if (typeof page !== 'object' || page === null || Array.isArray(page)) throw new HttpError(400, 'bad_request', 'page must be an object');
+  return page as Record<string, unknown>;
+}
+// What the audit keeps of a waiting page write: its level and mode and, for a custom page, its size and SHA-256 (as the
+// router logs them), never the page.
+function pageText(level: string, page: Record<string, unknown> | null): string {
+  if (!page) return `${level} cleared`;
+  if (page.mode !== 'custom') return `${level} ${String(page.mode)}`;
+  return `${level} custom, ${Buffer.byteLength(String(page.html))} bytes, sha256 ${createHash('sha256').update(JSON.stringify(page)).digest('hex')}`;
 }
 const hibernateText = (h: boolean | null) => `hibernate ${h === null ? 'inherit' : h ? 'on' : 'off'}`;
 export function createApi({
@@ -976,6 +993,66 @@ export function createApi({
       throw err;
     }
   }
+  // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
+  // by hand): read as never set, and replaced by the next write so that an administrator can repair it.
+  async function readSettings(): Promise<Record<string, unknown> | null | 'unreadable'> {
+    let doc: unknown;
+    try {
+      doc = globalSettings ? await globalSettings.read() : null;
+    } catch (err) {
+      if (err instanceof SyntaxError) return 'unreadable';
+      throw err;
+    }
+    return doc === null || (typeof doc === 'object' && !Array.isArray(doc)) ? doc as Record<string, unknown> | null : 'unreadable';
+  }
+
+  // The waiting page action of the router (0.35.0): its problems are a 400, an older router a 409, the router's refusals as
+  // the workload routes give them.
+  async function pageCall(router: Router, payload: Record<string, unknown>, by: string) {
+    try {
+      const result = await invoke(router, { action: 'waiting-page', ...payload, by }) as { problems?: string[] } | null;
+      if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
+      return result;
+    } catch (err) {
+      if (unknownAction(err, 'waiting-page')) throw new HttpError(409, 'conflict', 'upgrade the router to 0.35.0');
+      if (err instanceof RouterError && err.message.includes('written by Terraform')) throw new HttpError(409, 'conflict', err.message);
+      if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
+      throw err;
+    }
+  }
+  // A custom page runs scripts on the application's own address (design §11): setting, replacing or clearing one is the
+  // administrators', at every level and by every path. The refusal is audited.
+  async function needAdminForCustom(identity: Identity, action: string, target: string) {
+    try {
+      need(identity, 'admin');
+    } catch (err) {
+      await refuse(identity, action, target, `${(err as Error).message}: a custom waiting page runs scripts on the application's own address`);
+    }
+  }
+  // The waiting page of a router (administrators) or of one of its workloads (operators and administrators, but a custom
+  // page, or a page over one, only administrators: the router is asked what is stored before an operator's write).
+  async function waitingPageRoute(identity: Identity, event: ApiEvent, method: string, router: Router, workloadId?: string): Promise<ApiResponse> {
+    const level = workloadId ? 'workload' : 'router';
+    const target = workloadId ? `${router.name}/${workloadId}` : router.name;
+    const which = workloadId ? { workloadId } : {};
+    if (method === 'GET') return reply(200, await pageCall(router, { op: 'get', ...which }, identity.email));
+    const clearing = method === 'DELETE';
+    const name = clearing ? 'waiting-page-clear' : 'waiting-page';
+    await needAudited(identity, workloadId ? 'operator' : 'admin', name, target);
+    const page = clearing ? null : pageIn(bodyOf(event));
+    if (RANK[identity.role] < RANK.admin) {
+      if (page && page.mode !== 'template') await needAdminForCustom(identity, name, target);
+      else {
+        // What is stored, as the router reads it: anything but no page or a template is taken as custom.
+        const own = (await pageCall(router, { op: 'get', ...which }, identity.email) as { own?: { mode?: unknown } | null } | null)?.own;
+        if (own !== null && own?.mode !== 'template') await needAdminForCustom(identity, name, target);
+      }
+    }
+    return audited(identity, name, target, async () => {
+      const result = await pageCall(router, { op: clearing ? 'delete' : 'put', ...which, ...(page ? { page } : {}) }, identity.email);
+      return { result: pageText(level, page), response: reply(200, result) };
+    });
+  }
   const where = (router: Router) => ({
     name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}),
     ...(router.clusters ? { clusters: router.clusters } : {}),
@@ -1110,18 +1187,6 @@ export function createApi({
 
     // The hibernation default of every router (EC2 hibernation §3): everyone reads it, administrators set it.
     if (resource === 'settings' && a === 'workloads' && !b && (method === 'GET' || method === 'PUT')) {
-      // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
-      // by hand): read as never set, and replaced by the next write so that an administrator can repair it.
-      const read = async (): Promise<Record<string, unknown> | null | 'unreadable'> => {
-        let doc: unknown;
-        try {
-          doc = globalSettings ? await globalSettings.read() : null;
-        } catch (err) {
-          if (err instanceof SyntaxError) return 'unreadable';
-          throw err;
-        }
-        return doc === null || (typeof doc === 'object' && !Array.isArray(doc)) ? doc as Record<string, unknown> | null : 'unreadable';
-      };
       const shown = (doc: Record<string, unknown> | null | 'unreadable') => {
         if (doc === 'unreadable') return { hibernate: true, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
         const hibernate = (doc?.workloads as { hibernate?: unknown } | undefined)?.hibernate;
@@ -1130,20 +1195,53 @@ export function createApi({
           updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         };
       };
-      if (method === 'GET') return reply(200, shown(await read()));
+      if (method === 'GET') return reply(200, shown(await readSettings()));
       await needAudited(identity, 'admin', 'settings', 'workloads');
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
       const hibernate = bodyOf(event).hibernate;
       if (typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
-        const found = await read();
+        const found = await readSettings();
         if (found === 'unreadable') console.warn(JSON.stringify({ level: 'warn', event: 'GlobalSettingsReplaced', reason: 'settings.json is unreadable', by: identity.email }));
         const doc = found === 'unreadable' ? {} : found ?? {};
         const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
         const updatedAt = new Date(now()).toISOString();
         await globalSettings.write({ ...doc, workloads: { ...workloads, hibernate }, updatedAt, updatedBy: identity.email });
         return { result: hibernate ? 'hibernate on' : 'hibernate off', response: reply(200, { hibernate, updatedAt, updatedBy: identity.email, note: 'routers apply it at their next check, within 5 minutes' }) };
+      });
+    }
+
+    // The organization's waiting page (branded waiting page §12): the waitingPage key of settings.json, which routers copy at
+    // their next check. The built-in roles read it, administrators set it; a custom page is theirs at every level.
+    if (resource === 'settings' && a === 'waiting-page' && !b && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
+      const stamp = (doc: Record<string, unknown> | null) => ({ updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null });
+      if (method === 'GET') {
+        const found = await readSettings();
+        const doc = found === 'unreadable' ? null : found;
+        const page = cleanPage(doc?.waitingPage);
+        return reply(200, { page, warnings: pageWarnings(page), ...stamp(doc), ...(found === 'unreadable' ? { error: 'settings.json is unreadable' } : {}) });
+      }
+      const clearing = method === 'DELETE';
+      const name = clearing ? 'waiting-page-clear' : 'waiting-page';
+      await needAudited(identity, 'admin', name, 'organization');
+      if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
+      const page = clearing ? null : pageIn(bodyOf(event));
+      if (page) {
+        const problems = validatePage(page);
+        if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
+      }
+      return audited(identity, name, 'organization', async () => {
+        // The whole document is read and written back, as the hibernation default does: another key is kept, the last write wins.
+        const found = await readSettings();
+        if (found === 'unreadable') console.warn(JSON.stringify({ level: 'warn', event: 'GlobalSettingsReplaced', reason: 'settings.json is unreadable', by: identity.email }));
+        const { waitingPage: _replaced, ...kept } = found === 'unreadable' ? {} : found ?? {};
+        const updatedAt = new Date(now()).toISOString();
+        await globalSettings.write({ ...kept, ...(page ? { waitingPage: page } : {}), updatedAt, updatedBy: identity.email });
+        return {
+          result: pageText('organization', page),
+          response: reply(200, { page, warnings: pageWarnings(page), updatedAt, updatedBy: identity.email, note: 'routers apply it at their next check, within 5 minutes' }),
+        };
       });
     }
 
@@ -1212,6 +1310,7 @@ export function createApi({
         return describeRoute(identity, event, { kind: 'router', account: accountOfRouter(router), region: router.region }, router.name, async () => {});
       }
       if (method === 'POST' && (b === 'pause' || b === 'resume') && !action) return pauseRoute(identity, event, router, b);
+      if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && b === 'waiting-page' && !action) return waitingPageRoute(identity, event, method, router);
       if (method === 'PUT' && b === 'settings' && !action) {
         await needAudited(identity, 'admin', 'router-settings', router.name);
         const hibernate = hibernateOf(bodyOf(event));
@@ -1476,6 +1575,7 @@ export function createApi({
           }
         });
       }
+      if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && action === 'waiting-page' && !parts[4]) return waitingPageRoute(identity, event, method, router, id);
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
         const hibernate = hibernateOf(bodyOf(event));
