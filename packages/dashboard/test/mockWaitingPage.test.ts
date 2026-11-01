@@ -32,6 +32,7 @@ describe('the demo\'s waiting pages', () => {
     expect(await get<OrganizationPageView>('/settings/waiting-page')).toMatchObject({ page: null, warnings: [] });
     const set = await put('/settings/waiting-page', { mode: 'template', icon: 'none', title: 'Acme portal' }) as OrganizationPageView;
     expect(set.page).toEqual({ mode: 'template', icon: 'none', title: 'Acme portal' });
+    expect((set as unknown as { note: string }).note).toBe('routers read it within about a minute');
     expect(state().audit[0]).toMatchObject({ action: 'waiting-page', target: 'organization', result: 'organization template' });
     expect((await get<OrganizationPageView>('/settings/waiting-page')).updatedBy).toBe(state().me.email);
     await expect(put('/settings/waiting-page', { mode: 'template', title: 'a'.repeat(81) })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('80') });

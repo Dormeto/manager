@@ -10,12 +10,16 @@ CLI script, of the same release).
 - Branded waiting page (router 0.35.0). While a workload wakes, its visitors see a page you set at three levels, each
   overriding the one above: the organization (Routers, beside Workload defaults), a router and a workload. A template
   takes an icon, a title and a description, field by field; the dashboard previews it in each state (waking, taking
-  longer, failed, nap window), in English or French, light or dark. A custom HTML page, uploaded as a file, replaces the
+  longer, failed, nap window), in English or French, light or dark. Routers read the organization's page directly, so a
+  change at any level reaches visitors within about a minute. A custom HTML page, uploaded as a file, replaces the
   template; it runs on the application's own address, so only administrators can set, replace or clear one (operators
-  can still set a workload's template). The icon is the application's favicon by default: the router reads it just
-  before a nap, at most once a day, and `icon: none` at the organization turns it off, reading included. A workload
-  written in Terraform is changed with `waiting_page` in its workload module. Visitors read their own language, and the
-  page shows a progress bar from the workload's recent wake times.
+  can still set a workload's template), and the dashboard only draws one in the edit dialog's preview, never in a
+  card. Viewers and members who may read a workload read its page, never change it. The icon is the application's
+  favicon by default: the router reads it just before a nap, at most once a day. `icon: none` at the organization turns
+  it off, reading included; set on a router or a workload, it stops the read for that level's workloads only. A
+  workload written in Terraform is changed with `waiting_page` in its workload module (a page the manager set before
+  the workload moved to Terraform can be reset from the dashboard). Visitors read their own language, and the page shows
+  a progress bar from the workload's recent wake times.
   Access: nothing to apply again. Upgrade the routers to 0.35.0 (a router before it answers that it must be upgraded).
 - The Onboard dialog gives the lines a Terraform that writes the workload's resources must keep: the AWS provider's
   `ignore_tags` for `dormeto:`, `ignore_changes = [action]` on a rule Dormeto changes in place, and the backend's own fields.

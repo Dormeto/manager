@@ -6,7 +6,7 @@ defineProps<{ html: string; title: string; mini?: boolean }>();
 </script>
 
 <template>
-  <div class="dm-wp-frame" :class="{ 'dm-wp-frame--mini': mini }">
+  <div class="dm-wp-frame" :class="{ 'dm-wp-frame--mini': mini }" :aria-hidden="mini ? 'true' : undefined">
     <iframe sandbox="" :srcdoc="html" :title="title" referrerpolicy="no-referrer" tabindex="-1" />
   </div>
 </template>

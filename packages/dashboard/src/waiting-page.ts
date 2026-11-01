@@ -72,7 +72,7 @@ export function iconTypeOf(bytes: Uint8Array): 'png' | 'jpeg' | 'webp' | 'svg+xm
   if (starts(bytes, [0xff, 0xd8, 0xff])) return 'jpeg';
   if (starts(bytes, [0x52, 0x49, 0x46, 0x46]) && starts(bytes, [0x57, 0x45, 0x42, 0x50], 8)) return 'webp';
   if (starts(bytes, [0, 0, 1, 0])) return 'x-icon';
-  if (startsWithSvg(new TextDecoder().decode(bytes.subarray(0, 4096)))) return 'svg+xml';
+  if (startsWithSvg(new TextDecoder().decode(bytes))) return 'svg+xml';
   return null;
 }
 
@@ -82,10 +82,14 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+// A chosen file's size against its limit, before a byte of it is read; '' when it fits.
+export const iconSizeProblem = (size: number): string => (size > ICON_BYTES ? 'The icon must be at most 64 KiB.' : '');
+export const htmlSizeProblem = (size: number): string => (size > HTML_BYTES ? 'The page must be at most 256 KiB.' : '');
+
 // A chosen icon file: its data URI, or what is wrong with it.
 export function checkIcon(bytes: Uint8Array): { uri: string } | { problem: string } {
   if (!bytes.length) return { problem: 'The file is empty.' };
-  if (bytes.length > ICON_BYTES) return { problem: 'The icon must be at most 64 KiB.' };
+  if (iconSizeProblem(bytes.length)) return { problem: iconSizeProblem(bytes.length) };
   const type = iconTypeOf(bytes);
   if (!type) return { problem: 'The icon must be a PNG, JPEG, WebP, SVG or ICO image.' };
   return { uri: `data:image/${type};base64,${base64(bytes)}` };
@@ -93,10 +97,10 @@ export function checkIcon(bytes: Uint8Array): { uri: string } | { problem: strin
 
 // A chosen HTML file: its text, or what is wrong with it.
 export function checkHtml(bytes: Uint8Array): { html: string } | { problem: string } {
-  if (bytes.length > HTML_BYTES) return { problem: 'The page must be at most 256 KiB.' };
+  if (htmlSizeProblem(bytes.length)) return { problem: htmlSizeProblem(bytes.length) };
   let html: string;
   try {
-    html = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    html = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return { problem: 'The page must be UTF-8 text.' };
   }
@@ -148,15 +152,21 @@ export function whyNoIcon(favicon: Favicon | null | undefined): string {
 }
 
 // What a level shows of its page for someone with this role (design §11). The API checks again. `reason` is said where the
-// buttons would be, only when someone who could otherwise write is stopped: a viewer is not told.
-export function editRights(level: PageLevel, role: Role, terraform: boolean, own: StoredPage | null): { edit: boolean; custom: boolean; reason: string } {
+// buttons would be, only when someone who could otherwise write is stopped: a viewer is not told. A Terraform workload is
+// read-only, but a page the manager wrote before it moved to Terraform (`by` set) can still be reset; one Terraform wrote can't.
+export function editRights(level: PageLevel, role: Role, terraform: boolean, own: StoredPage | null, by: string | null): { edit: boolean; custom: boolean; reset: boolean; reason: string } {
   const admin = role === 'admin';
   const may = level === 'workload' ? admin || role === 'operator' : admin;
-  const none = (reason = '') => ({ edit: false, custom: false, reason });
-  if (!may) return none();
-  if (terraform) return none("Set in this workload's Terraform: change waiting_page in its workload module and apply.");
-  if (!admin && own && own.mode !== 'template') return none("A custom page runs scripts on the application's own address, so only an administrator can change or remove it.");
-  return { edit: true, custom: admin, reason: '' };
+  const none = { edit: false, custom: false, reset: false, reason: '' };
+  if (!may) return none;
+  const mayTouch = !!own && (admin || own.mode === 'template');
+  if (terraform) {
+    return { ...none, reset: mayTouch && !!by, reason: "Set in this workload's Terraform: change waiting_page in its workload module and apply." };
+  }
+  if (!admin && own && own.mode !== 'template') {
+    return { ...none, reason: "A custom page runs scripts on the application's own address, so only an administrator can change or remove it." };
+  }
+  return { edit: true, custom: admin, reset: !!own, reason: '' };
 }
 
 // The organization's answer as a level of its own, with nothing above it.
@@ -175,10 +185,21 @@ function resolveEffective(page: StoredPage | null): EffectivePage {
   };
 }
 
-// What the router warns of when a custom page is stored, said before it is sent.
+// What the router warns of when a custom page is stored, said before it is sent. Linear in the page, as the router's is: the
+// end of each tag is searched once, and a tag is read for at most 1000 characters.
+const HOOK_STATUS = /data-dormeto\s*=\s*(?:"status"|'status'|status(?![^\s>/]))/i;
+const META = /<meta[\s/]/gi;
 export function htmlWarnings(html: string): string[] {
   const out: string[] = [];
-  if (!/data-dormeto\s*=\s*(?:"status"|'status'|status(?![^\s>/]))/i.test(html)) out.push('the page has no element data-dormeto="status": the visitor will not read why it waits');
-  if (/<meta[^>]*http-equiv\s*=\s*["']?content-security-policy/i.test(html)) out.push('a Content-Security-Policy meta tag may block the script Dormeto adds, and the wake with it in browser mode');
+  if (!HOOK_STATUS.test(html)) out.push('the page has no element data-dormeto="status": the visitor will not read why it waits');
+  let end = -1;
+  for (const m of html.matchAll(META)) {
+    if (end < m.index) end = html.indexOf('>', m.index);
+    if (end < 0) break;
+    if (/http-equiv\s*=\s*["']?content-security-policy/i.test(html.slice(m.index, Math.min(end, m.index + 1000)))) {
+      out.push('a Content-Security-Policy meta tag may block the script Dormeto adds, and the wake with it in browser mode');
+      break;
+    }
+  }
   return out;
 }

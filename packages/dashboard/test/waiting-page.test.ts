@@ -1,11 +1,21 @@
+// @vitest-environment node
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PAGE_STATES, checkHtml, checkIcon, editRights, fromLine, htmlWarnings, organizationView, previewHtml, resolveDraft, whyNoIcon } from '../src/waiting-page';
 
+const routerRules = resolve(import.meta.dirname, '../../../../router/lambda/src/lib/page-settings.mjs');
+interface RouterRules { validatePage(d: unknown): string[]; cleanPage(d: unknown): { html?: string } | null }
+const router = (existsSync(routerRules) ? await import(/* @vite-ignore */ routerRules) : null) as RouterRules | null;
 const bytes = (...b: number[]) => new Uint8Array(b);
 const PNG = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3);
 const text = (s: string) => new TextEncoder().encode(s);
 
 describe('checkIcon', () => {
+  it('reads the whole SVG, as the router does: a long comment before <svg is fine', () => {
+    const svg = `<?xml version="1.0"?><!-- ${'x'.repeat(6000)} --><svg xmlns="http://www.w3.org/2000/svg"/>`;
+    expect(checkIcon(text(svg))).toHaveProperty('uri');
+  });
   it('takes the type from the bytes, never from the name or the browser, and gives a data URI', () => {
     const png = checkIcon(PNG);
     expect(png).toEqual({ uri: `data:image/png;base64,${btoa(String.fromCharCode(...PNG))}` });
@@ -28,6 +38,18 @@ describe('checkIcon', () => {
 });
 
 describe('checkHtml', () => {
+  it('keeps a byte order mark: the saved page is the uploaded text', () => {
+    expect(checkHtml(bytes(0xef, 0xbb, 0xbf, 0x3c, 0x70, 0x3e))).toEqual({ html: '\uFEFF<p>' });
+    expect(checkHtml(bytes(0xef, 0xbb, 0xbf))).toEqual({ problem: expect.stringContaining('blank') });
+  });
+  it.skipIf(!existsSync(routerRules))('is accepted by the router\'s rules, a byte order mark included', async () => {
+    const rules = router!;
+    const found = checkHtml(bytes(0xef, 0xbb, 0xbf, ...text('<!doctype html><p data-dormeto="status">')));
+    const html = (found as { html: string }).html;
+    expect(rules.validatePage({ mode: 'custom', html })).toEqual([]);
+    expect(rules.cleanPage({ mode: 'custom', html })!.html).toBe(html);
+    expect(rules.validatePage({ mode: 'custom', html: '\uFEFF' })).not.toEqual([]);
+  });
   it('refuses a blank page and one over 256 KiB in bytes, and keeps the text', () => {
     expect(checkHtml(text('  \n'))).toEqual({ problem: expect.stringContaining('blank') });
     expect(checkHtml(text('<p>é</p>'))).toEqual({ html: '<p>é</p>' });
@@ -113,29 +135,41 @@ describe('words', () => {
 describe('editRights', () => {
   const template = { mode: 'template' as const, title: 'x' };
   const custom = { mode: 'custom' as const, html: '<p>x</p>' };
+  const NONE = { edit: false, custom: false, reset: false, reason: '' };
   it('lets viewers and members read only, without a reason to give', () => {
-    expect(editRights('workload', 'viewer', false, template)).toEqual({ edit: false, custom: false, reason: '' });
-    expect(editRights('router', 'member', false, null)).toEqual({ edit: false, custom: false, reason: '' });
+    expect(editRights('workload', 'viewer', false, template, 'a@b')).toEqual(NONE);
+    expect(editRights('router', 'member', false, null, null)).toEqual(NONE);
   });
   it('gives operators the workload\'s template and administrators every level and Custom HTML', () => {
-    expect(editRights('workload', 'operator', false, null)).toEqual({ edit: true, custom: false, reason: '' });
-    expect(editRights('router', 'operator', false, null)).toEqual({ edit: false, custom: false, reason: '' });
-    expect(editRights('organization', 'operator', false, null)).toEqual({ edit: false, custom: false, reason: '' });
-    expect(editRights('organization', 'admin', false, custom)).toEqual({ edit: true, custom: true, reason: '' });
-    expect(editRights('workload', 'admin', false, custom)).toEqual({ edit: true, custom: true, reason: '' });
+    expect(editRights('workload', 'operator', false, null, null)).toEqual({ edit: true, custom: false, reset: false, reason: '' });
+    expect(editRights('workload', 'operator', false, template, 'a@b')).toEqual({ edit: true, custom: false, reset: true, reason: '' });
+    expect(editRights('router', 'operator', false, null, null)).toEqual(NONE);
+    expect(editRights('organization', 'operator', false, null, null)).toEqual(NONE);
+    expect(editRights('organization', 'admin', false, custom, 'a@b')).toEqual({ edit: true, custom: true, reset: true, reason: '' });
+    expect(editRights('workload', 'admin', false, custom, 'a@b')).toEqual({ edit: true, custom: true, reset: true, reason: '' });
   });
   it('gives an operator the reason, not the buttons, on a stored custom page', () => {
-    const r = editRights('workload', 'operator', false, custom);
-    expect(r).toMatchObject({ edit: false, custom: false });
+    const r = editRights('workload', 'operator', false, custom, 'a@b');
+    expect(r).toMatchObject({ edit: false, custom: false, reset: false });
     expect(r.reason).toMatch(/only an administrator/);
   });
   it('names the variable of a Terraform workload, for everyone who could write', () => {
     for (const role of ['operator', 'admin'] as const) {
-      const r = editRights('workload', role, true, null);
-      expect(r.edit).toBe(false);
+      const r = editRights('workload', role, true, null, null);
+      expect(r).toMatchObject({ edit: false, reset: false });
       expect(r.reason).toContain('waiting_page');
     }
-    expect(editRights('workload', 'viewer', true, null).reason).toBe('');
+    expect(editRights('workload', 'viewer', true, null, null).reason).toBe('');
+  });
+  it('lets a page the manager wrote before the workload moved to Terraform be reset, not one Terraform wrote', () => {
+    const left = editRights('workload', 'admin', true, template, 'ops@example.com');
+    expect(left).toMatchObject({ edit: false, reset: true });
+    expect(left.reason).toContain('waiting_page');
+    expect(editRights('workload', 'admin', true, template, null)).toMatchObject({ edit: false, reset: false });
+    expect(editRights('workload', 'operator', true, template, 'ops@example.com')).toMatchObject({ reset: true });
+    expect(editRights('workload', 'operator', true, custom, 'ops@example.com')).toMatchObject({ reset: false });
+    expect(editRights('workload', 'admin', true, custom, 'ops@example.com')).toMatchObject({ reset: true });
+    expect(editRights('workload', 'viewer', true, template, 'ops@example.com')).toMatchObject({ reset: false });
   });
 });
 
@@ -148,6 +182,16 @@ describe('organizationView', () => {
 });
 
 describe('htmlWarnings', () => {
+  it('is linear in the page: a file of repeated <meta is read in a blink', () => {
+    const hostile = '<meta '.repeat(40_000);
+    const t = performance.now();
+    expect(htmlWarnings(hostile)).toEqual([expect.stringContaining('data-dormeto="status"')]);
+    expect(performance.now() - t).toBeLessThan(250);
+    const spaced = `<meta ${' '.repeat(100_000)}`.repeat(2);
+    const u = performance.now();
+    htmlWarnings(spaced + 'data-dormeto'.repeat(10_000));
+    expect(performance.now() - u).toBeLessThan(250);
+  });
   it('asks for the status hook and flags a Content-Security-Policy meta tag', () => {
     expect(htmlWarnings('<p>wait</p>')).toEqual([expect.stringContaining('data-dormeto="status"')]);
     expect(htmlWarnings('<p data-dormeto="status"></p>')).toEqual([]);

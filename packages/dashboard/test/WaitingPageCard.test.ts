@@ -21,7 +21,7 @@ vi.mock('../src/api', async (original) => ({
   ...(await original<typeof import('../src/api')>()),
   api: vi.fn(async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
-    const out = answer(path, init);
+    const out = await answer(path, init);
     if (out instanceof Error) throw out;
     return structuredClone(out);
   }),
@@ -42,14 +42,15 @@ const mounted: ReturnType<typeof mount>[] = [];
 async function show(role: 'viewer' | 'operator' | 'admin' | 'member', level: 'workload' | 'router' | 'organization' = 'workload', path = PATH) {
   setActivePinia(createPinia());
   useSession().role = role;
-  const w = mount(WaitingPageCard, { props: { level, path, subject: 'shop' }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+  const w = mount(WaitingPageCard, { props: { level, path, subject: 'shop', onNotice: (n: { type: string; text: string }) => notices.push(n) }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
   mounted.push(w);
   await flushPromises();
   return w;
 }
-beforeEach(() => { calls.length = 0; answer = () => view(); });
+beforeEach(() => { calls.length = 0; notices.length = 0; answer = () => view(); });
 afterEach(() => { while (mounted.length) mounted.pop()!.unmount(); });
 const button = (label: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLButtonElement | undefined;
+const notices: { type: string; text: string }[] = [];
 const frame = (root: ParentNode = document.body) => root.querySelector('iframe') as HTMLIFrameElement;
 
 describe('WaitingPageCard', () => {
@@ -141,5 +142,123 @@ describe('WaitingPageCard', () => {
     (document.body.querySelector('[data-test="confirm-reset-waiting-page"]') as HTMLButtonElement).click();
     await flushPromises();
     expect(calls.filter((c) => c.init?.method === 'DELETE')).toEqual([{ path: PATH, init: { method: 'DELETE' } }]);
+  });
+
+  it('shows a member who may read the workload its page, read-only', async () => {
+    const w = await show('member');
+    expect(w.find('[data-test="waiting-page-unavailable"]').exists()).toBe(false);
+    expect(w.get('[data-test="field-title"]').text()).toContain('Shop');
+    expect(w.find('[data-test="edit-waiting-page"]').exists()).toBe(false);
+    expect(w.find('[data-test="reset-waiting-page"]').exists()).toBe(false);
+  });
+
+  it('never draws a custom page in the card: its size and who set it, and no frame', async () => {
+    answer = () => view({
+      own: { mode: 'custom', html: 'x'.repeat(2048) }, effective: { mode: 'custom', html: 'x'.repeat(2048), from: { mode: 'workload', html: 'workload' } }, from: { mode: 'workload', html: 'workload' },
+    });
+    const w = await show('admin');
+    expect(w.find('iframe').exists()).toBe(false);
+    expect(w.get('[data-test="field-mode"]').text()).toContain('Custom HTML (2.0 KiB)');
+    expect(w.text()).toContain('Set by fab@example.com');
+  });
+
+  it('says the size of a small custom page in bytes', async () => {
+    answer = () => view({ own: null, effective: { mode: 'custom', html: '<!doctype html><p>wait</p>', from: { mode: 'organization', html: 'organization' } }, from: { mode: 'organization', html: 'organization' } });
+    expect((await show('viewer')).get('[data-test="field-mode"]').text()).toContain('Custom HTML (26 bytes)');
+  });
+
+  it('hides the template\'s mini preview from assistive technology, since the fields say it', async () => {
+    const w = await show('viewer');
+    expect(w.get('.dm-wp-frame').attributes('aria-hidden')).toBe('true');
+  });
+
+  it('lets an administrator reset a page the manager left on a Terraform workload, not one Terraform wrote', async () => {
+    answer = () => view({ terraform: true, by: 'ops@example.com' });
+    const left = await show('admin');
+    expect(left.find('[data-test="edit-waiting-page"]').exists()).toBe(false);
+    expect(left.find('[data-test="reset-waiting-page"]').exists()).toBe(true);
+    expect(left.get('[data-test="waiting-page-reason"]').text()).toContain('waiting_page');
+    answer = () => view({ terraform: true, by: null });
+    expect((await show('admin')).find('[data-test="reset-waiting-page"]').exists()).toBe(false);
+  });
+
+  describe('Edit to Save', () => {
+    const edit = async (w: Awaited<ReturnType<typeof show>>, title: string) => {
+      await w.get('[data-test="edit-waiting-page"]').trigger('click');
+      await flushPromises();
+      const input = document.body.querySelector('[data-test="title"] input') as HTMLInputElement;
+      input.value = title;
+      input.dispatchEvent(new Event('input'));
+      await flushPromises();
+    };
+    const save = async () => {
+      ([...document.body.querySelectorAll('[data-test="waiting-page-dialog"] button')].find((b) => b.textContent?.trim() === 'Save') as HTMLButtonElement).click();
+      await flushPromises();
+    };
+    const dialogOpen = (w: Awaited<ReturnType<typeof show>>) => w.findComponent({ name: 'WaitingPageDialog' }).props('modelValue');
+
+    it('sends the page as PUT { page }, closes, reloads, says when visitors see it, and shows the warnings the router gives', async () => {
+      let stored = view();
+      answer = (path, init) => {
+        if (init?.method === 'PUT') { stored = view({ own: JSON.parse(String(init.body)).page, warnings: ['the page has no element data-dormeto="status": the visitor will not read why it waits'] }); return stored; }
+        return stored;
+      };
+      const w = await show('admin');
+      await edit(w, 'Acme shop');
+      await save();
+      const put = calls.find((c) => c.init?.method === 'PUT')!;
+      expect(put.path).toBe(PATH);
+      expect(JSON.parse(String(put.init!.body))).toEqual({ page: { mode: 'template', title: 'Acme shop' } });
+      expect(dialogOpen(w)).toBe(false);
+      expect(w.text()).toContain('data-dormeto="status"');
+      expect(notices.at(-1)).toMatchObject({ type: 'success', text: expect.stringContaining('within about a minute') });
+      expect(notices.at(-1)!.text).not.toMatch(/5 minutes|6 minutes/);
+    });
+
+    it('says within about a minute at the organization too', async () => {
+      answer = () => ({ page: null, warnings: [], updatedAt: null, updatedBy: null });
+      const w = await show('admin', 'organization', '/settings/waiting-page');
+      await edit(w, 'Acme');
+      await save();
+      expect(notices.at(-1)!.text).toContain('within about a minute');
+      expect(w.text()).not.toMatch(/5 minutes/);
+    });
+
+    for (const [status, message] of [[400, 'title must be at most 80 characters'], [403, 'your role cannot change a custom page'], [409, 'workload w was written by Terraform: set waiting_page in its workload module']] as const) {
+      it(`keeps the dialog open and shows a ${status} from the save`, async () => {
+        answer = (path, init) => (init?.method === 'PUT' ? Object.assign(new Error(message), { status }) : view());
+        const w = await show('admin');
+        await edit(w, 'x');
+        await save();
+        expect(dialogOpen(w)).toBe(true);
+        expect(document.body.querySelector('[data-test="waiting-page-error"]')!.textContent).toContain(message);
+        expect(notices).toEqual([]);
+      });
+    }
+
+    it('keeps the card when the reload after a save fails', async () => {
+      let puts = 0;
+      answer = (path, init) => {
+        if (init?.method === 'PUT') { puts += 1; return view(); }
+        return puts ? new Error('timeout') : view();
+      };
+      const w = await show('admin');
+      await edit(w, 'x');
+      await save();
+      expect(w.find('[data-test="field-title"]').exists()).toBe(true);
+      expect(w.get('[data-test="waiting-page-stale"]').text()).toContain('timeout');
+    });
+  });
+
+  it('keeps the newest answer when the path changes while an older read is slow', async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((r) => { release = r; });
+    answer = (path) => (path === '/workloads/a/x/waiting-page' ? slow.then(() => view({ own: { mode: 'template', title: 'OLD' }, effective: { mode: 'template', icon: 'none', title: 'OLD', from: { mode: 'workload', title: 'workload' } } })) : view({ effective: { mode: 'template', icon: 'none', title: 'NEW', from: { mode: 'workload', title: 'workload' } } }));
+    const w = await show('viewer', 'workload', '/workloads/a/x/waiting-page');
+    await w.setProps({ path: '/workloads/a/y/waiting-page' });
+    await flushPromises();
+    release();
+    await flushPromises();
+    expect(w.get('[data-test="field-title"]').text()).toContain('NEW');
   });
 });

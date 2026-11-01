@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { createVuetify } from 'vuetify';
@@ -14,7 +14,7 @@ Object.defineProperty(window, 'visualViewport', {
 });
 
 const INHERITED: EffectivePage = { mode: 'template', icon: 'none', title: 'Acme', from: { mode: 'organization', icon: 'organization', title: 'organization' } };
-type Props = { level?: 'workload' | 'router' | 'organization'; own?: StoredPage | null; canCustom?: boolean; favicon?: string | null; error?: string; saving?: boolean };
+type Props = { level?: 'workload' | 'router' | 'organization'; own?: StoredPage | null; inherited?: EffectivePage; canCustom?: boolean; favicon?: string | null; error?: string; saving?: boolean };
 const mounted: ReturnType<typeof mount>[] = [];
 async function open(props: Props = {}) {
   const w = mount(WaitingPageDialog, {
@@ -39,9 +39,9 @@ async function type(name: string, value: string) {
   el.dispatchEvent(new Event('input'));
   await nextTick();
 }
-async function choose(name: string, file: File) {
+async function choose(name: string, file: File | null) {
   const input = pick(name).querySelector('input[type="file"]') as HTMLInputElement;
-  Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+  Object.defineProperty(input, 'files', { configurable: true, value: file ? [file] : [] });
   input.dispatchEvent(new Event('change', { bubbles: true }));
   await flushPromises();
 }
@@ -178,5 +178,132 @@ describe('WaitingPageDialog', () => {
     expect(pick('waiting-page-error').textContent).toContain('title must be at most 80 characters');
     await w.setProps({ saving: true });
     expect(button('Cancel')!.disabled).toBe(true);
+  });
+
+  it('forgets a chosen file when the input is cleared: the preview and Save no longer hold it', async () => {
+    const w = await open();
+    radio('icon-upload');
+    await flushPromises();
+    await choose('icon-file', file(PNG, 'a.png'));
+    expect(srcdoc()).toContain('src="data:image/png');
+    await choose('icon-file', null);
+    expect(srcdoc()).not.toContain('src="data:image/png');
+    expect(button('Save')!.disabled).toBe(true);
+    pick('mode-custom').click();
+    await flushPromises();
+    await choose('html-file', file('<p>old</p>', 'a.html'));
+    expect(srcdoc()).toContain('<p>old</p>');
+    await choose('html-file', null);
+    expect(dialog().querySelector('iframe')).toBeNull();
+    expect(button('Save')!.disabled).toBe(true);
+    expect(w.emitted('submit')).toBeUndefined();
+  });
+
+  it('checks a file\'s size before reading it, and says when it cannot be read', async () => {
+    await open();
+    radio('icon-upload');
+    await flushPromises();
+    const big = file(PNG, 'big.png');
+    Object.defineProperty(big, 'size', { value: 64 * 1024 + 1 });
+    const read = vi.spyOn(big, 'arrayBuffer');
+    await choose('icon-file', big);
+    expect(read).not.toHaveBeenCalled();
+    expect(pick('icon-problem').textContent).toContain('64 KiB');
+    const gone = file(PNG, 'gone.png');
+    vi.spyOn(gone, 'arrayBuffer').mockRejectedValue(new Error('NotReadableError'));
+    await choose('icon-file', gone);
+    expect(pick('icon-problem').textContent).toContain('could not be read');
+    pick('mode-custom').click();
+    await flushPromises();
+    const huge = file('x', 'huge.html');
+    Object.defineProperty(huge, 'size', { value: 256 * 1024 + 1 });
+    const readHtml = vi.spyOn(huge, 'arrayBuffer');
+    await choose('html-file', huge);
+    expect(readHtml).not.toHaveBeenCalled();
+    expect(pick('html-problem').textContent).toContain('256 KiB');
+  });
+
+  it('keeps the last file chosen when two reads finish out of order', async () => {
+    await open();
+    pick('mode-custom').click();
+    await flushPromises();
+    const slow = file('<p>first</p>', 'first.html');
+    vi.spyOn(slow, 'arrayBuffer').mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve(new TextEncoder().encode('<p>first</p>').buffer), 60)));
+    await choose('html-file', slow);
+    await choose('html-file', file('<p>second</p>', 'second.html'));
+    await new Promise((r) => setTimeout(r, 120));
+    await flushPromises();
+    expect(srcdoc()).toContain('<p>second</p>');
+  });
+
+  it('sends a stored page unchanged: no trimming, no field added, an empty field or Inherit leaves its key out', async () => {
+    const own = { mode: 'template' as const, title: 'Shop ', description: '  two  \nlines ' };
+    const w = await open({ own });
+    button('Save')!.click();
+    await flushPromises();
+    expect(w.emitted('submit')![0]).toEqual([own]);
+    await type('title', '');
+    button('Save')!.click();
+    await flushPromises();
+    expect(w.emitted('submit')![1]).toEqual([{ mode: 'template', description: '  two  \nlines ' }]);
+  });
+
+  it('adds no icon to an organization page that had none, and none to a custom page', async () => {
+    const w = await open({ level: 'organization', own: { mode: 'template', title: 'Acme' } });
+    button('Save')!.click();
+    await flushPromises();
+    expect(w.emitted('submit')![0]).toEqual([{ mode: 'template', title: 'Acme' }]);
+    radio('icon-none');
+    await flushPromises();
+    button('Save')!.click();
+    await flushPromises();
+    expect(w.emitted('submit')![1]).toEqual([{ mode: 'template', icon: 'none', title: 'Acme' }]);
+  });
+
+  it('sends a stored custom page unchanged, whitespace and all', async () => {
+    const own = { mode: 'custom' as const, html: '\uFEFF<!doctype html>\n<p data-dormeto="status"></p>\n\n' };
+    const w = await open({ own });
+    button('Save')!.click();
+    await flushPromises();
+    expect(w.emitted('submit')![0]).toEqual([own]);
+  });
+
+  it('says that an empty template replaces the custom page set above', async () => {
+    await open({ inherited: { mode: 'custom', html: '<p>x</p>', from: { mode: 'organization', html: 'organization' } } });
+    expect(pick('replaces-custom').textContent).toContain("This replaces the custom page set above with Dormeto's template.");
+  });
+  it('does not say it when the level above is a template', async () => {
+    await open();
+    expect(dialog().querySelector('[data-test="replaces-custom"]')).toBeNull();
+  });
+
+  it('names its groups for assistive technology and marks the French button', async () => {
+    await open();
+    expect(dialog().querySelector('[role="radiogroup"]')!.getAttribute('aria-label')).toBe('Icon');
+    expect(dialog().querySelector('.v-chip-group')!.getAttribute('aria-label')).toBe('State to preview');
+    expect(pick('language-fr').getAttribute('lang')).toBe('fr');
+    expect(pick('language-fr').closest('.v-btn-toggle')!.getAttribute('aria-label')).toBe('Language of the preview');
+    expect(pick('scheme-dark').closest('.v-btn-toggle')!.getAttribute('aria-label')).toBe('Color scheme of the preview');
+  });
+
+  it('cannot be closed by a click outside or Escape while it saves', async () => {
+    const w = await open({ saving: true });
+    expect(w.findComponent({ name: 'VDialog' }).props('persistent')).toBe(true);
+  });
+
+  it('cannot save a title of 81 characters or a description of 501', async () => {
+    await open();
+    await type('title', 'a'.repeat(81));
+    expect(button('Save')!.disabled).toBe(true);
+    await type('title', 'a'.repeat(80));
+    expect(button('Save')!.disabled).toBe(false);
+    await type('description', 'a'.repeat(501));
+    expect(button('Save')!.disabled).toBe(true);
+  });
+
+  it('opens a stored custom page in template mode when the user may not set one', async () => {
+    await open({ own: { mode: 'custom', html: '<p>x</p>' }, canCustom: false });
+    expect(dialog().querySelector('[data-test="html-file"]')).toBeNull();
+    expect(dialog().querySelector('[data-test="title"]')).not.toBeNull();
   });
 });

@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { mdiImageOutline } from '@mdi/js';
 import {
-  DESCRIPTION_MAX, PAGE_STATES, TITLE_MAX, checkHtml, checkIcon, fromLine, htmlWarnings, previewHtml, resolveDraft,
+  DESCRIPTION_MAX, PAGE_STATES, TITLE_MAX, checkHtml, checkIcon, fromLine, htmlSizeProblem, htmlWarnings, iconSizeProblem, previewHtml, resolveDraft,
   type EffectivePage, type PageLevel, type PageState, type StoredPage, type TemplatePage,
 } from '../waiting-page';
 import WaitingPagePreview from './WaitingPagePreview.vue';
@@ -24,6 +24,7 @@ const mode = ref<'template' | 'custom'>('template');
 const icon = ref<IconChoice>('inherit');
 const uploaded = ref<string | null>(null);
 const iconProblem = ref('');
+const iconTouched = ref(false);
 const title = ref('');
 const description = ref('');
 const html = ref('');
@@ -47,6 +48,7 @@ watch(() => props.modelValue, (open) => {
   description.value = template?.description ?? '';
   html.value = own?.mode === 'custom' ? own.html : '';
   iconProblem.value = '';
+  iconTouched.value = false;
   htmlProblem.value = '';
   shownError.value = props.error ?? '';
   state.value = 'waking';
@@ -54,35 +56,59 @@ watch(() => props.modelValue, (open) => {
 }, { immediate: true });
 
 const first = (value: File | File[] | null | undefined): File | null => (Array.isArray(value) ? value[0] ?? null : value ?? null);
+// The newest choice wins, whatever order the reads finish in.
+let choice = 0;
+async function read(file: File, tooBig: (size: number) => string): Promise<{ bytes: Uint8Array } | { problem: string }> {
+  const big = tooBig(file.size);
+  if (big) return { problem: big };
+  try {
+    return { bytes: new Uint8Array(await file.arrayBuffer()) };
+  } catch {
+    return { problem: 'The file could not be read.' };
+  }
+}
 async function chooseIcon(value: File | File[] | null) {
   const file = first(value);
-  if (!file) return;
-  const found = checkIcon(new Uint8Array(await file.arrayBuffer()));
+  const mine = (choice += 1);
+  if (!file) { uploaded.value = null; iconProblem.value = ''; return; }
+  const got = await read(file, iconSizeProblem);
+  if (mine !== choice) return;
+  const found = 'bytes' in got ? checkIcon(got.bytes) : got;
   iconProblem.value = 'problem' in found ? found.problem : '';
   uploaded.value = 'uri' in found ? found.uri : null;
 }
 async function chooseHtml(value: File | File[] | null) {
   const file = first(value);
-  if (!file) return;
-  const found = checkHtml(new Uint8Array(await file.arrayBuffer()));
+  const mine = (choice += 1);
+  if (!file) { html.value = ''; htmlProblem.value = ''; return; }
+  const got = await read(file, htmlSizeProblem);
+  if (mine !== choice) return;
+  const found = 'bytes' in got ? checkHtml(got.bytes) : got;
   htmlProblem.value = 'problem' in found ? found.problem : '';
   html.value = 'html' in found ? found.html : '';
 }
 
-// The template as typed. The icon is sent only when chosen (Inherit leaves it to the level above).
+// The template as typed. A field is sent as stored while it is unchanged (no trimming of what was already saved), left out
+// when empty, and trimmed only when edited. The icon is sent only when chosen: Inherit, and an organization's untouched
+// default, leave it to the built-in `auto`.
+const ownTemplate = computed(() => (props.own?.mode === 'template' ? props.own : null));
+const text = (value: string, stored: string | undefined) => (!value.trim() ? undefined : value === stored ? stored : value.trim());
 const template = computed<TemplatePage>(() => {
   const page: TemplatePage = { mode: 'template' };
-  if (icon.value === 'auto' || icon.value === 'none') page.icon = icon.value;
-  else if (icon.value === 'upload' && uploaded.value) page.icon = uploaded.value;
-  if (title.value.trim()) page.title = title.value.trim();
-  if (description.value.trim()) page.description = description.value.trim();
+  if (icon.value === 'auto' || icon.value === 'none') {
+    if (icon.value !== 'auto' || iconTouched.value || ownTemplate.value?.icon) page.icon = icon.value;
+  } else if (icon.value === 'upload' && uploaded.value) page.icon = uploaded.value;
+  const t = text(title.value, ownTemplate.value?.title);
+  if (t) page.title = t;
+  const d = text(description.value, ownTemplate.value?.description);
+  if (d) page.description = d;
   return page;
 });
 const draft = computed<StoredPage | null>(() => (mode.value === 'custom' ? (html.value ? { mode: 'custom', html: html.value } : null) : template.value));
 const bytes = computed(() => new TextEncoder().encode(html.value).length);
 const warnings = computed(() => (mode.value === 'custom' && html.value ? htmlWarnings(html.value) : []));
 const tooLong = computed(() => [...title.value.trim()].length > TITLE_MAX || [...description.value.trim()].length > DESCRIPTION_MAX);
-const canSave = computed(() => !props.saving && !!draft.value && !tooLong.value && !(mode.value === 'template' && icon.value === 'upload' && !uploaded.value) && !(mode.value === 'template' && /[\n\r]/.test(title.value)));
+const canSave = computed(() => !props.saving && !!draft.value && !tooLong.value && !(mode.value === 'template' && icon.value === 'upload' && !uploaded.value));
 
 const preview = computed(() => (draft.value ? previewHtml({ page: resolveDraft(draft.value, props.inherited), favicon: props.favicon, state: state.value, language: language.value, dark: dark.value }) : ''));
 const inheritedIcon = computed(() => (props.inherited.mode === 'template' ? props.inherited.icon ?? 'auto' : 'auto'));
@@ -96,7 +122,7 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
       <v-card-text>
         <div class="dm-wp">
           <div class="dm-wp__form">
-            <v-btn-toggle v-if="canCustom" v-model="mode" mandatory divided density="comfortable" color="primary" variant="outlined" class="mb-4">
+            <v-btn-toggle v-if="canCustom" v-model="mode" mandatory divided density="comfortable" color="primary" variant="outlined" class="mb-4" aria-label="Kind of page">
               <v-btn data-test="mode-template" value="template">Template</v-btn>
               <v-btn data-test="mode-custom" value="custom">Custom HTML</v-btn>
             </v-btn-toggle>
@@ -104,8 +130,10 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
             <template v-if="mode === 'template'">
               <p class="text-body-small text-medium-emphasis mb-3">What a visitor reads while the application wakes. The status sentence, in the visitor's language, is always
                 Dormeto's. A field left empty comes from the level above.</p>
-              <div class="font-weight-medium mb-1">Icon</div>
-              <v-radio-group v-model="icon" hide-details density="compact">
+              <v-alert v-if="inherited.mode === 'custom'" data-test="replaces-custom" type="info" variant="tonal" density="compact" class="mb-3 text-body-small">
+                This replaces the custom page set above with Dormeto's template.</v-alert>
+              <div class="font-weight-medium mb-1" aria-hidden="true">Icon</div>
+              <v-radio-group v-model="icon" hide-details density="compact" aria-label="Icon" @update:model-value="iconTouched = true">
                 <v-radio v-if="inheritable" data-test="icon-inherit" value="inherit" :label="`Inherit (${inheritText})`" />
                 <v-radio data-test="icon-auto" value="auto" label="Automatic: the application's favicon, read just before a nap (at most once a day)" />
                 <v-radio data-test="icon-upload" value="upload" label="Upload an image" />
@@ -117,7 +145,7 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
                 <div v-if="iconProblem" data-test="icon-problem" class="text-error text-body-small mt-1">{{ iconProblem }}</div>
                 <img v-else-if="uploaded" :src="uploaded" alt="" class="dm-wp__icon mt-2">
               </div>
-              <v-text-field v-model="title" data-test="title" label="Title" persistent-counter :counter="TITLE_MAX" density="compact" class="mt-3" hide-details="auto" :error-messages="/[\n\r]/.test(title) ? 'One line' : undefined" />
+              <v-text-field v-model="title" data-test="title" label="Title" persistent-counter :counter="TITLE_MAX" density="compact" class="mt-3" hide-details="auto" />
               <v-textarea v-model="description" data-test="description" label="Description" persistent-counter :counter="DESCRIPTION_MAX" rows="3" auto-grow max-rows="8" density="compact" class="mt-3" hide-details="auto"
                 hint="Plain text; line breaks are kept." />
             </template>
@@ -146,15 +174,15 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
 
           <div class="dm-wp__preview">
             <div class="font-weight-medium mb-2">Preview</div>
-            <v-chip-group v-model="state" mandatory column selected-class="text-primary" class="mb-1">
+            <v-chip-group v-model="state" mandatory column selected-class="text-primary" class="mb-1" aria-label="State to preview">
               <v-chip v-for="s in PAGE_STATES" :key="s.value" :data-test="`state-${s.value}`" :value="s.value" size="small" variant="outlined" filter>{{ s.title }}</v-chip>
             </v-chip-group>
             <div class="d-flex flex-wrap ga-2 mb-3">
-              <v-btn-toggle v-model="language" mandatory density="compact" divided variant="outlined" color="primary">
+              <v-btn-toggle v-model="language" mandatory density="compact" divided variant="outlined" color="primary" aria-label="Language of the preview">
                 <v-btn data-test="language-en" value="en" size="small">English</v-btn>
-                <v-btn data-test="language-fr" value="fr" size="small">Français</v-btn>
+                <v-btn data-test="language-fr" value="fr" size="small" lang="fr">Français</v-btn>
               </v-btn-toggle>
-              <v-btn-toggle :model-value="dark ? 'dark' : 'light'" mandatory density="compact" divided variant="outlined" color="primary" @update:model-value="dark = $event === 'dark'">
+              <v-btn-toggle :model-value="dark ? 'dark' : 'light'" mandatory density="compact" divided variant="outlined" color="primary" aria-label="Color scheme of the preview" @update:model-value="dark = $event === 'dark'">
                 <v-btn data-test="scheme-light" value="light" size="small">Light</v-btn>
                 <v-btn data-test="scheme-dark" value="dark" size="small">Dark</v-btn>
               </v-btn-toggle>

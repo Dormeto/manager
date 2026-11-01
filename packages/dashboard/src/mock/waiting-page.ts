@@ -100,7 +100,7 @@ export function organizationPage(d: Demo) {
 
 export function setOrganizationPage(d: Demo, body: Body | null, now: number) {
   write(d, 'organization', 'organization', body, d.waitingPage.page, (page) => { d.waitingPage = { page, updatedAt: iso(now), updatedBy: d.me.email }; });
-  return { ...organizationPage(d), note: 'routers apply it at their next check, within 5 minutes' };
+  return { ...organizationPage(d), note: 'routers read it within about a minute' };
 }
 
 export function routerPage(d: Demo, name: string, method: string, body: Body, now: number): WaitingPageView {
