@@ -1,13 +1,15 @@
 <script setup lang="ts">
-// "New window": a weekly window drawn on the Schedules calendar (or from its button) for one workload the user may edit.
-// The times come from the selection on the zone's clock (windowFromSelection; allDayWindow for a month selection), so
-// they are computed again when the workload, and so the zone, changes. Saving replaces the workload's schedule with the
+// "New window": a window drawn on the Schedules calendar (or from its button) for one workload the user may edit. A
+// selection starts a weekly window, and the helper makes it any other (WindowRecurrence). The times come from the selection
+// on the zone's clock (windowFromSelection; allDayWindow for a month selection), so they are computed again when the
+// workload, and so the zone, changes. Saving replaces the workload's schedule with the
 // one read when the dialog opened plus this window: the router has no merge.
 import { computed, ref, watch } from 'vue';
 import { mdiCalendarPlus } from '@mdi/js';
 import { useDisplay } from 'vuetify';
-import { allDayWindow, occurrencesIn, windowFromSelection } from '../occurrences';
-import { DAYS, TIMES, browserZone, dayLabel, daysText, scheduleBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
+import { allDayWindow, occurrencesIn, windowFromSelection, windowProblems } from '../occurrences';
+import { browserZone, recurrenceError, scheduleBody, windowBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
+import WindowRecurrence from './WindowRecurrence.vue';
 
 export interface Candidate { key: string; name: string; schedule: Schedule | null }
 export interface Selection { start: Date; end: Date; month: boolean; days?: Day[] }
@@ -21,17 +23,12 @@ const options = ref<Candidate[]>([]);
 const key = ref<string | null>(null);
 const kind = ref<'awake' | 'nap'>('awake');
 const wake = ref<'never' | 'header'>('never');
-// The days and times, from the selection until the user edits them (then they are kept when the workload changes).
-const days = ref<Day[]>([]);
-const startTime = ref('08:00');
-const endTime = ref('09:00');
+// How it repeats, from the selection until the user edits it (then it is kept when the workload changes).
+const draft = ref<ScheduleWindow>({ kind: 'awake', days: [], start: '08:00', end: '09:00' });
 const edited = ref(false);
 const fill = () => {
   const p = placed.value;
-  if ('problem' in p) { days.value = []; return; }
-  days.value = [...p.days];
-  startTime.value = p.start;
-  endTime.value = p.end;
+  draft.value = 'problem' in p ? { kind: 'awake', days: [], start: draft.value.start ?? '08:00', end: draft.value.end ?? '09:00' } : { kind: 'awake', days: [...p.days], start: p.start, end: p.end };
 };
 const chosen = computed(() => options.value.find((c) => c.key === key.value) ?? null);
 const zone = computed(() => chosen.value?.schedule?.timeZone || browserZone());
@@ -43,11 +40,11 @@ const placed = computed(() => {
 });
 const problem = computed(() => (!edited.value && 'problem' in placed.value ? placed.value.problem : ''));
 const window_ = computed<ScheduleWindow | null>(() => {
-  if (!days.value.length || problem.value) return null;
-  return { kind: kind.value, days: DAYS.filter((d) => days.value.includes(d)), start: startTime.value, end: endTime.value, ...(kind.value === 'nap' ? { wake: wake.value } : {}) };
+  const w = windowBody({ ...draft.value, kind: kind.value, wake: wake.value });
+  return problem.value || windowProblems(w).length ? null : w;
 });
 
-const edit = () => { edited.value = true; };
+const edit = (w: ScheduleWindow) => { draft.value = w; edited.value = true; };
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   options.value = props.candidates.map((c) => ({ ...c, schedule: c.schedule ? JSON.parse(JSON.stringify(c.schedule)) as Schedule : null }));
@@ -75,9 +72,6 @@ const clockChange = computed(() => {
   const date = new Intl.DateTimeFormat('en-GB', { timeZone: here, weekday: 'short', day: 'numeric', month: 'short' }).format(s.start);
   return `On ${date} the clock change moves this window to ${hhmm(o.start)}–${hhmm(o.end)} (${here}).`;
 });
-
-const repeats = computed(() => (days.value.length === 1 ? dayLabel(days.value[0]!) : daysText(days.value)));
-const length = computed(() => (startTime.value === endTime.value ? '24 hours' : endTime.value < startTime.value ? '(next day)' : ''));
 
 const canSave = computed(() => Boolean(chosen.value && window_.value && !props.saving));
 function save() {
@@ -109,22 +103,14 @@ function save() {
           </v-btn-toggle>
           <v-select v-if="kind === 'nap'" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
           <v-alert v-if="problem" data-test="nw-problem" type="warning" variant="tonal" density="compact" class="mb-3" :text="problem" />
-          <v-chip-group v-model="days" data-test="nw-days" multiple aria-label="Days" class="mb-2" @update:model-value="edit">
-            <v-chip v-for="d in DAYS" :key="d" :value="d" :data-test="`nw-day-${d}`" filter size="small" variant="outlined">{{ dayLabel(d) }}</v-chip>
-          </v-chip-group>
-          <div class="d-flex flex-wrap ga-3 mb-2">
-            <v-select v-model="startTime" data-test="nw-start" :items="TIMES" label="From" density="compact" hide-details class="dm-time" @update:model-value="edit" />
-            <v-select v-model="endTime" data-test="nw-end" :items="TIMES" label="To" density="compact" hide-details class="dm-time" @update:model-value="edit" />
-          </div>
+          <WindowRecurrence :model-value="draft" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" test="nw" class="mb-3" @update:model-value="edit" />
           <div data-test="nw-summary" class="mb-3">
-            <div v-if="!days.length" data-test="nw-days-hint" class="text-medium-emphasis">Choose at least one day.</div>
-            <div v-else><span class="text-medium-emphasis">Repeats every</span> <strong data-test="nw-repeats">{{ repeats }}</strong> <span v-if="length" data-test="nw-length" class="text-medium-emphasis">{{ length }}</span></div>
             <div><span class="text-medium-emphasis">Time zone</span> <strong data-test="nw-zone">{{ zone }}</strong><span v-if="chosen && !chosen.schedule?.timeZone" class="text-medium-emphasis"> (a first schedule: your browser's zone)</span></div>
           </div>
           <v-alert v-if="clockChange" data-test="nw-clock" type="info" variant="tonal" density="compact" class="mb-3" :text="clockChange" />
           <p data-test="nw-replace-note" class="text-body-small text-medium-emphasis">Saving replaces the workload's schedule with the one read when this dialog opened plus this window: a change made by someone else since then is lost.</p>
         </template>
-        <v-alert v-if="error" data-test="nw-error" type="error" variant="tonal" density="compact" class="mt-3" :text="error" />
+        <v-alert v-if="error" data-test="nw-error" type="error" variant="tonal" density="compact" class="mt-3" :text="recurrenceError(error ?? '')" />
       </v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />
@@ -134,7 +120,3 @@ function save() {
     </v-card>
   </v-dialog>
 </template>
-
-<style scoped>
-.dm-time { max-width: 130px; }
-</style>

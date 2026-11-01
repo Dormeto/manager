@@ -1,6 +1,14 @@
-// Schedules (R12): weekly awake and nap windows of a workload, as the dashboard writes and reads them.
+// Schedules (R12): awake and nap windows of a workload, on weekly days or by a recurrence within a range of dates (router
+// 0.36.0), as the dashboard writes and reads them.
 export type Day = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
-export interface ScheduleWindow { kind: 'awake' | 'nap'; days: Day[]; start: string; end: string; wake?: 'never' | 'header' }
+// Yearly is not a pattern of its own: monthly, interval 12, its month given by `from`.
+export type Repeat =
+  | { pattern: 'daily'; interval?: number }
+  | { pattern: 'weekly'; interval?: number; days: Day[] }
+  | { pattern: 'monthly'; interval?: number; day?: number; nth?: number; weekday?: Day }
+  | { pattern: 'cron'; cron: string; minutes: number };
+// `days` or `repeat`, never both; `start` and `end` but with a cron repeat, whose `minutes` say how long.
+export interface ScheduleWindow { kind: 'awake' | 'nap'; days?: Day[]; start?: string; end?: string; repeat?: Repeat; from?: string; until?: string; wake?: 'never' | 'header' }
 export interface Schedule { timeZone: string; windows?: ScheduleWindow[]; exceptions?: string[]; maxNapDays?: number; by?: string; at?: string }
 export interface NextEvent { at: string; kind: 'awake-start' | 'awake-end' | 'nap-start' | 'nap-end'; window: number }
 export interface ScheduleView { schedule: Schedule | null; next: NextEvent[]; maintenanceDue: string | null }
@@ -23,9 +31,71 @@ export function daysText(days: Day[]): string {
   return runs.map((r) => (r.length >= 3 || (r.length === 2 && runs.length > 1) ? `${LABEL[r[0]!]}–${LABEL[r.at(-1)!]}` : r.map((d) => LABEL[d]).join(', '))).join(', ');
 }
 
+// "10 h 30 min", "45 min", "1 day 5 min".
+export function durationText(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '';
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  return [days ? `${days} day${days > 1 ? 's' : ''}` : '', hours ? `${hours} h` : '', minutes % 60 ? `${minutes % 60} min` : ''].filter(Boolean).join(' ');
+}
+
 export function hoursText(w: ScheduleWindow): string {
+  if (w.repeat?.pattern === 'cron') return durationText(w.repeat.minutes);
   if (w.start === w.end) return 'all day (24 hours)';
-  return `${w.start}–${w.end}${w.end < w.start ? ' next day' : ''}`;
+  return `${w.start}–${w.end}${w.end! < w.start! ? ' next day' : ''}`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const NTHS: [number, string][] = [[1, 'first'], [2, 'second'], [3, 'third'], [4, 'fourth'], [-1, 'last']];
+const nthWord = (nth: number | undefined): string => NTHS.find(([n]) => n === nth)?.[1] ?? '';
+const monthOf = (date: string | undefined): string | undefined => MONTHS[Number(date?.slice(5, 7)) - 1];
+
+// "4 Jan 2027", from a date YYYY-MM-DD.
+export const dateText = (date: string): string => `${Number(date.slice(8, 10))} ${monthOf(date)} ${date.slice(0, 4)}`;
+
+// What a window repeats on: "Mon–Fri" as it always read, "Every 2 weeks on Mon, Thu", "Yearly on 25 Dec", "Cron 30 8 * * 1-5".
+export function repeatText(w: ScheduleWindow): string {
+  const { repeat } = w;
+  if (!repeat) return daysText(w.days ?? []);
+  const every = (unit: string, once: string, interval = (repeat as { interval?: number }).interval ?? 1) => (interval === 1 ? once : `Every ${interval} ${unit}`);
+  switch (repeat.pattern) {
+    case 'cron': return `Cron ${String(repeat.cron ?? '').trim().replace(/\s+/g, ' ')}`;
+    case 'daily': return every('days', 'Every day');
+    case 'weekly': {
+      const days = daysText(repeat.days ?? []);
+      if (days === 'every day') return every('weeks, every day', 'Every day');
+      return `${every('weeks', 'Weekly')} on ${days}`;
+    }
+    case 'monthly': {
+      const on = repeat.nth === undefined || repeat.nth === null ? `day ${repeat.day}` : `the ${nthWord(repeat.nth)} ${repeat.weekday ? LABEL[repeat.weekday] : ''}`;
+      const month = repeat.interval === 12 ? monthOf(w.from) : undefined;
+      if (month) return repeat.nth === undefined || repeat.nth === null ? `Yearly on ${repeat.day} ${month}` : `Yearly on ${on} of ${month}`;
+      return `${every('months', 'Monthly')} on ${on}`;
+    }
+    default: return `Repeats by ${(repeat as { pattern: string }).pattern}`;
+  }
+}
+
+// "from 4 Jan 2027, no end date", "until 30 Jun 2027", "from 4 Jan 2027 to 30 Jun 2027", nothing without a range.
+export function rangeText(w: ScheduleWindow): string {
+  if (w.from && w.until) return `from ${dateText(w.from)} to ${dateText(w.until)}`;
+  if (w.from) return `from ${dateText(w.from)}, no end date`;
+  return w.until ? `until ${dateText(w.until)}` : '';
+}
+
+// A recurrence in one sentence, as the helper says it back and the card reads it.
+export function recurrenceText(w: ScheduleWindow): string {
+  const text = [repeatText(w), hoursText(w), rangeText(w)].filter(Boolean).join(', ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// "Mon 4 Jan 2027, 08:00–12:00", "Mon 4 Jan 2027, 20:00 – Tue 5 Jan, 07:00", in the schedule's own zone.
+export function occurrenceText(o: { start: number; end: number }, timeZone: string): string {
+  const parts = (t: number) => Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t)).map((p) => [p.type, p.value]));
+  const [a, b] = [parts(o.start), parts(o.end)];
+  const day = `${a.weekday} ${a.day} ${a.month}`;
+  const end = `${b.weekday} ${b.day} ${b.month}`;
+  return `${day} ${a.year}, ${a.hour}:${a.minute}${day === end ? '–' : ` – ${end}, `}${b.hour}:${b.minute}`;
 }
 
 const EVENTS: Record<NextEvent['kind'], string> = {
@@ -58,10 +128,83 @@ export const TIMES: string[] = Array.from({ length: 288 }, (_, i) => `${String(M
 
 export const newWindow = (kind: 'awake' | 'nap' = 'awake'): ScheduleWindow => ({ kind, days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: kind === 'awake' ? '08:00' : '20:00', end: kind === 'awake' ? '19:00' : '07:00', ...(kind === 'nap' ? { wake: 'never' as const } : {}) });
 
+// What the helper's Repeats select offers, and which of them a window is (null: a stored pattern this dashboard cannot read).
+export type RepeatChoice = 'weekly' | 'daily' | 'monthly' | 'yearly' | 'cron';
+export function repeatChoice(w: ScheduleWindow): RepeatChoice | null {
+  const pattern: string = w.repeat?.pattern ?? 'weekly';
+  if (pattern === 'monthly') return (w.repeat as { interval?: number }).interval === 12 ? 'yearly' : 'monthly';
+  return ['weekly', 'daily', 'cron'].includes(pattern) ? pattern as RepeatChoice : null;
+}
+
+// How long a window from `start` to `end` lasts, in minutes: up to 24 hours.
+const lengthOf = (start: string, end: string): number => {
+  const minutes = (text: string) => Number(text.slice(0, 2)) * 60 + Number(text.slice(3, 5));
+  const [a, b] = [minutes(start), minutes(end)];
+  return b > a ? b - a : b - a + 1440;
+};
+
+// A window moved to another pattern: its kind, wake and range stay, its times where the pattern has them. `today` is the
+// start date a yearly window needs, and its day; `memory` what a cron has lost, for the way back. A cron starts as the
+// window did, on its days, for as long.
+export function withChoice(w: ScheduleWindow, choice: RepeatChoice, today: string, memory: { days: Day[]; start: string; end: string }): ScheduleWindow {
+  const { repeat, days, start = memory.start, end = memory.end, ...rest } = w;
+  const weekly = repeat?.pattern === 'weekly' ? repeat.days : days;
+  const times = { start, end };
+  // Monthly and yearly keep the day or weekday they were on.
+  const onDay = repeat?.pattern === 'monthly' ? (repeat.nth ? { nth: repeat.nth, weekday: repeat.weekday } : { day: repeat.day }) : null;
+  switch (choice) {
+    case 'weekly': return { ...rest, days: weekly ?? memory.days, ...times };
+    case 'daily': return { ...rest, ...times, repeat: { pattern: 'daily' } };
+    case 'monthly': return { ...rest, ...times, repeat: { pattern: 'monthly', ...(onDay ?? { day: Number((w.from ?? today).slice(8, 10)) }) } };
+    case 'yearly': {
+      const from = w.from ?? today;
+      return { ...rest, from, ...times, repeat: { pattern: 'monthly', interval: 12, ...(onDay ?? { day: Number(from.slice(8, 10)) }) } };
+    }
+    default: {
+      const on = weekly?.length && weekly.length < 7 ? DAYS.filter((d) => weekly.includes(d)).map((d) => DAYS.indexOf(d) + 1).join(',') : '*';
+      return { ...rest, repeat: { pattern: 'cron', cron: `${Number(start.slice(3, 5))} ${Number(start.slice(0, 2))} * * ${on}`, minutes: lengthOf(start, end) } };
+    }
+  }
+}
+
+// A window repeating every `interval` days, weeks or months: above 1 it needs a start date, today by default, and plain
+// weekly days take a repeat for it; back at 1 they are plain days again, which a router of any version reads. NaN is what
+// is being typed: refused, and kept so that the field stays blank.
+export function withInterval(w: ScheduleWindow, interval: number, today: string): ScheduleWindow {
+  const needs = interval > 1 ? { from: w.from || today } : {};
+  if (!w.repeat || w.repeat.pattern === 'weekly') {
+    const { repeat, days, ...rest } = w;
+    const chosen = repeat?.pattern === 'weekly' ? repeat.days : days ?? [];
+    if (interval === 1) return { ...rest, days: chosen };
+    return { ...rest, ...needs, repeat: { pattern: 'weekly', interval, days: chosen } };
+  }
+  if (w.repeat.pattern === 'cron') return w;
+  const { interval: _, ...repeat } = w.repeat as { interval?: number } & Repeat;
+  return { ...w, ...needs, repeat: { ...repeat, ...(interval === 1 ? {} : { interval }) } as Repeat };
+}
+
+const isEmpty = (value: unknown): boolean => value === undefined || value === null || value === '';
+const filled = <T extends object>(object: T): T => Object.fromEntries(Object.entries(object).filter(([, value]) => !isEmpty(value))) as T;
+
+// A window as the PUT sends it: what is empty dropped (null, a date cleared), what its kind or pattern does not take too,
+// its days in week order. A window read back stays what it was.
+export function windowBody(w: ScheduleWindow): ScheduleWindow {
+  const repeat = isEmpty(w.repeat) ? undefined : filled(w.repeat!);
+  const weekOrder = (days: Day[]) => (Array.isArray(days) ? DAYS.filter((d) => days.includes(d)) : days);
+  return {
+    kind: w.kind,
+    ...(repeat ? {} : { days: weekOrder(w.days ?? []) }),
+    ...(repeat?.pattern === 'cron' ? {} : { start: w.start, end: w.end }),
+    ...(repeat ? { repeat: repeat.pattern === 'weekly' ? { ...repeat, days: weekOrder(repeat.days) } : repeat } : {}),
+    ...filled({ from: w.from, until: w.until }),
+    ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}),
+  };
+}
+
 // The body of the PUT: the zone in its canonical form (none without windows), the wake mode of nap windows only, the
 // exceptions and the maximum nap only when set. `maxNap` is the form field (blank for none).
 export function scheduleBody(s: Schedule, maxNap: string): Schedule {
-  const windows = (s.windows ?? []).map((w) => ({ kind: w.kind, days: DAYS.filter((d) => w.days.includes(d)), start: w.start, end: w.end, ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}) }));
+  const windows = (s.windows ?? []).map(windowBody);
   const zone = canonicalZone(s.timeZone) ?? String(s.timeZone ?? '').trim();
   const max = maxNap.trim();
   return {
@@ -72,13 +215,18 @@ export function scheduleBody(s: Schedule, maxNap: string): Schedule {
   } as Schedule;
 }
 
-// What the form refuses before sending (the router refuses the rest, in its words).
+// What the form refuses before sending, the schedule's own fields (windowProblems the windows', the router the rest, in its
+// words).
 export function formProblem(s: Schedule, maxNap: string): string {
   if (s.windows?.length && !canonicalZone(s.timeZone)) return 'timeZone: an IANA time zone name, such as Europe/Paris, not a UTC offset';
-  const empty = (s.windows ?? []).findIndex((w) => !w.days.length);
-  if (empty >= 0) return `windows[${empty}].days: pick at least one day`;
   const max = maxNap.trim();
   if (max && !(Number.isInteger(Number(max)) && Number(max) >= 1 && Number(max) <= 60)) return 'maxNapDays: a whole number from 1 to 60';
   if (!s.windows?.length && !max) return 'Add a window or set a maximum nap';
   return '';
+}
+
+// The refusal of a router as it words it, with what it takes when it is a router before recurrences: it does not know their
+// fields.
+export function recurrenceError(message: string): string {
+  return /\.(repeat|from|until): unknown field/.test(message) ? `${message.replace(/\.$/, '')}. Recurrences need router 0.36.0 or later.` : message;
 }

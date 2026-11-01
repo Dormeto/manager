@@ -84,6 +84,37 @@ describe('eventsFor', () => {
     const ny = eventsFor([paris], day, day + 86_400_000, 'America/New_York').find((e) => e.title === 'Shop · Awake')!;
     expect(ny.extendedProps.tip).toContain('Wed 08:00–19:00 Europe/Paris');
   });
+  it('draws a recurring window, and says its recurrence in the tooltip', () => {
+    const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [
+      { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04', until: '2027-06-30', wake: 'header' },
+      { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+      { kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily' }, until: '2020-01-01' },
+    ] } };
+    const from = Date.UTC(2027, 0, 4);
+    const drawn = eventsFor([c], from, from + 2 * 86_400_000, 'UTC', false, from);
+    expect(drawn.map((e) => [e.title, e.start.toISOString()])).toEqual([
+      ['Blog · Awake', '2027-01-04T08:30:00.000Z'],
+      ['Blog · Nap (wake: header)', '2027-01-04T20:00:00.000Z'],
+      ['Blog · Awake', '2027-01-05T08:30:00.000Z'],
+    ]);
+    expect(drawn[0]!.extendedProps.tip).toBe('Blog · Awake — Cron 30 8 * * 1-5, 10 h 30 min');
+    expect(drawn[1]!.extendedProps.tip).toBe('Blog · Nap (wake: header) — Every 2 weeks on Mon, Thu, 20:00–07:00 next day, from 4 Jan 2027 to 30 Jun 2027');
+  });
+  it('draws the touching starts of a frequent cron window as one bar, not one a start', () => {
+    const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [
+      { kind: 'awake', repeat: { pattern: 'cron', cron: '*/5 8-9 * * *', minutes: 5 } },
+      { kind: 'awake', repeat: { pattern: 'cron', cron: '0,30 12 * * *', minutes: 5 } },
+    ] } };
+    const from = Date.UTC(2027, 0, 4);
+    const drawn = eventsFor([c], from, from + 86_400_000, 'UTC', false, from);
+    expect(drawn.map((e) => [e.start.toISOString().slice(11, 16), e.end.toISOString().slice(11, 16)])).toEqual([['08:00', '10:00'], ['12:00', '12:05'], ['12:30', '12:35']]);
+    expect(new Set(drawn.map((e) => e.id)).size).toBe(3);
+  });
+  it('keeps the touching days of a plain window apart, as it always drew them', () => {
+    const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00' }] } };
+    const from = Date.UTC(2027, 0, 9);
+    expect(eventsFor([c], from, from + 2 * 86_400_000, 'UTC', false, from)).toHaveLength(2);
+  });
   it('draws nothing for a calendar without a schedule', () => {
     expect(eventsFor([{ key: 'r/b', name: 'B', color: '#000', schedule: null }], day, day + 86_400_000)).toEqual([]);
   });

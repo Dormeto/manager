@@ -48,6 +48,18 @@ describe('ScheduleCard', () => {
     wrapper.unmount();
   });
 
+  it('reads a recurring window in the helper\'s words', () => {
+    const wrapper = mountCard({ schedule: { timeZone: 'Europe/Paris', windows: [
+      { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04', wake: 'header' },
+      { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+    ] }, next: [] });
+    const rows = wrapper.findAll('[data-test="window"]').map((r) => r.text());
+    expect(rows[0]).toContain('Every 2 weeks on Mon, Thu, 20:00–07:00 next day, from 4 Jan 2027, no end date');
+    expect(rows[0]).toContain('wakes with the header');
+    expect(rows[1]).toContain('Cron 30 8 * * 1-5, 10 h 30 min');
+    wrapper.unmount();
+  });
+
   it('hides Edit and Clear without the permission', () => {
     const wrapper = mountCard({ canEdit: false });
     expect(wrapper.find('[data-test="edit-schedule"]').exists()).toBe(false);

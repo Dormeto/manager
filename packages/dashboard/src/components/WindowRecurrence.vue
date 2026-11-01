@@ -1,0 +1,190 @@
+<script setup lang="ts">
+// How a window repeats (schedule recurrence design), in the Schedule and New window dialogs: the Repeats select and what that
+// pattern needs, the times (a cron's duration), the range of dates, the window said back in a sentence and its next 5
+// occurrences in the schedule's zone, or why it cannot be saved under the field concerned. The window is the dialog's: a
+// change comes back as a new one, and what is not changed stays as it was stored.
+import { computed, watch } from 'vue';
+import { mdiAlertOutline } from '@mdi/js';
+import { cronShortestGap, fieldProblems, localDate, nextOccurrences } from '../occurrences';
+import {
+  DAYS, TIMES, browserZone, canonicalZone, dayLabel, occurrenceText, recurrenceText, repeatChoice, repeatText, windowBody, withChoice, withInterval,
+  type Day, type Repeat, type RepeatChoice, type ScheduleWindow,
+} from '../schedule';
+
+const props = withDefaults(defineProps<{ modelValue: ScheduleWindow; timeZone?: string | null; exceptions?: string[]; test?: string }>(), { timeZone: null, exceptions: () => [], test: 'w' });
+const emit = defineEmits<{ 'update:modelValue': [ScheduleWindow] }>();
+
+const CHOICES: { value: RepeatChoice; title: string }[] = [
+  { value: 'weekly', title: 'Weekly' }, { value: 'daily', title: 'Daily' }, { value: 'monthly', title: 'Monthly' }, { value: 'yearly', title: 'Yearly' }, { value: 'cron', title: 'Cron expression' },
+];
+const UNITS: Partial<Record<RepeatChoice, string>> = { daily: 'day', weekly: 'week', monthly: 'month' };
+const NTHS = [{ value: 1, title: 'first' }, { value: 2, title: 'second' }, { value: 3, title: 'third' }, { value: 4, title: 'fourth' }, { value: -1, title: 'last' }];
+const WEEKDAYS = DAYS.map((d) => ({ value: d, title: dayLabel(d) }));
+const MINUTES = Array.from({ length: 12 }, (_, i) => ({ value: i * 5, title: String(i * 5).padStart(2, '0') }));
+const ENDS = [{ value: 'none', title: 'No end date' }, { value: 'date', title: 'On a date' }];
+// How often a start is frequent enough to say what it does to a manual Nap or Wake.
+const FREQUENT = 15;
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+const w = computed(() => props.modelValue);
+const repeat = computed(() => w.value.repeat as (Repeat & { interval?: number; day?: number; nth?: number; weekday?: Day; days?: Day[]; cron?: string; minutes?: number }) | undefined);
+const choice = computed(() => repeatChoice(w.value));
+const zone = computed(() => canonicalZone(props.timeZone) ?? browserZone());
+const today = () => localDate(Date.now(), zone.value);
+const update = (next: ScheduleWindow) => emit('update:modelValue', next);
+const setRepeat = (fields: Record<string, unknown>) => update({ ...w.value, repeat: { ...w.value.repeat, ...fields } as Repeat });
+// A number being typed: NaN when blank, which the checks refuse, and the field stays blank.
+const typed = (value: unknown): number => (value === '' || value === null || value === undefined ? NaN : Number(value));
+const shown = (value: number | undefined): number | string => (value === undefined || Number.isNaN(value) ? '' : value);
+
+// What a cron has no place for, kept for the way back: this row's own, so a slip on the select loses nothing.
+const memory: { days: Day[]; start: string; end: string } = { days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:00', end: '19:00' };
+watch(w, (now) => {
+  const days = now.repeat?.pattern === 'weekly' ? now.repeat.days : now.days;
+  if (days?.length) memory.days = days;
+  if (now.start) memory.start = now.start;
+  if (now.end) memory.end = now.end;
+}, { immediate: true });
+
+const body = computed(() => windowBody(w.value));
+const problems = computed(() => fieldProblems(body.value));
+const valid = computed(() => !Object.keys(problems.value).length);
+const days = computed(() => (w.value.repeat ? repeat.value?.days : w.value.days) ?? []);
+const setDays = (chosen: Day[]) => {
+  const inOrder = DAYS.filter((d) => chosen.includes(d));
+  update(w.value.repeat ? { ...w.value, repeat: { ...w.value.repeat, days: inOrder } as Repeat } : { ...w.value, days: inOrder });
+};
+const daysProblem = computed(() => (choice.value === 'weekly' && (problems.value.days || problems.value['repeat.days']) ? 'Choose at least one day.' : ''));
+
+const monthly = computed(() => (repeat.value?.nth === undefined || repeat.value?.nth === null ? 'day' : 'nth'));
+const setMonthly = (mode: 'day' | 'nth') => {
+  const { pattern, interval } = w.value.repeat as Repeat & { interval?: number };
+  const fields = mode === 'day' ? { day: Number((w.value.from ?? today()).slice(8, 10)) } : { nth: 1, weekday: DAYS[(new Date(`${w.value.from ?? today()}T00:00:00Z`).getUTCDay() + 6) % 7] };
+  update({ ...w.value, repeat: { pattern, ...(interval === undefined ? {} : { interval }), ...fields } as Repeat });
+};
+const yearMonth = computed(() => MONTH_NAMES[Number(w.value.from?.slice(5, 7)) - 1] ?? '');
+
+const hours = computed(() => (Number.isNaN(repeat.value?.minutes) ? '' : Math.floor((repeat.value?.minutes ?? 0) / 60)));
+const minutePart = computed(() => (repeat.value?.minutes ?? 0) % 60 || 0);
+const frequent = computed(() => {
+  const gap = choice.value === 'cron' ? cronShortestGap(repeat.value?.cron) : null;
+  return gap !== null && gap <= FREQUENT ? gap : null;
+});
+
+const unit = computed(() => `${UNITS[choice.value!]}${repeat.value?.interval === undefined || repeat.value.interval === 1 ? '' : 's'}`);
+const needsFrom = computed(() => (repeat.value?.interval ?? 1) > 1);
+const setDate = (field: 'from' | 'until', value: string | null) => {
+  const { [field]: _, ...rest } = w.value;
+  update(value ? { ...rest, [field]: value } : rest);
+};
+const setEnd = (kind: string) => {
+  if (kind === 'none') return setDate('until', null);
+  // A month after the start, or from today: a date to correct, valid meanwhile.
+  const base = Date.parse(`${w.value.from ?? today()}T00:00:00Z`);
+  return setDate('until', new Date(base + 30 * 86_400_000).toISOString().slice(0, 10));
+};
+
+const sentence = computed(() => (daysProblem.value ? '' : recurrenceText(body.value)));
+const head = computed(() => repeatText(body.value));
+const tail = computed(() => sentence.value.slice(head.value.length));
+const next = computed(() => (valid.value ? nextOccurrences({ timeZone: zone.value, windows: [body.value], exceptions: props.exceptions }, Date.now(), 5) : []));
+// A problem that has no field of its own here: a stored window nothing else shows it for.
+const SHOWN = ['days', 'repeat.days', 'repeat.interval', 'repeat.day', 'repeat.nth', 'repeat.weekday', 'repeat', 'repeat.cron', 'repeat.minutes', 'from', 'until'];
+const other = computed(() => Object.entries(problems.value).filter(([field]) => !SHOWN.includes(field)).map(([field, why]) => `${field}: ${why}`));
+</script>
+
+<template>
+  <div class="dm-recurrence">
+    <div class="d-flex flex-wrap ga-3 mt-3">
+      <v-select :data-test="`${test}-pattern`" :model-value="choice" :items="CHOICES" label="Repeats" density="compact" hide-details class="dm-repeats" @update:model-value="update(withChoice(w, $event, today(), memory))" />
+      <v-text-field
+        v-if="choice && UNITS[choice]" :data-test="`${test}-interval`" :model-value="shown(repeat?.interval ?? 1)" label="Every" type="number" min="1" max="99" :suffix="unit" density="compact" class="dm-interval"
+        :error-messages="problems['repeat.interval'] ?? ''" :hide-details="!problems['repeat.interval']" @update:model-value="update(withInterval(w, typed($event), today()))"
+      />
+    </div>
+
+    <template v-if="choice === 'weekly'">
+      <v-chip-group :data-test="`${test}-days`" :model-value="days" multiple column aria-label="Days" class="mt-1" @update:model-value="setDays">
+        <v-chip v-for="d in DAYS" :key="d" :value="d" :data-test="`${test}-day-${d}`" filter size="small" variant="outlined">{{ dayLabel(d) }}</v-chip>
+      </v-chip-group>
+      <div v-if="daysProblem" :data-test="`${test}-days-hint`" class="text-body-small text-error">{{ daysProblem }}</div>
+    </template>
+
+    <template v-if="choice === 'monthly' || choice === 'yearly'">
+      <v-radio-group :data-test="`${test}-monthly`" :model-value="monthly" hide-details class="mt-2" @update:model-value="setMonthly($event as 'day' | 'nth')">
+        <div class="dm-on">
+          <v-radio value="day" label="On day" class="dm-on__radio" />
+          <v-text-field
+            :data-test="`${test}-month-day`" :model-value="shown(repeat?.day)" :disabled="monthly !== 'day'" aria-label="Day of the month" type="number" min="1" max="31" density="compact" class="dm-interval"
+            :error-messages="problems['repeat.day'] ?? ''" :hide-details="!problems['repeat.day']" @update:model-value="setRepeat({ day: typed($event) })"
+          />
+        </div>
+        <div class="dm-on mt-2">
+          <v-radio value="nth" label="On the" class="dm-on__radio" />
+          <v-select :data-test="`${test}-nth`" :model-value="repeat?.nth" :disabled="monthly !== 'nth'" :items="NTHS" aria-label="Which one in the month" density="compact" hide-details class="dm-nth" @update:model-value="setRepeat({ nth: $event })" />
+          <v-select :data-test="`${test}-weekday`" :model-value="repeat?.weekday" :disabled="monthly !== 'nth'" :items="WEEKDAYS" aria-label="Weekday" density="compact" hide-details class="dm-nth" @update:model-value="setRepeat({ weekday: $event })" />
+        </div>
+      </v-radio-group>
+      <div v-if="problems['repeat'] || problems['repeat.nth'] || problems['repeat.weekday']" class="text-body-small text-error mt-1">{{ problems['repeat'] || problems['repeat.nth'] || problems['repeat.weekday'] }}</div>
+      <div v-if="monthly === 'day' && Number(repeat?.day) > 28" class="text-body-small text-medium-emphasis mt-1">A month without this day has it on its last day.</div>
+      <div v-if="choice === 'yearly'" :data-test="`${test}-year-hint`" class="text-body-small text-medium-emphasis mt-1">The month is the start date's{{ yearMonth ? `: ${yearMonth}` : '' }}.</div>
+    </template>
+
+    <template v-if="choice === 'cron'">
+      <v-text-field
+        :data-test="`${test}-cron`" :model-value="repeat?.cron" label="Cron expression" density="compact" class="dm-cron mt-3" spellcheck="false" autocomplete="off" persistent-hint
+        hint="minute hour day-of-month month day-of-week, minutes multiples of 5" :error-messages="problems['repeat.cron'] ?? ''" @update:model-value="setRepeat({ cron: $event ?? '' })"
+      />
+      <v-alert v-if="frequent" :data-test="`${test}-cron-warning`" type="warning" variant="tonal" density="compact" :icon="mdiAlertOutline" class="mt-2 text-body-small">
+        This starts as often as every {{ frequent }} minutes, and each start applies again: a manual Nap or Wake lasts until the next start, and an awake window blocks naps.
+      </v-alert>
+    </template>
+
+    <div class="d-flex flex-wrap ga-3 mt-3">
+      <template v-if="choice === 'cron'">
+        <v-text-field
+          :data-test="`${test}-hours`" :model-value="hours" label="Lasts" suffix="h" type="number" min="0" max="168" density="compact" class="dm-interval" :error-messages="problems['repeat.minutes'] ?? ''" :hide-details="!problems['repeat.minutes']"
+          @update:model-value="setRepeat({ minutes: typed($event) * 60 + minutePart })"
+        />
+        <v-select :data-test="`${test}-minutes`" :model-value="minutePart" :items="MINUTES" label="Minutes" suffix="min" density="compact" hide-details class="dm-time" @update:model-value="setRepeat({ minutes: (Number(hours) || 0) * 60 + $event })" />
+      </template>
+      <template v-else-if="choice">
+        <v-select :data-test="`${test}-start`" :model-value="w.start" :items="TIMES" label="From" density="compact" hide-details class="dm-time" @update:model-value="update({ ...w, start: $event })" />
+        <v-select :data-test="`${test}-end`" :model-value="w.end" :items="TIMES" label="To" density="compact" hide-details class="dm-time" @update:model-value="update({ ...w, end: $event })" />
+      </template>
+      <slot />
+    </div>
+
+    <div class="d-flex flex-wrap ga-3 mt-4">
+      <v-text-field
+        :data-test="`${test}-from`" :model-value="w.from ?? ''" :label="needsFrom ? 'Start date' : 'Start date (optional)'" type="date" density="compact" class="dm-date"
+        :error-messages="problems.from ?? ''" :hide-details="!problems.from" @update:model-value="setDate('from', $event)"
+      />
+      <v-select :data-test="`${test}-end-kind`" :model-value="w.until ? 'date' : 'none'" :items="ENDS" label="End" density="compact" hide-details class="dm-date" @update:model-value="setEnd($event)" />
+      <v-text-field
+        v-if="w.until" :data-test="`${test}-until`" :model-value="w.until" label="End date" type="date" density="compact" class="dm-date"
+        :error-messages="problems.until ?? ''" :hide-details="!problems.until" @update:model-value="setDate('until', $event)"
+      />
+    </div>
+
+    <div v-if="other.length" class="text-body-small text-error mt-2">{{ other.join('; ') }}</div>
+    <div v-if="sentence" :data-test="`${test}-sentence`" class="mt-3 text-body-medium"><strong :data-test="`${test}-repeats`">{{ head.charAt(0).toUpperCase() + head.slice(1) }}</strong>{{ tail }}</div>
+    <div v-if="valid" :data-test="`${test}-next`" class="mt-2">
+      <div class="dm-subhead mb-1">Next occurrences</div>
+      <ul v-if="next.length" class="dm-next text-body-small"><li v-for="o in next" :key="o.start">{{ occurrenceText(o, zone) }}</li></ul>
+      <div v-else class="text-body-small text-medium-emphasis">No occurrence in the next 10 years.</div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.dm-repeats { max-width: 200px; min-width: 160px; }
+.dm-interval { max-width: 130px; min-width: 110px; }
+.dm-time { max-width: 130px; min-width: 110px; }
+.dm-nth { max-width: 130px; min-width: 100px; }
+.dm-date { max-width: 190px; min-width: 150px; }
+.dm-cron :deep(input) { font-family: var(--dm-mono); }
+.dm-on { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dm-on__radio { flex: 0 0 auto; }
+.dm-next { margin: 0; padding-left: 18px; font-variant-numeric: tabular-nums; }
+</style>

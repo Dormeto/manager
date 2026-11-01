@@ -1,8 +1,8 @@
 // The Schedules calendar's arithmetic: a schedule's occurrences at literal instants (overnight and 24-hour windows,
 // clock changes, exceptions, another zone than the browser's), and a calendar selection as a window in a zone.
 import { describe, expect, it } from 'vitest';
-import { allDayWindow, occurrencesIn, windowFromSelection, type Occurrence } from '../src/occurrences';
-import { browserZone, type Schedule } from '../src/schedule';
+import { allDayWindow, cronShortestGap, fieldProblems, localDate, nextEvents, nextOccurrences, occurrencesIn, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
+import { browserZone, type Schedule, type ScheduleWindow } from '../src/schedule';
 
 const at = (text: string): number => Date.parse(text);
 const HOUR = 3_600_000;
@@ -187,5 +187,162 @@ describe('a selection as a window', () => {
 describe('a month selection as a window', () => {
   it('00:00–00:00 on the days selected, each once, in week order', () => {
     expect(allDayWindow(['sun', 'sat', 'sat'])).toEqual({ days: ['sat', 'sun'], start: '00:00', end: '00:00' });
+  });
+});
+
+// Recurrences (schedule recurrence design): literal instants, so these hold without the router's checkout.
+describe('recurring windows', () => {
+  const NOW = at('2027-01-01T00:00:00Z');
+  const utc = (w: ScheduleWindow, more: Partial<Schedule> = {}): Schedule => ({ timeZone: 'UTC', windows: [w], ...more });
+  const paris = (w: ScheduleWindow): Schedule => ({ timeZone: 'Europe/Paris', windows: [w] });
+  const awake = (fields: Partial<ScheduleWindow>): ScheduleWindow => ({ kind: 'awake', start: '08:00', end: '12:00', ...fields });
+  const cron = (expression: string, minutes = 5): ScheduleWindow => ({ kind: 'awake', repeat: { pattern: 'cron', cron: expression, minutes } });
+  const dates = (s: Schedule, count = 5, t = NOW): string[] => nextOccurrences(s, t, count).map((o) => new Date(o.start).toISOString().slice(0, 16).replace('T', ' '));
+  const at8 = (...days: string[]) => days.map((d) => `${d} 08:00`);
+
+  it('daily counts days from from, across a month and a year', () => {
+    expect(dates(utc(awake({ repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' })), 3)).toEqual(at8('2027-01-04', '2027-01-07', '2027-01-10'));
+    expect(dates(utc(awake({ repeat: { pattern: 'daily', interval: 10 }, from: '2026-12-25' })), 2)).toEqual(at8('2027-01-04', '2027-01-14'));
+  });
+
+  it('weekly counts weeks, Monday to Sunday, from the week of from', () => {
+    expect(dates(utc(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-06' })))).toEqual(at8('2027-01-07', '2027-01-18', '2027-01-21', '2027-02-01', '2027-02-04'));
+    expect(dates(utc(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'sun'] }, from: '2027-01-10' })), 3)).toEqual(at8('2027-01-10', '2027-01-18', '2027-01-24'));
+  });
+
+  it('monthly counts months from the month of from, and a day past the month\'s end falls on its last day', () => {
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', interval: 3, day: 15 }, from: '2027-01-20' })), 2)).toEqual(at8('2027-04-15', '2027-07-15'));
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', day: 31 } })), 4)).toEqual(at8('2027-01-31', '2027-02-28', '2027-03-31', '2027-04-30'));
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', day: 31 } })), 1, at('2028-02-01T00:00:00Z'))).toEqual(at8('2028-02-29'));
+  });
+
+  it('monthly on the first to fourth weekday, and the last', () => {
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', nth: 1, weekday: 'mon' } })), 2)).toEqual(at8('2027-01-04', '2027-02-01'));
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', nth: 4, weekday: 'mon' } })), 2)).toEqual(at8('2027-01-25', '2027-02-22'));
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', nth: -1, weekday: 'mon' } })), 3)).toEqual(at8('2027-01-25', '2027-02-22', '2027-03-29'));
+  });
+
+  it('yearly is monthly every 12 months, its month given by from, and is found within 400 days', () => {
+    const christmas: ScheduleWindow = { kind: 'nap', start: '00:00', end: '00:00', repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2026-12-01' };
+    const after = at('2027-01-15T12:00:00+01:00');
+    expect(nextOccurrences(paris(christmas), after, 1)).toEqual([{ kind: 'nap', window: 0, start: at('2027-12-24T23:00:00Z'), end: at('2027-12-25T23:00:00Z'), wake: 'never' }]);
+    expect(nextEvents(paris(christmas), after)).toEqual([
+      { at: '2027-12-24T23:00:00.000Z', kind: 'nap-start', window: 0 },
+      { at: '2027-12-25T23:00:00.000Z', kind: 'nap-end', window: 0 },
+    ]);
+  });
+
+  it('from and until both count, and an occurrence started on until runs past it', () => {
+    const s = utc({ kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'daily' }, from: '2027-01-04', until: '2027-01-05' });
+    expect(occurrencesIn(s, at('2027-01-01T00:00:00Z'), at('2027-01-10T00:00:00Z')).map((o) => [o.start, o.end])).toEqual([
+      [at('2027-01-04T20:00:00Z'), at('2027-01-05T07:00:00Z')],
+      [at('2027-01-05T20:00:00Z'), at('2027-01-06T07:00:00Z')],
+    ]);
+    expect(dates(utc(awake({ days: ['mon'], until: '2026-12-31' })))).toEqual([]);
+    expect(dates(utc(awake({ days: ['mon'], from: '2027-01-11' })), 1)).toEqual(at8('2027-01-11'));
+  });
+
+  it('a cron expression: its grammar, either day field, and each start its own occurrence', () => {
+    expect(dates(utc(cron('0,30 8 * * *')), 3)).toEqual(['2027-01-01 08:00', '2027-01-01 08:30', '2027-01-02 08:00']);
+    expect(dates(utc(cron('0 8 15 * MON')), 3)).toEqual(at8('2027-01-04', '2027-01-11', '2027-01-15'));
+    expect(dates(utc(cron('0 8 */10 * MON')), 3)).toEqual(at8('2027-01-01', '2027-01-04', '2027-01-11'));
+    expect(dates(utc(cron('0 8 * * FRI-SUN')), 3)).toEqual(at8('2027-01-01', '2027-01-02', '2027-01-03'));
+    expect(dates(utc(cron('0 8 * * 0')), 1)).toEqual(at8('2027-01-03'));
+    expect(dates(utc(cron('0 8 * * 7')), 1)).toEqual(at8('2027-01-03'));
+    expect(dates(utc(cron('0 8 ? mar ?')), 1)).toEqual(at8('2027-03-01'));
+    expect(dates(utc(cron('0 8 29 2 *')), 1, at('2028-01-01T00:00:00Z'))).toEqual(at8('2028-02-29'));
+  });
+
+  it('minutes up to 7 days: an occurrence started long ago still reaches the range', () => {
+    const week = utc(cron('0 8 1 * *', 10080));
+    expect(occurrencesIn(week, at('2027-01-08T07:55:00Z'), at('2027-01-08T08:05:00Z'))).toEqual([{ kind: 'awake', window: 0, start: at('2027-01-01T08:00:00Z'), end: at('2027-01-08T08:00:00Z') }]);
+  });
+
+  it('clock changes: a skipped start applies at the change, a repeated one at its first instance, minutes in wall time', () => {
+    const on = (expression: string, minutes: number, t: string) => occurrencesIn(paris(cron(expression, minutes)), at(t), at(t) + 1).map((o) => [o.start, o.end]);
+    expect(on('30 2 * * *', 60, '2027-03-28T03:10:00+02:00')).toEqual([[at('2027-03-28T01:00:00Z'), at('2027-03-28T01:30:00Z')]]);
+    expect(on('30 2 * * *', 60, '2027-10-31T02:40:00+01:00')).toEqual([[at('2027-10-31T00:30:00Z'), at('2027-10-31T02:30:00Z')]]);
+    expect(on('0 12 27 3 *', 1440, '2027-03-28T11:55:00+02:00')).toEqual([[at('2027-03-27T11:00:00Z'), at('2027-03-28T10:00:00Z')]]);
+  });
+
+  it('an exception date removes what starts on it, of every pattern', () => {
+    const more = { exceptions: ['2027-01-15'] };
+    for (const w of [awake({ repeat: { pattern: 'monthly', day: 15 } }), awake({ repeat: { pattern: 'daily' } }), cron('0 8 15 * *', 240)]) {
+      expect(occurrencesIn(utc(w), at('2027-01-15T09:00:00Z'), at('2027-01-15T09:05:00Z'))).toHaveLength(1);
+      expect(occurrencesIn(utc(w, more), at('2027-01-15T09:00:00Z'), at('2027-01-15T09:05:00Z'))).toEqual([]);
+    }
+  });
+
+  it('a stored window it cannot read has no occurrence, rather than an error, and the others keep their index', () => {
+    const windows = [
+      { kind: 'awake', repeat: { pattern: 'cron', cron: 'not cron', minutes: 60 } },
+      { kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'hourly' } },
+      { kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily' } },
+    ] as unknown as ScheduleWindow[];
+    expect(nextOccurrences({ timeZone: 'UTC', windows }, NOW, 1).map((o) => o.window)).toEqual([2]);
+    expect(nextOccurrences({ timeZone: 'UTC', windows: windows.slice(0, 2) }, NOW)).toEqual([]);
+    expect(nextEvents({ timeZone: 'UTC', windows: windows.slice(0, 2) }, NOW)).toEqual([]);
+  });
+
+  it('nextOccurrences gives the coming starts only, a */5 window quickly', () => {
+    const begin = performance.now();
+    expect(dates(utc(cron('*/5 * * * *')), 3, at('2027-01-06T12:02:00Z'))).toEqual(['2027-01-06 12:05', '2027-01-06 12:10', '2027-01-06 12:15']);
+    expect(performance.now() - begin).toBeLessThan(200);
+  });
+
+  it('nextOccurrences reads from the start date when it is far ahead, and 10 years on from there', () => {
+    expect(dates(utc(awake({ repeat: { pattern: 'daily' }, from: '2099-01-04' })), 1)).toEqual(at8('2099-01-04'));
+    expect(dates(utc(cron('0 8 29 2 *')), 1)).toEqual(at8('2028-02-29'));
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2027-12-01' })))).toEqual(at8('2027-12-25', '2028-12-25', '2029-12-25', '2030-12-25', '2031-12-25'));
+    expect(dates(utc(awake({ repeat: { pattern: 'monthly', interval: 99, day: 1 }, from: '2027-02-01' })))).toEqual(at8('2027-02-01', '2035-05-01'));
+    expect(nextOccurrences({ timeZone: 'UTC', windows: [] }, NOW)).toEqual([]);
+  });
+
+  it('says how often a cron expression starts at its shortest, or null with one start a day or an expression it cannot read', () => {
+    expect(cronShortestGap('*/5 * * * *')).toBe(5);
+    expect(cronShortestGap('*/15 8 * * *')).toBe(15);
+    expect(cronShortestGap('0,10 8 * * *')).toBe(10);
+    expect(cronShortestGap('0,30 8 * * *')).toBe(30);
+    expect(cronShortestGap('55 23 * * *')).toBeNull();
+    expect(cronShortestGap('0,55 0,23 * * *')).toBe(5);
+    expect(cronShortestGap('nope')).toBeNull();
+  });
+
+  it('gives the local date in a zone', () => {
+    expect(localDate(at('2026-12-31T23:30:00Z'), 'Europe/Paris')).toBe('2027-01-01');
+    expect(localDate(at('2026-12-31T23:30:00Z'), 'UTC')).toBe('2026-12-31');
+  });
+});
+
+describe('a window\'s problems, in the router\'s words', () => {
+  const problems = (w: unknown) => windowProblems(w as ScheduleWindow, 'windows[1]');
+  const cron = (expression: string) => ({ kind: 'awake', repeat: { pattern: 'cron', cron: expression, minutes: 60 } });
+
+  it('finds none in the design\'s examples', () => {
+    for (const w of [
+      { kind: 'awake', days: ['mon', 'fri'], start: '08:30', end: '19:00' },
+      { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' },
+      { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04', until: '2027-06-30', wake: 'header' },
+      { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'monthly', interval: 1, day: 15 } },
+      { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'monthly', interval: 3, nth: 1, weekday: 'mon' }, from: '2027-01-01' },
+      { kind: 'nap', start: '00:00', end: '00:00', repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2026-12-01' },
+      { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+    ]) expect(problems(w), JSON.stringify(w)).toEqual([]);
+  });
+
+  it('names the field and says why', () => {
+    expect(problems(cron('* 8 * * *'))).toEqual(['windows[1].repeat.cron: minutes must be multiples of 5, as schedule times are: * is every minute, */5 every five']);
+    expect(problems(cron('cron(0 8 * * ? *)'))).toEqual(['windows[1].repeat.cron: five fields: minute hour day-of-month month day-of-week']);
+    expect(problems(cron('0 8 31 2 *'))).toEqual(['windows[1].repeat.cron: never matches: no such date in that month']);
+    expect(problems({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily', interval: 2 } })).toEqual(['windows[1].from: required when repeat.interval is above 1, it anchors the count']);
+    expect(problems({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00', from: '2027-01-05', until: '2027-01-04' })).toEqual(['windows[1].until: not before from']);
+    expect(problems({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 7 } })).toEqual(['windows[1].repeat.minutes: a multiple of 5 from 5 to 10080']);
+    expect(problems({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily', interval: NaN } })).toEqual(['windows[1].repeat.interval: a whole number from 1 to 99']);
+  });
+
+  it('reads them by field for a form', () => {
+    expect(fieldProblems({ kind: 'awake', days: [], start: '08:00', end: '09:00', from: '2027-1-5' })).toEqual({
+      days: 'one or more of mon, tue, wed, thu, fri, sat, sun, each once', from: 'a date YYYY-MM-DD',
+    });
   });
 });

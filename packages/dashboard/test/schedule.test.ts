@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalZone, daysText, eventText, formProblem, hoursText, scheduleBody, TIMES, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { canonicalZone, dateText, daysText, durationText, eventText, formProblem, hoursText, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withInterval, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { causeText } from '../src/history';
 
 describe('schedule formatting', () => {
@@ -73,6 +73,168 @@ describe('schedule formatting', () => {
 
   it('puts no zone in a schedule without windows (only a maximum nap)', () => {
     expect(scheduleBody({ timeZone: '', windows: [], exceptions: [] }, '7')).toEqual({ windows: [], maxNapDays: 7 });
+  });
+});
+
+describe('a recurrence in words', () => {
+  const nap = (fields: Partial<ScheduleWindow>): ScheduleWindow => ({ kind: 'nap', start: '00:00', end: '00:00', ...fields });
+  const hours = (fields: Partial<ScheduleWindow>): ScheduleWindow => ({ kind: 'awake', start: '08:00', end: '18:00', ...fields });
+
+  it('reads the design\'s examples', () => {
+    expect(recurrenceText({ kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04' })).toBe('Every 2 weeks on Mon, Thu, 20:00–07:00 next day, from 4 Jan 2027, no end date');
+    expect(repeatText(nap({ repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2026-12-01' }))).toBe('Yearly on 25 Dec');
+    expect(recurrenceText({ kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } })).toBe('Cron 30 8 * * 1-5, 10 h 30 min');
+    expect(recurrenceText(nap({ repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2026-12-01' }))).toBe('Yearly on 25 Dec, all day (24 hours), from 1 Dec 2026, no end date');
+  });
+
+  it('reads every pattern', () => {
+    const text = (repeat: ScheduleWindow['repeat'], from?: string) => repeatText(hours({ repeat, ...(from ? { from } : {}) }));
+    expect(text({ pattern: 'daily' })).toBe('Every day');
+    expect(text({ pattern: 'daily', interval: 1 })).toBe('Every day');
+    expect(text({ pattern: 'daily', interval: 3 }, '2027-01-04')).toBe('Every 3 days');
+    expect(text({ pattern: 'weekly', days: ['thu', 'mon'] })).toBe('Weekly on Mon, Thu');
+    expect(text({ pattern: 'weekly', days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] })).toBe('Every day');
+    expect(text({ pattern: 'weekly', interval: 2, days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }, '2027-01-04')).toBe('Every 2 weeks, every day');
+    expect(text({ pattern: 'monthly', day: 15 })).toBe('Monthly on day 15');
+    expect(text({ pattern: 'monthly', interval: 3, day: 15 }, '2027-01-01')).toBe('Every 3 months on day 15');
+    expect(text({ pattern: 'monthly', nth: 1, weekday: 'mon' })).toBe('Monthly on the first Mon');
+    expect(text({ pattern: 'monthly', interval: 3, nth: -1, weekday: 'sun' }, '2027-01-01')).toBe('Every 3 months on the last Sun');
+    expect(text({ pattern: 'monthly', interval: 12, nth: 2, weekday: 'tue' }, '2027-03-01')).toBe('Yearly on the second Tue of Mar');
+    expect(text({ pattern: 'cron', cron: ' 0  8 * * * ', minutes: 60 })).toBe('Cron 0 8 * * *');
+  });
+
+  it('reads a plain weekly window as it always did', () => {
+    const plain = hours({ days: ['mon', 'tue', 'wed', 'thu', 'fri'] });
+    expect(repeatText(plain)).toBe('Mon–Fri');
+    expect(recurrenceText(plain)).toBe('Mon–Fri, 08:00–18:00');
+    expect(recurrenceText(hours({ days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }))).toBe('Every day, 08:00–18:00');
+  });
+
+  it('reads the range: each of from and until alone, and both', () => {
+    expect(rangeText(hours({ days: ['mon'] }))).toBe('');
+    expect(rangeText(hours({ days: ['mon'], from: '2027-01-04' }))).toBe('from 4 Jan 2027, no end date');
+    expect(rangeText(hours({ days: ['mon'], until: '2027-06-30' }))).toBe('until 30 Jun 2027');
+    expect(rangeText(hours({ days: ['mon'], from: '2027-01-04', until: '2027-06-30' }))).toBe('from 4 Jan 2027 to 30 Jun 2027');
+    expect(dateText('2027-12-05')).toBe('5 Dec 2027');
+  });
+
+  it('reads a duration in hours and minutes, days past 24 hours', () => {
+    expect(durationText(630)).toBe('10 h 30 min');
+    expect(durationText(45)).toBe('45 min');
+    expect(durationText(120)).toBe('2 h');
+    expect(durationText(1440)).toBe('1 day');
+    expect(durationText(1445)).toBe('1 day 5 min');
+    expect(durationText(10080)).toBe('7 days');
+    expect(hoursText({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 90 } })).toBe('1 h 30 min');
+  });
+
+  it('survives a window it cannot read, or a form half filled', () => {
+    expect(repeatText({ kind: 'awake', repeat: { pattern: 'hourly' } } as unknown as ScheduleWindow)).toBe('Repeats by hourly');
+    expect(repeatText({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'monthly', interval: 12, day: 25 } })).toBe('Every 12 months on day 25');
+    expect(durationText(NaN)).toBe('');
+    expect(daysText([])).toBe('');
+    expect(repeatText({ kind: 'awake', start: '08:00', end: '09:00' })).toBe('');
+  });
+
+  it('reads an occurrence in the schedule\'s zone, the year on its first day only', () => {
+    const at = Date.parse;
+    expect(occurrenceText({ start: at('2027-01-04T07:00:00Z'), end: at('2027-01-04T11:00:00Z') }, 'Europe/Paris')).toBe('Mon 4 Jan 2027, 08:00–12:00');
+    expect(occurrenceText({ start: at('2027-01-04T19:00:00Z'), end: at('2027-01-05T06:00:00Z') }, 'Europe/Paris')).toBe('Mon 4 Jan 2027, 20:00 – Tue 5 Jan, 07:00');
+    expect(occurrenceText({ start: at('2027-01-04T19:00:00Z'), end: at('2027-01-05T06:00:00Z') }, 'UTC')).toBe('Mon 4 Jan 2027, 19:00 – Tue 5 Jan, 06:00');
+  });
+});
+
+describe('the body of a recurring window', () => {
+  const stored: ScheduleWindow[] = [
+    { kind: 'awake', days: ['mon', 'fri'], start: '08:30', end: '19:00' },
+    { kind: 'awake', days: ['mon'], start: '08:30', end: '19:00', from: '2027-01-04', until: '2027-02-01' },
+    { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' },
+    { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04', until: '2027-06-30', wake: 'header' },
+    { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'weekly', days: ['tue'] } },
+    { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'monthly', interval: 1, day: 15 } },
+    { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'monthly', interval: 3, nth: 1, weekday: 'mon' }, from: '2027-01-01' },
+    { kind: 'nap', start: '00:00', end: '00:00', repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2026-12-01', wake: 'never' },
+    { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+  ];
+
+  it('a window read back and saved again stays what it was', () => {
+    expect(scheduleBody({ timeZone: 'UTC', windows: stored }, '').windows).toEqual(stored);
+    expect(scheduleBody({ timeZone: 'UTC', windows: JSON.parse(JSON.stringify(stored)) }, '').windows).toEqual(stored);
+  });
+
+  it('drops the empty fields, null and blank, and what a kind or pattern does not take', () => {
+    const blank = { kind: 'awake', days: null, start: '08:00', end: '09:00', from: '', until: null, wake: 'never', repeat: { pattern: 'monthly', interval: null, day: null, nth: -1, weekday: 'sun' } } as unknown as ScheduleWindow;
+    expect(windowBody(blank)).toEqual({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'monthly', nth: -1, weekday: 'sun' } });
+    expect(windowBody({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00', from: null, until: null, repeat: null } as unknown as ScheduleWindow)).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' });
+    expect(windowBody({ kind: 'awake', days: [], start: '08:00', end: '09:00', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } })).toEqual({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } });
+    expect(windowBody({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'weekly', days: ['fri', 'mon'] } }).repeat).toEqual({ pattern: 'weekly', days: ['mon', 'fri'] });
+  });
+
+  it('keeps the old checks for the form, and a window without days raises none', () => {
+    for (const w of stored) expect(formProblem({ timeZone: 'UTC', windows: [w] }, ''), JSON.stringify(w)).toBe('');
+  });
+});
+
+describe('the helper\'s changes to a window', () => {
+  const today = '2026-11-03';
+  const memory = { days: ['mon', 'tue'] as ScheduleWindow['days'] & object, start: '09:00', end: '17:00' };
+  const plain: ScheduleWindow = { kind: 'nap', days: ['mon', 'thu'], start: '20:00', end: '07:00', wake: 'header' };
+
+  it('reads which choice a window is', () => {
+    expect(repeatChoice(plain)).toBe('weekly');
+    expect(repeatChoice({ ...plain, days: undefined, repeat: { pattern: 'weekly', interval: 2, days: ['mon'] } })).toBe('weekly');
+    expect(repeatChoice({ ...plain, repeat: { pattern: 'daily' } })).toBe('daily');
+    expect(repeatChoice({ ...plain, repeat: { pattern: 'monthly', day: 1 } })).toBe('monthly');
+    expect(repeatChoice({ ...plain, repeat: { pattern: 'monthly', interval: 12, day: 1 } })).toBe('yearly');
+    expect(repeatChoice({ ...plain, repeat: { pattern: 'monthly', interval: 24, day: 1 } })).toBe('monthly');
+    expect(repeatChoice({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } })).toBe('cron');
+    expect(repeatChoice({ kind: 'awake', repeat: { pattern: 'hourly' } } as unknown as ScheduleWindow)).toBeNull();
+  });
+
+  it('moves to each pattern, keeping the kind, the wake, the times and the range', () => {
+    const ranged = { ...plain, until: '2027-06-30' };
+    expect(withChoice(ranged, 'daily', today, memory)).toEqual({ kind: 'nap', wake: 'header', until: '2027-06-30', start: '20:00', end: '07:00', repeat: { pattern: 'daily' } });
+    expect(withChoice(ranged, 'monthly', today, memory)).toEqual({ kind: 'nap', wake: 'header', until: '2027-06-30', start: '20:00', end: '07:00', repeat: { pattern: 'monthly', day: 3 } });
+  });
+
+  it('yearly needs a start date: today, its day the month\'s, unless one is set', () => {
+    expect(withChoice(plain, 'yearly', today, memory)).toMatchObject({ from: today, repeat: { pattern: 'monthly', interval: 12, day: 3 } });
+    expect(withChoice({ ...plain, from: '2027-12-25' }, 'yearly', today, memory)).toMatchObject({ from: '2027-12-25', repeat: { pattern: 'monthly', interval: 12, day: 25 } });
+    expect(withChoice({ ...plain, repeat: { pattern: 'monthly', nth: 2, weekday: 'tue' }, days: undefined }, 'yearly', today, memory).repeat).toEqual({ pattern: 'monthly', interval: 12, nth: 2, weekday: 'tue' });
+    expect(withChoice({ ...plain, repeat: { pattern: 'monthly', interval: 12, day: 9 }, days: undefined, from: today }, 'monthly', today, memory).repeat).toEqual({ pattern: 'monthly', day: 9 });
+  });
+
+  it('a cron starts from the window\'s start, days and length, and drops the times', () => {
+    expect(withChoice(plain, 'cron', today, memory)).toEqual({ kind: 'nap', wake: 'header', repeat: { pattern: 'cron', cron: '0 20 * * 1,4', minutes: 660 } });
+    expect(withChoice({ kind: 'awake', start: '08:30', end: '08:30', repeat: { pattern: 'daily' } }, 'cron', today, memory)).toEqual({ kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * *', minutes: 1440 } });
+  });
+
+  it('comes back from a cron to the times and days it remembers', () => {
+    const cron: ScheduleWindow = { kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } };
+    expect(withChoice(cron, 'weekly', today, memory)).toEqual({ kind: 'awake', days: ['mon', 'tue'], start: '09:00', end: '17:00' });
+  });
+
+  it('an interval above 1 sets the start date, and a weekly window takes a repeat for it; back at 1 a plain one again', () => {
+    const two = withInterval(plain, 2, today);
+    expect(two).toEqual({ kind: 'nap', wake: 'header', start: '20:00', end: '07:00', from: today, repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] } });
+    expect(withInterval(two, 1, today)).toEqual({ kind: 'nap', wake: 'header', start: '20:00', end: '07:00', from: today, days: ['mon', 'thu'] });
+    expect(withInterval({ ...plain, days: undefined, repeat: { pattern: 'daily' } }, 3, today)).toMatchObject({ from: today, repeat: { pattern: 'daily', interval: 3 } });
+    expect(withInterval({ ...plain, days: undefined, repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-01' }, 1, today)).toMatchObject({ from: '2027-01-01', repeat: { pattern: 'daily' } });
+    expect(withInterval({ ...plain, days: undefined, repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-01' }, 1, today).repeat).toEqual({ pattern: 'daily' });
+    expect(withInterval({ ...plain, days: undefined, repeat: { pattern: 'daily' } }, NaN, today).repeat).toEqual({ pattern: 'daily', interval: NaN });
+  });
+});
+
+describe('a refusal of an older router', () => {
+  it('adds that recurrences need router 0.36.0 when a recurrence field is unknown to it', () => {
+    expect(recurrenceError('windows[0].repeat: unknown field')).toBe('windows[0].repeat: unknown field. Recurrences need router 0.36.0 or later.');
+    expect(recurrenceError('windows[0].days: one or more of mon; windows[2].from: unknown field; windows[2].until: unknown field')).toContain('Recurrences need router 0.36.0');
+  });
+
+  it('leaves any other message as it is', () => {
+    expect(recurrenceError('')).toBe('');
+    expect(recurrenceError('boom')).toBe('boom');
+    expect(recurrenceError('windows[0].other: unknown field')).toBe('windows[0].other: unknown field');
   });
 });
 

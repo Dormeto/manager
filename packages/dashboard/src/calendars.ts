@@ -1,7 +1,7 @@
 // The Schedules calendar's data: the fixed palette, the enabled calendars kept in the browser (per user), the support of
 // routers, and the events drawn from a workload's schedule. Pure apart from the storage helpers.
-import { browserZone, type NextEvent, type Schedule } from './schedule';
-import { occurrencesIn } from './occurrences';
+import { browserZone, recurrenceText, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
+import { occurrencesIn, type Occurrence } from './occurrences';
 
 export const MAX_CALENDARS = 20;
 export const MIN_ROUTER = '0.31.0';
@@ -94,27 +94,57 @@ export interface CalendarEvent {
   extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; window?: number; tip: string };
 }
 
-const clock = (t: number, timeZone: string, day = true) => new Intl.DateTimeFormat('en-GB', { timeZone, ...(day ? { weekday: 'short' as const } : {}), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(t)).replace(',', '');
+// One formatter a zone: a frequent cron window has thousands of occurrences on a month.
+const clocks = new Map<string, Intl.DateTimeFormat>();
+const clock = (t: number, timeZone: string, day = true) => {
+  const key = `${timeZone} ${day}`;
+  let f = clocks.get(key);
+  if (!f) clocks.set(key, f = new Intl.DateTimeFormat('en-GB', { timeZone, ...(day ? { weekday: 'short' as const } : {}), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }));
+  return f.format(new Date(t)).replace(',', '');
+};
+
+// A window on weekly days and nothing else reads on the calendar as it always did; any other says its recurrence.
+const isPlain = (w: ScheduleWindow | undefined): boolean => !w || !(w.repeat || w.from || w.until);
+
+// Occurrences of a cron window that touch or overlap are one bar: every 5 minutes for 5 minutes draws the hours it holds,
+// not a tile for each start. Others stay one a day, as they always were.
+function drawn(occurrences: Occurrence[], windows: ScheduleWindow[]): Occurrence[] {
+  const bars: Occurrence[] = [];
+  const last = new Map<number, Occurrence>();
+  for (const o of occurrences) {
+    const bar = windows[o.window]?.repeat?.pattern === 'cron' ? last.get(o.window) : undefined;
+    if (bar && o.start <= bar.end) {
+      bar.end = Math.max(bar.end, o.end);
+      continue;
+    }
+    const copy = { ...o };
+    last.set(o.window, copy);
+    bars.push(copy);
+  }
+  return bars;
+}
 
 // The events of the calendars in [from, to): a window's occurrence is "<workload> · Awake" filled, or "· Nap (wake: header)"
 // outlined (its text readable on the theme's surface); a maximum nap's maintenance due time of an asleep workload is a short marker. The tooltip gives the times in the
-// schedule's own zone when it is not the browser's. An occurrence that ended before `now` carries `dm-past` (drawn dimmed).
+// schedule's own zone when it is not the browser's, and a recurrence in its words. An occurrence that ended before `now` carries `dm-past` (drawn dimmed).
 export function eventsFor(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false, now: number = Date.now()): CalendarEvent[] {
   const surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
   const out: CalendarEvent[] = [];
   for (const c of calendars) {
     const s = c.schedule;
     if (!s) continue;
-    for (const o of occurrencesIn(s, from, to)) {
+    const windows = s.windows ?? [];
+    for (const o of drawn(occurrencesIn(s, from, to), windows)) {
       const nap = o.kind === 'nap';
       const label = nap ? `Nap${o.wake === 'header' ? ' (wake: header)' : ''}` : 'Awake';
       const title = `${c.name} · ${label}`;
       const there = s.timeZone && s.timeZone !== here ? ` — ${clock(o.start, s.timeZone)}–${clock(o.end, s.timeZone, false)} ${s.timeZone}` : '';
+      const words = isPlain(windows[o.window]) ? '' : ` — ${recurrenceText(windows[o.window]!)}`;
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
         classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake', ...(o.end < now ? ['dm-past'] : [])],
         backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
-        extendedProps: { key: c.key, kind: o.kind, window: o.window, tip: `${title}${there}` },
+        extendedProps: { key: c.key, kind: o.kind, window: o.window, tip: `${title}${there}${words}` },
       });
     }
     const due = c.maintenanceDue ? Date.parse(c.maintenanceDue) : NaN;

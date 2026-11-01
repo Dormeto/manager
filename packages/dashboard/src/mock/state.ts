@@ -287,6 +287,28 @@ const SCHEDULES: (() => Schedule)[] = [
     { kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00', wake: 'never' },
   ], ...BY }),
 ];
+// One example of each kind of recurrence (router 0.36.0), each on a workload of its own of an up-to-date router (build).
+const RECURRENCES: (() => Schedule)[] = [
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: dateIn(-5) },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: dateIn(-5), until: dateIn(150), wake: 'header' },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'monthly', day: 15 } },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', start: '08:00', end: '18:00', repeat: { pattern: 'monthly', interval: 3, nth: 1, weekday: 'mon' }, from: dateIn(-5) },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'nap', start: '00:00', end: '00:00', repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: dateIn(-30) },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+    { kind: 'nap', repeat: { pattern: 'cron', cron: '0 22 * * FRI', minutes: 600 }, wake: 'header' },
+  ], ...BY }),
+];
 
 // R11: the demo's teams, whose workloads the groups below pick by their team tag.
 const TEAMS = ['payments', 'platform', 'data', 'web'];
@@ -542,6 +564,8 @@ function build(now: number): Demo {
   seedDescriptions(routers, workloads, now);
   seedFavicons(workloads, now);
   workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
+  const current = workloads.filter((w) => !w.schedule && routers.find((r) => r.name === w.router)?.version === AVAILABLE.version);
+  RECURRENCES.forEach((make, i) => { if (current[i]) current[i]!.schedule = make(); });
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {
     t0: now,

@@ -16,6 +16,14 @@ The commands the dashboard's Update page and the docs tell you to run are `dorme
 (`dormeto aws estimate`, `dormeto aws install status`): they need a CLI that has `aws`, which comes with the CLI after
 0.8.0. The old names (`dormeto install`) go on working with that CLI, with a notice, until a later release removes them.
 
+A schedule's window repeats on more than chosen weekdays (routers 0.36.0 and later): daily, weekly, monthly on a day or on
+the first to fourth or last weekday, every N days, weeks or months, yearly, or by a cron expression (crontab's five fields,
+minutes multiples of 5). It can have a start date and an end date, the end optional. A day past a month's end falls on the
+month's last day. The window's editor says it back in a sentence and shows its next occurrences; the card and the calendars
+read the same words. A cron expression starting every 15 minutes or less brings a warning: each start applies again, so a
+manual Nap or Wake lasts until the next start, and an awake window blocks naps. A router before 0.36.0 refuses these windows
+(`unknown field`), and the dialog says it needs that version; plain weekly windows go on working on any router.
+
 ## 0.20.0 — 2026-11-01
 
 Router 0.35.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

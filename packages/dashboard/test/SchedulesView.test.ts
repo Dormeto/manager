@@ -400,6 +400,7 @@ const click = async (sel: string) => { (body().querySelector(sel) as HTMLElement
 const field = (w: VueWrapper, name: string) => dialog(w).findComponent(`[data-test="${name}"]`) as unknown as { props(n: string): unknown; vm: { $emit(...a: unknown[]): void } };
 const times = (w: VueWrapper) => `${field(w, 'nw-start').props('modelValue')}–${field(w, 'nw-end').props('modelValue')}`;
 const puts = () => h.calls.filter((c) => c.method === 'PUT');
+let recorded: Schedule | null = null;
 
 describe('Schedules view: creating a window', () => {
   it('opens the dialog prefilled from a week selection and saves the existing windows plus the new one', async () => {
@@ -436,7 +437,7 @@ describe('Schedules view: creating a window', () => {
     await enable(wrapper, 'dmt-dev/a');
     await select(wrapper, at('2026-10-19', '22:00'), at('2026-10-20', '06:00'));
     expect(times(wrapper)).toBe('22:00–06:00');
-    expect(text('[data-test="nw-length"]')).toBe('(next day)');
+    expect(text('[data-test="nw-sentence"]')).toBe('Mon, 22:00–06:00 next day');
     await click('[data-test="nw-save"]');
     expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', days: ['mon'], start: '22:00', end: '06:00' });
   });
@@ -554,7 +555,7 @@ describe('Schedules view: creating a window', () => {
     await field(wrapper, 'nw-start').vm.$emit('update:modelValue', '09:15');
     await field(wrapper, 'nw-end').vm.$emit('update:modelValue', '09:15');
     await flushPromises();
-    expect(text('[data-test="nw-length"]')).toBe('24 hours');
+    expect(text('[data-test="nw-sentence"]')).toContain('all day (24 hours)');
     expect(text('[data-test="nw-repeats"]')).toContain('Mon, Tue');
     await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/b');
     await flushPromises();
@@ -639,6 +640,55 @@ describe('Schedules view: creating a window', () => {
     await click('[data-test="nw-day-wed"]');
     expect(text('[data-test="nw-repeats"]')).toBe('Wed');
     expect(body().querySelector('[data-test="nw-days-hint"]')).toBeNull();
+  });
+
+  it('a calendar selection starts a weekly window, which the helper can turn into another pattern', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '12:00'), at('2026-10-19', '13:00'));
+    expect(field(wrapper, 'nw-pattern').props('modelValue')).toBe('weekly');
+    await field(wrapper, 'nw-pattern').vm.$emit('update:modelValue', 'monthly');
+    await flushPromises();
+    await field(wrapper, 'nw-month-day').vm.$emit('update:modelValue', '15');
+    await flushPromises();
+    await field(wrapper, 'nw-from').vm.$emit('update:modelValue', '2099-01-01');
+    await flushPromises();
+    expect(text('[data-test="nw-sentence"]')).toBe('Monthly on day 15, 12:00–13:00, from 1 Jan 2099, no end date');
+    expect(body().querySelectorAll('[data-test="nw-next"] li')).toHaveLength(5);
+    await click('[data-test="nw-save"]');
+    expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', start: '12:00', end: '13:00', repeat: { pattern: 'monthly', day: 15 }, from: '2099-01-01' });
+  });
+
+  it('keeps Save off on a cron expression it cannot read, and says why', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '12:00'), at('2026-10-19', '13:00'));
+    await field(wrapper, 'nw-pattern').vm.$emit('update:modelValue', 'cron');
+    await flushPromises();
+    await field(wrapper, 'nw-cron').vm.$emit('update:modelValue', '* 8 * * *');
+    await flushPromises();
+    expect(body().querySelector('[data-test="nw-cron"]')!.closest('.v-input')!.textContent).toContain('minutes must be multiples of 5');
+    expect((body().querySelector('[data-test="nw-save"]') as HTMLButtonElement).disabled).toBe(true);
+    await field(wrapper, 'nw-cron').vm.$emit('update:modelValue', '30 8 * * 1-5');
+    await flushPromises();
+    await click('[data-test="nw-save"]');
+    expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 60 } });
+  });
+
+  it('saves a recurring window already in the schedule as it was, beside the new one', async () => {
+    const stored = { kind: 'awake', start: '10:00', end: '11:00', repeat: { pattern: 'monthly', nth: -1, weekday: 'fri' }, from: '2099-01-01' };
+    const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates: [{ key: 'r/a', name: 'Shop', schedule: { timeZone: 'UTC', windows: [stored as never] } }], selection: { start: new Date(), end: new Date(Date.now() + 3_600_000), month: false }, last: 'r/a', onSubmit: (arg: { schedule: Schedule }) => { recorded = arg.schedule; } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    await click('[data-test="nw-save"]');
+    expect(recorded!.windows![0]).toEqual(stored);
+    wrapper.unmount();
+  });
+
+  it('adds the hint to the refusal of a router that does not know recurrences', async () => {
+    const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates: [{ key: 'r/a', name: 'Shop', schedule: null }], selection: { start: new Date(), end: new Date(Date.now() + 3_600_000), month: false }, last: 'r/a', error: 'windows[0].from: unknown field' })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    expect(text('[data-test="nw-error"]')).toBe('windows[0].from: unknown field. Recurrences need router 0.36.0 or later.');
+    wrapper.unmount();
   });
 
   it('does not offer a calendar whose last read failed', async () => {
