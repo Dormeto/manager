@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
   errors: [] as { router: string; message: string }[],
   // Reads held until released, with how many are in flight at most.
   hold: null as null | Promise<void>,
+  // Run once, while a read is out: what lands in that gap.
+  duringRead: null as null | (() => Promise<void>),
   active: 0,
   peak: 0,
 }));
@@ -54,6 +56,11 @@ vi.mock('../src/api', () => ({
       h.active++;
       h.peak = Math.max(h.peak, h.active);
       try { await h.hold; } finally { h.active--; }
+    }
+    if (!init.method && h.duringRead) {
+      const during = h.duringRead;
+      h.duringRead = null;
+      await during();
     }
     if (h.fail.has(path)) throw new Error('boom');
     if (init.method === 'PUT') return {};
@@ -92,7 +99,7 @@ const enable = async (w: VueWrapper, key: string) => {
 const toast = () => document.querySelector('.dm-toast .v-snackbar__content')?.textContent?.trim();
 const eventTitles = (w: VueWrapper) => w.findAll('.fc-event').map((e) => e.text());
 
-beforeEach(() => { h.calls.length = 0; h.fail.clear(); h.errors = []; h.hold = null; h.active = 0; h.peak = 0; seed(); window.localStorage.clear(); });
+beforeEach(() => { h.calls.length = 0; h.fail.clear(); h.errors = []; h.hold = null; h.duringRead = null; h.active = 0; h.peak = 0; seed(); window.localStorage.clear(); });
 afterEach(() => { mounted.splice(0).forEach((w) => w.unmount()); document.body.innerHTML = ''; });
 
 describe('Schedules view: the calendars panel', () => {
@@ -909,11 +916,18 @@ describe('Schedules view: the shared tooltip of the calendar items', () => {
 });
 
 describe('Schedules view: moving a window by dragging it', () => {
-  type Drop = { event: { start: Date; extendedProps: Record<string, unknown> }; oldEvent: { start: Date }; revert(): void };
+  type Delta = { years: number; months: number; days: number; milliseconds: number };
+  type Drop = { event: { start: Date; extendedProps: Record<string, unknown> }; oldEvent: { start: Date }; delta: Delta; revert(): void };
+  // FullCalendar's delta between two instants: days and time of day on the calendar's clock, the browser's here (diffDayAndTime).
+  const deltaOf = (from: Date, to: Date): Delta => {
+    const day = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+    const time = (d: Date) => (d.getHours() * 60 + d.getMinutes()) * 60_000;
+    return { years: 0, months: 0, days: Math.round((day(to) - day(from)) / 86_400_000), milliseconds: time(to) - time(from) };
+  };
   const dropOf = (w: VueWrapper) => (w.findComponent(FullCalendar).props('options') as { eventDrop(arg: Drop): Promise<void> }).eventDrop;
   const drop = async (w: VueWrapper, key: string, window: number, from: string, to: string) => {
     const revert = vi.fn();
-    await dropOf(w)({ event: { start: new Date(to), extendedProps: { key, window } }, oldEvent: { start: new Date(from) }, revert });
+    await dropOf(w)({ event: { start: new Date(to), extendedProps: { key, window } }, oldEvent: { start: new Date(from) }, delta: deltaOf(new Date(from), new Date(to)), revert });
     await flushPromises();
     return revert;
   };
@@ -941,12 +955,20 @@ describe('Schedules view: moving a window by dragging it', () => {
     expect(toast()).toBe('Window moved: every occurrence of Shop now runs Mon–Fri, 09:30–20:30');
   });
 
-  it('computes the offset on the schedule\'s own clock', async () => {
+  it('moves by the calendar\'s own delta, whatever the schedule\'s zone', async () => {
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/b');
-    // Wed 09:00 New York; a day later in instants, its clock a day later too.
     await drop(wrapper, 'dmt-dev/b', 0, '2026-10-21T09:00:00-04:00', '2026-10-22T09:00:00-04:00');
     expect(JSON.parse(puts()[0]!.body!).windows[0]).toEqual({ kind: 'awake', days: ['thu'], start: '09:00', end: '12:00' });
+  });
+
+  it('a whole-day drag keeps the clock time across the browser\'s clock change, the schedule in another zone', async () => {
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { timeZone: 'UTC', windows: [{ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }] });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    // Mon 22 Mar 2027 to Mon 29 Mar 2027 in a browser in Paris: 7 days on its clock, 167 hours of instants.
+    await drop(wrapper, 'dmt-dev/a', 0, '2027-03-22T09:00:00+01:00', '2027-03-29T09:00:00+02:00');
+    expect(JSON.parse(puts()[0]!.body!).windows[0]).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' });
   });
 
   it('puts back what a shift cannot give, saying so, and writes nothing', async () => {
@@ -1010,6 +1032,66 @@ describe('Schedules view: moving a window by dragging it', () => {
     expect(toast()).toContain('changed since it was read');
   });
 
+  it('compares the fresh read with the window as drawn, though another read lands while it is out: the other window never moves', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    // Someone puts a window first, and the user's Refresh answers during the drop's own read.
+    const first = { kind: 'awake' as const, days: ['sat' as const], start: '14:00', end: '15:00' };
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, windows: [first, ...shopSchedule.windows!] });
+    h.duringRead = async () => { await wrapper.find('[data-test="refresh"]').trigger('click'); await flushPromises(); };
+    h.calls.length = 0;
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(revert).toHaveBeenCalledOnce();
+    expect(puts()).toEqual([]);
+    expect(toast()).toContain('changed since');
+  });
+
+  describe('with dates without a window', () => {
+    const NIGHTLY = { kind: 'nap' as const, start: '23:00', end: '23:30', repeat: { pattern: 'daily' as const }, wake: 'never' as const };
+    const WORDS = 'This schedule has dates without a window, and this move would change which occurrence they skip: edit it in the dialog.';
+    const seeded = async (exceptions: string[]) => {
+      h.status['/workloads/dmt-dev/a'] = status('Shop', { timeZone: 'Europe/Paris', windows: [NIGHTLY], exceptions });
+      const { wrapper } = await open();
+      await enable(wrapper, 'dmt-dev/a');
+      return wrapper;
+    };
+
+    it('puts back a time crossing midnight, or a day\'s move: the date would skip another occurrence', async () => {
+      const wrapper = await seeded(['2099-12-25']);
+      const late = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-05T01:00:00+01:00');
+      expect(late).toHaveBeenCalledOnce();
+      expect(toast()).toBe(WORDS);
+      const dayLater = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-05T23:00:00+01:00');
+      expect(dayLater).toHaveBeenCalledOnce();
+      const earlier = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-03T23:00:00+01:00');
+      expect(earlier).toHaveBeenCalledOnce();
+      expect(puts()).toEqual([]);
+    });
+
+    it('takes a move within the same day', async () => {
+      const wrapper = await seeded(['2099-12-25']);
+      const revert = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-04T21:00:00+01:00');
+      expect(revert).not.toHaveBeenCalled();
+      expect(JSON.parse(puts()[0]!.body!)).toMatchObject({ windows: [{ start: '21:00', end: '21:30' }], exceptions: ['2099-12-25'] });
+    });
+
+    it('takes a day\'s move when the dates have passed: they skip nothing any more', async () => {
+      const wrapper = await seeded(['2020-12-25']);
+      const revert = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-05T01:00:00+01:00');
+      expect(revert).not.toHaveBeenCalled();
+      expect(puts()).toHaveLength(1);
+    });
+  });
+
+  it('after a router\'s rollback, a drag drops the value it no longer knows', async () => {
+    // No joinInherited answered: the router would refuse the stored joinMinutes as unknown, and every save with it.
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, joinMinutes: 30 });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(JSON.parse(puts()[0]!.body!)).not.toHaveProperty('joinMinutes');
+  });
+
   it('puts back a drop that moves nothing, in silence', async () => {
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');
@@ -1058,6 +1140,36 @@ describe('Schedules view: picking a workload', () => {
     h.list = ['w-10', 'W-3', 'alpha', 'w-2'].map((name) => row('dmt-dev', name, name));
     const { wrapper } = await open();
     expect(wrapper.findAll('[data-test^="calendar-"]').map((r) => r.attributes('data-test')!.replace('calendar-dmt-dev/', ''))).toEqual(['alpha', 'w-2', 'W-3', 'w-10']);
+  });
+
+  it('a month cell is a date: a Do not repeat starts on the date clicked, in a schedule of any zone', async () => {
+    // Wed 10 Mar 2027 in Paris begins on the 9th in New York: the date clicked is still the 10th, as the weekly default says.
+    const { wrapper } = await open('?view=month&date=2027-03-01');
+    await enable(wrapper, 'dmt-dev/b');
+    await select(wrapper, at('2027-03-10', '00:00'), at('2027-03-11', '00:00'));
+    expect(field(wrapper, 'nw-days').props('modelValue')).toEqual(['wed']);
+    await field(wrapper, 'nw-pattern').vm.$emit('update:modelValue', 'once');
+    await flushPromises();
+    expect(text('[data-test="nw-sentence"]')).toContain('Once on 10 Mar 2027');
+  });
+
+  it('a time-grid selection stays on the schedule\'s clock', async () => {
+    const { wrapper } = await open('?view=week&date=2027-03-10');
+    await enable(wrapper, 'dmt-dev/b');
+    // 02:00 in Paris on the 10th is the evening of the 9th in New York.
+    await select(wrapper, at('2027-03-10', '02:00'), at('2027-03-10', '03:00'));
+    await field(wrapper, 'nw-pattern').vm.$emit('update:modelValue', 'once');
+    await flushPromises();
+    expect(text('[data-test="nw-sentence"]')).toContain('Once on 9 Mar 2027');
+  });
+
+  it('after a router\'s rollback, a new window drops the value it no longer knows', async () => {
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, joinMinutes: 30 });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-24', '12:00'), at('2026-10-24', '13:00'));
+    await click('[data-test="nw-save"]');
+    expect(JSON.parse(puts()[0]!.body!)).not.toHaveProperty('joinMinutes');
   });
 
   it('dates a Do not repeat from a selection on that day', async () => {

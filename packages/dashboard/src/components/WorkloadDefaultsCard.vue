@@ -36,6 +36,8 @@ async function saveJoin(joinMinutes: number | null) {
     emit('notice', { type: 'success', text: `Windows of one kind join up to ${joinMinutes ?? JOIN_DEFAULT_MINUTES} minutes apart by default: ${saved.note}.` });
   } catch (err) {
     emit('notice', { type: 'error', text: (err as Error).message });
+    // A refusal can be news about the file: what it holds now is said on the card.
+    void load();
   } finally {
     savingJoin.value = false;
     joinOpen.value = false;
@@ -76,6 +78,7 @@ async function confirm() {
     </v-card-item>
     <v-card-text v-if="error" class="text-error">{{ error }}</v-card-text>
     <template v-else-if="defaults">
+    <v-alert v-if="defaults.error" data-test="defaults-error" type="warning" variant="tonal" density="compact" class="mx-4 mb-2" :text="`${defaults.error}: these are the defaults it reads as. Repair the file, or set Hibernate, which replaces it.`" />
     <v-card-text class="d-flex flex-wrap align-center ga-4 pb-2">
       <div class="dm-default">
         <div class="font-weight-medium">Hibernate</div>

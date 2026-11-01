@@ -2,6 +2,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { napMessage } from '../src/waiting-page/page.mjs';
 import { PAGE_STATES, checkHtml, checkIcon, editRights, fromLine, htmlWarnings, organizationView, previewHtml, resolveDraft, whyNoIcon } from '../src/waiting-page';
 
 const routerRules = resolve(import.meta.dirname, '../../../../router/lambda/src/lib/page-settings.mjs');
@@ -221,5 +222,13 @@ describe('htmlWarnings', () => {
     expect(htmlWarnings('<p>wait</p>')).toEqual([expect.stringContaining('data-dormeto="status"')]);
     expect(htmlWarnings('<p data-dormeto="status"></p>')).toEqual([]);
     expect(htmlWarnings('<meta http-equiv="Content-Security-Policy" content="x"><p data-dormeto=status></p>')).toEqual([expect.stringContaining('Content-Security-Policy')]);
+  });
+});
+
+describe('a nap whose end is not known', () => {
+  it('says no end, in each language, and a known end as the router writes it', () => {
+    expect(napMessage({ at: null, local: null, timeZone: 'Europe/Paris' })).toBe('Napping on schedule.');
+    expect(napMessage({ at: null, local: null, timeZone: 'Europe/Paris' }, 'fr')).toBe('En pause programmée.');
+    expect(napMessage({ local: 'Tue 2027-01-19 23:45', timeZone: 'Europe/Paris' })).toBe('Napping on schedule until Tue 2027-01-19 23:45 (Europe/Paris).');
   });
 });

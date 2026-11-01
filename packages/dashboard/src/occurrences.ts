@@ -514,10 +514,15 @@ export function editProblems(w: ScheduleWindow): Record<string, string> {
   return found;
 }
 
-// The offset of a drag in a zone's wall time, in minutes on the 5-minute step: the view may show another zone, and a day on the
-// schedule's clock is a day whatever a clock change does to its instants.
-export function wallOffset(from: number, to: number, timeZone: string): number {
-  return Math.round(((to + offsetAt(to, timeZone)) - (from + offsetAt(from, timeZone))) / (STEP * MINUTE)) * STEP;
+// The offset of a drag, in minutes: FullCalendar's delta, days and time on the calendar's clock. A week later is a week later,
+// and instants would be an hour off across a clock change of the browser's zone that the schedule's does not have.
+export const dragMinutes = ({ days, milliseconds }: { days: number; milliseconds: number }): number => days * 1440 + milliseconds / MINUTE;
+
+// Whether a move changes the day a window's occurrences start on: an exception date removes what starts on it, so it would then
+// remove another occurrence (a night's nap moved past midnight).
+export function movesDay(w: ScheduleWindow, minutes: number): boolean {
+  const start = minutesOf(w.start);
+  return start !== null && Math.floor((start + minutes) / 1440) !== 0;
 }
 
 // The same window `minutes` of wall time later: the times shift, a start crossing midnight adds to a day offset, which rotates

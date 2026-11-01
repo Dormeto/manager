@@ -7,7 +7,8 @@ export interface RenderOptions {
   pollSeconds: number;
   failure?: string;
   retryInMs?: number;
-  napUntil?: { at?: string; local: string; timeZone: string };
+  // at and local null: a nap with no end known.
+  napUntil?: { at?: string | null; local: string | null; timeZone: string };
   probeUrl?: string;
   cloud?: string;
   language?: Language;
@@ -17,5 +18,5 @@ export interface RenderOptions {
 }
 export function languageOf(acceptLanguage: string | undefined | null): Language;
 export function failureMessage(failure: string | undefined, retryInMs?: number, cloud?: string, language?: Language): string;
-export function napMessage(napUntil: { local: string; timeZone: string }, language?: Language): string;
+export function napMessage(napUntil: { at?: string | null; local: string | null; timeZone: string }, language?: Language): string;
 export function renderPage(options: RenderOptions): string;

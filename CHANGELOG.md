@@ -41,6 +41,17 @@ can't be dragged: edit them in the dialog. An older router does not join, and re
 router's routes (`PUT /api/settings/workloads`, `PUT /api/routers/{router}/settings`) take `joinMinutes` without `hibernate`,
 and keep what a write does not send.
 
+This applies to schedules already saved, at 15 minutes by default. The case to know: a daily nap 00:00–23:45 with `wake: never`
+and no maximum nap has no gap left for a visitor to wake it. Set `joinMinutes` to 0 to keep a gap.
+
+A `settings.json` that cannot be read is replaced only by a write naming `hibernate`: setting `joinMinutes` or the
+organization's waiting page answers 409 and says why, so that an organization's hibernation off is not lost. Workload defaults
+shows it. A drag compares the fresh schedule with the window as drawn, moves by the calendar's own days and time, and is put
+back when it would change which occurrence a date without a window skips. A month cell's Do not repeat starts on the date
+clicked. After a router's rollback, a save or a drag drops a stored `joinMinutes` the router no longer knows.
+
+In a custom waiting page, `napUntil.at` and `napUntil.local` of the `dormeto:state` event can be null, for a nap with no end known.
+
 A first tap on a tooltip no longer opens and closes it at once on a phone (a pause, a setting, a router's health, an
 organization's access).
 

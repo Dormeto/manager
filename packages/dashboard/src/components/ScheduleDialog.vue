@@ -42,7 +42,8 @@ watch(() => props.modelValue, (open) => {
   joinMinutes.value = s?.joinMinutes ?? null;
   typed.value = '';
 }, { immediate: true });
-const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: windows.value, exceptions: exceptions.value, joinMinutes: joinMinutes.value }));
+// A router that answers no inherited value does not know a stored one (rolled back), and would refuse every save with it.
+const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: windows.value, exceptions: exceptions.value, joinMinutes: inherited.value ? joinMinutes.value : null }));
 const problem = computed(() => formProblem(form.value, maxNap.value));
 // A window's own problems are shown under its fields, and keep Save off.
 const windowsInvalid = computed(() => windows.value.some((w) => Object.keys(editProblems(w)).length));

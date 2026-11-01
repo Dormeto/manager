@@ -1,7 +1,7 @@
 // The Schedules calendar's arithmetic: a schedule's occurrences at literal instants (overnight and 24-hour windows,
 // clock changes, exceptions, another zone than the browser's), and a calendar selection as a window in a zone.
 import { describe, expect, it } from 'vitest';
-import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, moveWindow, nextOccurrences, occurrencesIn, wallOffset, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
+import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, moveWindow, movesDay, dragMinutes, nextOccurrences, occurrencesIn, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
 import { browserZone, type Schedule, type ScheduleWindow } from '../src/schedule';
 
 const at = (text: string): number => Date.parse(text);
@@ -378,15 +378,20 @@ describe('moving a whole window by dragging an occurrence', () => {
   const times = (w: ScheduleWindow | null) => w && `${w.start}–${w.end}`;
   const awake = (fields: Partial<ScheduleWindow>): ScheduleWindow => ({ kind: 'awake', start: '08:00', end: '12:00', ...fields });
 
-  it('reads the offset in the schedule\'s own wall time, to 5 minutes', () => {
-    const paris = 'Europe/Paris';
-    expect(wallOffset(at('2027-01-04T08:00:00+01:00'), at('2027-01-04T10:00:00+01:00'), paris)).toBe(120);
-    expect(wallOffset(at('2027-01-04T08:00:00+01:00'), at('2027-01-05T08:00:00+01:00'), paris)).toBe(1440);
-    expect(wallOffset(at('2027-01-04T08:00:00+01:00'), at('2027-01-04T08:07:00+01:00'), paris)).toBe(5);
-    // Across the spring change: a day later on the clock is 23 hours of instants.
-    expect(wallOffset(at('2027-03-27T08:00:00+01:00'), at('2027-03-28T08:00:00+02:00'), paris)).toBe(1440);
-    // The view may show another zone: the same instants, a day of New York's clock.
-    expect(wallOffset(at('2027-03-13T08:00:00-05:00'), at('2027-03-14T08:00:00-04:00'), 'America/New_York')).toBe(1440);
+  it('reads the offset from the calendar\'s delta: days and time on its clock', () => {
+    expect(dragMinutes({ days: 0, milliseconds: 7_200_000 })).toBe(120);
+    expect(dragMinutes({ days: 1, milliseconds: 0 })).toBe(1440);
+    expect(dragMinutes({ days: 7, milliseconds: 0 })).toBe(10080);
+    expect(dragMinutes({ days: -1, milliseconds: 3_600_000 })).toBe(-1380);
+  });
+
+  it('knows a move that changes the day occurrences start on', () => {
+    const late = awake({ start: '23:00', end: '23:30', days: ['mon'] });
+    expect(movesDay(late, 30)).toBe(false);
+    expect(movesDay(late, -120)).toBe(false);
+    expect(movesDay(late, 120)).toBe(true);
+    expect(movesDay(late, 1440)).toBe(true);
+    expect(movesDay(awake({ start: '01:00', end: '02:00', days: ['mon'] }), -120)).toBe(true);
   });
 
   it('shifts the times; a plain window keeps its days within a day', () => {

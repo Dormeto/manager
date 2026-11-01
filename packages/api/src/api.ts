@@ -1017,7 +1017,9 @@ export function createApi({
     }
   }
   // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
-  // by hand): read as never set, and replaced by the next write so that an administrator can repair it.
+  // by hand): read as never set. Only a write naming hibernate replaces it, so that an administrator can repair it: another would
+  // lose an organization's hibernate:false without saying so.
+  const UNREADABLE_SETTINGS = 'settings.json is unreadable: this write would replace it, losing what it holds. Repair the file, or set hibernate, which replaces it.';
   async function readSettings(): Promise<Record<string, unknown> | null | 'unreadable'> {
     let doc: unknown;
     try {
@@ -1246,6 +1248,7 @@ export function createApi({
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
         const found = await readSettings();
+        if (found === 'unreadable' && hibernate === undefined) throw new HttpError(409, 'conflict', UNREADABLE_SETTINGS);
         if (found === 'unreadable') console.warn(JSON.stringify({ level: 'warn', event: 'GlobalSettingsReplaced', reason: 'settings.json is unreadable', by: identity.email }));
         const doc = found === 'unreadable' ? {} : found ?? {};
         const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
@@ -1284,8 +1287,8 @@ export function createApi({
       return audited(identity, name, 'organization', async () => {
         // The whole document is read and written back, as the hibernation default does: another key is kept, the last write wins.
         const found = await readSettings();
-        if (found === 'unreadable') console.warn(JSON.stringify({ level: 'warn', event: 'GlobalSettingsReplaced', reason: 'settings.json is unreadable', by: identity.email }));
-        const { waitingPage: before, ...kept } = found === 'unreadable' ? {} : found ?? {};
+        if (found === 'unreadable') throw new HttpError(409, 'conflict', UNREADABLE_SETTINGS);
+        const { waitingPage: before, ...kept } = found ?? {};
         const at = new Date(now()).toISOString();
         await globalSettings.write({ ...kept, ...(page ? { waitingPage: { ...page, by: identity.email, at } } : {}) });
         return {

@@ -552,6 +552,13 @@ describe('Schedule dialog: joined windows', () => {
     expect(firstNext()).toContain('08:00–12:00');
   });
 
+  it('after a router\'s rollback, drops the stored value it no longer knows', async () => {
+    await open({ ...schedule, joinMinutes: 30 });
+    expect(field()).toBeNull();
+    await save();
+    expect(submitted).not.toHaveProperty('joinMinutes');
+  });
+
   it('adds the hint to the refusal of a router that does not know it', async () => {
     await open(schedule, 'joinMinutes: unknown field');
     expect(document.querySelector('[data-test="schedule-error"]')!.textContent).toContain('Joined windows need router 0.36.0 or later.');

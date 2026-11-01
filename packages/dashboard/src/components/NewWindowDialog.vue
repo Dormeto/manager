@@ -36,8 +36,8 @@ const fill = () => {
   draft.value = 'problem' in p ? { kind: 'awake', days: [], start: draft.value.start ?? '08:00', end: draft.value.end ?? '09:00' } : { kind: 'awake', days: [...p.days], start: p.start, end: p.end };
 };
 const chosen = computed(() => options.value.find((c) => c.key === key.value) ?? null);
-// The day of the selection on the zone's clock: where a Do not repeat starts.
-const selectedDate = computed(() => (props.selection ? localDate(props.selection.start.getTime(), zone.value) : null));
+// Where a Do not repeat starts: the day of the selection on the zone's clock; a month cell is a date, the one clicked, whatever the zone.
+const selectedDate = computed(() => (props.selection ? localDate(props.selection.start.getTime(), props.selection.month ? browserZone() : zone.value) : null));
 const zone = computed(() => chosen.value?.schedule?.timeZone || browserZone());
 const placed = computed(() => {
   const s = props.selection;

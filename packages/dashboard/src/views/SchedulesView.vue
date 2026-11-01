@@ -14,8 +14,8 @@ import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventC
 import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
 import { api } from '../api';
 import { MAX_CALENDARS, calendarEvents, calendarKey, cappedText, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
-import { DAYS, browserZone, joinInForce, movedText, recurrenceError, scheduleBody, windowBody, type Day, type Schedule } from '../schedule';
-import { localDate, moveWindow, wallOffset, windowFromSelection } from '../occurrences';
+import { DAYS, browserZone, joinInForce, movedText, recurrenceError, scheduleBody, windowBody, writableSchedule, type Day, type Schedule } from '../schedule';
+import { dragMinutes, localDate, moveWindow, movesDay, windowFromSelection } from '../occurrences';
 import type { WorkloadStatus, WorkloadSummary } from '../types';
 import { useSession } from '../stores/session';
 import CalendarsPanel from '../components/CalendarsPanel.vue';
@@ -257,7 +257,7 @@ const editable = computed<Candidate[]>(() => enabled.value.flatMap((e) => {
   const r = reads[e.key];
   const can = r?.data?.can;
   if (r?.status !== 'ok' || !r.data || !(can?.wake && can.nap)) return [];
-  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ?? null, joinMinutes: joinInForce(r.data) }];
+  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ? writableSchedule(r.data.schedule, r.data) : null, joinMinutes: joinInForce(r.data) }];
 }));
 function openNew(selection: Selection) {
   notice.value = '';
@@ -315,27 +315,36 @@ async function eventDrop(arg: EventDropArg) {
   const name = nameOf(key);
   if (moving.value) { arg.revert(); return; }
   moving.value = true;
+  // As drawn, before any wait: another read can land during the fresh one, and its windows may be in another order.
+  const drawn = reads[key]?.data;
+  const known = drawn?.schedule?.windows?.[index];
   try {
     const fresh = await api<WorkloadStatus>(pathOf(key));
     const schedule = fresh.schedule;
     const window = schedule?.windows?.[index];
-    const known = reads[key]?.data?.schedule?.windows?.[index];
     // The bar was drawn with the value in force too: another one could have drawn another bar.
-    if (!schedule || !window || !known || JSON.stringify(windowBody(window)) !== JSON.stringify(windowBody(known)) || joinInForce(fresh) !== joinInForce(reads[key]?.data)) {
+    if (!schedule || !window || !known || JSON.stringify(windowBody(window)) !== JSON.stringify(windowBody(known)) || joinInForce(fresh) !== joinInForce(drawn)) {
       arg.revert();
       said('warning', `The schedule of ${name} changed since it was read: look at it again before moving this window.`);
       await readOne(key);
       return;
     }
-    const minutes = wallOffset(arg.oldEvent.start!.getTime(), arg.event.start!.getTime(), schedule.timeZone);
+    const minutes = dragMinutes(arg.delta);
     if (!minutes) { arg.revert(); return; }
-    const moved = moveWindow(window, minutes, localDate(Date.now(), schedule.timeZone));
+    const today = localDate(Date.now(), schedule.timeZone);
+    const moved = moveWindow(window, minutes, today);
     if (!moved) {
       arg.revert();
       said('warning', 'This window can\'t be moved by dragging: edit it in the dialog.');
       return;
     }
-    const body = scheduleBody({ ...schedule, windows: schedule.windows!.map((w, i) => (i === index ? moved : w)) }, schedule.maxNapDays ? String(schedule.maxNapDays) : '');
+    // A date that has passed skips nothing any more.
+    if (movesDay(window, minutes) && schedule.exceptions?.some((date) => date >= today)) {
+      arg.revert();
+      said('warning', 'This schedule has dates without a window, and this move would change which occurrence they skip: edit it in the dialog.');
+      return;
+    }
+    const body = scheduleBody({ ...writableSchedule(schedule, fresh), windows: schedule.windows!.map((w, i) => (i === index ? moved : w)) }, schedule.maxNapDays ? String(schedule.maxNapDays) : '');
     await api(`${pathOf(key)}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
     reads[key] = { status: 'ok', data: { ...fresh, schedule: body } };
     said('success', movedText(name, windowBody(moved)));

@@ -34,8 +34,8 @@ time per target group, router or workload, one per load balancer (lock), three p
   by the API only (`PUT /api/settings/workloads`, Routers › Workload defaults), never by Terraform, so an apply keeps it; the bucket's
   `force_destroy` removes it with the bucket at uninstall. Routers 0.32.0 read it beside `catalog.json` (within 5
   minutes); a router without `ip_lists_catalog` reads none and uses its own level or the built-in default. A
-  `settings.json` that is not a JSON object reads as never set (the API says it is unreadable) and the next write
-  replaces it. The same object holds the organization's waiting page under `waitingPage`
+  `settings.json` that is not a JSON object reads as never set (the API says it is unreadable). Only a write naming
+  `hibernate` replaces it; any other, the waiting page's too, is a 409 that says why, as it would lose what the file holds. The same object holds the organization's waiting page under `waitingPage`
   (`GET|PUT|DELETE /api/settings/waiting-page`; routers 0.35.0 read it themselves, so a change reaches visitors within about a
   minute). The page keeps its own `by` and `at` inside `waitingPage`, apart from the file's `updatedBy` and `updatedAt`, which
   stay the hibernation default's. Each setting's write keeps the other's keys, and the file is rewritten whole, so two

@@ -40,7 +40,7 @@ export interface Hibernation {
 // What a router last read of the manager's settings (url null: it reads none).
 // `joinMinutes` (joined windows): router 0.36.0 and later, null when the organization sets none.
 export interface ManagerSettings { url: string | null; hibernate: boolean | null; joinMinutes?: number | null; readAt: string | null; error: string | null }
-export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | null; updatedAt: string | null; updatedBy: string | null }
+export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | null; updatedAt: string | null; updatedBy: string | null; error?: string }
 
 export interface WorkloadSummary {
   router: string;

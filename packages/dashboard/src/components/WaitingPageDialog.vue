@@ -165,7 +165,7 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
                 <li><code>data-dormeto="status"</code>: its text becomes the status sentence, in the visitor's language.</li>
                 <li><code>data-dormeto="elapsed"</code>: its text becomes the seconds with their unit, for example <code>3 s</code>.</li>
                 <li><code>data-dormeto="progress"</code>: its width becomes the progress bar's percentage; <code>hidden</code> is removed once a bar applies.</li>
-                <li>The <code>dormeto:state</code> event on <code>document</code> fires at each probe, with <code>detail: { state, failure, retryAt, napUntil, elapsedMs, typicalMs }</code>.</li>
+                <li>The <code>dormeto:state</code> event on <code>document</code> fires at each probe, with <code>detail: { state, failure, retryAt, napUntil, elapsedMs, typicalMs }</code>. <code>napUntil.at</code> and <code>napUntil.local</code> are null for a nap with no end known.</li>
               </ul>
               <v-alert type="warning" variant="tonal" density="compact" class="mt-3 text-body-small" data-test="html-security">
                 A custom page runs on the application's own address, so its scripts can read that site's cookies and call its API as the visitor. Only administrators can set,

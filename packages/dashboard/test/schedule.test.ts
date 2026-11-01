@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JOIN_PROBLEM, canonicalZone, isJoinMinutes, joinInForce, joinText, routerJoinInherited, recurrenceError as joinError, scheduleBody as bodyOfSchedule, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { JOIN_PROBLEM, writableSchedule, canonicalZone, isJoinMinutes, joinInForce, joinText, routerJoinInherited, recurrenceError as joinError, scheduleBody as bodyOfSchedule, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { causeText } from '../src/history';
 
 describe('schedule formatting', () => {
@@ -450,6 +450,13 @@ describe('joined windows: the value', () => {
     for (const good of [0, 5, 15, 120]) expect(isJoinMinutes(good), String(good)).toBe(true);
     for (const bad of [-5, 3, 2.5, 125, '15', null, undefined, NaN]) expect(isJoinMinutes(bad), String(bad)).toBe(false);
     expect(JOIN_PROBLEM).toBe('joinMinutes: a whole number from 0 to 120, a multiple of 5');
+  });
+
+  it('a schedule as it can be written back: without the value a router that answers no joinInherited does not know', () => {
+    const s = { timeZone: 'UTC', windows, joinMinutes: 30 };
+    expect(writableSchedule(s, { joinInherited: { joinMinutes: 15, joinFrom: 'default' } })).toEqual(s);
+    expect(writableSchedule(s, {})).toEqual({ timeZone: 'UTC', windows });
+    expect(writableSchedule(s, null)).toEqual({ timeZone: 'UTC', windows });
   });
 
   it('says a value and its level', () => {

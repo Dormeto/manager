@@ -300,6 +300,14 @@ export function windowBody(w: ScheduleWindow): ScheduleWindow {
   };
 }
 
+// A schedule as it can be written back: a router that answers no joinInherited (rolled back) refuses a stored joinMinutes as
+// unknown, on every save, and the field that could remove it is not offered.
+export function writableSchedule(s: Schedule, answer: JoinAnswer | null | undefined): Schedule {
+  if (answer?.joinInherited) return s;
+  const { joinMinutes: _, ...rest } = s;
+  return rest;
+}
+
 // The body of the PUT: the zone in its canonical form (none without windows), the wake mode of nap windows only, the
 // exceptions, the maximum nap and the joined windows' value (0 is one) only when set, so that a schedule without them still
 // reads on an older router. `maxNap` is the form field (blank for none).

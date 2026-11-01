@@ -123,6 +123,7 @@ describe('PUT /api/settings/workloads', () => {
   });
 });
 
+const UNREADABLE = 'settings.json is unreadable: this write would replace it, losing what it holds. Repair the file, or set hibernate, which replaces it.';
 const JOIN_PROBLEM = 'joinMinutes: a whole number from 0 to 120, a multiple of 5';
 const BAD_JOINS = [-5, 7, 2.5, 125, '15', true, {}, []];
 
@@ -182,17 +183,8 @@ describe('the organization\'s joinMinutes in /api/settings/workloads', () => {
     expect((await s.api(iam('PUT', '/iam/settings/workloads', { joinMinutes: 15 }))).statusCode).toBe(200);
   });
 
-  it('a corrupt file reads null, and a write of joinMinutes alone repairs it', async () => {
-    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const corrupt = async () => [1];
-      expect(json(await setup({ read: corrupt }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).joinMinutes).toBeNull();
-      const s = setup({ read: corrupt });
-      await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: 30 }));
-      expect(s.store.writes[0]!.workloads).toEqual({ joinMinutes: 30 });
-    } finally {
-      logged.mockRestore();
-    }
+  it('a corrupt file reads null', async () => {
+    expect(json(await setup({ read: async () => [1] }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).joinMinutes).toBeNull();
   });
 });
 
@@ -218,6 +210,30 @@ describe('a corrupt settings.json (not JSON, or not an object)', () => {
         expect([res.statusCode, s.store.writes]).toEqual([200, [{ workloads: { hibernate: false }, updatedAt: new Date(NOW).toISOString(), updatedBy: 'dmt-admin@example.com' }]]);
       }
       expect(logged.mock.calls.map(([line]) => JSON.parse(String(line)).event)).toEqual(Array(corrupt.length).fill('GlobalSettingsReplaced'));
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('a write that does not name hibernate does not replace it: a 409 with why, audited, nothing written', async () => {
+    for (const read of corrupt) {
+      const s = setup({ read });
+      for (const joinMinutes of [30, null]) {
+        const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes }));
+        expect([res.statusCode, json(res).error, json(res).message]).toEqual([409, 'conflict', UNREADABLE]);
+      }
+      expect(s.store.writes).toEqual([]);
+      expect(s.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: `error: ${UNREADABLE}` });
+    }
+  });
+
+  it('a write naming hibernate replaces it with joinMinutes too', async () => {
+    const logged = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const s = setup({ read: corrupt[0]! });
+      const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false, joinMinutes: 30 }));
+      expect(res.statusCode).toBe(200);
+      expect(s.store.writes[0]!.workloads).toEqual({ hibernate: false, joinMinutes: 30 });
     } finally {
       logged.mockRestore();
     }

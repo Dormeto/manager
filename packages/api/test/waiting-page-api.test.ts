@@ -121,15 +121,12 @@ describe('the organization level', () => {
     expect(s.audit).toEqual([]);
   });
 
-  it('PUT replaces an unreadable settings.json, logged, as the hibernation default does', async () => {
-    const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
+  it('neither PUT nor DELETE replaces an unreadable settings.json: it may hold the hibernation default, so a 409 with why', async () => {
+    for (const [method, sent] of [['PUT', { page: TEMPLATE }], ['DELETE', undefined]] as const) {
       const s = setup({ read: async () => { throw new SyntaxError('not json'); } });
-      expect((await s.api(event('PUT', ORG, 'dmt-admin', { page: TEMPLATE }))).statusCode).toBe(200);
-      expect(s.store.writes).toEqual([{ waitingPage: { ...TEMPLATE, by: 'dmt-admin@example.com', at: AT } }]);
-      expect(quiet).toHaveBeenCalledWith(expect.stringContaining('GlobalSettingsReplaced'));
-    } finally {
-      quiet.mockRestore();
+      const res = await s.api(event(method, ORG, 'dmt-admin', sent));
+      expect([res.statusCode, json(res).message]).toEqual([409, 'settings.json is unreadable: this write would replace it, losing what it holds. Repair the file, or set hibernate, which replaces it.']);
+      expect(s.store.writes).toEqual([]);
     }
   });
 

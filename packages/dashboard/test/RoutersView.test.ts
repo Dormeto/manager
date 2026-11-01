@@ -14,6 +14,7 @@ let failPut = false;
 // The workload defaults as never set by an administrator (no who, no when).
 let neverChanged = false;
 let defaultsJoin: number | null = null;
+let defaultsError: string | null = null;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
@@ -35,7 +36,7 @@ vi.mock('../src/api', () => ({
     if (path === '/settings/workloads') {
       if (init?.method === 'PUT' && failPut) throw new Error('settings.json: access denied');
       if (init?.method === 'PUT') return { ...JSON.parse(String(init.body)), updatedAt: new Date().toISOString(), updatedBy: 'ops@example.com', note: 'routers apply it at their next check, within 5 minutes' };
-      return neverChanged ? { hibernate: true, joinMinutes: defaultsJoin, updatedAt: null, updatedBy: null } : { hibernate: true, joinMinutes: defaultsJoin, updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
+      return neverChanged ? { hibernate: true, joinMinutes: defaultsJoin, updatedAt: null, updatedBy: null, ...(defaultsError ? { error: defaultsError } : {}) } : { hibernate: true, joinMinutes: defaultsJoin, ...(defaultsError ? { error: defaultsError } : {}), updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
     }
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
@@ -342,6 +343,22 @@ describe('Routers view', () => {
       const put = calls.find((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')!;
       expect(JSON.parse(String(put.init!.body))).toEqual({ joinMinutes: 30 });
       wrapper.unmount();
+    });
+
+    it('says a settings.json it cannot read, and a refusal in a toast; the card reads it again', async () => {
+      const wrapper = await mountView();
+      expect(card(wrapper).find('[data-test="defaults-error"]').exists()).toBe(false);
+      await joinButton(wrapper).trigger('click');
+      await flushPromises();
+      failPut = true;
+      defaultsError = 'settings.json is unreadable';
+      dialogButton('Save').click();
+      await flushPromises();
+      expect(document.querySelector('.dm-toast')?.textContent).toContain('settings.json: access denied');
+      expect(card(wrapper).find('[data-test="defaults-error"]').text()).toContain('settings.json is unreadable');
+      wrapper.unmount();
+      failPut = false;
+      defaultsError = null;
     });
 
     it('hides the switch from an operator', async () => {
