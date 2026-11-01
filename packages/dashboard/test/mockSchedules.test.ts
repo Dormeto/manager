@@ -27,7 +27,7 @@ describe('the demo\'s schedules', () => {
   it('show one example of each kind of recurrence, on routers that know them', () => {
     const recurring = scheduled().filter((w) => w.schedule!.windows?.some((x) => x.repeat));
     const kinds = new Set(recurring.flatMap((w) => w.schedule!.windows!.map(repeatChoice)));
-    for (const kind of ['daily', 'monthly', 'yearly', 'cron']) expect(kinds, kind).toContain(kind);
+    for (const kind of ['once', 'daily', 'monthly', 'yearly', 'cron']) expect(kinds, kind).toContain(kind);
     expect(recurring.flatMap((w) => w.schedule!.windows!).some((x) => x.repeat?.pattern === 'weekly' && (x.repeat.interval ?? 1) > 1)).toBe(true);
     expect(recurring.flatMap((w) => w.schedule!.windows!).some((x) => x.repeat?.pattern === 'monthly' && x.repeat.nth)).toBe(true);
     for (const w of recurring) expect(state().routers.find((r) => r.name === w.router)!.version).toBe('0.36.0');

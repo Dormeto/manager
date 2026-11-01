@@ -58,6 +58,9 @@ describe('ScheduleCard', () => {
     expect(rows[0]).toContain('wakes with the header');
     expect(rows[1]).toContain('Cron 30 8 * * 1-5, 10 h 30 min');
     wrapper.unmount();
+    const once = mountCard({ schedule: { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: '2027-01-04', until: '2027-01-04' }] }, next: [] });
+    expect(once.find('[data-test="window"]').text()).toContain('Once on 4 Jan 2027, 08:00–12:00');
+    once.unmount();
   });
 
   it('hides Edit and Clear without the permission', () => {

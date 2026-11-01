@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalZone, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { canonicalZone, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { causeText } from '../src/history';
 
 describe('schedule formatting', () => {
@@ -322,6 +322,80 @@ describe('the helper\'s changes to a window', () => {
     const edited = { ...yearly, repeat: { pattern: 'monthly', interval: 12, day: 7 } } as ScheduleWindow;
     expect(withFrom(edited, '2026-12-25', memory).repeat).toEqual(edited.repeat);
     expect(withFrom(withChoice(withChoice(edited, 'daily', today, memory), 'yearly', today, memory), '2027-03-25', memory).repeat).toEqual(edited.repeat);
+  });
+});
+
+describe('Do not repeat', () => {
+  const once: ScheduleWindow = { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: '2027-01-04', until: '2027-01-04' };
+  const today = '2026-11-03';
+
+  it('is a daily window, interval 1, from equal to until, and reads in its own words', () => {
+    expect(isOnce(once)).toBe(true);
+    expect(repeatChoice(once)).toBe('once');
+    expect(isOnce({ ...once, repeat: { pattern: 'daily', interval: 1 } })).toBe(true);
+    expect(recurrenceText(once)).toBe('Once on 4 Jan 2027, 08:00–12:00');
+    expect(rangeText(once)).toBe('');
+    expect(recurrenceText({ ...once, start: '20:00', end: '07:00' })).toBe('Once on 4 Jan 2027, 20:00–07:00 next day');
+    expect(recurrenceText({ ...once, start: '00:00', end: '00:00' })).toBe('Once on 4 Jan 2027, all day (24 hours)');
+  });
+
+  it('any other shape is not it', () => {
+    expect(isOnce({ ...once, until: '2027-01-05' })).toBe(false);
+    expect(isOnce({ ...once, repeat: { pattern: 'daily', interval: 2 } })).toBe(false);
+    const { until: _, ...open } = once;
+    expect(isOnce(open)).toBe(false);
+    expect(isOnce({ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00', from: '2027-01-04', until: '2027-01-04' })).toBe(false);
+    expect(isOnce({ ...once, repeat: { pattern: 'monthly', day: 4 } })).toBe(false);
+  });
+
+  it('a window read back stays what it was', () => {
+    expect(windowBody(once)).toEqual(once);
+    const explicit = { ...once, repeat: { pattern: 'daily' as const, interval: 1 } };
+    expect(windowBody(explicit)).toEqual(explicit);
+  });
+
+  it('starts on the selection\'s day, else a start date already set, else today', () => {
+    const plain: ScheduleWindow = { kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' };
+    expect(withChoice(plain, 'once', today, newMemory())).toEqual({ kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: today, until: today });
+    expect(withChoice({ ...plain, from: '2027-03-01' }, 'once', today, newMemory())).toMatchObject({ from: '2027-03-01', until: '2027-03-01' });
+    expect(withChoice(plain, 'once', today, { ...newMemory(), onceDate: '2027-05-05' })).toMatchObject({ from: '2027-05-05', until: '2027-05-05' });
+  });
+
+  it('a slip on the select loses nothing, on either side', () => {
+    const ranged: ScheduleWindow = { kind: 'awake', days: ['mon'], start: '08:00', end: '12:00', from: '2027-03-01', until: '2027-04-01' };
+    const memory = newMemory();
+    const there = withChoice(ranged, 'once', today, memory);
+    expect(there).toMatchObject({ from: '2027-03-01', until: '2027-03-01' });
+    expect(withChoice(there, 'weekly', today, memory)).toEqual(ranged);
+    const other = newMemory();
+    const away = withChoice(once, 'monthly', today, other);
+    expect(away.until).toBeUndefined();
+    expect(away.from).toBe('2027-01-04');
+    expect(withChoice(away, 'once', today, other)).toEqual(once);
+    for (const c of ['weekly', 'daily', 'yearly', 'cron'] as RepeatChoice[]) {
+      const m = newMemory();
+      expect(withChoice(withChoice(once, c, today, m), 'once', today, m), c).toEqual(once);
+    }
+    // Through Do not repeat, a start date the helper filled in comes back too.
+    const two = newMemory();
+    const every2 = withInterval(ranged, 2, today, two);
+    expect(withChoice(withChoice(every2, 'once', today, two), 'weekly', today, two)).toEqual(every2);
+  });
+
+  it('its date moves both ends together, and a date the helper chose is not dropped as a filled-in one', () => {
+    expect(withOnceDate(once, '2027-02-02')).toMatchObject({ from: '2027-02-02', until: '2027-02-02' });
+    expect(repeatChoice(withOnceDate(once, ''))).toBe('once');
+    const memory = newMemory();
+    const yearly = withChoice({ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }, 'yearly', today, memory);
+    expect(withChoice(yearly, 'once', today, memory)).toMatchObject({ from: today, until: today });
+  });
+});
+
+describe('a moved window in words', () => {
+  it('says every occurrence, the sentence running on', () => {
+    expect(movedText('Shop', { kind: 'awake', days: ['mon', 'tue'], start: '09:00', end: '10:00' })).toBe('Window moved: every occurrence of Shop now runs Mon, Tue, 09:00–10:00');
+    expect(movedText('Shop', { kind: 'awake', start: '09:00', end: '10:00', repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' })).toBe('Window moved: every occurrence of Shop now runs every 3 days, 09:00–10:00, from 4 Jan 2027, no end date');
+    expect(movedText('Shop', { kind: 'awake', start: '09:00', end: '10:00', repeat: { pattern: 'daily' }, from: '2027-01-04', until: '2027-01-04' })).toBe('Window moved: every occurrence of Shop now runs once on 4 Jan 2027, 09:00–10:00');
   });
 });
 

@@ -22,6 +22,7 @@ import RenameDialog from '../components/RenameDialog.vue';
 import TagsDialog from '../components/TagsDialog.vue';
 import { tagsList, type Tags } from '../tags';
 import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
+import NoticeToast from '../components/NoticeToast.vue';
 import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
 import HistoryCard from '../components/HistoryCard.vue';
@@ -48,6 +49,8 @@ const url = ref<string | null>(null);
 const confirm = ref<'nap' | 'wake' | 'offboard' | null>(null);
 const acting = ref(false);
 const notice = ref<Notice | null>(null);
+// A schedule's writes, wherever the page is scrolled to.
+const scheduleNotice = ref<Notice | null>(null);
 const pauseOpen = ref(false);
 const excludeOpen = ref(false);
 const renameOpen = ref(false);
@@ -147,10 +150,11 @@ async function saveSchedule(schedule: Schedule) {
   try {
     await api(`${path.value}/schedule`, { method: 'PUT', body: JSON.stringify(schedule) });
     scheduleOpen.value = false;
-    notice.value = { type: 'success', text: 'Schedule saved.' };
+    scheduleNotice.value = { type: 'success', text: `Schedule of ${title.value} saved` };
     await run();
   } catch (err) {
     scheduleError.value = (err as Error).message;
+    scheduleNotice.value = { type: 'error', text: `Schedule of ${title.value} not saved: ${(err as Error).message}` };
   } finally {
     savingSchedule.value = false;
   }
@@ -160,12 +164,12 @@ async function clearSchedule() {
   try {
     await api(`${path.value}/schedule`, { method: 'DELETE' });
     scheduleOpen.value = false;
-    notice.value = { type: 'success', text: 'Schedule cleared.' };
+    scheduleNotice.value = { type: 'success', text: `Schedule of ${title.value} cleared` };
     await run();
   } catch (err) {
-    // From the dialog, the refusal stays in it; from the card, it is a notice.
+    // From the dialog, the refusal stays in it too.
     if (scheduleOpen.value) scheduleError.value = (err as Error).message;
-    else notice.value = { type: 'error', text: (err as Error).message };
+    scheduleNotice.value = { type: 'error', text: `Schedule of ${title.value} not cleared: ${(err as Error).message}` };
   }
 }
 
@@ -394,6 +398,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </div>
   </v-card>
   <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
+  <NoticeToast :notice="scheduleNotice" @close="scheduleNotice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-alert v-if="pauses.length" type="info" variant="tonal" class="mb-4 dm-alert-links" :title="excluded ? 'Excluded: never napped, waiting for offboarding' : 'Paused: never napped, requests still wake it'">
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">

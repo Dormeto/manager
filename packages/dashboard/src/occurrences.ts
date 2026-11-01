@@ -2,7 +2,7 @@
 // dates) expanded into occurrences (instants, epoch ms), a window's refusals and a calendar selection turned into a window.
 // Ported from the router's lambda/src/lib/schedule.mjs (R12 and the schedule recurrence design) with its names, held to it by
 // test/occurrences-parity.test.ts. Pure: local wall times come from Intl only.
-import { DAYS, canonicalZone, windowBody, type Day, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
+import { DAYS, canonicalZone, isOnce, windowBody, type Day, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
 
 export type Occurrence = { kind: 'awake' | 'nap'; window: number; start: number; end: number; wake?: 'never' | 'header' };
 
@@ -455,8 +455,57 @@ export function fieldProblems(w: ScheduleWindow): Record<string, string> {
 // A window's problems in a form: the body's, and an end date chosen and left blank, which the body would drop as no end date.
 export function editProblems(w: ScheduleWindow): Record<string, string> {
   const found = fieldProblems(windowBody(w));
-  if (w.until === '') found.until ??= 'choose a date, or No end date';
+  if (w.until === '') found.until ??= isOnce(w) ? 'choose a date' : 'choose a date, or No end date';
   return found;
+}
+
+// The offset of a drag in a zone's wall time, in minutes on the 5-minute step: the view may show another zone, and a day on the
+// schedule's clock is a day whatever a clock change does to its instants.
+export function wallOffset(from: number, to: number, timeZone: string): number {
+  return Math.round(((to + offsetAt(to, timeZone)) - (from + offsetAt(from, timeZone))) / (STEP * MINUTE)) * STEP;
+}
+
+// The same window `minutes` of wall time later: the times shift, a start crossing midnight adds to a day offset, which rotates
+// weekly days, moves from and until, and moves a monthly day or weekday. Null for a window with no start of its own (a cron).
+function shifted(w: ScheduleWindow, minutes: number): ScheduleWindow | null {
+  const [start, end] = [minutesOf(w.start), minutesOf(w.end)];
+  if (w.repeat?.pattern === 'cron' || start === null || end === null) return null;
+  const length = end > start ? end - start : end - start + 1440;
+  const days = Math.floor((start + minutes) / 1440);
+  const moved = start + minutes - days * 1440;
+  const rotate = (list: Day[]) => DAYS.filter((d) => list.includes(DAYS[weekday(DAYS.indexOf(d) - days - 3)]!));
+  const date = (text: string) => dateOf(dayOfDate(text)! + days);
+  const repeat = w.repeat;
+  return {
+    ...w,
+    start: hhmm(moved),
+    end: hhmm((moved + length) % 1440),
+    ...(w.days ? { days: rotate(w.days) } : {}),
+    ...(w.from ? { from: date(w.from) } : {}),
+    ...(w.until ? { until: date(w.until) } : {}),
+    ...(repeat?.pattern === 'weekly' ? { repeat: { ...repeat, days: rotate(repeat.days) } } : {}),
+    ...(repeat?.pattern === 'monthly' && !absent(repeat.day) ? { repeat: { ...repeat, day: repeat.day + days } } : {}),
+    ...(repeat?.pattern === 'monthly' && !absent(repeat.nth) ? { repeat: { ...repeat, weekday: DAYS[weekday(DAYS.indexOf(repeat.weekday!) + days - 3)] } } : {}),
+  } as ScheduleWindow;
+}
+
+// A window moved as a drag moves it: every occurrence by the same offset of wall time, or null when that cannot be said. Whether it
+// can is checked, not assumed: the new window's starts from today (the exceptions aside: they stay on their dates) must be the old
+// ones shifted. A monthly day past a month's end, a first weekday that becomes a second, a week counted from `from` do not.
+export function moveWindow(w: ScheduleWindow, minutes: number, today: string): ScheduleWindow | null {
+  const moved = shifted(w, minutes);
+  if (!moved || windowProblems(windowBody(moved)).length) return null;
+  const [before, after] = [prepareWindow(w, 0), prepareWindow(moved, 0)];
+  if (!before || !after) return null;
+  const days = Math.floor((before.starts[0]! + minutes) / 1440);
+  const first = dayOfDate(today)!;
+  const startsOf = (plan: PlanWindow, from: number) => {
+    const found: number[] = [];
+    for (let day = from; day <= from + PREVIEW_DAYS; day++) for (const start of startsOn(plan, day)) found.push(day * 1440 + start);
+    return found;
+  };
+  const [old, fresh] = [startsOf(before, first).map((t) => t + minutes), startsOf(after, first + days)];
+  return old.length === fresh.length && old.every((t, i) => t === fresh[i]) ? moved : null;
 }
 
 // A selection of the calendar (instants) as a weekly window in `timeZone`: the local weekday of its start, its times on

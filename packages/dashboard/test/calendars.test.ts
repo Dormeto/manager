@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { CALENDAR_EVENTS_MAX, PALETTE, calendarEvents, cappedText, colorFor, contrast, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar } from '../src/calendars';
+import { CALENDAR_EVENTS_MAX, PALETTE, calendarEvents, cappedText, colorFor, naturalCompare, contrast, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar } from '../src/calendars';
 import type { Day } from '../src/schedule';
 
 const paris: Calendar = {
@@ -12,6 +12,12 @@ const paris: Calendar = {
 };
 const day = Date.UTC(2026, 9, 21);
 const DARK_SURFACE = '#0d1422';
+
+describe('sorting workloads', () => {
+  it('is natural and ignores case', () => {
+    expect(['w-10', 'W-3', 'b', 'w-2', 'A'].sort(naturalCompare)).toEqual(['A', 'b', 'w-2', 'W-3', 'w-10']);
+  });
+});
 
 describe('palette', () => {
   it('repeats past its end and picks the first free slot', () => {
@@ -81,9 +87,9 @@ describe('eventsFor', () => {
     expect(eventsFor([{ ...paris, state: 'AWAKE' }], day, day + 2 * 86_400_000, 'Europe/Paris').some((e) => e.extendedProps.kind === 'maintenance')).toBe(false);
   });
   it('gives the schedule\'s own zone in the tooltip only when it differs from the browser\'s', () => {
-    expect(events.find((e) => e.title === 'Shop · Awake')!.extendedProps.tip).toBe('Shop · Awake');
+    expect(events.find((e) => e.title === 'Shop · Awake')!.extendedProps.tip().join(' | ')).not.toContain('Europe/Paris');
     const ny = eventsFor([paris], day, day + 86_400_000, 'America/New_York').find((e) => e.title === 'Shop · Awake')!;
-    expect(ny.extendedProps.tip).toContain('Wed 08:00–19:00 Europe/Paris');
+    expect(ny.extendedProps.tip().join(' | ')).toContain('Wed 08:00–19:00 Europe/Paris');
   });
   it('draws a recurring window, and says its recurrence in the tooltip', () => {
     const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [
@@ -98,8 +104,8 @@ describe('eventsFor', () => {
       ['Blog · Nap (wake: header)', '2027-01-04T20:00:00.000Z'],
       ['Blog · Awake', '2027-01-05T08:30:00.000Z'],
     ]);
-    expect(drawn[0]!.extendedProps.tip).toBe('Blog · Awake — Cron 30 8 * * 1-5, 10 h 30 min');
-    expect(drawn[1]!.extendedProps.tip).toBe('Blog · Nap (wake: header) — Every 2 weeks on Mon, Thu, 20:00–07:00 next day, from 4 Jan 2027 to 30 Jun 2027');
+    expect(drawn[0]!.extendedProps.tip()).toEqual(['Blog · Awake', 'Cron 30 8 * * 1-5, 10 h 30 min', 'Mon 08:30–19:00', 'A cron window can\'t be dragged: edit it in the dialog.']);
+    expect(drawn[1]!.extendedProps.tip().slice(0, 3)).toEqual(['Blog · Nap (wake: header)', 'Every 2 weeks on Mon, Thu, 20:00–07:00 next day, from 4 Jan 2027 to 30 Jun 2027', 'Mon 20:00–07:00']);
   });
   it('draws the touching starts of a frequent cron window as one bar, not one a start', () => {
     const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [
@@ -120,15 +126,35 @@ describe('eventsFor', () => {
     const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [{ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 3 1 *', minutes: 11520 / 2 } }, { kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * 2 *', minutes: 1440 } }] } };
     const from = Date.UTC(2027, 0, 1);
     const [long] = eventsFor([c], from, from + 10 * 86_400_000, 'Europe/Paris', false, from);
-    expect(long!.extendedProps.tip).toContain('Sun 3 Jan 08:00–Thu 7 Jan 08:00 UTC');
+    expect(long!.extendedProps.tip().join(' | ')).toContain('Sun 3 Jan 08:00–Thu 7 Jan 08:00 UTC');
     const feb = Date.UTC(2027, 1, 1);
     const [bar] = eventsFor([c], feb, feb + 9 * 86_400_000, 'Europe/Paris', false, feb);
     expect(bar!.start.toISOString()).toBe('2027-02-01T08:00:00.000Z');
-    expect(bar!.extendedProps.tip).toContain('Mon 1 Feb 08:00–Wed 10 Feb 08:00 UTC');
+    expect(bar!.extendedProps.tip().join(' | ')).toContain('Mon 1 Feb 08:00–Wed 10 Feb 08:00 UTC');
     // Up to a day it reads as it always did, a 24-hour one on a clock change included.
     const day: Calendar = { key: 'r/d', name: 'Day', color: '#112233', schedule: { timeZone: 'Europe/Paris', windows: [{ kind: 'nap', days: ['sun'], start: '00:00', end: '00:00' }] } };
     const autumn = Date.parse('2026-10-25T00:00:00+02:00');
-    expect(eventsFor([day], autumn, autumn + 3_600_000, 'UTC', false, autumn)[0]!.extendedProps.tip).toContain('Sun 00:00–00:00 Europe/Paris');
+    expect(eventsFor([day], autumn, autumn + 3_600_000, 'UTC', false, autumn)[0]!.extendedProps.tip().join(' | ')).toContain('Sun 00:00–00:00 Europe/Paris');
+  });
+  it('says in the tooltip what it is, and only a window a user may edit, with a start to move, can be dragged', () => {
+    const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', canEdit: true, state: 'ASLEEP', maintenanceDue: '2027-01-04T10:00:00.000Z', schedule: { timeZone: 'UTC', maxNapDays: 7, windows: [
+      { kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' },
+      { kind: 'nap', repeat: { pattern: 'cron', cron: '*/5 12 * * *', minutes: 5 } },
+    ] } };
+    const from = Date.UTC(2027, 0, 4);
+    const of = (calendar: Calendar) => calendarEvents([calendar], from, from + 86_400_000, 'UTC', false, from).events;
+    const [plain, due] = [...of(c)].sort((a, b) => a.start.getTime() - b.start.getTime());
+    expect(plain!.startEditable).toBe(true);
+    expect(plain!.durationEditable).toBe(false);
+    expect(plain!.extendedProps.tip()).toEqual(['Blog · Awake', 'Mon, 08:00–09:00', 'Mon 08:00–09:00', 'Drag to move every occurrence of this window.']);
+    expect(due!.extendedProps.kind).toBe('maintenance');
+    expect(due!.startEditable).toBe(false);
+    const cron = of(c).find((e) => e.extendedProps.kind === 'nap')!;
+    expect(cron.startEditable).toBe(false);
+    expect(cron.extendedProps.tip().at(-1)).toBe('A cron window can\'t be dragged: edit it in the dialog.');
+    const read = of({ ...c, canEdit: false }).find((e) => e.extendedProps.kind === 'awake')!;
+    expect(read.startEditable).toBe(false);
+    expect(read.extendedProps.tip().at(-1)).toBe('You may not edit this workload: it can\'t be dragged.');
   });
   it('draws at most so many occurrences of a calendar, the first ones, and says how many it has', () => {
     const dense: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: Array.from({ length: 20 }, () => ({ kind: 'awake' as const, repeat: { pattern: 'cron' as const, cron: '0,10,20,30,40,50 * * * *', minutes: 5 } })) } };

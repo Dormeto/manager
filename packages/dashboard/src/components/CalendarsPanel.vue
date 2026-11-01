@@ -3,7 +3,7 @@
 // on by default; a checkbox enables a calendar (the view enforces the limit), and an enabled one shows its color.
 import { computed, ref } from 'vue';
 import { mdiAlertCircleOutline, mdiLockOutline, mdiMagnify } from '@mdi/js';
-import { MAX_CALENDARS, NEEDS_ROUTER, colorFor, type CalendarStatus, type PanelRow } from '../calendars';
+import { MAX_CALENDARS, NEEDS_ROUTER, colorFor, naturalCompare, type CalendarStatus, type PanelRow } from '../calendars';
 
 const props = defineProps<{ rows: PanelRow[]; enabled: Record<string, number>; status: Record<string, CalendarStatus>; message?: string; loading?: boolean; error?: string }>();
 const emit = defineEmits<{ toggle: [key: string] }>();
@@ -14,7 +14,8 @@ const scheduledOnly = ref(true);
 // Workloads of a router before 0.31.0 stay listed (disabled): whether they have a schedule is not known.
 const shown = computed(() => {
   const q = search.value.trim().toLowerCase();
-  return props.rows.filter((r) => (!q || `${r.name} ${r.id} ${r.router} ${r.router}/${r.id}`.toLowerCase().includes(q)) && (!scheduledOnly.value || r.scheduled || !r.supported || r.key in props.enabled));
+  return props.rows.filter((r) => (!q || `${r.name} ${r.id} ${r.router} ${r.router}/${r.id}`.toLowerCase().includes(q)) && (!scheduledOnly.value || r.scheduled || !r.supported || r.key in props.enabled))
+    .sort((a, b) => naturalCompare(a.name, b.name));
 });
 const count = computed(() => Object.keys(props.enabled).length);
 function toggle(r: PanelRow) {

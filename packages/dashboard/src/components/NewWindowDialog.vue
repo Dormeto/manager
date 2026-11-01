@@ -5,10 +5,12 @@
 // workload, and so the zone, changes. Saving replaces the workload's schedule with the
 // one read when the dialog opened plus this window: the router has no merge.
 import { computed, ref, watch } from 'vue';
-import { mdiCalendarPlus } from '@mdi/js';
+import { mdiCalendarPlus, mdiInformationOutline, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import { useDisplay } from 'vuetify';
-import { allDayWindow, editProblems, occurrencesIn, windowFromSelection } from '../occurrences';
+import { allDayWindow, editProblems, localDate, occurrencesIn, windowFromSelection } from '../occurrences';
+import { naturalCompare } from '../calendars';
 import { browserZone, recurrenceError, scheduleBody, windowBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
+import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
 export interface Candidate { key: string; name: string; schedule: Schedule | null }
@@ -33,6 +35,8 @@ const fill = () => {
   draft.value = 'problem' in p ? { kind: 'awake', days: [], start: draft.value.start ?? '08:00', end: draft.value.end ?? '09:00' } : { kind: 'awake', days: [...p.days], start: p.start, end: p.end };
 };
 const chosen = computed(() => options.value.find((c) => c.key === key.value) ?? null);
+// The day of the selection on the zone's clock: where a Do not repeat starts.
+const selectedDate = computed(() => (props.selection ? localDate(props.selection.start.getTime(), zone.value) : null));
 const zone = computed(() => chosen.value?.schedule?.timeZone || browserZone());
 const placed = computed(() => {
   const s = props.selection;
@@ -49,7 +53,7 @@ const window_ = computed<ScheduleWindow | null>(() => {
 const edit = (w: ScheduleWindow) => { draft.value = w; edited.value = true; };
 watch(() => props.modelValue, (open) => {
   if (!open) return;
-  options.value = props.candidates.map((c) => ({ ...c, schedule: c.schedule ? JSON.parse(JSON.stringify(c.schedule)) as Schedule : null }));
+  options.value = props.candidates.map((c) => ({ ...c, schedule: c.schedule ? JSON.parse(JSON.stringify(c.schedule)) as Schedule : null })).sort((a, b) => naturalCompare(a.name, b.name));
   key.value = options.value.some((c) => c.key === props.last) ? props.last! : options.value.length === 1 ? options.value[0]!.key : null;
   kind.value = props.selection?.month ? 'nap' : 'awake';
   wake.value = 'never';
@@ -99,19 +103,29 @@ function save() {
       <v-card-text class="pt-3" data-test="nw-body">
         <v-alert v-if="!options.length" data-test="nw-none" type="info" variant="tonal" density="compact" text="No enabled calendar may be edited: enable the calendar of a workload you may wake and nap, then try again." />
         <template v-else>
-          <v-select v-model="key" data-test="nw-workload" :items="options" item-title="name" item-value="key" label="Workload" density="compact" />
-          <v-btn-toggle v-model="kind" data-test="nw-kind" mandatory density="compact" variant="outlined" divided class="mb-3">
-            <v-btn value="awake" size="small">Awake</v-btn>
-            <v-btn value="nap" size="small">Nap</v-btn>
-          </v-btn-toggle>
+          <v-autocomplete v-model="key" data-test="nw-workload" :items="options" item-title="name" item-value="key" label="Workload" density="compact" auto-select-first />
+          <div class="d-flex flex-wrap align-center ga-2 mb-3">
+            <v-btn-toggle v-model="kind" data-test="nw-kind" mandatory density="compact" variant="outlined" divided>
+              <v-btn value="awake" size="small" :prepend-icon="mdiWeatherSunny">Awake</v-btn>
+              <v-btn value="nap" size="small" :prepend-icon="mdiWeatherNight">Nap</v-btn>
+            </v-btn-toggle>
+            <ScheduleHelp />
+          </div>
           <v-select v-if="kind === 'nap'" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
           <v-alert v-if="problem" data-test="nw-problem" type="warning" variant="tonal" density="compact" class="mb-3" :text="problem" />
-          <WindowRecurrence :key="opening" :model-value="draft" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" test="nw" class="mb-3" @update:model-value="edit" />
+          <WindowRecurrence :key="opening" :model-value="draft" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" :date="selectedDate" test="nw" class="mb-3" @update:model-value="edit" />
           <div data-test="nw-summary" class="mb-3">
             <div><span class="text-medium-emphasis">Time zone</span> <strong data-test="nw-zone">{{ zone }}</strong><span v-if="chosen && !chosen.schedule?.timeZone" class="text-medium-emphasis"> (a first schedule: your browser's zone)</span></div>
           </div>
           <v-alert v-if="clockChange" data-test="nw-clock" type="info" variant="tonal" density="compact" class="mb-3" :text="clockChange" />
-          <p data-test="nw-replace-note" class="text-body-small text-medium-emphasis">Saving replaces the workload's schedule with the one read when this dialog opened plus this window: a change made by someone else since then is lost.</p>
+          <p class="text-body-small text-medium-emphasis"><span data-test="nw-replace-note">Saving replaces the workload's schedule.</span>
+            <v-tooltip location="top" max-width="340" open-on-focus>
+              <template #activator="{ props: activator }">
+                <v-icon v-bind="activator" data-test="nw-replace-more" :icon="mdiInformationOutline" size="14" tabindex="0" aria-label="More on what saving replaces" />
+              </template>
+              <span data-test="nw-replace-tip">It takes the one read when this dialog opened plus this window: a change made by someone else since then is lost.</span>
+            </v-tooltip>
+          </p>
         </template>
         <v-alert v-if="error" data-test="nw-error" type="error" variant="tonal" density="compact" class="mt-3" :text="recurrenceError(error ?? '')" />
       </v-card-text>

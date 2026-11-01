@@ -290,6 +290,9 @@ const SCHEDULES: (() => Schedule)[] = [
 // One example of each kind of recurrence (router 0.36.0), each on a workload of its own of an up-to-date router (build).
 const RECURRENCES: (() => Schedule)[] = [
   () => ({ timeZone: 'Europe/Paris', windows: [
+    { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'daily' }, from: dateIn(4), until: dateIn(4), wake: 'header' },
+  ], ...BY }),
+  () => ({ timeZone: 'Europe/Paris', windows: [
     { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: dateIn(-5) },
   ], ...BY }),
   () => ({ timeZone: 'Europe/Paris', windows: [

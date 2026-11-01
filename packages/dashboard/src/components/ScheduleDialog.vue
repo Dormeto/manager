@@ -2,9 +2,10 @@
 // Edit a workload's schedule (R12): a row per window with how it repeats (WindowRecurrence), the time zone (the browser's by
 // default), exceptions and the maximum nap. The router's refusals are shown as it words them.
 import { computed, ref, watch } from 'vue';
-import { mdiCalendarClock, mdiDeleteOutline } from '@mdi/js';
+import { mdiCalendarClock, mdiDeleteOutline, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import { editProblems } from '../occurrences';
 import { browserZone, formProblem, newWindow, recurrenceError, scheduleBody, type Schedule, type ScheduleWindow } from '../schedule';
+import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
 const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; error?: string; saving?: boolean }>();
@@ -57,16 +58,21 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
     <v-card :title="`Schedule of ${name}`">
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiCalendarClock" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-4 text-medium-emphasis">Windows in local time, weekly or on another recurrence. An awake window keeps the workload awake; a nap window keeps it asleep, and requests wake it only with the header if you allow it. Windows of different kinds may not overlap.</p>
+        <p class="mb-4 text-medium-emphasis"><span data-test="schedule-intro">Awake and nap windows override the idle rules, in local time.</span> <ScheduleHelp /></p>
         <v-combobox v-model="timeZone" :items="zones" label="Time zone" density="compact" data-test="time-zone" />
         <div v-for="(w, i) in windows" :key="keys[i]" data-test="window" class="dm-window">
           <div class="d-flex flex-wrap align-center ga-2">
             <v-btn-toggle :model-value="w.kind" mandatory density="compact" variant="outlined" divided @update:model-value="setKind(w, $event)">
-              <v-btn value="awake" size="small">Awake</v-btn>
-              <v-btn value="nap" size="small">Nap</v-btn>
+              <v-btn value="awake" size="small" :prepend-icon="mdiWeatherSunny">Awake</v-btn>
+              <v-btn value="nap" size="small" :prepend-icon="mdiWeatherNight">Nap</v-btn>
             </v-btn-toggle>
             <v-spacer />
-            <v-btn data-test="remove-window" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Remove window ${i + 1}`" @click="remove(i)" />
+            <v-tooltip location="top">
+              <template #activator="{ props: activator }">
+                <v-btn v-bind="activator" data-test="remove-window" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Remove window ${i + 1}`" @click="remove(i)" />
+              </template>
+              <span data-test="remove-window-tip">Remove this window</span>
+            </v-tooltip>
           </div>
           <WindowRecurrence v-model="windows[i]!" :time-zone="timeZone" :exceptions="exceptions">
             <v-select v-if="w.kind === 'nap'" :model-value="w.wake ?? 'never'" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" hide-details class="dm-wake" @update:model-value="w.wake = $event" />

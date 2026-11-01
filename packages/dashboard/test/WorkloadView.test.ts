@@ -333,7 +333,7 @@ describe('Workload view', () => {
     fail = false;
     click('Save');
     await flushPromises();
-    expect(wrapper.text()).toContain('Schedule saved');
+    expect(document.body.textContent).toMatch(/Schedule of .+ saved/);
     wrapper.unmount();
     current = status;
   });
@@ -351,7 +351,7 @@ describe('Workload view', () => {
     const del = calls.find(([, init]) => init?.method === 'DELETE')!;
     expect(del[0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/schedule');
     expect(calls.slice(before).some(([p, init]) => p === '/workloads/dmtr-dev/5cdfbf844b925bf8' && !init?.method)).toBe(true);
-    expect(wrapper.text()).toContain('Schedule cleared');
+    expect(document.body.textContent).toMatch(/Schedule of .+ cleared/);
     wrapper.unmount();
     current = status;
   });
@@ -380,7 +380,7 @@ describe('Workload view', () => {
     await flushPromises();
     expect(calls.filter(([, init]) => init?.method === 'DELETE').map(([p]) => p)).toEqual(['/workloads/dmtr-dev/5cdfbf844b925bf8/schedule', '/workloads/dmtr-dev/5cdfbf844b925bf8/schedule']);
     expect(calls.slice(before).some(([p, init]) => p === '/workloads/dmtr-dev/5cdfbf844b925bf8' && !init?.method)).toBe(true);
-    expect(wrapper.text()).toContain('Schedule cleared');
+    expect(document.body.textContent).toMatch(/Schedule of .+ cleared/);
     wrapper.unmount();
     current = status;
   });

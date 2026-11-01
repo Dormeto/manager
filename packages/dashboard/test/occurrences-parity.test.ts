@@ -10,8 +10,9 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { nextEvents, occurrencesIn, windowProblems, type Occurrence } from '../src/occurrences';
-import { DAYS, type Day, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { moveWindow, nextEvents, occurrencesIn, windowProblems, type Occurrence } from '../src/occurrences';
+import { DAYS, isOnce, type Day, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { OVERLAP_SAMPLES } from '../src/overlap-samples';
 import { state } from '../src/mock/state';
 
 const ROUTER_SCHEDULE = '../../../../router/lambda/src/lib/schedule.mjs';
@@ -111,7 +112,7 @@ function randomRecurring(random: () => number, anchor: number): ScheduleWindow {
   const range = { ...(random() < 0.4 ? { from: near(10) } : {}), ...(random() < 0.3 ? { until: iso(anchor + Math.floor(random() * 12 + 1) * DAY).slice(0, 10) } : {}) };
   const counted = { ...range, from: range.from ?? near(30) };
   const interval = pick([2, 2, 3, 5]);
-  const kindOf = pick(['daily', 'dailyN', 'weekly', 'weeklyN', 'monthDay', 'monthDayN', 'monthNth', 'yearly', 'yearlyNth', 'cron', 'cron', 'cron', 'plainRange'] as const);
+  const kindOf = pick(['daily', 'dailyN', 'weekly', 'weeklyN', 'monthDay', 'monthDayN', 'monthNth', 'yearly', 'yearlyNth', 'cron', 'cron', 'cron', 'plainRange', 'once', 'once'] as const);
   const days: Day[] = DAYS.filter(() => random() < 0.4);
   if (!days.length) days.push(pick(DAYS));
   const yearlyFrom = iso(Date.UTC(date.getUTCFullYear() - pick([0, 1]), date.getUTCMonth(), 1)).slice(0, 10);
@@ -126,6 +127,7 @@ function randomRecurring(random: () => number, anchor: number): ScheduleWindow {
     case 'yearly': return { kind, ...times, repeat: { pattern: 'monthly', interval: 12, day: dayOfMonth() }, from: yearlyFrom, ...wake };
     case 'yearlyNth': return { kind, ...times, repeat: { pattern: 'monthly', interval: 12, nth: pick([1, 2, 3, 4, -1]), weekday: pick(DAYS) }, from: yearlyFrom, ...wake };
     case 'plainRange': return { kind, ...times, days, ...range, ...wake };
+    case 'once': { const date = near(3); return { kind, ...times, repeat: { pattern: 'daily' }, from: date, until: date, ...wake }; }
     default: {
       const anchorDay = date.getUTCDate();
       const expression = pick([
@@ -276,7 +278,7 @@ if (!router) {
       const zoneChanges = new Map(ZONES.map((zone) => [zone, changes(zone)]));
       const mismatches: string[] = [];
       const counts = newCounts();
-      const patterns = { daily: 0, weekly: 0, monthly: 0, yearly: 0, cron: 0, longCron: 0, nextEvents: 0 };
+      const patterns = { once: 0, daily: 0, weekly: 0, monthly: 0, yearly: 0, cron: 0, longCron: 0, nextEvents: 0 };
       for (let n = 0; n < RECURRING; n++) {
         const zone = ZONES[n % ZONES.length]!;
         const near = zoneChanges.get(zone)!;
@@ -285,7 +287,8 @@ if (!router) {
         const problems = r.scheduleProblems(s, { now: anchor - 12 * DAY });
         if (problems.length) throw new Error(`seed ${SEED}, schedule ${n}: generated invalid ${JSON.stringify(s)}: ${problems.join('; ')}`);
         for (const w of s.windows!) {
-          if (w.repeat?.pattern === 'monthly' && w.repeat.interval === 12) patterns.yearly += 1;
+          if (isOnce(w)) patterns.once += 1;
+          else if (w.repeat?.pattern === 'monthly' && w.repeat.interval === 12) patterns.yearly += 1;
           else if (w.repeat) patterns[w.repeat.pattern] += 1;
           if (w.repeat?.pattern === 'cron' && w.repeat.minutes > 1440) patterns.longCron += 1;
         }
@@ -326,6 +329,62 @@ if (!router) {
         expect(occurrencesIn(s, at - DAY, at + DAY)).toEqual([]);
         expect(nextEvents(s, at)).toEqual(r.nextEvents(s, at, { count: 5 }));
       }
+    });
+
+    it('Do not repeat has one occurrence on its date for the router too, past or future, overnight or not', () => {
+      for (const date of ['2020-02-29', '2027-03-28', '2099-12-31']) {
+        const s: Schedule = { timeZone: 'Europe/Paris', windows: [{ kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'daily' }, from: date, until: date }] };
+        expect(r.scheduleProblems(s), date).toEqual([]);
+        const noon = Date.parse(`${date}T12:00:00Z`);
+        const ours = occurrencesIn(s, noon - 5 * DAY, noon + 5 * DAY);
+        expect(ours, date).toHaveLength(1);
+        expect(new Date(ours[0]!.start).toISOString().slice(0, 10)).toBe(date);
+        expect(r.occurrenceAt(s, ours[0]!.start)?.start).toBe(ours[0]!.start);
+        expect(r.occurrenceAt(s, ours[0]!.end - 1)?.end).toBe(ours[0]!.end);
+        expect(r.occurrenceAt(s, ours[0]!.start - 1)).toBeNull();
+        expect(r.occurrenceAt(s, ours[0]!.end)).toBeNull();
+        expect(r.occurrenceAt(s, ours[0]!.start + 7 * DAY)).toBeNull();
+        expect(nextEvents(s, noon - 5 * DAY)).toEqual(r.nextEvents(s, noon - 5 * DAY, { count: 5 }));
+      }
+    });
+
+    it('the samples the dialog draws say what the router does', () => {
+      const now = Date.parse('2026-11-01T12:00:00Z');
+      for (const sample of OVERLAP_SAMPLES) {
+        for (const windows of sample.schedules) {
+          const found = r.scheduleProblems({ timeZone: 'UTC', windows }, { now });
+          if (sample.allowed) expect(found, sample.title).toEqual([]);
+          else expect(found[0], sample.title).toMatch(/^windows\[1\]: the nap window overlaps the awake window windows\[0\] \(/);
+        }
+      }
+      expect(OVERLAP_SAMPLES.filter((x) => !x.allowed)).toHaveLength(1);
+    });
+
+    it('a dragged window, moved or refused, starts where the router says: every occurrence shifted', () => {
+      const WINDOWS: ScheduleWindow[] = [
+        { kind: 'awake', days: ['mon', 'thu'], start: '08:00', end: '12:00' },
+        { kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04', wake: 'header' },
+        { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' },
+        { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'monthly', day: 15 } },
+        { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'monthly', interval: 12, day: 10 }, from: '2027-02-01' },
+        { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'monthly', interval: 3, nth: 2, weekday: 'mon' }, from: '2027-01-01' },
+        { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: '2027-06-04', until: '2027-06-04' },
+      ];
+      const starts = (w: ScheduleWindow) => r.nextEvents({ timeZone: 'UTC', windows: [w] }, Date.parse('2026-12-20T00:00:00Z'), { count: 40 }).filter((e) => e.kind.endsWith('-start')).map((e) => Date.parse(e.at));
+      let moved = 0;
+      for (const w of WINDOWS) {
+        for (const minutes of [60, -120, 1440, 2880, 1500, -1440]) {
+          const next = moveWindow(w, minutes, '2026-12-01');
+          if (!next) continue;
+          moved += 1;
+          expect(r.scheduleProblems({ timeZone: 'UTC', windows: [next] }, { now: Date.parse('2026-11-01T00:00:00Z') }), JSON.stringify(next)).toEqual([]);
+          // From the same reading, a window further along has its first occurrences shifted: compared from their common span.
+          const [a, b] = [starts(w).map((t) => t + minutes * MINUTE), starts(next)];
+          const common = b.filter((t) => t >= Date.parse('2027-01-01T00:00:00Z')).slice(0, 8);
+          for (const t of common) expect(a, `${JSON.stringify(next)} at ${iso(t)}`).toContain(t);
+        }
+      }
+      expect(moved).toBeGreaterThan(25);
     });
 
     it('the demo\'s schedules are valid for the router', () => {

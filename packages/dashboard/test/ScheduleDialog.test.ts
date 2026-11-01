@@ -201,13 +201,13 @@ describe('Schedule dialog: recurrences', () => {
 
   it('shows the next 5 occurrences in the schedule\'s zone, the exceptions applied', async () => {
     await open({ ...paris({ kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2099-01-04' }), exceptions: ['2099-01-07'] });
-    const rows = [...document.querySelectorAll('[data-test="w-next"] li')].map((r) => r.textContent?.trim());
+    const rows = [...document.querySelectorAll('[data-test="w-next-list"] li')].map((r) => r.textContent?.trim());
     expect(rows).toEqual(['Sun 4 Jan 2099, 08:00–12:00', 'Sat 10 Jan 2099, 08:00–12:00', 'Tue 13 Jan 2099, 08:00–12:00', 'Fri 16 Jan 2099, 08:00–12:00', 'Mon 19 Jan 2099, 08:00–12:00']);
   });
 
   it('shows 5 occurrences of a yearly window, and the months of a Monthly one are a month for 1', async () => {
     const wrapper = await open(paris({ kind: 'nap', start: '00:00', end: '00:00', repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2099-12-01' }));
-    expect(document.querySelectorAll('[data-test="w-next"] li')).toHaveLength(5);
+    expect(document.querySelectorAll('[data-test="w-next-list"] li')).toHaveLength(5);
     await set(wrapper, 'w-pattern', 'monthly');
     expect(q('w-interval')!.textContent).toContain('month');
     expect(q('w-interval')!.textContent).not.toContain('months');
@@ -257,7 +257,7 @@ describe('Schedule dialog: recurrences', () => {
     await set(wrapper, 'w-pattern', 'yearly');
     await set(wrapper, 'w-from', '2099-12-25');
     expect(text('w-sentence')).toBe('Yearly on 25 Dec, all day (24 hours), from 25 Dec 2099, no end date');
-    expect(document.querySelectorAll('[data-test="w-next"] li')[0]!.textContent).toContain('25 Dec 2099');
+    expect(text('w-next')).toContain('25 Dec 2099');
     await set(wrapper, 'w-month-day', '7');
     await set(wrapper, 'w-from', '2099-11-02');
     expect(text('w-sentence')).toBe('Yearly on 7 Nov, all day (24 hours), from 2 Nov 2099, no end date');
@@ -301,7 +301,7 @@ describe('Schedule dialog: recurrences', () => {
   it('lists starts a spring clock change brings together, without a key twice', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await open(paris({ kind: 'nap', wake: 'never', repeat: { pattern: 'cron', cron: '*/15 2 * * *', minutes: 60 }, from: '2099-03-29', until: '2099-03-29' }));
-    const rows = [...document.querySelectorAll('[data-test="w-next"] li')].map((r) => r.textContent?.trim());
+    const rows = [...document.querySelectorAll('[data-test="w-next-list"] li')].map((r) => r.textContent?.trim());
     expect(rows.length).toBeGreaterThan(1);
     expect(new Set(rows.map((r) => r!.slice(0, 22))).size).toBe(1);
     expect(warn.mock.calls.filter((c) => String(c[0]).includes('Duplicate keys'))).toEqual([]);
@@ -335,5 +335,124 @@ describe('Schedule dialog: recurrences', () => {
     await flushPromises();
     expect(text('w-days-hint')).toBe('Choose at least one day.');
     expect(saved()!.disabled).toBe(true);
+  });
+});
+
+describe('Schedule dialog: the next occurrence, on one line', () => {
+  const window: Schedule = { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2099-01-04' }] };
+
+  it('shows the next one, and the next 5 in a tooltip reached by hover and by keyboard', async () => {
+    await open(window);
+    const line = document.querySelector('[data-test="w-next-line"]') as HTMLElement;
+    expect(line.textContent).toContain('Sun 4 Jan 2099, 08:00–12:00');
+    expect(document.querySelector('[data-test="w-next"]')!.textContent).not.toContain('7 Jan 2099');
+    expect(line.getAttribute('tabindex')).toBe('0');
+    const list = () => document.querySelector('.v-overlay--active [data-test="w-next-list"]');
+    expect(list()).toBeNull();
+    line.dispatchEvent(new MouseEvent('mouseenter'));
+    await vi.waitFor(() => expect(list()).not.toBeNull());
+    expect([...list()!.querySelectorAll('li')].map((r) => r.textContent?.trim())).toEqual(['Sun 4 Jan 2099, 08:00–12:00', 'Wed 7 Jan 2099, 08:00–12:00', 'Sat 10 Jan 2099, 08:00–12:00', 'Tue 13 Jan 2099, 08:00–12:00', 'Fri 16 Jan 2099, 08:00–12:00']);
+  });
+});
+
+describe('Schedule dialog: what it says of itself', () => {
+  const sample: Schedule = { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }, { kind: 'nap', days: ['tue'], start: '08:00', end: '12:00' }] };
+  const hover = async (selector: string, content: string) => {
+    document.querySelector(selector)!.dispatchEvent(new MouseEvent('mouseenter'));
+    await vi.waitFor(() => expect(document.querySelector(`.v-overlay--active ${content}`)).not.toBeNull());
+    return document.querySelector(`.v-overlay--active ${content}`)!;
+  };
+
+  it('keeps its introduction to one short sentence', async () => {
+    await open(sample);
+    const intro = document.querySelector('[data-test="schedule-intro"]')!.textContent!.trim();
+    expect(intro.split(/[.!?](\s|$)/).filter((x) => x.trim()).length).toBe(1);
+    expect(intro.length).toBeLessThan(90);
+  });
+
+  it('says in its tooltip that a schedule overrides the idle behaviour, and what wins over it', async () => {
+    await open(sample);
+    const help = await hover('[data-test="schedule-help"]', '[data-test="schedule-help-text"]');
+    const text = help.textContent!;
+    for (const words of ['overrides', 'idle naps do not happen', 'requests do not wake it', 'x-dormeto-wake', 'idle rules apply as usual', 'pause', 'Wake', 'Nap']) expect(text, words).toContain(words);
+  });
+
+  it('draws samples of the overlaps: one workload, allowed and refused, 400 days', async () => {
+    await open(sample);
+    const help = await hover('[data-test="overlap-help"]', '[data-test="overlap-samples"]');
+    expect(help.textContent).toContain('one workload');
+    expect(help.textContent).toContain('400 days');
+    const samples = [...help.querySelectorAll('[data-test="overlap-sample"]')];
+    expect(samples.length).toBeGreaterThanOrEqual(6);
+    expect(samples.filter((x) => x.getAttribute('data-allowed') === 'false')).toHaveLength(1);
+    for (const x of samples) {
+      expect(x.querySelector('.v-icon'), x.textContent!).not.toBeNull();
+      expect(x.querySelectorAll('.dm-bar').length, x.textContent!).toBeGreaterThanOrEqual(2);
+      expect(x.querySelector('[role="img"]')!.getAttribute('aria-label')).toBeTruthy();
+    }
+  });
+
+  it('stays open through the click that follows a tap\'s hover: a tap on a phone is both', async () => {
+    await open(sample);
+    const help = document.querySelector('[data-test="overlap-help"]') as HTMLElement;
+    await hover('[data-test="overlap-help"]', '[data-test="overlap-samples"]');
+    help.click();
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(document.querySelector('.v-overlay--active [data-test="overlap-samples"]')).not.toBeNull();
+  });
+
+  it('has icons on Awake and Nap, and a tooltip on the delete button', async () => {
+    await open(sample);
+    const toggle = [...document.querySelectorAll('[data-test="window"] .v-btn-toggle button')];
+    expect(toggle.map((b) => b.textContent?.trim())).toEqual(['Awake', 'Nap', 'Awake', 'Nap']);
+    for (const b of toggle) expect(b.querySelector('.v-icon')).not.toBeNull();
+    const tip = await hover('[data-test="remove-window"]', '[data-test="remove-window-tip"]');
+    expect(tip.textContent).toBe('Remove this window');
+  });
+});
+
+describe('Schedule dialog: Do not repeat', () => {
+  const paris = (...windows: NonNullable<Schedule['windows']>): Schedule => ({ timeZone: 'Europe/Paris', windows });
+  const q = (name: string) => document.querySelector(`[data-test="${name}"]`);
+  const text = (name: string) => q(name)?.textContent?.trim();
+  const set = async (wrapper: VueWrapper, name: string, value: unknown) => {
+    (wrapper.findAllComponents({ name: 'WindowRecurrence' })[0]!.findComponent(`[data-test="${name}"]`) as unknown as { vm: { $emit(...a: unknown[]): void } }).vm.$emit('update:modelValue', value);
+    await flushPromises();
+  };
+  const stored: NonNullable<Schedule['windows']>[number] = { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: '2099-01-05', until: '2099-01-05' };
+
+  it('reads a window of that shape as Do not repeat, with one date field, and saves it as it was', async () => {
+    const wrapper = await open(paris(stored));
+    expect((wrapper.findAllComponents({ name: 'WindowRecurrence' })[0]!.findComponent('[data-test="w-pattern"]') as unknown as { props(n: string): unknown; }).props('modelValue')).toBe('once');
+    expect(q('w-once-date')).not.toBeNull();
+    expect(q('w-from')).toBeNull();
+    expect(q('w-end-kind')).toBeNull();
+    expect(q('w-interval')).toBeNull();
+    expect(q('w-start')).not.toBeNull();
+    expect(text('w-sentence')).toBe('Once on 5 Jan 2099, 08:00–12:00');
+    await click('Save');
+    expect(submitted!.windows![0]).toEqual(stored);
+  });
+
+  it('offers it, dated today, and moves both ends with its date', async () => {
+    const wrapper = await open(paris({ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' }));
+    await set(wrapper, 'w-pattern', 'once');
+    await set(wrapper, 'w-once-date', '2099-02-03');
+    expect(text('w-sentence')).toBe('Once on 3 Feb 2099, 08:00–12:00');
+    await click('Save');
+    expect(submitted!.windows![0]).toEqual({ kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily' }, from: '2099-02-03', until: '2099-02-03' });
+  });
+
+  it('says a past date will never run, and a blank one keeps Save off', async () => {
+    const wrapper = await open(paris({ ...stored, from: '2020-01-05', until: '2020-01-05' }));
+    expect(text('w-once-past')).toContain('will never run');
+    expect(button('Save')!.disabled).toBe(false);
+    await set(wrapper, 'w-once-date', '');
+    expect((q('w-once-date')!.closest('.v-input') as HTMLElement).textContent).toContain('choose a date');
+    expect(q('w-once-past')).toBeNull();
+    expect(button('Save')!.disabled).toBe(true);
+    await set(wrapper, 'w-once-date', '2099-01-01');
+    expect(q('w-once-past')).toBeNull();
   });
 });

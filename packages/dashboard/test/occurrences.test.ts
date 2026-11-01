@@ -1,7 +1,7 @@
 // The Schedules calendar's arithmetic: a schedule's occurrences at literal instants (overnight and 24-hour windows,
 // clock changes, exceptions, another zone than the browser's), and a calendar selection as a window in a zone.
 import { describe, expect, it } from 'vitest';
-import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, nextOccurrences, occurrencesIn, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
+import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, moveWindow, nextOccurrences, occurrencesIn, wallOffset, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
 import { browserZone, type Schedule, type ScheduleWindow } from '../src/schedule';
 
 const at = (text: string): number => Date.parse(text);
@@ -368,5 +368,82 @@ describe('a window\'s problems, in the router\'s words', () => {
     expect(fieldProblems({ kind: 'awake', days: [], start: '08:00', end: '09:00', from: '2027-1-5' })).toEqual({
       days: 'one or more of mon, tue, wed, thu, fri, sat, sun, each once', from: 'a date YYYY-MM-DD',
     });
+  });
+});
+
+describe('moving a whole window by dragging an occurrence', () => {
+  const TODAY = '2026-11-01';
+  const HOUR = 60;
+  const DAY_MIN = 1440;
+  const times = (w: ScheduleWindow | null) => w && `${w.start}–${w.end}`;
+  const awake = (fields: Partial<ScheduleWindow>): ScheduleWindow => ({ kind: 'awake', start: '08:00', end: '12:00', ...fields });
+
+  it('reads the offset in the schedule\'s own wall time, to 5 minutes', () => {
+    const paris = 'Europe/Paris';
+    expect(wallOffset(at('2027-01-04T08:00:00+01:00'), at('2027-01-04T10:00:00+01:00'), paris)).toBe(120);
+    expect(wallOffset(at('2027-01-04T08:00:00+01:00'), at('2027-01-05T08:00:00+01:00'), paris)).toBe(1440);
+    expect(wallOffset(at('2027-01-04T08:00:00+01:00'), at('2027-01-04T08:07:00+01:00'), paris)).toBe(5);
+    // Across the spring change: a day later on the clock is 23 hours of instants.
+    expect(wallOffset(at('2027-03-27T08:00:00+01:00'), at('2027-03-28T08:00:00+02:00'), paris)).toBe(1440);
+    // The view may show another zone: the same instants, a day of New York's clock.
+    expect(wallOffset(at('2027-03-13T08:00:00-05:00'), at('2027-03-14T08:00:00-04:00'), 'America/New_York')).toBe(1440);
+  });
+
+  it('shifts the times; a plain window keeps its days within a day', () => {
+    const moved = moveWindow(awake({ days: ['mon', 'fri'] }), 90, TODAY);
+    expect(moved).toEqual(awake({ days: ['mon', 'fri'], start: '09:30', end: '13:30' }));
+  });
+
+  it('a start crossing midnight adds to the day, and weekly days rotate', () => {
+    expect(moveWindow(awake({ days: ['mon', 'sun'], start: '22:00', end: '23:00' }), 3 * HOUR, TODAY)).toEqual(awake({ days: ['mon', 'tue'], start: '01:00', end: '02:00' }));
+    expect(moveWindow(awake({ days: ['mon'], start: '01:00', end: '02:00' }), -2 * HOUR, TODAY)).toEqual(awake({ days: ['sun'], start: '23:00', end: '00:00' }));
+    expect(moveWindow(awake({ days: ['mon', 'wed'] }), 2 * DAY_MIN, TODAY)).toEqual(awake({ days: ['wed', 'fri'] }));
+    expect(moveWindow(awake({ repeat: { pattern: 'weekly', days: ['sat'] } }), 2 * DAY_MIN, TODAY)!.repeat).toEqual({ pattern: 'weekly', days: ['mon'] });
+  });
+
+  it('keeps a window that ends the next day, or lasts 24 hours, as long as it was', () => {
+    expect(times(moveWindow(awake({ days: ['mon'], start: '20:00', end: '07:00' }), 2 * HOUR, TODAY))).toBe('22:00–09:00');
+    expect(moveWindow(awake({ days: ['mon'], start: '00:00', end: '00:00' }), DAY_MIN, TODAY)).toEqual(awake({ days: ['tue'], start: '00:00', end: '00:00' }));
+    expect(times(moveWindow(awake({ days: ['mon'], start: '00:00', end: '00:00' }), 8 * HOUR, TODAY))).toBe('08:00–08:00');
+  });
+
+  it('a day offset moves from and until when set, of every pattern', () => {
+    expect(moveWindow(awake({ days: ['mon'], from: '2027-01-04', until: '2027-02-01' }), DAY_MIN, TODAY)).toEqual(awake({ days: ['tue'], from: '2027-01-05', until: '2027-02-02' }));
+    expect(moveWindow(awake({ repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' }), 2 * DAY_MIN, TODAY)).toEqual(awake({ repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-06' }));
+    expect(moveWindow(awake({ repeat: { pattern: 'daily' }, until: '2027-01-04' }), DAY_MIN, TODAY)).toEqual(awake({ repeat: { pattern: 'daily' }, until: '2027-01-05' }));
+    const yes = moveWindow(awake({ repeat: { pattern: 'daily' }, from: '2027-01-04', until: '2027-01-04' }), 3 * DAY_MIN, TODAY);
+    expect(yes).toEqual(awake({ repeat: { pattern: 'daily' }, from: '2027-01-07', until: '2027-01-07' }));
+  });
+
+  it('monthly moves its day, or its weekday where that gives the same dates', () => {
+    expect(moveWindow(awake({ repeat: { pattern: 'monthly', day: 15 } }), 2 * DAY_MIN, TODAY)!.repeat).toEqual({ pattern: 'monthly', day: 17 });
+    expect(moveWindow(awake({ repeat: { pattern: 'monthly', day: 15 } }), 2 * HOUR, TODAY)).toEqual(awake({ start: '10:00', end: '14:00', repeat: { pattern: 'monthly', day: 15 } }));
+    expect(moveWindow(awake({ repeat: { pattern: 'monthly', nth: 2, weekday: 'mon' } }), 2 * HOUR, TODAY)!.repeat).toEqual({ pattern: 'monthly', nth: 2, weekday: 'mon' });
+    expect(moveWindow(awake({ repeat: { pattern: 'monthly', interval: 12, day: 25 }, from: '2026-12-01' }), DAY_MIN, TODAY)).toEqual(awake({ repeat: { pattern: 'monthly', interval: 12, day: 26 }, from: '2026-12-02' }));
+  });
+
+  it('refuses what a shift of every occurrence would not give', () => {
+    const cant = (w: ScheduleWindow, minutes: number) => expect(moveWindow(w, minutes, TODAY), JSON.stringify(w)).toBeNull();
+    // Past a month's end: day 30 falls on 28 Feb, day 31 on 28 Feb too, a day apart elsewhere.
+    cant(awake({ repeat: { pattern: 'monthly', day: 30 } }), DAY_MIN);
+    cant(awake({ repeat: { pattern: 'monthly', day: 31 } }), -DAY_MIN);
+    cant(awake({ repeat: { pattern: 'monthly', day: 31 } }), DAY_MIN);
+    // The first Monday, a day later, is not always the first Tuesday.
+    cant(awake({ repeat: { pattern: 'monthly', nth: 1, weekday: 'mon' } }), DAY_MIN);
+    // Every 2 weeks, crossing its week: Monday and Sunday, a day later, are Tuesday and a Monday of the week not counted.
+    cant(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'sun'] }, from: '2027-01-04' }), DAY_MIN);
+    // A yearly day moved out of its month.
+    cant(awake({ repeat: { pattern: 'monthly', interval: 12, day: 31 }, from: '2026-12-31' }), DAY_MIN);
+    // A cron has no start to move.
+    cant({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } }, HOUR);
+  });
+
+  it('moves a weekly window with an interval when its count follows, its from moving with it', () => {
+    expect(moveWindow(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['sun'] }, from: '2027-01-10' }), DAY_MIN, TODAY)).toEqual(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['mon'] }, from: '2027-01-11' }));
+    expect(moveWindow(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['mon'] }, from: '2027-01-04' }), DAY_MIN, TODAY)).toEqual(awake({ repeat: { pattern: 'weekly', interval: 2, days: ['tue'] }, from: '2027-01-05' }));
+  });
+
+  it('leaves the wake and the kind as they are', () => {
+    expect(moveWindow({ kind: 'nap', days: ['mon'], start: '20:00', end: '07:00', wake: 'header' }, HOUR, TODAY)).toEqual({ kind: 'nap', days: ['mon'], start: '21:00', end: '08:00', wake: 'header' });
   });
 });

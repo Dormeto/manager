@@ -1,9 +1,11 @@
 // The Schedules calendar's data: the fixed palette, the enabled calendars kept in the browser (per user), the support of
 // routers, and the events drawn from a workload's schedule. Pure apart from the storage helpers.
-import { browserZone, recurrenceText, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
+import { browserZone, recurrenceText, type NextEvent, type Schedule } from './schedule';
 import { occurrencesByDay, type Occurrence } from './occurrences';
 
 export const MAX_CALENDARS = 20;
+// Workloads as the dashboard lists them: by name, whatever the case, w-2 before w-10.
+export const naturalCompare = new Intl.Collator('en', { numeric: true, sensitivity: 'base' }).compare;
 export const MIN_ROUTER = '0.31.0';
 export const NEEDS_ROUTER = `router ${MIN_ROUTER} needed`;
 
@@ -80,6 +82,8 @@ export interface Calendar {
   state?: string;
   maintenanceDue?: string | null;
   next?: NextEvent[];
+  // Whether the user may edit it: only then can its windows be dragged.
+  canEdit?: boolean;
 }
 
 export interface CalendarEvent {
@@ -91,7 +95,10 @@ export interface CalendarEvent {
   backgroundColor: string;
   borderColor: string;
   textColor: string;
-  extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; window?: number; tip: string };
+  startEditable: boolean;
+  durationEditable: boolean;
+  // tip: the tooltip's lines, read only when it opens (a view can draw 24,000 items).
+  extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; window?: number; tip: () => string[] };
 }
 
 // One formatter a zone: a frequent cron window has thousands of occurrences on a month.
@@ -114,8 +121,9 @@ function spanText(o: Occurrence, timeZone: string): string {
   return `${full(o.start)}–${full(o.end)}`;
 }
 
-// A window on weekly days and nothing else reads on the calendar as it always did; any other says its recurrence.
-const isPlain = (w: ScheduleWindow | undefined): boolean => !w || !(w.repeat || w.from || w.until);
+const CAN_DRAG = 'Drag to move every occurrence of this window.';
+const CRON_STAYS = 'A cron window can\'t be dragged: edit it in the dialog.';
+const READ_ONLY = 'You may not edit this workload: it can\'t be dragged.';
 
 // What the calendar draws of one workload in a view. In a month view it puts every event in the page, hidden or not, about 0.1 s
 // for each 1,000 (the demo in Edge: 1,008 in 0.13 s, 5,040 in 0.5 s, 20,160 in 1.9 to 2.3 s, 30,240 in 2.6 to 4.4 s, 120,960 in
@@ -157,7 +165,7 @@ export function cappedText(capped: Capped[], here: string = browserZone()): stri
 
 // The events of the calendars in [from, to): a window's occurrence is "<workload> · Awake" filled, or "· Nap (wake: header)"
 // outlined (its text readable on the theme's surface); a maximum nap's maintenance due time of an asleep workload is a short marker. The tooltip gives the times in the
-// schedule's own zone when it is not the browser's, and a recurrence in its words. An occurrence that ended before `now` carries `dm-past` (drawn dimmed).
+// schedule's own zone when it is not the browser's, and the recurrence in its words. An occurrence that ended before `now` carries `dm-past` (drawn dimmed).
 export function calendarEvents(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false, now: number = Date.now()): { events: CalendarEvent[]; capped: Capped[] } {
   const surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
   const out: CalendarEvent[] = [];
@@ -172,13 +180,19 @@ export function calendarEvents(calendars: Calendar[], from: number, to: number, 
       const nap = o.kind === 'nap';
       const label = nap ? `Nap${o.wake === 'header' ? ' (wake: header)' : ''}` : 'Awake';
       const title = `${c.name} · ${label}`;
-      const there = s.timeZone && s.timeZone !== here ? ` — ${spanText(o, s.timeZone)} ${s.timeZone}` : '';
-      const words = isPlain(windows[o.window]) ? '' : ` — ${recurrenceText(windows[o.window]!)}`;
+      const w = windows[o.window]!;
+      const cron = w.repeat?.pattern === 'cron';
+      const tip = () => [
+        title, recurrenceText(w),
+        `${spanText(o, here)}${s.timeZone && s.timeZone !== here ? ` here, ${spanText(o, s.timeZone)} ${s.timeZone}` : ''}`,
+        cron ? CRON_STAYS : c.canEdit ? CAN_DRAG : READ_ONLY,
+      ];
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
         classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake', ...(o.end < now ? ['dm-past'] : [])],
         backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
-        extendedProps: { key: c.key, kind: o.kind, window: o.window, tip: `${title}${there}${words}` },
+        startEditable: Boolean(c.canEdit) && !cron, durationEditable: false,
+        extendedProps: { key: c.key, kind: o.kind, window: o.window, tip },
       });
     }
     const due = c.maintenanceDue ? Date.parse(c.maintenanceDue) : NaN;
@@ -187,7 +201,8 @@ export function calendarEvents(calendars: Calendar[], from: number, to: number, 
       out.push({
         id: `${c.key}#maintenance`, title: `${c.name} · maintenance due`, start: new Date(due), end: new Date(due + 15 * 60_000),
         classNames: ['dm-ev', 'dm-ev--maintenance'], backgroundColor: c.color, borderColor: c.color, textColor: '#ffffff',
-        extendedProps: { key: c.key, kind: 'maintenance', tip },
+        startEditable: false, durationEditable: false,
+        extendedProps: { key: c.key, kind: 'maintenance', tip: () => [tip] },
       });
     }
   }

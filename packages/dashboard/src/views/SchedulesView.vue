@@ -10,17 +10,19 @@ import FullCalendar from '@fullcalendar/vue3';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventContentArg, EventMountArg } from '@fullcalendar/core';
+import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventContentArg, EventDropArg, EventMountArg } from '@fullcalendar/core';
 import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
 import { api } from '../api';
 import { MAX_CALENDARS, calendarEvents, calendarKey, cappedText, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
-import { DAYS, browserZone, type Day, type Schedule } from '../schedule';
-import { windowFromSelection } from '../occurrences';
+import { DAYS, browserZone, movedText, recurrenceError, scheduleBody, windowBody, type Day, type Schedule } from '../schedule';
+import { localDate, moveWindow, wallOffset, windowFromSelection } from '../occurrences';
 import type { WorkloadStatus, WorkloadSummary } from '../types';
 import { useSession } from '../stores/session';
 import CalendarsPanel from '../components/CalendarsPanel.vue';
 import ScheduleDialog from '../components/ScheduleDialog.vue';
 import NewWindowDialog, { type Candidate, type Selection } from '../components/NewWindowDialog.vue';
+import NoticeToast from '../components/NoticeToast.vue';
+import type { Notice } from '../components/NoticeAlert.vue';
 
 const session = useSession();
 const route = useRoute();
@@ -166,7 +168,7 @@ const nameOf = (key: string) => reads[key]?.data?.name ?? rows.value.find((w) =>
 const calendars = computed<Calendar[]>(() => enabled.value.flatMap((e) => {
   const data = reads[e.key]?.data;
   if (!data) return [];
-  return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next }];
+  return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next, canEdit: canEdit(e.key) }];
 }));
 const drawing = computed(() => (range.value ? calendarEvents(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark, Date.now()) : { events: [], capped: [] }));
 const events = computed(() => drawing.value.events);
@@ -182,6 +184,10 @@ function datesSet(arg: DatesSetArg) {
 }
 const go = (action: 'prev' | 'next' | 'today') => fc()?.[action]();
 const show = (v: ViewName) => fc()?.changeView(VIEWS[v]);
+
+// What each write of a schedule says, naming the workload.
+const toast = ref<Notice | null>(null);
+const said = (type: Notice['type'], text: string) => { toast.value = { type, text }; };
 
 // An event opens its workload's schedule (the workload's page for one the user may not edit).
 const dialogKey = ref<string | null>(null);
@@ -212,9 +218,11 @@ async function saveSchedule(schedule: Schedule) {
     await api(`${pathOf(key)}/schedule`, { method: 'PUT', body: JSON.stringify(schedule) });
     dialogOpen.value = false;
     persist({ last: key });
+    said('success', `Schedule of ${nameOf(key)} saved`);
     await readOne(key);
   } catch (err) {
     dialogError.value = (err as Error).message;
+    said('error', `Schedule of ${nameOf(key)} not saved: ${(err as Error).message}`);
   } finally {
     saving.value = false;
   }
@@ -228,9 +236,11 @@ async function clearSchedule() {
   try {
     await api(`${pathOf(key)}/schedule`, { method: 'DELETE' });
     dialogOpen.value = false;
+    said('success', `Schedule of ${nameOf(key)} cleared`);
     await readOne(key);
   } catch (err) {
     dialogError.value = (err as Error).message;
+    said('error', `Schedule of ${nameOf(key)} not cleared: ${(err as Error).message}`);
   } finally {
     saving.value = false;
   }
@@ -285,17 +295,77 @@ async function saveNew(arg: { key: string; schedule: Schedule }) {
     newOpen.value = false;
     last.value = arg.key;
     persist({ last: arg.key });
+    said('success', `Schedule of ${nameOf(arg.key)} saved`);
     await readOne(arg.key);
   } catch (err) {
     newError.value = (err as Error).message;
+    said('error', `Schedule of ${nameOf(arg.key)} not saved: ${(err as Error).message}`);
   } finally {
     newSaving.value = false;
   }
 }
 watch(newOpen, (open) => { if (!open) fc()?.unselect(); });
 
+// Dragging an occurrence moves its whole window: the model has no edit of one occurrence. From a fresh read, for that workload
+// only, and put back on anything but a save. The drawing keeps the drop until the workload is read again, so nothing jumps.
+const moving = ref(false);
+async function eventDrop(arg: EventDropArg) {
+  const key = arg.event.extendedProps.key as string;
+  const index = arg.event.extendedProps.window as number;
+  const name = nameOf(key);
+  if (moving.value) { arg.revert(); return; }
+  moving.value = true;
+  try {
+    const fresh = await api<WorkloadStatus>(pathOf(key));
+    const schedule = fresh.schedule;
+    const window = schedule?.windows?.[index];
+    const known = reads[key]?.data?.schedule?.windows?.[index];
+    if (!schedule || !window || !known || JSON.stringify(windowBody(window)) !== JSON.stringify(windowBody(known))) {
+      arg.revert();
+      said('warning', `The schedule of ${name} changed since it was read: look at it again before moving this window.`);
+      await readOne(key);
+      return;
+    }
+    const minutes = wallOffset(arg.oldEvent.start!.getTime(), arg.event.start!.getTime(), schedule.timeZone);
+    if (!minutes) { arg.revert(); return; }
+    const moved = moveWindow(window, minutes, localDate(Date.now(), schedule.timeZone));
+    if (!moved) {
+      arg.revert();
+      said('warning', 'This window can\'t be moved by dragging: edit it in the dialog.');
+      return;
+    }
+    const body = scheduleBody({ ...schedule, windows: schedule.windows!.map((w, i) => (i === index ? moved : w)) }, schedule.maxNapDays ? String(schedule.maxNapDays) : '');
+    await api(`${pathOf(key)}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
+    reads[key] = { status: 'ok', data: { ...fresh, schedule: body } };
+    said('success', movedText(name, windowBody(moved)));
+    await readOne(key);
+  } catch (err) {
+    arg.revert();
+    said('error', recurrenceError((err as Error).message));
+  } finally {
+    moving.value = false;
+  }
+}
+
+// One tooltip for every item, a view can draw 1,200 per workload: its activator follows the item hovered or focused.
+const tips = new WeakMap<Element, () => string[]>();
+const tipFor = ref<{ el: Element; lines: string[] } | null>(null);
+const dragging = ref(false);
 function eventDidMount(arg: EventMountArg) {
-  arg.el.title = String(arg.event.extendedProps.tip ?? arg.event.title);
+  tips.set(arg.el, arg.event.extendedProps.tip as () => string[]);
+}
+function eventWillUnmount(arg: EventMountArg) {
+  if (tipFor.value?.el === arg.el) tipFor.value = null;
+}
+function showTip(e: Event) {
+  const el = (e.target as Element).closest?.('.fc-event');
+  const tip = el && tips.get(el);
+  if (!tip || dragging.value || tipFor.value?.el === el) return;
+  tipFor.value = { el: el!, lines: tip() };
+}
+function hideTip(e: Event) {
+  const el = (e.target as Element).closest?.('.fc-event');
+  if (el && tipFor.value?.el === el && !el.contains((e as MouseEvent).relatedTarget as Node | null)) tipFor.value = null;
 }
 
 const options = computed<CalendarOptions>(() => ({
@@ -311,7 +381,11 @@ const options = computed<CalendarOptions>(() => ({
     // nap) is not shown again at 00:00 on the next day.
     dayGridMonth: { eventDisplay: 'list-item', dayMaxEvents: true, nextDayThreshold: '12:00' },
   },
-  events: events.value, datesSet, eventClick, eventDidMount,
+  events: events.value, datesSet, eventClick, eventDidMount, eventWillUnmount, eventDrop,
+  // The whole window moves: drag only, never a resize, and only the items marked so.
+  eventDurationEditable: false,
+  eventDragStart: () => { dragging.value = true; tipFor.value = null; },
+  eventDragStop: () => { dragging.value = false; },
 }));
 
 const drawer = ref(false);
@@ -330,7 +404,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
   <v-alert v-if="listError" type="error" class="mb-4" :text="listError" />
   <v-alert v-for="e in routerErrors" :key="e.router" data-test="router-error" type="warning" variant="tonal" density="compact" class="mb-4" :title="`Router ${e.router} unreachable`" :text="`${e.message} Its workloads are missing from the panel; the calendars you enabled stay.`" />
   <v-alert v-if="incomplete" data-test="list-incomplete" type="warning" variant="tonal" density="compact" class="mb-4" text="The list of workloads is incomplete: some may be missing from the panel." />
-  <v-alert v-if="smAndDown" data-test="touch-hint" type="info" variant="tonal" density="compact" class="mb-4" text="Touch and hold, then drag, to create a window — or use New window." />
+  <v-alert v-if="smAndDown" data-test="touch-hint" type="info" variant="tonal" density="compact" class="mb-4" text="Touch and hold, then drag, to create a window or move one — or use New window." />
   <v-alert v-if="notice" data-test="select-notice" type="warning" variant="tonal" closable class="mb-4" :text="notice" @click:close="notice = ''" />
   <v-alert v-if="drawing.capped.length" data-test="calendar-capped" type="info" variant="tonal" density="compact" class="mb-4" :text="cappedText(drawing.capped)" />
   <div class="dm-sched">
@@ -343,18 +417,24 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     <v-card class="dm-sched__main">
       <div class="dm-sched__bar">
         <v-btn data-test="today" variant="outlined" size="small" @click="go('today')">Today</v-btn>
-        <v-btn data-test="prev" :icon="mdiChevronLeft" variant="text" size="small" aria-label="Previous" @click="go('prev')" />
-        <v-btn data-test="next" :icon="mdiChevronRight" variant="text" size="small" aria-label="Next" @click="go('next')" />
+        <v-tooltip location="top" text="Previous">
+          <template #activator="{ props: activator }"><v-btn v-bind="activator" data-test="prev" :icon="mdiChevronLeft" variant="text" size="small" aria-label="Previous" @click="go('prev')" /></template>
+        </v-tooltip>
+        <v-tooltip location="top" text="Next">
+          <template #activator="{ props: activator }"><v-btn v-bind="activator" data-test="next" :icon="mdiChevronRight" variant="text" size="small" aria-label="Next" @click="go('next')" /></template>
+        </v-tooltip>
         <h2 data-test="title" class="dm-sched__title" aria-live="polite">{{ title }}</h2>
         <v-spacer />
         <v-btn v-if="smAndDown" data-test="panel-toggle" :prepend-icon="mdiFormatListChecks" variant="tonal" size="small" @click="drawer = !drawer">Calendars</v-btn>
         <v-btn data-test="new-window" :prepend-icon="mdiCalendarPlus" variant="tonal" size="small" color="primary" title="Or drag over the calendar" @click="newWindowButton">New window</v-btn>
-        <v-btn data-test="refresh" :icon="mdiRefresh" variant="text" size="small" aria-label="Refresh" :loading="listing" @click="refresh" />
+        <v-tooltip location="top" text="Refresh">
+          <template #activator="{ props: activator }"><v-btn v-bind="activator" data-test="refresh" :icon="mdiRefresh" variant="text" size="small" aria-label="Refresh" :loading="listing" @click="refresh" /></template>
+        </v-tooltip>
         <v-btn-toggle :model-value="view" mandatory density="compact" variant="outlined" divided class="dm-sched__views" @update:model-value="show($event)">
           <v-btn v-for="(label, v) in VIEW_LABELS" :key="v" :data-test="`view-${v}`" :value="v" size="small">{{ label }}</v-btn>
         </v-btn-toggle>
       </div>
-      <div class="dm-sched__calendar">
+      <div class="dm-sched__calendar" @mouseover="showTip" @mouseout="hideTip" @focusin="showTip" @focusout="hideTip">
         <FullCalendar ref="calendar" :options="options">
           <template #eventContent="arg">
             <div class="dm-ev__body" :class="{ 'dm-ev__body--grid': arg.view.type === 'dayGridMonth' }">
@@ -367,6 +447,10 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
       </div>
     </v-card>
   </div>
+  <v-tooltip :model-value="Boolean(tipFor)" :activator="tipFor?.el ?? undefined" :open-on-hover="false" :open-on-focus="false" location="top" max-width="380" :transition="false">
+    <div v-if="tipFor" data-test="event-tip"><div v-for="(line, i) in tipFor.lines" :key="i" :class="{ 'font-weight-medium': i === 0 }">{{ line }}</div></div>
+  </v-tooltip>
+  <NoticeToast :notice="toast" @close="toast = null" />
   <NewWindowDialog v-model="newOpen" :candidates="editable" :selection="newSelection" :last="last" :error="newError" :saving="newSaving" @submit="saveNew" />
   <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
 </template>

@@ -1,21 +1,22 @@
 <script setup lang="ts">
 // How a window repeats (schedule recurrence design), in the Schedule and New window dialogs: the Repeats select and what that
-// pattern needs, the times (a cron's duration), the range of dates, the window said back in a sentence and its next 5
-// occurrences in the schedule's zone, or why it cannot be saved under the field concerned. The window is the dialog's: a
+// pattern needs, the times (a cron's duration), the range of dates or a date, the window said back in a sentence and its next
+// occurrence in the schedule's zone (the next 5 in a tooltip), or why it cannot be saved under the field concerned. The window is the dialog's: a
 // change comes back as a new one, and what is not changed stays as it was stored.
 import { computed } from 'vue';
-import { mdiAlertOutline } from '@mdi/js';
+import { mdiAlertOutline, mdiInformationOutline } from '@mdi/js';
 import { cronShortestGap, editProblems, localDate, nextOccurrences } from '../occurrences';
 import {
-  DAYS, TIMES, browserZone, canonicalZone, dayLabel, newMemory, occurrenceText, recurrenceText, repeatChoice, repeatText, windowBody, withChoice, withFrom, withInterval,
+  DAYS, TIMES, browserZone, canonicalZone, dayLabel, newMemory, occurrenceText, recurrenceText, repeatChoice, repeatText, windowBody, withChoice, withFrom, withInterval, withOnceDate,
   type Day, type Repeat, type RepeatChoice, type ScheduleWindow,
 } from '../schedule';
 
-const props = withDefaults(defineProps<{ modelValue: ScheduleWindow; timeZone?: string | null; exceptions?: string[]; test?: string }>(), { timeZone: null, exceptions: () => [], test: 'w' });
+// date: the day of a calendar selection, where a Do not repeat starts.
+const props = withDefaults(defineProps<{ modelValue: ScheduleWindow; timeZone?: string | null; exceptions?: string[]; test?: string; date?: string | null }>(), { timeZone: null, exceptions: () => [], test: 'w', date: null });
 const emit = defineEmits<{ 'update:modelValue': [ScheduleWindow] }>();
 
 const CHOICES: { value: RepeatChoice; title: string }[] = [
-  { value: 'weekly', title: 'Weekly' }, { value: 'daily', title: 'Daily' }, { value: 'monthly', title: 'Monthly' }, { value: 'yearly', title: 'Yearly' }, { value: 'cron', title: 'Cron expression' },
+  { value: 'once', title: 'Do not repeat' }, { value: 'weekly', title: 'Weekly' }, { value: 'daily', title: 'Daily' }, { value: 'monthly', title: 'Monthly' }, { value: 'yearly', title: 'Yearly' }, { value: 'cron', title: 'Cron expression' },
 ];
 const UNITS: Partial<Record<RepeatChoice, string>> = { daily: 'day', weekly: 'week', monthly: 'month' };
 const NTHS = [{ value: 1, title: 'first' }, { value: 2, title: 'second' }, { value: 3, title: 'third' }, { value: 4, title: 'fourth' }, { value: -1, title: 'last' }];
@@ -39,6 +40,11 @@ const shown = (value: number | undefined): number | string => (value === undefin
 
 // This row's own, kept as long as the row is (a dialog gives each a stable key).
 const memory = newMemory();
+const choose = (next: RepeatChoice) => {
+  memory.onceDate = props.date ?? undefined;
+  update(withChoice(w.value, next, today(), memory));
+};
+const oncePast = computed(() => choice.value === 'once' && Boolean(w.value.from) && w.value.from! < today());
 
 const body = computed(() => windowBody(w.value));
 const problems = computed(() => editProblems(w.value));
@@ -94,7 +100,7 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
 <template>
   <div class="dm-recurrence">
     <div class="d-flex flex-wrap align-start ga-3 mt-3">
-      <v-select :data-test="`${test}-pattern`" :model-value="choice" :items="CHOICES" label="Repeats" density="compact" hide-details class="dm-repeats" @update:model-value="update(withChoice(w, $event, today(), memory))" />
+      <v-select :data-test="`${test}-pattern`" :model-value="choice" :items="CHOICES" label="Repeats" density="compact" hide-details class="dm-repeats" @update:model-value="choose($event)" />
       <v-text-field
         v-if="choice && UNITS[choice]" :data-test="`${test}-interval`" :model-value="shown(repeat?.interval ?? 1)" label="Every" type="number" min="1" max="99" :suffix="unit" density="compact" class="dm-interval"
         :error-messages="problems['repeat.interval'] ?? ''" :hide-details="!problems['repeat.interval']" @update:model-value="update(withInterval(w, typed($event), today(), memory))"
@@ -153,7 +159,14 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
       <slot />
     </div>
 
-    <div class="d-flex flex-wrap align-start ga-3 mt-4">
+    <div v-if="choice === 'once'" class="mt-4">
+      <v-text-field
+        :data-test="`${test}-once-date`" :model-value="w.from ?? ''" label="Date" type="date" density="compact" class="dm-date"
+        :error-messages="problems.until ?? problems.from ?? ''" :hide-details="!problems.until && !problems.from" @update:model-value="update(withOnceDate(w, $event ?? ''))"
+      />
+      <div v-if="oncePast" :data-test="`${test}-once-past`" class="text-body-small text-warning mt-1">This date is past: the window will never run.</div>
+    </div>
+    <div v-else class="d-flex flex-wrap align-start ga-3 mt-4">
       <v-text-field
         :data-test="`${test}-from`" :model-value="w.from ?? ''" :label="needsFrom ? 'Start date' : 'Start date (optional)'" type="date" density="compact" class="dm-date"
         :error-messages="problems.from ?? ''" :hide-details="!problems.from" @update:model-value="update(withFrom(w, $event ?? '', memory))"
@@ -167,10 +180,17 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
 
     <div v-if="other.length" class="text-body-small text-error mt-2">{{ other.join('; ') }}</div>
     <div v-if="sentence" :data-test="`${test}-sentence`" class="mt-3 text-body-medium"><strong :data-test="`${test}-repeats`">{{ head.charAt(0).toUpperCase() + head.slice(1) }}</strong>{{ tail }}</div>
-    <div v-if="valid" :data-test="`${test}-next`" class="mt-2">
-      <div class="dm-subhead mb-1">Next occurrences</div>
-      <ul v-if="next.length" class="dm-next text-body-small"><li v-for="(o, i) in next" :key="i">{{ occurrenceText(o, zone) }}</li></ul>
-      <div v-else class="text-body-small text-medium-emphasis">No occurrence in the next 10 years.</div>
+    <div v-if="valid" :data-test="`${test}-next`" class="mt-2 text-body-small">
+      <v-tooltip v-if="next.length" location="top" max-width="340" open-on-focus>
+        <template #activator="{ props: activator }">
+          <span v-bind="activator" :data-test="`${test}-next-line`" class="dm-next-line" tabindex="0"><span class="text-medium-emphasis">Next:</span> {{ occurrenceText(next[0]!, zone) }} <v-icon :icon="mdiInformationOutline" size="14" /></span>
+        </template>
+        <div :data-test="`${test}-next-list`">
+          <div class="font-weight-medium mb-1">Next occurrences</div>
+          <ul class="dm-next"><li v-for="(o, i) in next" :key="i">{{ occurrenceText(o, zone) }}</li></ul>
+        </div>
+      </v-tooltip>
+      <span v-else class="text-medium-emphasis">No occurrence in the next 10 years.</span>
     </div>
   </div>
 </template>
@@ -184,5 +204,6 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
 .dm-cron :deep(input) { font-family: var(--dm-mono); }
 .dm-on { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dm-on__radio { flex: 0 0 auto; }
+.dm-next-line { cursor: help; }
 .dm-next { margin: 0; padding-left: 18px; font-variant-numeric: tabular-nums; }
 </style>

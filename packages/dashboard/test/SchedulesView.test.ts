@@ -89,6 +89,7 @@ const enable = async (w: VueWrapper, key: string) => {
   await w.find(`[data-test="calendar-${key}"] input`).setValue(true);
   await flushPromises();
 };
+const toast = () => document.querySelector('.dm-toast .v-snackbar__content')?.textContent?.trim();
 const eventTitles = (w: VueWrapper) => w.findAll('.fc-event').map((e) => e.text());
 
 beforeEach(() => { h.calls.length = 0; h.fail.clear(); h.errors = []; h.hold = null; h.active = 0; h.peak = 0; seed(); window.localStorage.clear(); });
@@ -98,7 +99,7 @@ describe('Schedules view: the calendars panel', () => {
   it('lists the scheduled workloads by default, the others when "Scheduled only" is off, and searches by name, id and router', async () => {
     const { wrapper } = await open();
     const names = () => wrapper.findAll('[data-test^="calendar-"]').map((r) => r.attributes('data-test')!.replace('calendar-', ''));
-    expect(names()).toEqual(['dmt-dev/a', 'dmt-dev/b', 'old/d']);
+    expect(names()).toEqual(['dmt-dev/b', 'old/d', 'dmt-dev/a']);
     await wrapper.find('[data-test="scheduled-only"] input').setValue(false);
     expect(names()).toContain('dmt-dev/c');
     await wrapper.find('[data-test="panel-search"] input').setValue('blog');
@@ -238,7 +239,8 @@ describe('Schedules view: the calendar', () => {
     // Wed 09:00-12:00 in New York is 15:00-18:00 in Paris on 21 Oct (the clocks differ by 6 hours that week).
     expect(ev.text()).toContain('Blog · Awake');
     expect(ev.find('.fc-event-time').text()).toContain('15:00');
-    expect(ev.attributes('title')).toContain('America/New_York');
+    await ev.trigger('mouseover');
+    await vi.waitFor(() => expect(document.querySelector('.v-overlay--active [data-test="event-tip"]')?.textContent).toContain('America/New_York'));
   });
 
   it('switches to Day, Work week and Month, and keeps the view and date in the address', async () => {
@@ -291,6 +293,7 @@ describe('Schedules view: the calendar', () => {
     expect(JSON.parse(put.body!).windows).toHaveLength(1);
     expect(h.calls.filter((c) => c.path === '/workloads/dmt-dev/a' && c.method === 'GET')).toHaveLength(2);
     expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(false);
+    expect(toast()).toBe('Schedule of Shop saved');
   });
 
   it('keeps the dialog open and shows the refusal when the save fails', async () => {
@@ -654,7 +657,7 @@ describe('Schedules view: creating a window', () => {
     await field(wrapper, 'nw-from').vm.$emit('update:modelValue', '2099-01-01');
     await flushPromises();
     expect(text('[data-test="nw-sentence"]')).toBe('Monthly on day 15, 12:00–13:00, from 1 Jan 2099, no end date');
-    expect(body().querySelectorAll('[data-test="nw-next"] li')).toHaveLength(5);
+    expect(body().querySelectorAll('[data-test="nw-next-list"] li')).toHaveLength(5);
     await click('[data-test="nw-save"]');
     expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', start: '12:00', end: '13:00', repeat: { pattern: 'monthly', day: 15 }, from: '2099-01-01' });
   });
@@ -826,5 +829,214 @@ describe('SchedulesView styles', () => {
     // A night's nap (20:00–07:00) shows on its start day only, not again at 00:00 on the next day.
     expect(src).toMatch(/dayGridMonth:\s*\{[^}]*nextDayThreshold:\s*'12:00'/);
     expect(src).toMatch(/\.dm-past\)\s*\{\s*opacity/);
+  });
+});
+
+describe('Schedules view: notifications', () => {
+  it('names the workload on a clear, and says when a write fails while the dialog stays open', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await wrapper.find('.fc-event.dm-ev--awake').trigger('click');
+    await flushPromises();
+    h.fail.add('/workloads/dmt-dev/a/schedule');
+    wrapper.findComponent(ScheduleDialog).vm.$emit('submit', shopSchedule);
+    await flushPromises();
+    expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(true);
+    expect(toast()).toBe('Schedule of Shop not saved: boom');
+    wrapper.findComponent(ScheduleDialog).vm.$emit('clear');
+    await flushPromises();
+    expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(true);
+    expect(toast()).toBe('Schedule of Shop not cleared: boom');
+    h.fail.clear();
+    wrapper.findComponent(ScheduleDialog).vm.$emit('clear');
+    await flushPromises();
+    expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(false);
+    expect(toast()).toBe('Schedule of Shop cleared');
+  });
+
+  it('names the workload after a new window', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '12:00'), at('2026-10-19', '13:00'));
+    await click('[data-test="nw-save"]');
+    expect(toast()).toBe('Schedule of Shop saved');
+  });
+});
+
+describe('Schedules view: the shared tooltip of the calendar items', () => {
+  it('replaces the title attribute, follows the hovered or focused item, and goes on leaving', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/b');
+    const ev = wrapper.find('.fc-event.dm-ev--awake');
+    expect(ev.attributes('title')).toBeUndefined();
+    const tip = () => document.querySelector('.v-overlay--active [data-test="event-tip"]')?.textContent;
+    expect(tip()).toBeUndefined();
+    await ev.trigger('mouseover');
+    await vi.waitFor(() => expect(tip()).toContain('Blog · Awake'));
+    expect(tip()).toContain('Wed, 09:00–12:00');
+    expect(tip()).toContain('America/New_York');
+    expect(tip()).toContain('Drag to move every occurrence');
+    await ev.trigger('mouseout');
+    await vi.waitFor(() => expect(tip()).toBeUndefined());
+    await ev.trigger('focusin');
+    await vi.waitFor(() => expect(tip()).toContain('Blog · Awake'));
+    await ev.trigger('focusout');
+    await vi.waitFor(() => expect(tip()).toBeUndefined());
+    expect(wrapper.findAllComponents({ name: 'VTooltip' }).filter((t) => t.attributes('data-test') === 'event-tooltip' || t.props('activator') !== undefined).length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('Schedules view: moving a window by dragging it', () => {
+  type Drop = { event: { start: Date; extendedProps: Record<string, unknown> }; oldEvent: { start: Date }; revert(): void };
+  const dropOf = (w: VueWrapper) => (w.findComponent(FullCalendar).props('options') as { eventDrop(arg: Drop): Promise<void> }).eventDrop;
+  const drop = async (w: VueWrapper, key: string, window: number, from: string, to: string) => {
+    const revert = vi.fn();
+    await dropOf(w)({ event: { start: new Date(to), extendedProps: { key, window } }, oldEvent: { start: new Date(from) }, revert });
+    await flushPromises();
+    return revert;
+  };
+  const SHOP_MON = '2026-10-19T08:00:00+02:00';
+
+  it('moves every occurrence from a fresh read, leaves the others and the exceptions alone, and says so', async () => {
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, exceptions: ['2026-12-25'], maxNapDays: 7 });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    // Someone added a window since the calendar read the schedule: the fresh read has it, and it stays.
+    const added = { kind: 'nap' as const, days: ['sat' as const], start: '00:00', end: '00:00', wake: 'never' as const };
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, windows: [...shopSchedule.windows!, added], exceptions: ['2026-12-25'], maxNapDays: 7 });
+    h.calls.length = 0;
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(revert).not.toHaveBeenCalled();
+    expect(h.calls[0]).toMatchObject({ method: 'GET', path: '/workloads/dmt-dev/a' });
+    const puts_ = h.calls.filter((c) => c.method === 'PUT');
+    expect(puts_).toHaveLength(1);
+    expect(puts_[0]!.path).toBe('/workloads/dmt-dev/a/schedule');
+    expect(JSON.parse(puts_[0]!.body!)).toEqual({
+      timeZone: 'Europe/Paris',
+      windows: [{ ...shopSchedule.windows![0], start: '09:30', end: '20:30' }, shopSchedule.windows![1], added],
+      exceptions: ['2026-12-25'], maxNapDays: 7,
+    });
+    expect(toast()).toBe('Window moved: every occurrence of Shop now runs Mon–Fri, 09:30–20:30');
+  });
+
+  it('computes the offset on the schedule\'s own clock', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/b');
+    // Wed 09:00 New York; a day later in instants, its clock a day later too.
+    await drop(wrapper, 'dmt-dev/b', 0, '2026-10-21T09:00:00-04:00', '2026-10-22T09:00:00-04:00');
+    expect(JSON.parse(puts()[0]!.body!).windows[0]).toEqual({ kind: 'awake', days: ['thu'], start: '09:00', end: '12:00' });
+  });
+
+  it('puts back what a shift cannot give, saying so, and writes nothing', async () => {
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'monthly', day: 31 } }] });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, '2026-10-31T08:00:00+01:00', '2026-11-01T08:00:00+01:00');
+    expect(revert).toHaveBeenCalledOnce();
+    expect(puts()).toEqual([]);
+    expect(toast()).toBe('This window can\'t be moved by dragging: edit it in the dialog.');
+  });
+
+  it('puts back on the router\'s refusal, in its words', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    h.fail.add('/workloads/dmt-dev/a/schedule');
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(revert).toHaveBeenCalledOnce();
+    expect(toast()).toBe('boom');
+  });
+
+  it('puts back when the window changed since it was drawn, and draws it again', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, windows: [{ ...shopSchedule.windows![0]!, start: '07:00' }, shopSchedule.windows![1]!] });
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    expect(revert).toHaveBeenCalledOnce();
+    expect(puts()).toEqual([]);
+    expect(toast()).toContain('changed since');
+  });
+
+  it('puts back a drop that moves nothing, in silence', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, SHOP_MON);
+    expect(revert).toHaveBeenCalledOnce();
+    expect(puts()).toEqual([]);
+    expect(toast()).toBeUndefined();
+  });
+
+  it('draws the moved window at once and keeps the view and its date', async () => {
+    const { wrapper, router } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00');
+    const awakeTimes = () => wrapper.findAll('.fc-event.dm-ev--awake .fc-event-time').map((t) => t.text());
+    // The router's answer is the old window here: what it draws until the next read is the drop.
+    expect(puts()).toHaveLength(1);
+    expect(awakeTimes().length).toBeGreaterThan(0);
+    expect(router.currentRoute.value.query).toMatchObject({ view: 'week', date: '2026-10-21' });
+    expect(wrapper.find('.fc-timeGridWeek-view').exists()).toBe(true);
+  });
+
+  it('does not let a read-only workload or a cron window be dragged', async () => {
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', shopSchedule), can: { wake: true, nap: false } };
+    h.status['/workloads/dmt-dev/b'] = status('Blog', { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } }] });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await enable(wrapper, 'dmt-dev/b');
+    const events = (wrapper.findComponent(FullCalendar).props('options') as { events: { startEditable: boolean }[] }).events;
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.startEditable === false)).toBe(true);
+  });
+});
+
+describe('Schedules view: picking a workload', () => {
+  it('the New window field autocompletes, sorted naturally by name', async () => {
+    const candidates = ['w-10', 'W-3', 'alpha', 'w-2'].map((name) => ({ key: `r/${name}`, name, schedule: null }));
+    const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates, selection: { start: new Date(), end: new Date(Date.now() + 3_600_000), month: false } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    const field = wrapper.findComponent({ name: 'VAutocomplete' });
+    expect(field.attributes('data-test')).toBe('nw-workload');
+    expect((field.props('items') as { name: string }[]).map((c) => c.name)).toEqual(['alpha', 'w-2', 'W-3', 'w-10']);
+    wrapper.unmount();
+  });
+
+  it('the panel lists the workloads the same way', async () => {
+    h.list = ['w-10', 'W-3', 'alpha', 'w-2'].map((name) => row('dmt-dev', name, name));
+    const { wrapper } = await open();
+    expect(wrapper.findAll('[data-test^="calendar-"]').map((r) => r.attributes('data-test')!.replace('calendar-dmt-dev/', ''))).toEqual(['alpha', 'w-2', 'W-3', 'w-10']);
+  });
+
+  it('dates a Do not repeat from a selection on that day', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-20', '12:00'), at('2026-10-20', '13:00'));
+    await field(wrapper, 'nw-pattern').vm.$emit('update:modelValue', 'once');
+    await flushPromises();
+    expect(text('[data-test="nw-sentence"]')).toBe('Once on 20 Oct 2026, 12:00–13:00');
+    await click('[data-test="nw-save"]');
+    expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', start: '12:00', end: '13:00', repeat: { pattern: 'daily' }, from: '2026-10-20', until: '2026-10-20' });
+  });
+
+  it('has an icon on Awake and Nap, and short words with a tooltip for what Save replaces', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '12:00'), at('2026-10-19', '13:00'));
+    const toggle = [...body().querySelectorAll('[data-test="nw-kind"] button')];
+    for (const b of toggle) expect(b.querySelector('.v-icon')).not.toBeNull();
+    expect(text('[data-test="nw-replace-note"]')).toBe('Saving replaces the workload\'s schedule.');
+    body().querySelector('[data-test="nw-replace-more"]')!.dispatchEvent(new MouseEvent('mouseenter'));
+    await vi.waitFor(() => expect(body().querySelector('.v-overlay--active [data-test="nw-replace-tip"]')?.textContent).toContain('a change made by someone else'));
+    expect(body().querySelector('[data-test="schedule-help"]')).not.toBeNull();
+    expect(body().querySelector('[data-test="overlap-help"]')).not.toBeNull();
+  });
+
+  it('gives its icon-only buttons a tooltip', async () => {
+    const { wrapper } = await open();
+    for (const [name, words] of [['prev', 'Previous'], ['next', 'Next'], ['refresh', 'Refresh']] as const) {
+      await wrapper.find(`[data-test="${name}"]`).trigger('mouseenter');
+      await vi.waitFor(() => expect(body().querySelector('.v-overlay--active .v-tooltip__content, .v-overlay--active.v-tooltip')?.textContent, name).toContain(words));
+      await wrapper.find(`[data-test="${name}"]`).trigger('mouseleave');
+      await vi.waitFor(() => expect(body().querySelector('.v-overlay--active.v-tooltip'), name).toBeNull());
+    }
   });
 });

@@ -25,6 +25,14 @@ manual Nap or Wake lasts until the next start, and an awake window blocks naps. 
 (`unknown field`), and the dialog says it needs that version; plain weekly windows go on working on any router. A calendar
 draws at most 1,200 occurrences of a workload in a view, and says when it leaves some out.
 
+"Do not repeat" is a new choice for a window: one date, written as a daily window from that date until that date. Drag an
+item on the Schedules calendar to move its window: every occurrence moves by the same offset on the schedule's clock, from a
+fresh read of the schedule. A cron window can't be dragged, and neither can one whose occurrences a shift would not move alike;
+the dashboard says so and puts the item back. Each save, move or clear of a schedule shows a notification naming the workload.
+The dialogs' help moved to tooltips: what a schedule overrides, what wins over it, and drawn samples of the overlap rules. A
+window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip. The Workload field of New window
+autocompletes, and workloads are sorted by name.
+
 ## 0.20.0 — 2026-11-01
 
 Router 0.35.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
