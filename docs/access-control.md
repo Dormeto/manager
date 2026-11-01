@@ -20,14 +20,17 @@ user reads the manager's Hibernate default (`GET /api/settings/workloads`). Writ
 workload's description and Hibernate, operators and administrators (a Terraform workload's Hibernate is set in its
 `workload` module); a router's description and Hibernate, and the manager's default, administrators.
 
-The **waiting page** (routers 0.35.0) is read by the built-in roles, at the organization (`/api/settings/waiting-page`),
-the router (`/api/routers/{router}/waiting-page`) and the workload (`/api/workloads/{router}/{id}/waiting-page`) level; a
-member, whatever their groups grant, reads and writes none. A template page is set by administrators at the organization
-and router levels, and by operators and administrators at the workload level. A **custom HTML page** runs scripts on the
-application's own address, where it can read that site's cookies and call its API as the visitor: setting, replacing or
-clearing one is for administrators at every level, and so is replacing it with a template. An operator's attempt is refused
-with a 403 and audited; the API asks the router what is stored before an operator's write. The audit keeps the level, the
-mode and, for a custom page, its size and SHA-256, never the page. Callers of the `/iam/` routes act as administrators.
+The **waiting page** (routers 0.35.0) is read at the organization (`/api/settings/waiting-page`, by every signed-in user, as
+the Hibernate default is), the router (`/api/routers/{router}/waiting-page`, by the built-in roles) and the workload
+(`/api/workloads/{router}/{id}/waiting-page`) level; a member reads a workload's page when their groups' grants read that
+workload, and no other's. A template page is set by administrators at the organization and router levels, and by operators
+and administrators at the workload level. A **custom HTML page** runs scripts on the application's own address, where it can
+read that site's cookies and call its API as the visitor: setting, replacing or clearing one is for administrators at every
+level, and so is replacing it with a template. A write by anyone else, a member included whatever their groups grant, is
+refused with a 403 and audited; the API asks the router what is stored before a write. The audit keeps the level, the mode
+and, for a custom page, the size and SHA-256 of its HTML, and the same of a custom page a write removes or replaces; never
+a page. Callers of the `/iam/` routes act as administrators, so a principal allowed to call them may set a custom page. A
+session's role is its token's: a demoted administrator keeps it for up to the token's hour.
 
 A user in no built-in group is a **member**. The built-in roles' rights are unchanged: existing users in a built-in group see no
 difference.

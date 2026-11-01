@@ -141,3 +141,22 @@ export function pageWarnings(doc: unknown): string[] {
   }
   return warnings;
 }
+
+// The problems of a write as one sentence for a 400 and an audit entry. A key of the body is echoed by the rules (the
+// router's too), so the sentences are bounded here: a key keeps 40 characters, no markup or control character is kept, and
+// at most 10 sentences of 200 characters, 1000 in all.
+const UNSAFE = /[<>\u0000-\u001f\u007f\u0085\u2028\u2029]/g;
+const KEY_SENTENCE = /^([\s\S]*) is not a field of a (template|custom) page$/;
+export function problemsText(problems: string[]): string {
+  const shown = problems.slice(0, 10).map((problem) => {
+    const field = KEY_SENTENCE.exec(problem);
+    if (field) {
+      const key = field[1]!.replace(UNSAFE, '');
+      return `${key.slice(0, 40)}${key.length > 40 ? '…' : ''} is not a field of a ${field[2]} page`;
+    }
+    const clean = problem.replace(UNSAFE, '');
+    return clean.length > 200 ? `${clean.slice(0, 200)}…` : clean;
+  });
+  const text = `${shown.join('; ')}${problems.length > 10 ? `; and ${problems.length - 10} more` : ''}`;
+  return text.length > 1000 ? `${text.slice(0, 1000)}…` : text;
+}

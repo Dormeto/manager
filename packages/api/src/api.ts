@@ -10,7 +10,7 @@ import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Desc
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
-import { cleanPage, pageWarnings, validatePage } from './page-settings.js';
+import { cleanPage, pageWarnings, problemsText, validatePage } from './page-settings.js';
 import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
@@ -396,12 +396,16 @@ function pageIn(body: Record<string, unknown>): Record<string, unknown> {
   if (typeof page !== 'object' || page === null || Array.isArray(page)) throw new HttpError(400, 'bad_request', 'page must be an object');
   return page as Record<string, unknown>;
 }
-// What the audit keeps of a waiting page write: its level and mode and, for a custom page, its size and SHA-256 (as the
-// router logs them), never the page.
-function pageText(level: string, page: Record<string, unknown> | null): string {
-  if (!page) return `${level} cleared`;
-  if (page.mode !== 'custom') return `${level} ${String(page.mode)}`;
-  return `${level} custom, ${Buffer.byteLength(String(page.html))} bytes, sha256 ${createHash('sha256').update(JSON.stringify(page)).digest('hex')}`;
+// What the audit keeps of a waiting page write: its level and mode and, for a custom page, the size and SHA-256 of its HTML,
+// and the same of a custom page it removes or replaces; never a page.
+const customOf = (page: unknown): string | null => {
+  const shown = cleanPage(page);
+  return shown?.mode === 'custom' ? `${Buffer.byteLength(String(shown.html))} bytes, sha256 ${createHash('sha256').update(String(shown.html)).digest('hex')}` : null;
+};
+function pageText(level: string, page: Record<string, unknown> | null, before: unknown): string {
+  const gone = customOf(before);
+  const base = !page ? `${level} cleared` : page.mode !== 'custom' ? `${level} ${String(page.mode)}` : `${level} custom, ${customOf(page) ?? '?'}`;
+  return gone ? `${base} (removed custom page: ${gone})` : base;
 }
 const hibernateText = (h: boolean | null) => `hibernate ${h === null ? 'inherit' : h ? 'on' : 'off'}`;
 export function createApi({
@@ -1011,7 +1015,7 @@ export function createApi({
   async function pageCall(router: Router, payload: Record<string, unknown>, by: string) {
     try {
       const result = await invoke(router, { action: 'waiting-page', ...payload, by }) as { problems?: string[] } | null;
-      if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
+      if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', problemsText(result.problems));
       return result;
     } catch (err) {
       if (unknownAction(err, 'waiting-page')) throw new HttpError(409, 'conflict', 'upgrade the router to 0.35.0');
@@ -1040,19 +1044,26 @@ export function createApi({
     const name = clearing ? 'waiting-page-clear' : 'waiting-page';
     await needAudited(identity, workloadId ? 'operator' : 'admin', name, target);
     const page = clearing ? null : pageIn(bodyOf(event));
+    const stored = () => pageCall(router, { op: 'get', ...which }, identity.email).then((view) => (view as { own?: unknown } | null)?.own);
+    let before: unknown;
+    let read = false;
     if (RANK[identity.role] < RANK.admin) {
       if (page && page.mode !== 'template') await needAdminForCustom(identity, name, target);
       else {
         // What is stored, as the router reads it: anything but no page or a template is taken as custom.
-        const own = (await pageCall(router, { op: 'get', ...which }, identity.email) as { own?: { mode?: unknown } | null } | null)?.own;
-        if (own !== null && own?.mode !== 'template') await needAdminForCustom(identity, name, target);
+        before = await stored();
+        read = true;
+        if (before !== null && (before as { mode?: unknown } | undefined)?.mode !== 'template') await needAdminForCustom(identity, name, target);
       }
     }
     return audited(identity, name, target, async () => {
+      // An administrator's read is to audit the custom page the write removes or replaces.
+      if (!read) before = await stored();
       const result = await pageCall(router, { op: clearing ? 'delete' : 'put', ...which, ...(page ? { page } : {}) }, identity.email);
-      return { result: pageText(level, page), response: reply(200, result) };
+      return { result: pageText(level, page, before), response: reply(200, result) };
     });
   }
+
   const where = (router: Router) => ({
     name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}),
     ...(router.clusters ? { clusters: router.clusters } : {}),
@@ -1130,8 +1141,8 @@ export function createApi({
     if (resource === 'preferences') return !a && (method === 'GET' || method === 'PUT');
     if (extra !== undefined) return false;
     if (method === 'GET') {
-      if (resource === 'settings') return a === 'workloads' && !b;
-      if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window' || action === 'description'));
+      if (resource === 'settings') return (a === 'workloads' || a === 'waiting-page') && !b;
+      if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window' || action === 'description' || action === 'waiting-page'));
       return (resource === 'savings' || resource === 'alerts') ? !a : resource === 'operations' && !b;
     }
     if (resource === 'workloads' && !!a && !!b && action === 'schedule') return method === 'PUT' || method === 'DELETE';
@@ -1143,7 +1154,15 @@ export function createApi({
     if (method === 'GET' && resource === 'me' && !a) return reply(200, me(identity));
     // A member reaches their preferences and the routes of workloads, savings, alerts and operations, each filtered by
     // their grants below: none of the fleet's other routes.
-    if (identity.role === 'member' && !memberRoute(method, parts)) throw new HttpError(403, 'forbidden', 'viewer role required');
+    if (identity.role === 'member' && !memberRoute(method, parts)) {
+      // A member's attempt to write a waiting page is audited, as an operator's is.
+      const page = parts[0] === 'settings' ? parts[1] === 'waiting-page' && parts.length === 2 : parts[0] === 'routers' ? parts[2] === 'waiting-page' && parts.length === 3 : parts[0] === 'workloads' && parts[3] === 'waiting-page' && parts.length === 4;
+      if (page && (method === 'PUT' || method === 'DELETE')) {
+        const target = parts[0] === 'settings' ? 'organization' : parts[0] === 'routers' ? decoded(parts[1]) : `${decoded(parts[1])}/${decoded(parts[2])}`;
+        await refuse(identity, method === 'DELETE' ? 'waiting-page-clear' : 'waiting-page', target, `${parts[0] === 'workloads' ? 'operator' : 'admin'} role required`);
+      }
+      throw new HttpError(403, 'forbidden', 'viewer role required');
+    }
 
     if (resource === 'preferences' && !a && preferences) {
       if (method === 'GET') return reply(200, { ...DEFAULT_PREFERENCES, ...((await preferences.get(identity.sub)) ?? {}) });
@@ -1215,12 +1234,16 @@ export function createApi({
     // The organization's waiting page (branded waiting page §12): the waitingPage key of settings.json, which routers copy at
     // their next check. The built-in roles read it, administrators set it; a custom page is theirs at every level.
     if (resource === 'settings' && a === 'waiting-page' && !b && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
-      const stamp = (doc: Record<string, unknown> | null) => ({ updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null });
+      // The page's own author and date, apart from the hibernation default's (the file's updatedBy and updatedAt).
+      const stamp = (stored: unknown) => {
+        const own = (typeof stored === 'object' && stored !== null ? stored : {}) as { by?: unknown; at?: unknown };
+        return { by: typeof own.by === 'string' ? own.by : null, at: typeof own.at === 'string' ? own.at : null };
+      };
       if (method === 'GET') {
         const found = await readSettings();
         const doc = found === 'unreadable' ? null : found;
         const page = cleanPage(doc?.waitingPage);
-        return reply(200, { page, warnings: pageWarnings(page), ...stamp(doc), ...(found === 'unreadable' ? { error: 'settings.json is unreadable' } : {}) });
+        return reply(200, { page, warnings: pageWarnings(page), ...(page ? stamp(doc?.waitingPage) : stamp(null)), ...(found === 'unreadable' ? { error: 'settings.json is unreadable' } : {}) });
       }
       const clearing = method === 'DELETE';
       const name = clearing ? 'waiting-page-clear' : 'waiting-page';
@@ -1229,18 +1252,18 @@ export function createApi({
       const page = clearing ? null : pageIn(bodyOf(event));
       if (page) {
         const problems = validatePage(page);
-        if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
+        if (problems.length) throw new HttpError(400, 'bad_request', problemsText(problems));
       }
       return audited(identity, name, 'organization', async () => {
         // The whole document is read and written back, as the hibernation default does: another key is kept, the last write wins.
         const found = await readSettings();
         if (found === 'unreadable') console.warn(JSON.stringify({ level: 'warn', event: 'GlobalSettingsReplaced', reason: 'settings.json is unreadable', by: identity.email }));
-        const { waitingPage: _replaced, ...kept } = found === 'unreadable' ? {} : found ?? {};
-        const updatedAt = new Date(now()).toISOString();
-        await globalSettings.write({ ...kept, ...(page ? { waitingPage: page } : {}), updatedAt, updatedBy: identity.email });
+        const { waitingPage: before, ...kept } = found === 'unreadable' ? {} : found ?? {};
+        const at = new Date(now()).toISOString();
+        await globalSettings.write({ ...kept, ...(page ? { waitingPage: { ...page, by: identity.email, at } } : {}) });
         return {
-          result: pageText('organization', page),
-          response: reply(200, { page, warnings: pageWarnings(page), updatedAt, updatedBy: identity.email, note: 'routers apply it at their next check, within 5 minutes' }),
+          result: pageText('organization', page, before),
+          response: reply(200, { page, warnings: pageWarnings(page), ...(page ? { by: identity.email, at } : { by: null, at: null }), note: 'routers apply it within about a minute' }),
         };
       });
     }
@@ -1447,7 +1470,7 @@ export function createApi({
         throw err;
       }));
       // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
-      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window' || action === 'description')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
+      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window' || action === 'description' || action === 'waiting-page')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
       if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, await tagsNow(), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
       const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : await tagsNow(), permission);
       // Its description alone, from the manager's store: read while its router cannot be reached.

@@ -16,10 +16,12 @@ const SECRET_HTML = '<!doctype html><p data-dormeto="status"></p><!-- SECRET-MAR
 const CUSTOM = { mode: 'custom', html: SECRET_HTML };
 const ICON = `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]).toString('base64')}`;
 const TF = 'workload tf was written by Terraform: set waiting_page in its workload module';
-const sha = (page: unknown) => createHash('sha256').update(JSON.stringify(page)).digest('hex');
+// The audit's hash is of the HTML alone, so that `shasum page.html` matches it.
+const sha = (html: string) => createHash('sha256').update(html).digest('hex');
+const removed = (html: string) => ` (removed custom page: ${Buffer.byteLength(html)} bytes, sha256 ${sha(html)})`;
 
 // A router at 0.35.0, as far as these routes can tell: one stored page per level, the view it answers.
-function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; noStore?: boolean; read?: () => Promise<unknown>; stored?: Record<string, unknown> } = {}) {
+function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; noStore?: boolean; read?: () => Promise<unknown>; stored?: Record<string, unknown>; mfa?: boolean } = {}) {
   const audit: AuditEntry[] = [];
   const calls: Record<string, unknown>[] = [];
   const store = { doc: opts.doc ?? null, writes: [] as Record<string, unknown>[] };
@@ -36,10 +38,11 @@ function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; no
         if (payload.op === 'delete') delete levels[level];
         return { own: cleanPage(levels[level]), inherited: { mode: 'template', icon: 'auto' }, effective: cleanPage(levels[level]), from: {}, favicon: null, warnings: [], terraform: false, by: null, at: null };
       }
-      if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', tags: { team: 'payments' } };
+      if (payload.action === 'status') return { workloadId: payload.workloadId, state: 'AWAKE', tags: { team: payload.workloadId === 'other' ? 'billing' : 'payments' } };
       return null;
     },
     fleet: { listRouters: async () => [], listGroups: async () => GROUPS, getWorkload: async () => null } as never,
+    ...(opts.mfa ? { mfa: { mode: 'operators' as const, passkeys: false, enabled: async () => false } } : {}),
     ...(opts.noStore ? {} : { globalSettings: { read: (opts.read ?? (async () => store.doc)) as () => Promise<Record<string, unknown> | null>, write: async (d: Record<string, unknown>) => { store.writes.push(d); store.doc = d; } } }),
   });
   const pageCalls = () => calls.filter((c) => c.action === 'waiting-page');
@@ -60,17 +63,16 @@ const WL = (id = 'pay') => `/api/workloads/dmt-dev/${id}/waiting-page`;
 const refusals = (s: { audit: AuditEntry[] }) => s.audit.filter((e) => e.result === 'refused');
 
 describe('the organization level', () => {
-  it('GET answers the page, its warnings and the file\'s last write to every built-in role, and a member is refused', async () => {
-    const doc = { waitingPage: CUSTOM, updatedAt: '2026-10-20T10:00:00.000Z', updatedBy: 'a@example.com' };
-    for (const groups of ['dmt-viewer', 'dmt-operator', 'dmt-admin']) {
+  it('GET answers the page, its warnings and its own author and date to every signed-in role, a member included', async () => {
+    const doc = { waitingPage: { ...CUSTOM, by: 'a@example.com', at: '2026-10-20T10:00:00.000Z' }, updatedAt: '2026-10-21T10:00:00.000Z', updatedBy: 'hibernate@example.com' };
+    for (const groups of ['dmt-viewer', 'dmt-operator', 'dmt-admin', 'payments']) {
       const res = await setup({ doc }).api(event('GET', ORG, groups));
-      expect([res.statusCode, json(res)], groups).toEqual([200, { page: CUSTOM, warnings: [], updatedAt: doc.updatedAt, updatedBy: 'a@example.com' }]);
+      expect([res.statusCode, json(res)], groups).toEqual([200, { page: CUSTOM, warnings: [], by: 'a@example.com', at: '2026-10-20T10:00:00.000Z' }]);
     }
-    expect((await setup({ doc }).api(event('GET', ORG, 'payments'))).statusCode).toBe(403);
   });
 
   it('GET reads through the same rules as the routers: an invalid stored page reads as none, and a missing store or file as none', async () => {
-    const none = { page: null, warnings: [], updatedAt: null, updatedBy: null };
+    const none = { page: null, warnings: [], by: null, at: null };
     for (const doc of [null, {}, { waitingPage: { mode: 'custom', html: ' ' } }, { waitingPage: 'x' }]) {
       expect(json(await setup({ doc }).api(event('GET', ORG, 'dmt-viewer'))), JSON.stringify(doc)).toEqual(none);
     }
@@ -80,11 +82,11 @@ describe('the organization level', () => {
     expect(json(await setup({ doc: { waitingPage: { mode: 'template', title: 'x' }, other: 1 } }).api(event('GET', ORG, 'dmt-viewer'))).page).toEqual({ mode: 'template', title: 'x' });
   });
 
-  it('PUT writes waitingPage into the whole document, keeping every other key, and audits the level and mode', async () => {
-    const s = setup({ doc: { workloads: { hibernate: false }, other: 1 } });
+  it('PUT writes waitingPage with its own author and date into the whole document, keeping every other key, hibernation\'s author and date included', async () => {
+    const s = setup({ doc: { workloads: { hibernate: false }, other: 1, updatedAt: 'T0', updatedBy: 'hib@example.com' } });
     const res = await s.api(event('PUT', ORG, 'dmt-admin', { page: TEMPLATE }));
-    expect([res.statusCode, json(res)]).toEqual([200, { page: TEMPLATE, warnings: [], updatedAt: AT, updatedBy: 'dmt-admin@example.com', note: 'routers apply it at their next check, within 5 minutes' }]);
-    expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, other: 1, waitingPage: TEMPLATE, updatedAt: AT, updatedBy: 'dmt-admin@example.com' }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { page: TEMPLATE, warnings: [], by: 'dmt-admin@example.com', at: AT, note: 'routers apply it within about a minute' }]);
+    expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, other: 1, updatedAt: 'T0', updatedBy: 'hib@example.com', waitingPage: { ...TEMPLATE, by: 'dmt-admin@example.com', at: AT } }]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page', target: 'organization', result: 'organization template', who: 'dmt-admin@example.com' });
   });
 
@@ -93,7 +95,7 @@ describe('the organization level', () => {
     const html = '<p>é</p>';
     const res = await s.api(event('PUT', ORG, 'dmt-admin', { page: { mode: 'custom', html } }));
     expect(json(res).warnings).toHaveLength(1);
-    expect(s.audit.at(-1)!.result).toBe(`organization custom, ${Buffer.byteLength(html)} bytes, sha256 ${sha({ mode: 'custom', html })}`);
+    expect(s.audit.at(-1)!.result).toBe(`organization custom, ${Buffer.byteLength(html)} bytes, sha256 ${sha(html)}`);
   });
 
   it('PUT refuses everyone but administrators, a template included, with audited refusals and nothing written', async () => {
@@ -106,6 +108,7 @@ describe('the organization level', () => {
     expect(refusals(s).map((e) => [e.who, e.action, e.target])).toEqual([
       ['dmt-viewer@example.com', 'waiting-page', 'organization'], ['dmt-viewer@example.com', 'waiting-page-clear', 'organization'],
       ['dmt-operator@example.com', 'waiting-page', 'organization'], ['dmt-operator@example.com', 'waiting-page-clear', 'organization'],
+      ['payments@example.com', 'waiting-page', 'organization'], ['payments@example.com', 'waiting-page-clear', 'organization'],
     ]);
   });
 
@@ -123,7 +126,7 @@ describe('the organization level', () => {
     try {
       const s = setup({ read: async () => { throw new SyntaxError('not json'); } });
       expect((await s.api(event('PUT', ORG, 'dmt-admin', { page: TEMPLATE }))).statusCode).toBe(200);
-      expect(s.store.writes).toEqual([{ waitingPage: TEMPLATE, updatedAt: AT, updatedBy: 'dmt-admin@example.com' }]);
+      expect(s.store.writes).toEqual([{ waitingPage: { ...TEMPLATE, by: 'dmt-admin@example.com', at: AT } }]);
       expect(quiet).toHaveBeenCalledWith(expect.stringContaining('GlobalSettingsReplaced'));
     } finally {
       quiet.mockRestore();
@@ -136,22 +139,31 @@ describe('the organization level', () => {
     expect((await s.api(event('DELETE', ORG, 'dmt-admin'))).statusCode).toBe(404);
   });
 
-  it('DELETE removes the key and keeps the rest, audited, also when there is none', async () => {
-    const s = setup({ doc: { workloads: { hibernate: false }, waitingPage: CUSTOM, other: 1 } });
+  it('DELETE removes the key and keeps the rest, audited with the custom page it removes, also when there is none', async () => {
+    const s = setup({ doc: { workloads: { hibernate: false }, waitingPage: { ...CUSTOM, by: 'a@example.com', at: 'T0' }, other: 1, updatedAt: 'T1', updatedBy: 'hib@example.com' } });
     const res = await s.api(event('DELETE', ORG, 'dmt-admin'));
     expect([res.statusCode, json(res).page]).toEqual([200, null]);
-    expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, other: 1, updatedAt: AT, updatedBy: 'dmt-admin@example.com' }]);
-    expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page-clear', target: 'organization', result: 'organization cleared' });
+    expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, other: 1, updatedAt: 'T1', updatedBy: 'hib@example.com' }]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page-clear', target: 'organization', result: `organization cleared${removed(SECRET_HTML)}` });
     expect((await setup().api(event('DELETE', ORG, 'dmt-admin'))).statusCode).toBe(200);
   });
 
-  it('each setting\'s write keeps the other', async () => {
+  it('PUT over a custom page audits the page it replaces', async () => {
+    const s = setup({ doc: { waitingPage: CUSTOM } });
+    await s.api(event('PUT', ORG, 'dmt-admin', { page: TEMPLATE }));
+    expect(s.audit.at(-1)!.result).toBe(`organization template${removed(SECRET_HTML)}`);
+  });
+
+  it('each setting\'s write keeps the other, and its author and date', async () => {
     const s = setup({ doc: { workloads: { hibernate: true } } });
     await s.api(event('PUT', ORG, 'dmt-admin', { page: TEMPLATE }));
-    await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
-    expect(s.store.doc).toMatchObject({ workloads: { hibernate: false }, waitingPage: TEMPLATE });
+    const cli = `arn:aws:iam::${MANAGER}:user/cli`;
+    await s.api(iam('PUT', '/iam/settings/workloads', { hibernate: false }));
+    expect(s.store.doc).toMatchObject({ workloads: { hibernate: false }, waitingPage: { ...TEMPLATE, by: 'dmt-admin@example.com', at: AT }, updatedBy: cli });
+    expect(json(await s.api(event('GET', ORG, 'dmt-viewer'))).by).toBe('dmt-admin@example.com');
     await s.api(event('PUT', ORG, 'dmt-admin', { page: { mode: 'template', title: 'New' } }));
-    expect(s.store.doc).toMatchObject({ workloads: { hibernate: false }, waitingPage: { mode: 'template', title: 'New' } });
+    expect(s.store.doc).toMatchObject({ workloads: { hibernate: false }, updatedBy: cli, waitingPage: { mode: 'template', title: 'New', by: 'dmt-admin@example.com' } });
+    expect(json(await s.api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).updatedBy).toBe(cli);
   });
 
   it('is reached through /iam/ as an administrator, custom pages included', async () => {
@@ -181,21 +193,24 @@ describe('the router level', () => {
     expect(refusals(s).map((e) => [e.who, e.action, e.target])).toEqual([
       ['dmt-viewer@example.com', 'waiting-page', 'dmt-dev'], ['dmt-viewer@example.com', 'waiting-page-clear', 'dmt-dev'],
       ['dmt-operator@example.com', 'waiting-page', 'dmt-dev'], ['dmt-operator@example.com', 'waiting-page-clear', 'dmt-dev'],
+      ['payments@example.com', 'waiting-page', 'dmt-dev'], ['payments@example.com', 'waiting-page-clear', 'dmt-dev'],
     ]);
   });
 
-  it('PUT sends the page to the router and audits the level, mode, size and SHA-256 of a custom one', async () => {
+  it('PUT sends the page to the router and audits the level, mode, size and SHA-256 of the HTML of a custom one', async () => {
     const s = setup();
     const res = await s.api(event('PUT', ROUTER, 'dmt-admin', { page: CUSTOM }));
     expect([res.statusCode, json(res).own]).toEqual([200, CUSTOM]);
-    expect(s.pageCalls()).toEqual([{ action: 'waiting-page', op: 'put', page: CUSTOM, by: 'dmt-admin@example.com' }]);
-    expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page', target: 'dmt-dev', result: `router custom, ${Buffer.byteLength(SECRET_HTML)} bytes, sha256 ${sha(CUSTOM)}` });
+    expect(s.pageCalls().map((c) => c.op)).toEqual(['get', 'put']);
+    expect(s.pageCalls()[1]).toEqual({ action: 'waiting-page', op: 'put', page: CUSTOM, by: 'dmt-admin@example.com' });
+    expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page', target: 'dmt-dev', result: `router custom, ${Buffer.byteLength(SECRET_HTML)} bytes, sha256 ${sha(SECRET_HTML)}` });
     await s.api(event('PUT', ROUTER, 'dmt-admin', { page: TEMPLATE }));
-    expect(s.audit.at(-1)!.result).toBe('router template');
+    expect(s.audit.at(-1)!.result).toBe(`router template${removed(SECRET_HTML)}`);
+    await s.api(event('PUT', ROUTER, 'dmt-admin', { page: CUSTOM }));
     const cleared = await s.api(event('DELETE', ROUTER, 'dmt-admin'));
     expect([cleared.statusCode, json(cleared).own]).toEqual([200, null]);
     expect(s.pageCalls().at(-1)).toEqual({ action: 'waiting-page', op: 'delete', by: 'dmt-admin@example.com' });
-    expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page-clear', target: 'dmt-dev', result: 'router cleared' });
+    expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page-clear', target: 'dmt-dev', result: `router cleared${removed(SECRET_HTML)}` });
   });
 
   it('relays the router\'s problems as 400, and says an old router is too old', async () => {
@@ -213,35 +228,50 @@ describe('the router level', () => {
   it('is reached through /iam/', async () => {
     const s = setup();
     expect((await s.api(iam('PUT', '/iam/routers/dmt-dev/waiting-page', { page: CUSTOM }))).statusCode).toBe(200);
-    expect(s.pageCalls()[0]).toMatchObject({ op: 'put', by: `arn:aws:iam::${MANAGER}:user/cli` });
+    expect(s.pageCalls()[1]).toMatchObject({ op: 'put', by: `arn:aws:iam::${MANAGER}:user/cli` });
   });
 });
 
 describe('the workload level', () => {
-  it('GET relays the router\'s view to the built-in roles, and refuses a member, a group grant included', async () => {
+  it('GET relays the router\'s view to the built-in roles', async () => {
     const s = setup({ stored: { pay: CUSTOM } });
     for (const groups of ['dmt-viewer', 'dmt-operator', 'dmt-admin']) expect(json(await s.api(event('GET', WL(), groups))).own, groups).toEqual(CUSTOM);
     expect(s.pageCalls()[0]).toEqual({ action: 'waiting-page', op: 'get', workloadId: 'pay', by: 'dmt-viewer@example.com' });
-    for (const groups of ['payments', 'pausers']) expect((await s.api(event('GET', WL(), groups))).statusCode, groups).toBe(403);
   });
 
-  it('PUT of a template is for operators, who read what is stored first, and administrators, who do not', async () => {
+  it('GET lets a member read the page of a workload their grants read, and no other\'s', async () => {
+    const s = setup({ stored: { pay: CUSTOM, other: TEMPLATE } });
+    expect(json(await s.api(event('GET', WL(), 'pausers'))).own).toEqual(CUSTOM);
+    // Tagged team=billing: the grant does not cover it, and it answers as an unknown workload, the router unasked.
+    const calls = s.pageCalls().length;
+    const other = await s.api(event('GET', WL('other'), 'pausers'));
+    expect([other.statusCode, json(other).error]).toEqual([404, 'not_found']);
+    expect((await s.api(event('GET', WL(), 'payments'))).statusCode).toBe(404);
+    expect(s.pageCalls()).toHaveLength(calls);
+  });
+
+  it('PUT of a template is for operators and administrators, each reading what is stored first', async () => {
     const s = setup();
     for (const groups of ['dmt-operator', 'dmt-admin']) {
       const res = await s.api(event('PUT', WL(), groups, { page: TEMPLATE }));
       expect([res.statusCode, json(res).own], groups).toEqual([200, TEMPLATE]);
     }
-    expect(s.pageCalls().map((c) => c.op)).toEqual(['get', 'put', 'put']);
+    expect(s.pageCalls().map((c) => c.op)).toEqual(['get', 'put', 'get', 'put']);
     expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page', target: 'dmt-dev/pay', result: 'workload template' });
   });
 
-  it('refuses a viewer and a group grant to write, a grant of wake and nap included, and calls nothing', async () => {
+  it('refuses a viewer and a group grant to write, a grant of wake and nap included: audited, and the router is not called', async () => {
     const s = setup();
     for (const groups of ['dmt-viewer', 'pausers', 'payments']) {
       expect((await s.api(event('PUT', WL(), groups, { page: TEMPLATE }))).statusCode, groups).toBe(403);
       expect((await s.api(event('DELETE', WL(), groups))).statusCode, groups).toBe(403);
     }
     expect(s.pageCalls()).toEqual([]);
+    expect(refusals(s).map((e) => [e.who, e.action, e.target])).toEqual([
+      ['dmt-viewer@example.com', 'waiting-page', 'dmt-dev/pay'], ['dmt-viewer@example.com', 'waiting-page-clear', 'dmt-dev/pay'],
+      ['pausers@example.com', 'waiting-page', 'dmt-dev/pay'], ['pausers@example.com', 'waiting-page-clear', 'dmt-dev/pay'],
+      ['payments@example.com', 'waiting-page', 'dmt-dev/pay'], ['payments@example.com', 'waiting-page-clear', 'dmt-dev/pay'],
+    ]);
   });
 
   it('refuses an operator\'s PUT of a custom page: 403, audited, and the router is not called', async () => {
@@ -292,13 +322,17 @@ describe('the workload level', () => {
     }
   });
 
-  it('lets an administrator set, replace and clear a custom page, without a read first, and audits its size and hash', async () => {
-    const s = setup({ stored: { pay: CUSTOM } });
+  it('lets an administrator set, replace and clear a custom page, auditing the size and hash of the HTML, and of the page removed', async () => {
+    const s = setup();
+    const first = { mode: 'custom', html: '<!doctype html><p>One</p>' };
     const next = { mode: 'custom', html: '<!doctype html><p>New</p>' };
+    expect((await s.api(event('PUT', WL(), 'dmt-admin', { page: first }))).statusCode).toBe(200);
+    expect(s.audit.at(-1)!.result).toBe(`workload custom, ${Buffer.byteLength(first.html)} bytes, sha256 ${sha(first.html)}`);
     expect((await s.api(event('PUT', WL(), 'dmt-admin', { page: next }))).statusCode).toBe(200);
-    expect(s.audit.at(-1)!.result).toBe(`workload custom, ${Buffer.byteLength(next.html)} bytes, sha256 ${sha(next)}`);
+    expect(s.audit.at(-1)!.result).toBe(`workload custom, ${Buffer.byteLength(next.html)} bytes, sha256 ${sha(next.html)}${removed(first.html)}`);
     expect((await s.api(event('DELETE', WL(), 'dmt-admin'))).statusCode).toBe(200);
-    expect(s.pageCalls().map((c) => c.op)).toEqual(['put', 'delete']);
+    expect(s.audit.at(-1)!.result).toBe(`workload cleared${removed(next.html)}`);
+    expect(s.pageCalls().map((c) => c.op)).toEqual(['get', 'put', 'get', 'put', 'get', 'delete']);
   });
 
   it('answers 409 for a Terraform workload, 404 for an unknown one, 400 for problems and 409 for an old router, also on the operator\'s read', async () => {
@@ -323,7 +357,7 @@ describe('the workload level', () => {
     expect((await s.api(iam('PUT', '/iam/workloads/dmt-dev/pay/waiting-page', { page: { mode: 'custom', html: '<p>x</p>' } }))).statusCode).toBe(200);
     expect((await s.api(iam('DELETE', '/iam/workloads/dmt-dev/pay/waiting-page'))).statusCode).toBe(200);
     expect((await s.api(iam('GET', '/iam/workloads/dmt-dev/pay/waiting-page'))).statusCode).toBe(200);
-    expect(s.pageCalls().map((c) => c.op)).toEqual(['put', 'delete', 'get']);
+    expect(s.pageCalls().map((c) => c.op)).toEqual(['get', 'put', 'get', 'delete', 'get']);
   });
 });
 
@@ -355,7 +389,7 @@ describe('a request body', () => {
     const exact = { mode: 'custom', html: `<p data-dormeto="status"></p>${'"é\n'.repeat(60_000)}`.slice(0, 256 * 1024 - 1) + 'a' };
     const s = setup();
     for (const page of [big, exact]) expect((await s.api(event('PUT', WL(), 'dmt-admin', { page }))).statusCode).toBe(200);
-    expect(s.pageCalls()[1]!.page).toEqual(exact);
+    expect(s.pageCalls().filter((c) => c.op === 'put')[1]!.page).toEqual(exact);
     const over = await s.api(event('PUT', ORG, 'dmt-admin', { page: { mode: 'custom', html: 'a'.repeat(256 * 1024 + 1) } }));
     expect([over.statusCode, json(over).message]).toEqual([400, 'html must be at most 256 KiB']);
   });
@@ -365,6 +399,71 @@ describe('a request body', () => {
     const raw = event('PUT', ROUTER, 'dmt-admin', { page: big });
     const res = await s.api({ ...raw, body: Buffer.from(raw.body!).toString('base64'), isBase64Encoded: true });
     expect(res.statusCode).toBe(200);
-    expect(s.pageCalls()[0]!.page).toEqual(big);
+    expect(s.pageCalls().find((c) => c.op === 'put')!.page).toEqual(big);
+  });
+});
+
+describe('a member\'s refused write', () => {
+  it('is audited, whatever the level', async () => {
+    const s = setup();
+    for (const path of [ORG, ROUTER, WL()]) expect((await s.api(event('PUT', path, 'pausers', { page: TEMPLATE }))).statusCode, path).toBe(403);
+    expect(refusals(s).map((e) => [e.who, e.action, e.target])).toEqual([
+      ['pausers@example.com', 'waiting-page', 'organization'], ['pausers@example.com', 'waiting-page', 'dmt-dev'], ['pausers@example.com', 'waiting-page', 'dmt-dev/pay'],
+    ]);
+    expect(s.pageCalls()).toEqual([]);
+  });
+});
+
+describe('the two-step verification policy', () => {
+  it('lets an administrator or operator not yet enrolled read, and refuses every write as a viewer would, audited', async () => {
+    const s = setup({ mfa: true, stored: { pay: CUSTOM } });
+    for (const groups of ['dmt-admin', 'dmt-operator']) {
+      expect((await s.api(event('GET', WL(), groups))).statusCode, groups).toBe(200);
+      const res = await s.api(event('PUT', ORG, groups, { page: CUSTOM }));
+      expect(res.statusCode, groups).toBe(403);
+      if (groups === 'dmt-admin') expect(json(res).message).toContain('two-step verification required');
+      expect((await s.api(event('PUT', ROUTER, groups, { page: TEMPLATE }))).statusCode, groups).toBe(403);
+      expect((await s.api(event('PUT', WL(), groups, { page: CUSTOM }))).statusCode, groups).toBe(403);
+      expect((await s.api(event('PUT', WL(), groups, { page: TEMPLATE }))).statusCode, groups).toBe(403);
+      expect((await s.api(event('DELETE', WL(), groups))).statusCode, groups).toBe(403);
+    }
+    expect(s.pageCalls().map((c) => c.op)).toEqual(['get', 'get']);
+    expect(s.store.writes).toEqual([]);
+    expect(s.levels.pay).toEqual(CUSTOM);
+    expect(refusals(s).every((e) => e.role === 'viewer')).toBe(true);
+    expect(refusals(s).length).toBeGreaterThan(4);
+  });
+});
+
+describe('the sentences a write answers', () => {
+  const KEY = `<!doctype html><script>SECRET-KEY</script>${'k'.repeat(600_000)}`;
+  const bounded = (text: string, max = 400) => {
+    expect(text).not.toContain('<');
+    expect(text).not.toContain('SECRET-KEY</script>');
+    expect(text.length).toBeLessThan(max);
+  };
+
+  it('never echoes a key of the body without bound or HTML, at the organization', async () => {
+    const s = setup();
+    const res = await s.api(event('PUT', ORG, 'dmt-admin', { page: { mode: 'template', [KEY]: 1 } }));
+    expect(res.statusCode).toBe(400);
+    bounded(json(res).message);
+    expect(json(res).message).toMatch(/ is not a field of a template page$/);
+  });
+
+  it('strips and bounds what the router says, in the answer and in the audit entry', async () => {
+    const s = setup({ invoke: async () => ({ problems: [`${KEY} is not a field of a template page`, ...Array.from({ length: 50 }, (_, i) => `problem ${i} <b>${'x'.repeat(5000)}`)] }) });
+    for (const [path, groups] of [[ROUTER, 'dmt-admin'], [WL(), 'dmt-operator']] as const) {
+      const res = await s.api(event('PUT', path, groups, { page: TEMPLATE }));
+      expect(res.statusCode).toBe(400);
+      bounded(json(res).message, 1100);
+    }
+    expect(s.audit.length).toBeGreaterThan(0);
+    for (const entry of s.audit) bounded(entry.result, 1200);
+  });
+
+  it('keeps a short key, so that the author sees which one', async () => {
+    const res = await setup().api(event('PUT', ORG, 'dmt-admin', { page: { mode: 'template', colour: 'red' } }));
+    expect(json(res).message).toBe('colour is not a field of a template page');
   });
 });
