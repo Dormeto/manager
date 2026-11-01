@@ -250,10 +250,10 @@ onBeforeUnmount(() => {
     <v-card v-if="current && !current.installedWithCli">
       <v-card-text>
         <p class="text-title-medium mb-2">Updates from this page are not set up for this manager.</p>
-        <p class="mb-3">It was installed without <code>dormeto aws install</code>, or with a CLI older than 0.2.0, or with <code>--build-role</code>.</p>
+        <p class="mb-3">It was installed without the CLI's install command, or with a CLI older than 0.2.0, or with <code>--build-role</code>.</p>
         <ul class="dm-ways">
           <li>
-            Installed with the CLI: run <code>dormeto aws install</code> again with the CLI 0.2.0 or later (without <code>--build-role</code>) to set up updates
+            Installed with the CLI: run <code>dormeto aws install</code> again with the latest CLI (without <code>--build-role</code>) to set up updates
             from this page, or <code>{{ notSetUpCommand }}</code> from a laptop.
             <a :href="UPDATING" rel="noopener" target="_blank">Updating the manager<v-icon :icon="mdiOpenInNew" size="14" /></a>
           </li>

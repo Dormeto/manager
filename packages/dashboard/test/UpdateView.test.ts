@@ -381,8 +381,8 @@ describe('Update', () => {
     const text = wrapper.text();
     expect(text).toContain('0.11.0');
     expect(text).toContain('Updates from this page are not set up for this manager.');
-    expect(text).toContain('It was installed without dormeto aws install, or with a CLI older than 0.2.0, or with --build-role.');
-    expect(text).toContain('Installed with the CLI: run dormeto aws install again with the CLI 0.2.0 or later (without --build-role) to set up updates from this page, or dormeto aws install --profile <your profile> --region eu-west-1 --env dev --version <version> from a laptop.');
+    expect(text).toContain("It was installed without the CLI's install command, or with a CLI older than 0.2.0");
+    expect(text).toContain('Installed with the CLI: run dormeto aws install again with the latest CLI');
     expect(text).toContain('Installed with the Terraform module: raise the module\'s version in the configuration that installed it, and apply.');
     expect(text).not.toContain('was not installed with');
     expect(text).not.toContain('new install');
