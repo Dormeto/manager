@@ -11,7 +11,7 @@ export type StoredPage = TemplatePage | CustomPage;
 // The router's resolved page: the level (or 'default') each field comes from.
 export type EffectivePage = { mode: 'template' | 'custom'; icon?: string; title?: string; description?: string; html?: string; from: Record<string, string> };
 export interface Favicon { icon: string | null; fetchedAt: string | null; error: string | null }
-// What GET answers for a router or a workload (the organization's answers { page, warnings, updatedAt, updatedBy }).
+// What GET answers for a router or a workload (the organization's answers { page, warnings, by, at }).
 export interface WaitingPageView {
   own: StoredPage | null;
   inherited: EffectivePage;
@@ -23,7 +23,7 @@ export interface WaitingPageView {
   by: string | null;
   at: string | null;
 }
-export interface OrganizationPageView { page: StoredPage | null; warnings: string[]; updatedAt: string | null; updatedBy: string | null; error?: string }
+export interface OrganizationPageView { page: StoredPage | null; warnings: string[]; at: string | null; by: string | null; error?: string }
 
 export const ICON_BYTES = 64 * 1024;
 export const HTML_BYTES = 256 * 1024;
@@ -107,11 +107,18 @@ export function checkHtml(bytes: Uint8Array): { html: string } | { problem: stri
   return html.trim() ? { html } : { problem: 'The page is blank.' };
 }
 
+// The template whose fields a draft inherits: the inherited page when it is a template; when it is a custom page (a level in the
+// middle), the router skips it and takes each field from the most specific template above it, `beneath` (the organization's).
+export function templateAbove(inherited: Pick<EffectivePage, 'mode' | 'icon' | 'title' | 'description' | 'html'>, beneath?: Pick<EffectivePage, 'mode' | 'icon' | 'title' | 'description' | 'html'> | null): Partial<EffectivePage> {
+  if (inherited.mode === 'template') return inherited;
+  return beneath?.mode === 'template' ? beneath : {};
+}
+
 // The draft over what the level inherits, as the router resolves them: a template takes each field from the draft, then from
-// the inherited template (a custom page above gives none); the icon is `auto` by default.
-export function resolveDraft(draft: StoredPage, inherited: Pick<EffectivePage, 'mode' | 'icon' | 'title' | 'description' | 'html'>): TemplatePage | CustomPage {
+// the inherited template, or the one beneath an inherited custom page; the icon is `auto` by default.
+export function resolveDraft(draft: StoredPage, inherited: Pick<EffectivePage, 'mode' | 'icon' | 'title' | 'description' | 'html'>, beneath?: Pick<EffectivePage, 'mode' | 'icon' | 'title' | 'description' | 'html'> | null): TemplatePage | CustomPage {
   if (draft.mode === 'custom') return draft;
-  const upper: Partial<EffectivePage> = inherited.mode === 'template' ? inherited : {};
+  const upper = templateAbove(inherited, beneath);
   const icon = draft.icon ?? upper.icon ?? 'auto';
   const title = draft.title ?? upper.title;
   const description = draft.description ?? upper.description;
@@ -146,8 +153,12 @@ export function previewHtml({ page, favicon, state, language, dark }: { page: Te
 const FROM: Record<string, string> = { organization: 'Organization', router: 'Router', workload: 'This workload', default: 'Built-in' };
 export const fromLine = (level: string | undefined): string => FROM[level ?? 'default'] ?? 'Built-in';
 
-// Why a workload shows no cached favicon (a failed read keeps the last good one, so this is for the first).
-export function whyNoIcon(favicon: Favicon | null | undefined): string {
+// Why a workload shows no cached favicon (a failed read keeps the last good one, so this is for the first). `shown` is the page
+// the router resolves: a custom page, `none` and an upload never read the favicon, so "not read yet" would be wrong there.
+export function whyNoIcon(favicon: Favicon | null | undefined, shown?: Pick<EffectivePage, 'mode' | 'icon'>): string {
+  if (shown?.mode === 'custom') return 'not read: the page is a custom one';
+  if (shown?.icon === 'none') return 'not read: the icon is none';
+  if (shown?.icon?.startsWith('data:')) return 'not read: an uploaded image is shown';
   return favicon?.error ?? 'not read yet: it is read just before a nap, at most once a day';
 }
 
@@ -172,7 +183,7 @@ export function editRights(level: PageLevel, role: Role, terraform: boolean, own
 // The organization's answer as a level of its own, with nothing above it.
 export function organizationView(v: OrganizationPageView): WaitingPageView {
   const effective = resolveEffective(v.page);
-  return { own: v.page, inherited: resolveEffective(null), effective, from: effective.from, warnings: v.warnings, terraform: false, by: v.updatedBy, at: v.updatedAt };
+  return { own: v.page, inherited: resolveEffective(null), effective, from: effective.from, warnings: v.warnings, terraform: false, by: v.by, at: v.at };
 }
 
 // A single level's page as the router resolves it: the fields it has, the icon `auto` otherwise.
@@ -187,11 +198,12 @@ function resolveEffective(page: StoredPage | null): EffectivePage {
 
 // What the router warns of when a custom page is stored, said before it is sent. Linear in the page, as the router's is: the
 // end of each tag is searched once, and a tag is read for at most 1000 characters.
-const HOOK_STATUS = /data-dormeto\s*=\s*(?:"status"|'status'|status(?![^\s>/]))/i;
+const HOOK_STATUS = /data-dormeto\s*=\s*(?:"status"|'status'|status(?![^\s>/]))/gi;
 const META = /<meta[\s/]/gi;
 export function htmlWarnings(html: string): string[] {
   const out: string[] = [];
-  if (!HOOK_STATUS.test(html)) out.push('the page has no element data-dormeto="status": the visitor will not read why it waits');
+  // The attribute's name in any case, its value as the script's selector reads it: in lower case.
+  if (![...html.matchAll(HOOK_STATUS)].some((m) => m[0].includes('status'))) out.push('the page has no element data-dormeto="status": the visitor will not read why it waits');
   let end = -1;
   for (const m of html.matchAll(META)) {
     if (end < m.index) end = html.indexOf('>', m.index);

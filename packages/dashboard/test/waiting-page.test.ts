@@ -71,6 +71,14 @@ describe('resolveDraft', () => {
   it('drops an inherited field the draft does not have when the inherited page is custom', () => {
     expect(resolveDraft({ mode: 'template' }, { mode: 'custom', html: '<p>x</p>' })).toEqual({ mode: 'template', icon: 'auto' });
   });
+  it('takes the fields a custom page in the middle skips from the template beneath it, as the router does', () => {
+    const beneath = { mode: 'template' as const, icon: 'none', title: 'ORG-T', description: 'ORG-D', from: { mode: 'organization' } };
+    const custom = { mode: 'custom' as const, html: '<p>x</p>', from: { mode: 'router' } };
+    expect(resolveDraft({ mode: 'template', icon: 'auto' }, custom, beneath)).toEqual({ mode: 'template', icon: 'auto', title: 'ORG-T', description: 'ORG-D' });
+    expect(resolveDraft({ mode: 'template', title: 'Mine' }, custom, beneath)).toEqual({ mode: 'template', icon: 'none', title: 'Mine', description: 'ORG-D' });
+    expect(resolveDraft({ mode: 'template' }, custom, null)).toEqual({ mode: 'template', icon: 'auto' });
+    expect(resolveDraft({ mode: 'template' }, { mode: 'template', icon: 'auto', title: 'R' }, beneath)).toEqual({ mode: 'template', icon: 'auto', title: 'R' });
+  });
   it('is the custom page itself for a custom draft', () => {
     expect(resolveDraft({ mode: 'custom', html: '<p>x</p>' }, inherited)).toEqual({ mode: 'custom', html: '<p>x</p>' });
   });
@@ -130,6 +138,14 @@ describe('words', () => {
     expect(whyNoIcon({ icon: null, fetchedAt: '2026-11-01T10:00:00Z', error: 'no host name' })).toBe('no host name');
     expect(whyNoIcon({ icon: null, fetchedAt: null, error: null })).toMatch(/not read yet/);
   });
+  it('does not say a favicon is waiting to be read when the page never reads it', () => {
+    const auto = { mode: 'template' as const, icon: 'auto' };
+    expect(whyNoIcon(null, auto)).toMatch(/not read yet/);
+    expect(whyNoIcon(null, { mode: 'custom' })).toBe('not read: the page is a custom one');
+    expect(whyNoIcon(null, { mode: 'template', icon: 'none' })).toBe('not read: the icon is none');
+    expect(whyNoIcon(null, { mode: 'template', icon: 'data:image/png;base64,AAAA' })).toBe('not read: an uploaded image is shown');
+    expect(whyNoIcon({ icon: null, fetchedAt: '2026-11-01T10:00:00Z', error: 'no rule for the whole of a host name' }, { mode: 'custom' })).toBe('not read: the page is a custom one');
+  });
 });
 
 describe('editRights', () => {
@@ -175,9 +191,9 @@ describe('editRights', () => {
 
 describe('organizationView', () => {
   it('reads the organization\'s answer as a level with nothing above it', () => {
-    const v = organizationView({ page: { mode: 'template', title: 'Acme' }, warnings: [], updatedAt: '2026-11-01T10:00:00Z', updatedBy: 'fab@example.com' });
+    const v = organizationView({ page: { mode: 'template', title: 'Acme' }, warnings: [], at: '2026-11-01T10:00:00Z', by: 'fab@example.com' });
     expect(v).toMatchObject({ own: { title: 'Acme' }, effective: { mode: 'template', icon: 'auto', title: 'Acme', from: { mode: 'organization', title: 'organization', icon: 'default' } }, by: 'fab@example.com', at: '2026-11-01T10:00:00Z', terraform: false });
-    expect(organizationView({ page: null, warnings: [], updatedAt: null, updatedBy: null }).effective).toEqual({ mode: 'template', icon: 'auto', from: { mode: 'default', icon: 'default' } });
+    expect(organizationView({ page: null, warnings: [], at: null, by: null }).effective).toEqual({ mode: 'template', icon: 'auto', from: { mode: 'default', icon: 'default' } });
   });
 });
 
@@ -191,6 +207,15 @@ describe('htmlWarnings', () => {
     const u = performance.now();
     htmlWarnings(spaced + 'data-dormeto'.repeat(10_000));
     expect(performance.now() - u).toBeLessThan(250);
+  });
+  it('matches the router\'s warnings: the attribute\'s name in any case, the value\'s case kept, linear', () => {
+    const pages = ['<p DATA-DORMETO="status"></p>', '<p data-dormeto="STATUS"></p>', "<p data-dormeto='Status'>", '<p data-dormeto=status>', '<p data-dormeto=statusx>', '<!-- data-dormeto="status" -->', '<META HTTP-EQUIV="Content-Security-Policy" content="x">', '<p>x</p>'];
+    expect(htmlWarnings('<p data-dormeto="STATUS"></p>')).toEqual([expect.stringContaining('data-dormeto="status"')]);
+    expect(htmlWarnings('<p DATA-DORMETO="status"></p>')).toEqual([]);
+    if (router) for (const page of pages) expect(htmlWarnings(page), page).toEqual((router as unknown as { pageWarnings(d: unknown): string[] }).pageWarnings({ mode: 'custom', html: page }));
+    const t = performance.now();
+    htmlWarnings('data-dormeto="STATUS"'.repeat(12_000));
+    expect(performance.now() - t).toBeLessThan(250);
   });
   it('asks for the status hook and flags a Content-Security-Policy meta tag', () => {
     expect(htmlWarnings('<p>wait</p>')).toEqual([expect.stringContaining('data-dormeto="status"')]);

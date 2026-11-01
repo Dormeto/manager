@@ -12,7 +12,7 @@ import { useNow } from '../now';
 import { useSession } from '../stores/session';
 import {
   editRights, fromLine, organizationView, previewHtml, resolveDraft, whyNoIcon,
-  type OrganizationPageView, type PageLevel, type StoredPage, type WaitingPageView,
+  type EffectivePage, type OrganizationPageView, type PageLevel, type StoredPage, type WaitingPageView,
 } from '../waiting-page';
 import DmLoader from './DmLoader.vue';
 import type { Notice } from './NoticeAlert.vue';
@@ -27,6 +27,9 @@ const now = useNow();
 const session = useSession();
 const theme = useTheme();
 const view = ref<WaitingPageView | null>(null);
+// The template beneath a custom page in the middle (a workload under a custom router page): the router skips the custom page and
+// takes the fields from the organization's template, so the dialog's preview does too. None when it cannot be read.
+const beneath = ref<EffectivePage | null>(null);
 const unavailable = ref('');
 const open = ref(false);
 const confirmReset = ref(false);
@@ -44,6 +47,15 @@ async function load() {
     // A manager older than the feature answers something else: nothing to show.
     if (props.level === 'organization' ? !out || !('page' in out) : !out || !('effective' in out)) throw new Error('The waiting page is not available here yet.');
     view.value = props.level === 'organization' ? organizationView(out as OrganizationPageView) : out as WaitingPageView;
+    beneath.value = null;
+    if (props.level === 'workload' && view.value.inherited.mode === 'custom') {
+      try {
+        const org = await api<OrganizationPageView>('/settings/waiting-page');
+        if (mine === reads && org && 'page' in org) beneath.value = organizationView(org).effective;
+      } catch {
+        // Not readable by this account: the preview goes without the organization's fields.
+      }
+    }
     unavailable.value = '';
     stale.value = '';
   } catch (err) {
@@ -148,7 +160,7 @@ async function reset() {
             <div v-if="level === 'workload'" data-test="favicon">
               <dt>Cached favicon</dt>
               <dd v-if="favicon?.icon" class="dm-wp-card__favicon"><img :src="favicon.icon" alt=""><span>read {{ relative(favicon.fetchedAt, now) }}<template v-if="favicon.error"> (the last read failed: {{ favicon.error }})</template></span></dd>
-              <dd v-else class="text-medium-emphasis">none: {{ whyNoIcon(favicon) }}</dd>
+              <dd v-else class="text-medium-emphasis">none: {{ whyNoIcon(favicon, effective) }}</dd>
             </div>
           </dl>
           <WaitingPagePreview v-if="shown && effective.mode === 'template'" :html="shown" title="Preview of the waiting page" mini />
@@ -164,7 +176,7 @@ async function reset() {
         <template v-if="rights.reset"> A page the manager set before the workload moved to Terraform can still be reset here.</template>
       </v-card-text>
     </template>
-    <WaitingPageDialog v-if="view" v-model="open" :level="level" :subject="subject" :own="view.own" :inherited="view.inherited" :favicon="favicon?.icon ?? null"
+    <WaitingPageDialog v-if="view" v-model="open" :level="level" :subject="subject" :own="view.own" :inherited="view.inherited" :beneath="beneath" :favicon="favicon?.icon ?? null"
       :can-custom="rights.custom" :saving="saving" :error="saveError" @submit="save" />
     <v-dialog v-model="confirmReset" max-width="440">
       <v-card data-test="confirm-reset-waiting-page-dialog" title="Reset the waiting page?">

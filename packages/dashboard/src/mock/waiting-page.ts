@@ -94,13 +94,13 @@ function write(d: Demo, level: 'organization' | 'router' | 'workload', target: s
 }
 
 export function organizationPage(d: Demo) {
-  const { page, updatedAt, updatedBy } = d.waitingPage;
-  return { page, warnings: warningsOf(page), updatedAt, updatedBy };
+  const { page, at, by } = d.waitingPage;
+  return { page, warnings: warningsOf(page), by, at };
 }
 
 export function setOrganizationPage(d: Demo, body: Body | null, now: number) {
-  write(d, 'organization', 'organization', body, d.waitingPage.page, (page) => { d.waitingPage = { page, updatedAt: iso(now), updatedBy: d.me.email }; });
-  return { ...organizationPage(d), note: 'routers read it within about a minute' };
+  write(d, 'organization', 'organization', body, d.waitingPage.page, (page) => { d.waitingPage = { page, at: iso(now), by: d.me.email }; });
+  return { ...organizationPage(d), note: 'routers at 0.35.0 or later apply it within about a minute' };
 }
 
 export function routerPage(d: Demo, name: string, method: string, body: Body, now: number): WaitingPageView {

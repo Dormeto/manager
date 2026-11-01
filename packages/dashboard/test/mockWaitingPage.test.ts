@@ -22,7 +22,7 @@ beforeEach(() => {
   const d = state();
   d.me.role = 'admin';
   d.me.effectiveRole = 'admin';
-  d.waitingPage = { page: null, updatedAt: null, updatedBy: null };
+  d.waitingPage = { page: null, at: null, by: null };
   for (const r of d.routers) r.page = null;
   for (const w of d.workloads) w.page = null;
 });
@@ -32,9 +32,9 @@ describe('the demo\'s waiting pages', () => {
     expect(await get<OrganizationPageView>('/settings/waiting-page')).toMatchObject({ page: null, warnings: [] });
     const set = await put('/settings/waiting-page', { mode: 'template', icon: 'none', title: 'Acme portal' }) as OrganizationPageView;
     expect(set.page).toEqual({ mode: 'template', icon: 'none', title: 'Acme portal' });
-    expect((set as unknown as { note: string }).note).toBe('routers read it within about a minute');
+    expect((set as unknown as { note: string }).note).toBe('routers at 0.35.0 or later apply it within about a minute');
     expect(state().audit[0]).toMatchObject({ action: 'waiting-page', target: 'organization', result: 'organization template' });
-    expect((await get<OrganizationPageView>('/settings/waiting-page')).updatedBy).toBe(state().me.email);
+    expect((await get<OrganizationPageView>('/settings/waiting-page')).by).toBe(state().me.email);
     await expect(put('/settings/waiting-page', { mode: 'template', title: 'a'.repeat(81) })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('80') });
     await expect(put('/settings/waiting-page', { mode: 'template', html: HTML })).rejects.toMatchObject({ status: 400 });
     await del('/settings/waiting-page');

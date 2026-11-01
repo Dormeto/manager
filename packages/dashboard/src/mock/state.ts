@@ -217,7 +217,7 @@ export interface Demo {
   updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
   hibernation: { hibernate: boolean; updatedAt: string | null; updatedBy: string | null }; // the manager's default for every workload
-  waitingPage: { page: StoredPage | null; updatedAt: string | null; updatedBy: string | null }; // the organization's waiting page
+  waitingPage: { page: StoredPage | null; at: string | null; by: string | null }; // the organization's waiting page
   routers: DemoRouter[];
   workloads: DemoWorkload[];
   candidates: Candidate[];
@@ -550,7 +550,7 @@ function build(now: number): Demo {
     updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
     hibernation: { hibernate: true, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
-    waitingPage: { page: null, updatedAt: null, updatedBy: null },
+    waitingPage: { page: null, at: null, by: null },
     routers,
     workloads,
     candidates: [],

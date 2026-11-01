@@ -85,7 +85,7 @@ describe('the organization level', () => {
   it('PUT writes waitingPage with its own author and date into the whole document, keeping every other key, hibernation\'s author and date included', async () => {
     const s = setup({ doc: { workloads: { hibernate: false }, other: 1, updatedAt: 'T0', updatedBy: 'hib@example.com' } });
     const res = await s.api(event('PUT', ORG, 'dmt-admin', { page: TEMPLATE }));
-    expect([res.statusCode, json(res)]).toEqual([200, { page: TEMPLATE, warnings: [], by: 'dmt-admin@example.com', at: AT, note: 'routers apply it within about a minute' }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { page: TEMPLATE, warnings: [], by: 'dmt-admin@example.com', at: AT, note: 'routers at 0.35.0 or later apply it within about a minute' }]);
     expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, other: 1, updatedAt: 'T0', updatedBy: 'hib@example.com', waitingPage: { ...TEMPLATE, by: 'dmt-admin@example.com', at: AT } }]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'waiting-page', target: 'organization', result: 'organization template', who: 'dmt-admin@example.com' });
   });

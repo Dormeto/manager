@@ -15,8 +15,9 @@ CLI script, of the same release).
   template; it runs on the application's own address, so only administrators can set, replace or clear one (operators
   can still set a workload's template), and the dashboard only draws one in the edit dialog's preview, never in a
   card. Viewers and members who may read a workload read its page, never change it. The icon is the application's
-  favicon by default: the router reads it just before a nap, at most once a day. `icon: none` at the organization turns
-  it off, reading included; set on a router or a workload, it stops the read for that level's workloads only. A
+  favicon by default: the router reads it just before a nap, at most once a day. `icon: none` turns the read off for the
+  level's scope (every workload at the organization, a router's workloads, one workload), except where a lower level
+  says `auto`. A
   workload written in Terraform is changed with `waiting_page` in its workload module (a page the manager set before
   the workload moved to Terraform can be reset from the dashboard). Visitors read their own language, and the page shows
   a progress bar from the workload's recent wake times.

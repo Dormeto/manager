@@ -1231,8 +1231,8 @@ export function createApi({
       });
     }
 
-    // The organization's waiting page (branded waiting page §12): the waitingPage key of settings.json, which routers copy at
-    // their next check. The built-in roles read it, administrators set it; a custom page is theirs at every level.
+    // The organization's waiting page (branded waiting page §12): the waitingPage key of settings.json, which every router
+    // reads directly (a cached read, so within about a minute). The built-in roles read it, administrators set it; a custom page is theirs at every level.
     if (resource === 'settings' && a === 'waiting-page' && !b && (method === 'GET' || method === 'PUT' || method === 'DELETE')) {
       // The page's own author and date, apart from the hibernation default's (the file's updatedBy and updatedAt).
       const stamp = (stored: unknown) => {
@@ -1263,7 +1263,7 @@ export function createApi({
         await globalSettings.write({ ...kept, ...(page ? { waitingPage: { ...page, by: identity.email, at } } : {}) });
         return {
           result: pageText('organization', page, before),
-          response: reply(200, { page, warnings: pageWarnings(page), ...(page ? { by: identity.email, at } : { by: null, at: null }), note: 'routers apply it within about a minute' }),
+          response: reply(200, { page, warnings: pageWarnings(page), ...(page ? { by: identity.email, at } : { by: null, at: null }), note: 'routers at 0.35.0 or later apply it within about a minute' }),
         };
       });
     }

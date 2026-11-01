@@ -69,8 +69,13 @@ describe('WaitingPageCard', () => {
   });
 
   it('gives the reason a workload has no favicon', async () => {
-    answer = () => view({ favicon: { icon: null, fetchedAt: '2026-11-01T10:00:00Z', error: 'no host name' } });
-    expect((await show('viewer')).get('[data-test="favicon"]').text()).toContain('no host name');
+    const auto = { mode: 'template' as const, icon: 'auto', title: 'Shop', from: { mode: 'workload', icon: 'default', title: 'workload' } };
+    answer = () => view({ effective: auto, favicon: { icon: null, fetchedAt: '2026-11-01T10:00:00Z', error: 'no rule for the whole of a host name' } });
+    expect((await show('viewer')).get('[data-test="favicon"]').text()).toContain('no rule for the whole of a host name');
+    answer = () => view({ effective: auto, favicon: null });
+    expect((await show('viewer')).get('[data-test="favicon"]').text()).toContain('not read yet');
+    answer = () => view({ favicon: null });
+    expect((await show('viewer')).get('[data-test="favicon"]').text()).toContain('not read: the icon is none');
   });
 
   it('shows a custom page by its size and where it comes from, and its warnings', async () => {
@@ -122,11 +127,33 @@ describe('WaitingPageCard', () => {
     expect((await show('admin')).get('[data-test="waiting-page-unavailable"]').text()).toContain('boom');
   });
 
+  it('reads the organization\'s page for the dialog when a custom page sits between it and the workload', async () => {
+    const org = { page: { mode: 'template', title: 'ORG-T', description: 'ORG-D' }, warnings: [], by: 'fab@example.com', at: '2026-11-01T10:00:00Z' };
+    answer = (path) => (path === '/settings/waiting-page' ? org : view({ own: null, inherited: { mode: 'custom', html: '<p>x</p>', from: { mode: 'router', html: 'router' } } }));
+    const w = await show('admin');
+    expect(calls.map((c) => c.path)).toContain('/settings/waiting-page');
+    await w.get('[data-test="edit-waiting-page"]').trigger('click');
+    await flushPromises();
+    const preview = document.body.querySelector('[data-test="waiting-page-dialog"] iframe')!.getAttribute('srcdoc');
+    expect(preview).toContain('<h1>ORG-T</h1>');
+    expect(preview).toContain('ORG-D');
+  });
+
+  it('does not read the organization\'s page when nothing custom is in the middle, and goes without it when it cannot be read', async () => {
+    await show('admin');
+    expect(calls.map((c) => c.path)).toEqual([PATH]);
+    calls.length = 0;
+    answer = (path) => (path === '/settings/waiting-page' ? new ApiError(403, 'no') : view({ own: null, inherited: { mode: 'custom', html: '<p>x</p>', from: { mode: 'router', html: 'router' } } }));
+    const w = await show('admin');
+    expect(w.find('[data-test="waiting-page-unavailable"]').exists()).toBe(false);
+  });
+
   it('labels the organization\'s card Organization and shows its page', async () => {
-    answer = () => ({ page: { mode: 'template', title: 'Acme', icon: 'none' }, warnings: [], updatedAt: '2026-11-01T10:00:00Z', updatedBy: 'fab@example.com' });
+    answer = () => ({ page: { mode: 'template', title: 'Acme', icon: 'none' }, warnings: [], at: '2026-11-01T10:00:00Z', by: 'fab@example.com' });
     const w = await show('viewer', 'organization', '/settings/waiting-page');
     expect(w.get('[data-test="waiting-page-level"]').text()).toBe('Organization');
     expect(w.get('[data-test="field-title"]').text()).toContain('Acme');
+    expect(w.text()).toContain('fab@example.com');
     expect(frame(w.element).getAttribute('srcdoc')).toContain('Acme');
   });
 
@@ -216,7 +243,7 @@ describe('WaitingPageCard', () => {
     });
 
     it('says within about a minute at the organization too', async () => {
-      answer = () => ({ page: null, warnings: [], updatedAt: null, updatedBy: null });
+      answer = () => ({ page: null, warnings: [], at: null, by: null });
       const w = await show('admin', 'organization', '/settings/waiting-page');
       await edit(w, 'Acme');
       await save();

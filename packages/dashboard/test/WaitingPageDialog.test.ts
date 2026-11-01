@@ -14,7 +14,7 @@ Object.defineProperty(window, 'visualViewport', {
 });
 
 const INHERITED: EffectivePage = { mode: 'template', icon: 'none', title: 'Acme', from: { mode: 'organization', icon: 'organization', title: 'organization' } };
-type Props = { level?: 'workload' | 'router' | 'organization'; own?: StoredPage | null; inherited?: EffectivePage; canCustom?: boolean; favicon?: string | null; error?: string; saving?: boolean };
+type Props = { level?: 'workload' | 'router' | 'organization'; own?: StoredPage | null; inherited?: EffectivePage; canCustom?: boolean; beneath?: EffectivePage | null; favicon?: string | null; error?: string; saving?: boolean };
 const mounted: ReturnType<typeof mount>[] = [];
 async function open(props: Props = {}) {
   const w = mount(WaitingPageDialog, {
@@ -69,6 +69,18 @@ describe('WaitingPageDialog', () => {
     expect(srcdoc()).toContain('My shop &lt;b&gt;');
     await type('description', 'Back at 8.');
     expect(srcdoc()).toContain('Back at 8.');
+  });
+
+  it('previews over the template beneath a custom page in the middle, as the router resolves it', async () => {
+    const custom: EffectivePage = { mode: 'custom', html: '<p>x</p>', from: { mode: 'router', html: 'router' } };
+    const beneath: EffectivePage = { mode: 'template', icon: 'auto', title: 'ORG-T', description: 'ORG-D', from: { mode: 'organization', title: 'organization', description: 'organization', icon: 'default' } };
+    await open({ inherited: custom, beneath });
+    expect(srcdoc()).toContain('<h1>ORG-T</h1>');
+    expect(srcdoc()).toContain('ORG-D');
+    expect(pick('replaces-custom')).toBeTruthy();
+    mounted.pop()!.unmount();
+    await open({ inherited: custom });
+    expect(srcdoc()).not.toContain('ORG-T');
   });
 
   it('previews each state, in English or French, light or dark', async () => {

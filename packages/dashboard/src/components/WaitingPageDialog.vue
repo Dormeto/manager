@@ -6,14 +6,14 @@ import { computed, ref, watch } from 'vue';
 import { useDisplay, useTheme } from 'vuetify';
 import { mdiImageOutline } from '@mdi/js';
 import {
-  DESCRIPTION_MAX, PAGE_STATES, TITLE_MAX, checkHtml, checkIcon, fromLine, htmlSizeProblem, htmlWarnings, iconSizeProblem, previewHtml, resolveDraft,
+  DESCRIPTION_MAX, PAGE_STATES, TITLE_MAX, checkHtml, checkIcon, fromLine, htmlSizeProblem, htmlWarnings, iconSizeProblem, previewHtml, resolveDraft, templateAbove,
   type EffectivePage, type PageLevel, type PageState, type StoredPage, type TemplatePage,
 } from '../waiting-page';
 import WaitingPagePreview from './WaitingPagePreview.vue';
 
 type IconChoice = 'inherit' | 'auto' | 'upload' | 'none';
 const props = defineProps<{
-  modelValue: boolean; level: PageLevel; subject: string; own: StoredPage | null; inherited: EffectivePage; favicon: string | null;
+  modelValue: boolean; level: PageLevel; subject: string; own: StoredPage | null; inherited: EffectivePage; beneath?: EffectivePage | null; favicon: string | null;
   canCustom: boolean; saving?: boolean; error?: string;
 }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [StoredPage] }>();
@@ -110,9 +110,10 @@ const warnings = computed(() => (mode.value === 'custom' && html.value ? htmlWar
 const tooLong = computed(() => [...title.value.trim()].length > TITLE_MAX || [...description.value.trim()].length > DESCRIPTION_MAX);
 const canSave = computed(() => !props.saving && !!draft.value && !tooLong.value && !(mode.value === 'template' && icon.value === 'upload' && !uploaded.value));
 
-const preview = computed(() => (draft.value ? previewHtml({ page: resolveDraft(draft.value, props.inherited), favicon: props.favicon, state: state.value, language: language.value, dark: dark.value }) : ''));
-const inheritedIcon = computed(() => (props.inherited.mode === 'template' ? props.inherited.icon ?? 'auto' : 'auto'));
-const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : inheritedIcon.value === 'auto' ? 'automatic' : 'an uploaded image'}, ${fromLine(props.inherited.from.icon).toLowerCase()}`);
+const preview = computed(() => (draft.value ? previewHtml({ page: resolveDraft(draft.value, props.inherited, props.beneath), favicon: props.favicon, state: state.value, language: language.value, dark: dark.value }) : ''));
+const above = computed(() => templateAbove(props.inherited, props.beneath));
+const inheritedIcon = computed(() => above.value.icon ?? 'auto');
+const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : inheritedIcon.value === 'auto' ? 'automatic' : 'an uploaded image'}, ${fromLine(props.beneath && props.inherited.mode !== 'template' ? props.beneath.from.icon : props.inherited.from.icon).toLowerCase()}`);
 </script>
 
 <template>
@@ -161,7 +162,7 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
               </v-alert>
               <ul class="dm-wp__hooks text-body-small mt-3">
                 <li><code>data-dormeto="status"</code>: its text becomes the status sentence, in the visitor's language.</li>
-                <li><code>data-dormeto="elapsed"</code>: its text becomes the seconds.</li>
+                <li><code>data-dormeto="elapsed"</code>: its text becomes the seconds with their unit, for example <code>3 s</code>.</li>
                 <li><code>data-dormeto="progress"</code>: its width becomes the progress bar's percentage; <code>hidden</code> is removed once a bar applies.</li>
                 <li>The <code>dormeto:state</code> event on <code>document</code> fires at each probe, with <code>detail: { state, failure, retryAt, napUntil, elapsedMs, typicalMs }</code>.</li>
               </ul>
