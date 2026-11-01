@@ -144,6 +144,81 @@ describe('Update', () => {
     expect(button('Confirm').attributes('disabled')).toBeUndefined();
   });
 
+  // The answer of the next POST waits for `go`, so the page can be read while it is sent.
+  const heldPost = () => {
+    let go!: () => void;
+    const gate = new Promise<void>((r) => { go = r; });
+    const before = h.answer;
+    h.answer = (path, init) => (init?.method === 'POST' ? gate.then(() => before(path, init)) : before(path, init));
+    return go;
+  };
+  const loading = (label: string) => button(label).classes().includes('v-btn--loading');
+  const PLAN = { build: 'dmt-dev-install:p1', version: '0.13.0', summary: { add: 2, change: 3, destroy: 1, replaced: [], destroyed: [] } };
+  const changes = (answer: () => UpdateState) => (path: string) => (path.startsWith('/update/changes') ? sections : answer());
+
+  it('shows a loading indicator on Prepare alone, from the click until the plan is ready', async () => {
+    await mountView();
+    await select('0.13.0');
+    expect(loading('Prepare')).toBe(false);
+    h.answer = changes(() => state());
+    const go = heldPost();
+    await button('Prepare').trigger('click');
+    await flushPromises();
+    expect(loading('Prepare')).toBe(true);
+    expect(loading('Confirm')).toBe(false);
+
+    h.answer = changes(() => state({ pending: { action: 'plan', version: '0.13.0' } as UpdateState['pending'] }));
+    go();
+    await flushPromises();
+    expect(loading('Prepare')).toBe(true);
+    expect(loading('Confirm')).toBe(false);
+
+    h.answer = changes(() => running({ action: 'plan' }));
+    await wrapper.findAll('button').find((b) => b.text().includes('Check for updates'))?.trigger('click');
+    await flushPromises();
+    expect(loading('Prepare')).toBe(true);
+
+    h.answer = changes(() => state({ plan: PLAN }));
+    await wrapper.findAll('button').find((b) => b.text().includes('Check for updates'))?.trigger('click');
+    await flushPromises();
+    expect(loading('Prepare')).toBe(false);
+  });
+
+  it('shows a loading indicator on Confirm alone, from the click while the update applies', async () => {
+    h.answer = changes(() => state({ plan: PLAN }));
+    await mountView();
+    const go = heldPost();
+    await button('Confirm').trigger('click');
+    await flushPromises();
+    expect(loading('Confirm')).toBe(true);
+    expect(loading('Prepare')).toBe(false);
+
+    h.answer = changes(() => running());
+    go();
+    await flushPromises();
+    expect(loading('Confirm')).toBe(true);
+    expect(loading('Prepare')).toBe(false);
+  });
+
+  it('stops the loading indicator when the request is refused', async () => {
+    h.answer = (path, init) => {
+      if (init?.method === 'POST') throw new Error('refused');
+      return path.startsWith('/update/changes') ? sections : state({ plan: PLAN });
+    };
+    await mountView();
+    await button('Confirm').trigger('click');
+    await flushPromises();
+    expect(loading('Confirm')).toBe(false);
+    expect(wrapper.text()).toContain('refused');
+  });
+
+  it('does not show a loading indicator for a build started from the CLI', async () => {
+    h.answer = changes(() => running({ by: 'cli', action: undefined }));
+    await mountView();
+    expect(loading('Prepare')).toBe(false);
+    expect(loading('Confirm')).toBe(false);
+  });
+
   it('ties Confirm to its plan: named by the plan\'s version, disabled when another version is picked', async () => {
     h.answer = (path) => (path.startsWith('/update/changes') ? sections : state({
       plan: { build: 'dmt-dev-install:p1', version: '0.13.0', summary: { add: 1, change: 0, destroy: 0, replaced: [], destroyed: [] } },

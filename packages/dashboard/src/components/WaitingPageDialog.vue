@@ -146,9 +146,10 @@ const inheritText = computed(() => `${inheritedIcon.value === 'none' ? 'none' : 
                 <div v-if="iconProblem" data-test="icon-problem" class="text-error text-body-small mt-1">{{ iconProblem }}</div>
                 <img v-else-if="uploaded" :src="uploaded" alt="" class="dm-wp__icon mt-2">
               </div>
-              <v-text-field v-model="title" data-test="title" label="Title" persistent-counter :counter="TITLE_MAX" density="compact" class="mt-3" hide-details="auto" />
+              <v-text-field v-model="title" data-test="title" label="Title" persistent-counter :counter="TITLE_MAX" density="compact" class="mt-3" hide-details="auto"
+                hint="One line of Markdown: **bold**, *italic*, `code`, [a link](https://example.com)." persistent-hint />
               <v-textarea v-model="description" data-test="description" label="Description" persistent-counter :counter="DESCRIPTION_MAX" rows="3" auto-grow max-rows="8" density="compact" class="mt-3" hide-details="auto"
-                hint="Plain text; line breaks are kept." />
+                hint="Markdown: also headings, lists, quotes and code blocks. Line breaks are kept, raw HTML shows as text." persistent-hint />
             </template>
 
             <template v-else>

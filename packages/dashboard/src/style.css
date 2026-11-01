@@ -52,6 +52,8 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
 .v-overlay .v-card, .v-menu > .v-overlay__content > .v-list, .v-menu > .v-overlay__content > .v-card { backdrop-filter: blur(18px); }
 .v-theme--dark .v-overlay__content > .v-card, .v-theme--dark .v-menu .v-list { background: rgba(13, 20, 34, 0.94) !important; }
 .v-card-title { padding-top: 18px !important; }
+/* Beside an icon, the title is centered on it: the card item aligns them, and the padding above would push it down. */
+.v-card-item__prepend ~ .v-card-item__content .v-card-title { padding-top: 0 !important; }
 
 /* Tables: quiet headers, rows that light up. */
 .v-table { background: transparent !important; }

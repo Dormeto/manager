@@ -98,7 +98,7 @@ onMounted(load);
 
 <template>
   <!-- A form: a centred column on a wide screen rather than fields stretched over it. -->
-  <div class="dm-narrow">
+  <div>
     <div class="d-flex flex-wrap align-end ga-4 mb-6">
       <div>
         <div class="d-flex align-center mb-1">
@@ -243,7 +243,6 @@ onMounted(load);
 </template>
 
 <style scoped>
-.dm-narrow { max-width: 1120px; margin-inline: auto; }
 .dm-lede { max-width: 82ch; }
 .dm-pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 @media (min-width: 1280px) { .dm-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -7,6 +7,11 @@ CLI script, of the same release).
 
 ## Unreleased
 
+Every page takes the full width of the window (Update, Operations, Users, Account and Discovery's settings were capped). On
+the Update page, Prepare and Confirm show a loading indicator from the click until the plan or the update ends. The waiting
+page's title and description take Markdown, in the preview too (routers 0.36.0 and later draw it for visitors). A card's or
+a dialog's title is centered on its icon.
+
 The commands the dashboard's Update page and the docs tell you to run are `dormeto aws install` and the like
 (`dormeto aws estimate`, `dormeto aws install status`): they need a CLI that has `aws`, which comes with the CLI after
 0.8.0. The old names (`dormeto install`) go on working with that CLI, with a notice, until a later release removes them.

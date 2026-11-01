@@ -136,7 +136,7 @@ load();
 
 <template>
   <!-- A few rows: a centred column on a wide screen rather than a table spread over it. -->
-  <div class="dm-narrow">
+  <div>
     <div class="d-flex flex-wrap align-end ga-4 mb-6">
       <div>
         <div class="dm-eyebrow mb-1">Administration</div>
@@ -251,7 +251,6 @@ load();
 </template>
 
 <style scoped>
-.dm-narrow { max-width: 1120px; margin-inline: auto; }
 .dm-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .dm-tile__body { display: flex; align-items: center; gap: 14px; padding: 16px !important; }
 .dm-tile__text { min-width: 0; }

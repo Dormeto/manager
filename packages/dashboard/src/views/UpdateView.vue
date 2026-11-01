@@ -33,7 +33,8 @@ const notAnswering = ref(false);
 const target = ref<string | null>(null);
 const sections = ref<Section[] | null>(null);
 const changesLoading = ref(false);
-const sending = ref(false);
+// The request being sent: the button that sent it shows it until the state answers for itself.
+const sending = ref<'plan' | 'apply' | null>(null);
 // The daily check's setting and last result; null until read (or when this manager has none).
 const daily = ref<UpdateCheck | null>(null);
 const dailySaving = ref(false);
@@ -44,6 +45,14 @@ const checking = ref(false);
 
 const state = computed(() => (current.value && current.value.installedWithCli ? current.value : null));
 const isBusy = computed(() => (state.value ? busy(state.value) : false));
+// What the manager is doing for this page: its request, then what the state says (a build from the CLI names no button).
+const working = computed(() => {
+  if (sending.value) return sending.value;
+  const s = state.value;
+  if (!s || !isBusy.value) return null;
+  if (s.pending && !s.pending.notStarted) return s.pending.action;
+  return s.build?.by === 'cli' ? null : s.build?.action ?? null;
+});
 const reloadOffer = computed(() => current.value !== null && firstVersion.value !== null && current.value.version !== firstVersion.value);
 const build = computed(() => state.value?.build ?? null);
 const buildLink = computed(() => consoleLink(build.value?.consoleUrl));
@@ -179,8 +188,8 @@ watch(items, (list) => {
   if (target.value && !list.some((v) => v.value === target.value)) target.value = null;
 });
 
-async function send(path: string, body: object, label: string) {
-  sending.value = true;
+async function send(action: 'plan' | 'apply', path: string, body: object, label: string) {
+  sending.value = action;
   try {
     await api<Pending>(path, { method: 'POST', body: JSON.stringify(body) });
     notice.value = { type: 'success', text: label };
@@ -191,13 +200,13 @@ async function send(path: string, body: object, label: string) {
     // After a refusal too (409 busy): the buttons follow the state, not what the page last knew.
     await refresh();
   } finally {
-    sending.value = false;
+    sending.value = null;
   }
 }
 
-const prepare = () => send('/update/plan', { version: target.value }, `Preparing the update to ${target.value}.`);
+const prepare = () => send('plan', '/update/plan', { version: target.value }, `Preparing the update to ${target.value}.`);
 const planMismatch = computed(() => plan.value !== null && target.value !== null && target.value !== plan.value.version);
-const confirm = () => send('/update/apply', { planBuild: plan.value!.build }, `Applying the update to ${plan.value!.version}.`);
+const confirm = () => send('apply', '/update/apply', { planBuild: plan.value!.build }, `Applying the update to ${plan.value!.version}.`);
 const reload = () => location.reload();
 
 void refresh();
@@ -212,7 +221,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="dm-narrow">
+  <div>
     <div class="mb-6">
       <div class="dm-eyebrow mb-1">Administration</div>
       <h1 class="text-headline-small">Update</h1>
@@ -375,8 +384,8 @@ onBeforeUnmount(() => {
         The plan was prepared for {{ plan.version }}: prepare {{ target }} to update to it, or pick {{ plan.version }} again.
       </p>
       <div class="d-flex ga-2">
-        <v-btn variant="tonal" color="primary" :disabled="!target || isBusy || sending" @click="prepare">Prepare</v-btn>
-        <v-btn variant="flat" color="primary" :disabled="!plan || planMismatch || isBusy || sending" @click="confirm">Confirm{{ plan ? ` ${plan.version}` : '' }}</v-btn>
+        <v-btn variant="tonal" color="primary" :disabled="!target || isBusy || !!sending" :loading="working === 'plan'" @click="prepare">Prepare</v-btn>
+        <v-btn variant="flat" color="primary" :disabled="!plan || planMismatch || isBusy || !!sending" :loading="working === 'apply'" @click="confirm">Confirm{{ plan ? ` ${plan.version}` : '' }}</v-btn>
       </div>
 
       <v-card class="mt-6" title="With the CLI">
@@ -402,7 +411,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.dm-narrow { max-width: 860px; margin-inline: auto; }
 .dm-version { font-variant-numeric: tabular-nums; }
 .dm-links { margin-top: 4px; }
 .dm-ways { padding-left: 20px; }

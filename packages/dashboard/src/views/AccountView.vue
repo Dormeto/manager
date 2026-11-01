@@ -123,7 +123,7 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
 <template>
   <!-- A short page: one centred column, the profile above the two-step verification (side by side, setting it up left an
        empty card beside a tall one). -->
-  <div class="dm-account">
+  <div>
     <div class="d-flex flex-wrap align-end ga-4 mb-6">
       <div>
         <div class="dm-eyebrow mb-1">Account</div>
@@ -216,7 +216,6 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
 </template>
 
 <style scoped>
-.dm-account { max-width: 880px; margin-inline: auto; }
 .dm-profile__sky { position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(70% 90% at 0% 0%, rgba(var(--v-theme-primary), 0.14), transparent 70%), radial-gradient(50% 70% at 100% 100%, rgba(var(--v-theme-secondary), 0.08), transparent 70%); }
 .dm-profile__body { display: flex; align-items: center; gap: 18px; padding-top: 8px !important; padding-bottom: 24px !important; }

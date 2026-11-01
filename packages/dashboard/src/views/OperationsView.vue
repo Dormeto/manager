@@ -56,7 +56,7 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
 
 <template>
   <!-- A list of cards, its content on their left: a centred column on a wide screen rather than cards wider than it. -->
-  <div class="dm-narrow">
+  <div>
     <div class="d-flex flex-wrap align-end ga-4 mb-6">
       <div>
         <div class="dm-eyebrow mb-1">Organization</div>
@@ -164,7 +164,6 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
 </template>
 
 <style scoped>
-.dm-narrow { max-width: 1120px; margin-inline: auto; }
 .dm-lead { max-width: 68rem; font-size: 0.98rem; line-height: 1.55; text-wrap: pretty; }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 32px 16px !important; text-align: start; }
 
