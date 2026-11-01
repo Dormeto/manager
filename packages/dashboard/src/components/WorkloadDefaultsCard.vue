@@ -49,7 +49,7 @@ async function confirm() {
 </script>
 
 <template>
-  <v-card data-test="workload-defaults" class="mt-6">
+  <v-card data-test="workload-defaults">
     <v-card-item>
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="34"><v-icon :icon="mdiCogOutline" size="19" /></v-avatar></template>
       <v-card-title>Workload defaults</v-card-title>

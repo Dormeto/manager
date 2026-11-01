@@ -13,6 +13,7 @@ import { terraformHelp, workloadsHelp } from '../router-actions';
 import { useRouterOperations } from '../router-operations';
 import type { Notice } from '../components/NoticeAlert.vue';
 import DescriptionCard from '../components/DescriptionCard.vue';
+import WaitingPageCard from '../components/WaitingPageCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import NoticeToast from '../components/NoticeToast.vue';
@@ -175,6 +176,7 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
 
     <DescriptionCard class="mb-4" :description="description" :can-edit="session.isAdmin" :subject="router.name" :saving="savingDescription" :error="descriptionError"
       @save="saveDescription" @clear="clearDescription" />
+    <WaitingPageCard class="mb-4" level="router" :path="`/routers/${encodeURIComponent(router.name)}/waiting-page`" :subject="router.name" @notice="notice = $event" />
 
     <!-- The health, short, heads the first of RouterDetails' two columns (the figures beside it): no empty space under it. -->
     <div class="dm-sections">

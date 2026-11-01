@@ -785,4 +785,13 @@ describe('Workload view', () => {
       done();
     });
   });
+
+  describe('the Waiting page card', () => {
+    it('is on the workload\'s page, reading its own route', async () => {
+      const w = await mountView('admin');
+      expect(w.find('[data-test="waiting-page-card"]').exists()).toBe(true);
+      expect(vi.mocked(api).mock.calls.some(([path]) => path === '/workloads/dmtr-dev/5cdfbf844b925bf8/waiting-page')).toBe(true);
+      w.unmount();
+    });
+  });
 });

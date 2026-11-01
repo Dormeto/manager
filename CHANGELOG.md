@@ -7,6 +7,16 @@ CLI script, of the same release).
 
 ## Unreleased
 
+- Branded waiting page (router 0.35.0). While a workload wakes, its visitors see a page you set at three levels, each
+  overriding the one above: the organization (Routers, beside Workload defaults), a router and a workload. A template
+  takes an icon, a title and a description, field by field; the dashboard previews it in each state (waking, taking
+  longer, failed, nap window), in English or French, light or dark. A custom HTML page, uploaded as a file, replaces the
+  template; it runs on the application's own address, so only administrators can set, replace or clear one (operators
+  can still set a workload's template). The icon is the application's favicon by default: the router reads it just
+  before a nap, at most once a day, and `icon: none` at the organization turns it off, reading included. A workload
+  written in Terraform is changed with `waiting_page` in its workload module. Visitors read their own language, and the
+  page shows a progress bar from the workload's recent wake times.
+  Access: nothing to apply again. Upgrade the routers to 0.35.0 (a router before it answers that it must be upgraded).
 - The Onboard dialog gives the lines a Terraform that writes the workload's resources must keep: the AWS provider's
   `ignore_tags` for `dormeto:`, `ignore_changes = [action]` on a rule Dormeto changes in place, and the backend's own fields.
   Without them every apply removes what onboarding added, until the router repairs it. It also says that a rule Dormeto

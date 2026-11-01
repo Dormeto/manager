@@ -5,6 +5,7 @@ import type { Candidate, DiscoveryConfig, LintFinding, RunRecord, Status } from 
 import type { Failure } from '../failures';
 import type { Day, Schedule } from '../schedule';
 import type { Me } from '../stores/session';
+import type { Favicon, StoredPage } from '../waiting-page';
 import type { ClusterCheck, DescriptionInfo, Exclusion, HistoryEntry, OperationType, Pause, Rule, SavingsSettings, Settings, StoppedItem } from '../types';
 import {
   AVAILABLE, EC2_PRICES, PREVIOUS, FARGATE_PRICES, RDS_PRICES, TIME_ZONES, type BackendSpec, type CandidateSpec, type RouterSpec, type State, type WorkloadSpec,
@@ -21,6 +22,9 @@ export class MockError extends Error {
 export const fail = (status: number, code: string, message: string, body: Record<string, unknown> = {}): never => {
   throw new MockError(status, code, message, body);
 };
+
+// A waiting page level in the router's table (router 0.35.0): who wrote it (null: Terraform) and when.
+export interface StoredWaitingPage { page: StoredPage; by: string | null; at: number }
 
 export interface DemoRouter {
   name: string;
@@ -42,6 +46,7 @@ export interface DemoRouter {
   hibernateAt: number | null;
   readsManager: boolean;
   description: DescriptionInfo | null; // Markdown, by people (manager 0.19.0)
+  page: StoredWaitingPage | null; // its waiting page (router 0.35.0)
 }
 
 export interface DemoWorkload {
@@ -57,6 +62,8 @@ export interface DemoWorkload {
   schedule: Schedule | null; // R12
   hibernate: boolean | null; // its own value (null: inherit)
   description: DescriptionInfo | null;
+  page: StoredWaitingPage | null; // its waiting page (router 0.35.0); by null when Terraform wrote it
+  favicon: Favicon | null; // the one read just before a nap
   fallbackTypes: string[];
   settings: Settings;
   backends: BackendSpec[];
@@ -210,6 +217,7 @@ export interface Demo {
   updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
   hibernation: { hibernate: boolean; updatedAt: string | null; updatedBy: string | null }; // the manager's default for every workload
+  waitingPage: { page: StoredPage | null; updatedAt: string | null; updatedBy: string | null }; // the organization's waiting page
   routers: DemoRouter[];
   workloads: DemoWorkload[];
   candidates: Candidate[];
@@ -233,7 +241,7 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
     name: spec.name, account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
     clusters: (spec.clusters ?? []).map((name, i) => ({ name, reachable: true, allowed: true, missing: [], ...(i === 0 ? { via: 'direct' as const } : { via: 'proxy' as const, proxy: { name: `${spec.name}-kube-${name}`, version: spec.version } }), checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
-    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null,
+    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, hibernateBy: null, hibernateAt: null, readsManager: true, description: null, page: null,
   };
 }
 
@@ -291,7 +299,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   return {
     workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
     tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
-    schedule: null, hibernate: null, description: null, fallbackTypes: [],
+    schedule: null, hibernate: null, description: null, page: null, favicon: null, fallbackTypes: [],
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
     wakeMs: ((time.wake[0] + time.wake[1]) / 2) * SECOND, napMs: time.nap, state: 'ASLEEP', entries: [], bursts: [], pauses: [],
     failure: null, consecutiveFailures: 0, nextAttemptAt: null, awakeSince: null, wakeStartedAt: null, failedAt: null, updatedAt: null,
@@ -517,11 +525,22 @@ function seedDescriptions(routers: DemoRouter[], workloads: DemoWorkload[], now:
   });
 }
 
+// The favicon the routers read just before a nap: a small SVG for some workloads, the reason there is none for others.
+const ICON_COLORS = ['#5b5bd6', '#d6455b', '#2f9e6b', '#c9822b'];
+function seedFavicons(workloads: DemoWorkload[], now: number): void {
+  const svg = (w: DemoWorkload, i: number) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${ICON_COLORS[i % ICON_COLORS.length]}"/><text x="32" y="44" font-size="34" font-family="sans-serif" font-weight="700" text-anchor="middle" fill="#fff">${w.name[0]!.toUpperCase()}</text></svg>`;
+  workloads.forEach((w, i) => {
+    if (i % 3 === 0) w.favicon = { icon: `data:image/svg+xml;base64,${btoa(svg(w, i))}`, fetchedAt: iso(now - (i % 20) * HOUR - HOUR), error: null };
+    else if (i % 3 === 1) w.favicon = { icon: null, fetchedAt: iso(now - (i % 20) * HOUR - HOUR), error: 'https://' + w.hosts[0] + '/ answered 401 and /favicon.ico was not found' };
+  });
+}
+
 function build(now: number): Demo {
   const routers = ORG.routers.map((r) => makeRouter(r, now));
   const workloads = ORG.workloads.map((spec) => buildWorkload(spec, routers.find((r) => r.name === spec.router)!, now));
   seedHibernation(routers, workloads);
   seedDescriptions(routers, workloads, now);
+  seedFavicons(workloads, now);
   workloads.forEach((w, i) => { if (i % 2 === 0) w.schedule = SCHEDULES[(i / 2) % SCHEDULES.length]!(); });
   const lastRun = now - 2 * HOUR - 13 * MINUTE;
   const d: Demo = {
@@ -531,6 +550,7 @@ function build(now: number): Demo {
     updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
     hibernation: { hibernate: true, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
+    waitingPage: { page: null, updatedAt: null, updatedBy: null },
     routers,
     workloads,
     candidates: [],

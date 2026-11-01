@@ -355,4 +355,13 @@ describe('Router view', () => {
       reset();
     });
   });
+
+  describe('the Waiting page card', () => {
+    it('is on the router\'s page, reading its own route', async () => {
+      const w = await mountView(INSTALLED.name);
+      expect(w.find('[data-test="waiting-page-card"]').exists()).toBe(true);
+      expect(calls.some((c) => c.path === `/routers/${INSTALLED.name}/waiting-page`)).toBe(true);
+      w.unmount();
+    });
+  });
 });

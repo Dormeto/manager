@@ -20,6 +20,7 @@ import RouterActions from '../components/RouterActions.vue';
 import RouterVersion from '../components/RouterVersion.vue';
 import type { AlarmInfo, AlertsInfo, RouterInfo } from '../types';
 import IpListsPanel from '../components/IpListsPanel.vue';
+import WaitingPageCard from '../components/WaitingPageCard.vue';
 import WorkloadDefaultsCard from '../components/WorkloadDefaultsCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
@@ -148,7 +149,10 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
       </template>
     </v-data-table>
   </v-card>
-  <WorkloadDefaultsCard @notice="notice = $event" />
+  <div class="dm-defaults">
+    <WorkloadDefaultsCard @notice="notice = $event" />
+    <WaitingPageCard level="organization" path="/settings/waiting-page" subject="the organization" @notice="notice = $event" />
+  </div>
   <IpListsPanel />
   <v-dialog v-model="installOpen" max-width="480">
     <v-card title="Install a router">
@@ -174,6 +178,8 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 <style scoped>
 .dm-lead { max-width: 68rem; font-size: 0.98rem; line-height: 1.55; text-wrap: pretty; }
 .dm-num { font-variant-numeric: tabular-nums; }
+.dm-defaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; margin-top: 24px; }
+@media (max-width: 960px) { .dm-defaults { grid-template-columns: minmax(0, 1fr); } }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; }
 
 /* The table: room to breathe, cells aligned on their first line. */

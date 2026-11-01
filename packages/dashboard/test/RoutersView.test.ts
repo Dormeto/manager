@@ -347,4 +347,15 @@ describe('Routers view', () => {
       wrapper.unmount();
     });
   });
+
+  describe('the organization\'s waiting page card', () => {
+    it('is labelled Organization and sits beside the workload defaults', async () => {
+      const wrapper = await mountView();
+      const card = wrapper.get('[data-test="waiting-page-card"]');
+      expect(card.get('[data-test="waiting-page-level"]').text()).toBe('Organization');
+      expect(card.element.parentElement).toBe(wrapper.get('[data-test="workload-defaults"]').element.parentElement);
+      expect(calls.some((c) => c.path === '/settings/waiting-page')).toBe(true);
+      wrapper.unmount();
+    });
+  });
 });

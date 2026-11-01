@@ -10,6 +10,7 @@ import {
   changeDismissal, createExclusion, groupsAction, liftExclusion, pauseRouter, putConfig, putPreferences, putSavingsSettings, putUpdateCheck, resumeRouter, runDiscovery, startOperation, updateCheck, userAction,
   putWorkloadDefaults, setRouterDescription, setRouterSettings, setTags, setWorkloadDescription, setWorkloadSettings, workloadAction,
 } from './actions';
+import { organizationPage, routerPage, setOrganizationPage, workloadPage } from './waiting-page';
 import { clearSchedule, scheduleView, setSchedule } from './schedule';
 import { AVAILABLE } from './fixtures';
 import { ME } from './org';
@@ -66,6 +67,11 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (method === 'GET') return d.hibernation;
     if (method === 'PUT') return putWorkloadDefaults(d, body, now);
   }
+  if (resource === 'settings' && a === 'waiting-page' && !b) {
+    if (method === 'GET') return organizationPage(d);
+    if (method === 'PUT') return setOrganizationPage(d, body, now);
+    if (method === 'DELETE') return setOrganizationPage(d, null, now);
+  }
   if (method === 'GET' && resource === 'alerts' && !a) return alerts(d);
   if (method === 'GET' && resource === 'audit' && !a) return { entries: d.audit };
   if (resource === 'update') {
@@ -85,6 +91,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
     if (a && !action) {
       const router = routerOf(d, a);
       if (method === 'GET' && !b) return routerDetails(d, router, now);
+      if (b === 'waiting-page' && ['GET', 'PUT', 'DELETE'].includes(method)) return routerPage(d, a, method, body, now);
       if (method === 'GET' && b === 'description') return { description: router.description };
       if (method === 'PUT' && b === 'settings') return setRouterSettings(d, router, body, now);
       if (method === 'PUT' && b === 'description') return setRouterDescription(d, a, body, now);
@@ -110,6 +117,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
         return workloadHistory(d, workloadOf(d, a, b), days, now);
       }
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
+      if (action === 'waiting-page' && ['GET', 'PUT', 'DELETE'].includes(method)) return workloadPage(d, a, b, method, body, now);
       if (method === 'GET' && action === 'description') return { description: workloadOf(d, a, b).description };
       if (method === 'PUT' && action === 'settings') return setWorkloadSettings(d, a, b, body, now);
       if (method === 'PUT' && action === 'tags') return setTags(d, a, b, body);

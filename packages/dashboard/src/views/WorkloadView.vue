@@ -17,6 +17,7 @@ import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
 import ResourceTooltip from '../components/ResourceTooltip.vue';
 import DescriptionCard from '../components/DescriptionCard.vue';
+import WaitingPageCard from '../components/WaitingPageCard.vue';
 import RenameDialog from '../components/RenameDialog.vue';
 import TagsDialog from '../components/TagsDialog.vue';
 import { tagsList, type Tags } from '../tags';
@@ -413,6 +414,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
   <DescriptionCard class="mb-4" :description="description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
     @save="saveDescription" @clear="clearDescription" />
+  <WaitingPageCard v-if="status" class="mb-4" level="workload" :path="`${path}/waiting-page`" :subject="title" @notice="notice = $event" />
 
   <!-- Two columns of cards, 16 px apart: the backends, history, requests and idle window (wide content) on the left; the summary, rules,
        targets, filtering and settings (short ones) on the right, so both end at about the same height. -->
