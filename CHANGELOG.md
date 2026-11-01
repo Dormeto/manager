@@ -22,7 +22,8 @@ minutes multiples of 5). It can have a start date and an end date, the end optio
 month's last day. The window's editor says it back in a sentence and shows its next occurrences; the card and the calendars
 read the same words. A cron expression starting every 15 minutes or less brings a warning: each start applies again, so a
 manual Nap or Wake lasts until the next start, and an awake window blocks naps. A router before 0.36.0 refuses these windows
-(`unknown field`), and the dialog says it needs that version; plain weekly windows go on working on any router.
+(`unknown field`), and the dialog says it needs that version; plain weekly windows go on working on any router. A calendar
+draws at most 1,200 occurrences of a workload in a view, and says when it leaves some out.
 
 ## 0.20.0 — 2026-11-01
 

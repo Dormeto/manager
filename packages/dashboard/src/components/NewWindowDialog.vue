@@ -7,7 +7,7 @@
 import { computed, ref, watch } from 'vue';
 import { mdiCalendarPlus } from '@mdi/js';
 import { useDisplay } from 'vuetify';
-import { allDayWindow, occurrencesIn, windowFromSelection, windowProblems } from '../occurrences';
+import { allDayWindow, editProblems, occurrencesIn, windowFromSelection } from '../occurrences';
 import { browserZone, recurrenceError, scheduleBody, windowBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
 import WindowRecurrence from './WindowRecurrence.vue';
 
@@ -26,6 +26,8 @@ const wake = ref<'never' | 'header'>('never');
 // How it repeats, from the selection until the user edits it (then it is kept when the workload changes).
 const draft = ref<ScheduleWindow>({ kind: 'awake', days: [], start: '08:00', end: '09:00' });
 const edited = ref(false);
+// A helper of its own at each opening: nothing to remember from the last window.
+const opening = ref(0);
 const fill = () => {
   const p = placed.value;
   draft.value = 'problem' in p ? { kind: 'awake', days: [], start: draft.value.start ?? '08:00', end: draft.value.end ?? '09:00' } : { kind: 'awake', days: [...p.days], start: p.start, end: p.end };
@@ -40,8 +42,8 @@ const placed = computed(() => {
 });
 const problem = computed(() => (!edited.value && 'problem' in placed.value ? placed.value.problem : ''));
 const window_ = computed<ScheduleWindow | null>(() => {
-  const w = windowBody({ ...draft.value, kind: kind.value, wake: wake.value });
-  return problem.value || windowProblems(w).length ? null : w;
+  const w: ScheduleWindow = { ...draft.value, kind: kind.value, wake: wake.value };
+  return problem.value || Object.keys(editProblems(w)).length ? null : windowBody(w);
 });
 
 const edit = (w: ScheduleWindow) => { draft.value = w; edited.value = true; };
@@ -52,6 +54,7 @@ watch(() => props.modelValue, (open) => {
   kind.value = props.selection?.month ? 'nap' : 'awake';
   wake.value = 'never';
   edited.value = false;
+  opening.value += 1;
   fill();
 }, { immediate: true });
 watch(key, () => { if (!edited.value) fill(); });
@@ -103,7 +106,7 @@ function save() {
           </v-btn-toggle>
           <v-select v-if="kind === 'nap'" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
           <v-alert v-if="problem" data-test="nw-problem" type="warning" variant="tonal" density="compact" class="mb-3" :text="problem" />
-          <WindowRecurrence :model-value="draft" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" test="nw" class="mb-3" @update:model-value="edit" />
+          <WindowRecurrence :key="opening" :model-value="draft" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" test="nw" class="mb-3" @update:model-value="edit" />
           <div data-test="nw-summary" class="mb-3">
             <div><span class="text-medium-emphasis">Time zone</span> <strong data-test="nw-zone">{{ zone }}</strong><span v-if="chosen && !chosen.schedule?.timeZone" class="text-medium-emphasis"> (a first schedule: your browser's zone)</span></div>
           </div>

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PALETTE, colorFor, contrast, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar } from '../src/calendars';
+import { CALENDAR_EVENTS_MAX, PALETTE, calendarEvents, cappedText, colorFor, contrast, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar } from '../src/calendars';
+import type { Day } from '../src/schedule';
 
 const paris: Calendar = {
   key: 'r/a', name: 'Shop', color: '#112233', state: 'ASLEEP', maintenanceDue: '2026-10-21T10:00:00.000Z',
@@ -114,6 +115,57 @@ describe('eventsFor', () => {
     const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', days: ['sat', 'sun'], start: '00:00', end: '00:00' }] } };
     const from = Date.UTC(2027, 0, 9);
     expect(eventsFor([c], from, from + 2 * 86_400_000, 'UTC', false, from)).toHaveLength(2);
+  });
+  it('gives a bar or a long occurrence its real span in the tooltip, dates included', () => {
+    const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [{ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 3 1 *', minutes: 11520 / 2 } }, { kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * 2 *', minutes: 1440 } }] } };
+    const from = Date.UTC(2027, 0, 1);
+    const [long] = eventsFor([c], from, from + 10 * 86_400_000, 'Europe/Paris', false, from);
+    expect(long!.extendedProps.tip).toContain('Sun 3 Jan 08:00–Thu 7 Jan 08:00 UTC');
+    const feb = Date.UTC(2027, 1, 1);
+    const [bar] = eventsFor([c], feb, feb + 9 * 86_400_000, 'Europe/Paris', false, feb);
+    expect(bar!.start.toISOString()).toBe('2027-02-01T08:00:00.000Z');
+    expect(bar!.extendedProps.tip).toContain('Mon 1 Feb 08:00–Wed 10 Feb 08:00 UTC');
+    // Up to a day it reads as it always did, a 24-hour one on a clock change included.
+    const day: Calendar = { key: 'r/d', name: 'Day', color: '#112233', schedule: { timeZone: 'Europe/Paris', windows: [{ kind: 'nap', days: ['sun'], start: '00:00', end: '00:00' }] } };
+    const autumn = Date.parse('2026-10-25T00:00:00+02:00');
+    expect(eventsFor([day], autumn, autumn + 3_600_000, 'UTC', false, autumn)[0]!.extendedProps.tip).toContain('Sun 00:00–00:00 Europe/Paris');
+  });
+  it('draws at most so many occurrences of a calendar, the first ones, and says how many it has', () => {
+    const dense: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: Array.from({ length: 20 }, () => ({ kind: 'awake' as const, repeat: { pattern: 'cron' as const, cron: '0,10,20,30,40,50 * * * *', minutes: 5 } })) } };
+    const from = Date.UTC(2027, 0, 4);
+    const to = from + 42 * 86_400_000;
+    const { events: drawn, capped } = calendarEvents([dense, paris], from, to, 'UTC', false, from);
+    expect(drawn.filter((e) => e.extendedProps.key === 'r/b')).toHaveLength(CALENDAR_EVENTS_MAX);
+    expect(capped).toHaveLength(1);
+    expect(capped[0]).toMatchObject({ key: 'r/b', name: 'Blog' });
+    expect(cappedText(capped, 'UTC')).toBe(`Blog: only the first ${CALENDAR_EVENTS_MAX.toLocaleString('en-US')} occurrences are drawn here, up to 4 Jan. Too many to draw, and the schedule applies in full.`);
+    const starts = drawn.filter((e) => e.extendedProps.key === 'r/b').map((e) => e.start.getTime());
+    expect(starts).toEqual([...starts].sort((a, b) => a - b));
+    expect(starts[0]).toBe(from);
+    expect(drawn.some((e) => e.extendedProps.key === 'r/a'), 'another calendar keeps its own').toBe(true);
+  });
+  it('reads no further than it draws: 20 such calendars stay quick', () => {
+    const dense = (i: number): Calendar => ({ key: `r/${i}`, name: `w${i}`, color: '#112233', schedule: { timeZone: 'UTC', windows: Array.from({ length: 20 }, () => ({ kind: 'awake' as const, repeat: { pattern: 'cron' as const, cron: '0,10,20,30,40,50 * * * *', minutes: 5 } })) } });
+    const from = Date.UTC(2027, 0, 4);
+    const begin = performance.now();
+    const { events: drawn, capped } = calendarEvents(Array.from({ length: 20 }, (_, i) => dense(i)), from, from + 42 * 86_400_000, 'UTC', false, from);
+    expect(performance.now() - begin).toBeLessThan(1000);
+    expect(drawn).toHaveLength(20 * CALENDAR_EVENTS_MAX);
+    expect(capped).toHaveLength(20);
+  });
+  it('an hourly cron window on a month view is not cut, nor a bar that merges down below the cap', () => {
+    const c = (cron: string): Calendar => ({ key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: [{ kind: 'awake', repeat: { pattern: 'cron', cron, minutes: 5 } }] } });
+    const from = Date.UTC(2027, 0, 4);
+    const to = from + 42 * 86_400_000;
+    expect(calendarEvents([c('0 * * * *')], from, to, 'UTC', false, from).capped).toEqual([]);
+    expect(calendarEvents([c('*/5 * * * *')], from, to, 'UTC', false, from).events).toHaveLength(1);
+  });
+  it('a plain schedule at its largest is never cut: 20 windows on every day of a month view', () => {
+    const full: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', schedule: { timeZone: 'UTC', windows: Array.from({ length: 20 }, () => ({ kind: 'awake' as const, days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as Day[], start: '08:00', end: '09:00' })) } };
+    const from = Date.UTC(2027, 0, 4);
+    const { events: drawn, capped } = calendarEvents([full], from, from + 42 * 86_400_000, 'UTC', false, from);
+    expect(drawn).toHaveLength(840);
+    expect(capped).toEqual([]);
   });
   it('draws nothing for a calendar without a schedule', () => {
     expect(eventsFor([{ key: 'r/b', name: 'B', color: '#000', schedule: null }], day, day + 86_400_000)).toEqual([]);

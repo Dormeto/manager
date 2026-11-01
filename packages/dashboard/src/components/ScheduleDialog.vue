@@ -3,13 +3,17 @@
 // default), exceptions and the maximum nap. The router's refusals are shown as it words them.
 import { computed, ref, watch } from 'vue';
 import { mdiCalendarClock, mdiDeleteOutline } from '@mdi/js';
-import { windowProblems } from '../occurrences';
-import { browserZone, formProblem, newWindow, recurrenceError, scheduleBody, windowBody, type Schedule, type ScheduleWindow } from '../schedule';
+import { editProblems } from '../occurrences';
+import { browserZone, formProblem, newWindow, recurrenceError, scheduleBody, type Schedule, type ScheduleWindow } from '../schedule';
 import WindowRecurrence from './WindowRecurrence.vue';
 
 const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; error?: string; saving?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule]; clear: [] }>();
 const windows = ref<ScheduleWindow[]>([]);
+// A stable key for each row, beside its window: a window is replaced as it is edited, and a row keeps its helper's memory when
+// another one is removed.
+const keys = ref<number[]>([]);
+let lastKey = 0;
 const timeZone = ref('');
 const exceptions = ref<string[]>([]);
 // What is typed in the exceptions field and not yet committed with Enter: kept on blur when it is a date.
@@ -22,6 +26,7 @@ watch(() => props.modelValue, (open) => {
   if (!open) return;
   const s = props.schedule;
   windows.value = (s?.windows ?? []).map((w) => JSON.parse(JSON.stringify(w)) as ScheduleWindow);
+  keys.value = windows.value.map(() => ++lastKey);
   timeZone.value = s?.timeZone || browserZone();
   exceptions.value = [...(s?.exceptions ?? [])];
   maxNap.value = s?.maxNapDays ? String(s.maxNapDays) : '';
@@ -30,8 +35,9 @@ watch(() => props.modelValue, (open) => {
 const form = computed<Schedule>(() => ({ timeZone: timeZone.value, windows: windows.value, exceptions: exceptions.value }));
 const problem = computed(() => formProblem(form.value, maxNap.value));
 // A window's own problems are shown under its fields, and keep Save off.
-const windowsInvalid = computed(() => windows.value.some((w) => windowProblems(windowBody(w)).length));
-const add = (kind: 'awake' | 'nap') => windows.value.push(newWindow(kind));
+const windowsInvalid = computed(() => windows.value.some((w) => Object.keys(editProblems(w)).length));
+const add = (kind: 'awake' | 'nap') => { windows.value.push(newWindow(kind)); keys.value.push(++lastKey); };
+const remove = (i: number) => { windows.value.splice(i, 1); keys.value.splice(i, 1); };
 const setKind = (w: ScheduleWindow, kind: 'awake' | 'nap') => { w.kind = kind; if (kind === 'nap') w.wake ??= 'never'; };
 // With no window and no maximum nap left, saving would be refused: what the user means is to clear the schedule.
 const clearing = computed(() => Boolean(props.schedule) && !windows.value.length && !maxNap.value.trim());
@@ -53,17 +59,17 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
       <v-card-text>
         <p class="mb-4 text-medium-emphasis">Windows in local time, weekly or on another recurrence. An awake window keeps the workload awake; a nap window keeps it asleep, and requests wake it only with the header if you allow it. Windows of different kinds may not overlap.</p>
         <v-combobox v-model="timeZone" :items="zones" label="Time zone" density="compact" data-test="time-zone" />
-        <div v-for="(w, i) in windows" :key="i" data-test="window" class="dm-window">
+        <div v-for="(w, i) in windows" :key="keys[i]" data-test="window" class="dm-window">
           <div class="d-flex flex-wrap align-center ga-2">
             <v-btn-toggle :model-value="w.kind" mandatory density="compact" variant="outlined" divided @update:model-value="setKind(w, $event)">
               <v-btn value="awake" size="small">Awake</v-btn>
               <v-btn value="nap" size="small">Nap</v-btn>
             </v-btn-toggle>
             <v-spacer />
-            <v-btn data-test="remove-window" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Remove window ${i + 1}`" @click="windows.splice(i, 1)" />
+            <v-btn data-test="remove-window" :icon="mdiDeleteOutline" variant="text" size="small" :aria-label="`Remove window ${i + 1}`" @click="remove(i)" />
           </div>
           <WindowRecurrence v-model="windows[i]!" :time-zone="timeZone" :exceptions="exceptions">
-            <v-select v-if="w.kind === 'nap'" v-model="w.wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" hide-details class="dm-wake" />
+            <v-select v-if="w.kind === 'nap'" :model-value="w.wake ?? 'never'" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" hide-details class="dm-wake" @update:model-value="w.wake = $event" />
           </WindowRecurrence>
         </div>
         <div class="d-flex ga-2 my-3">

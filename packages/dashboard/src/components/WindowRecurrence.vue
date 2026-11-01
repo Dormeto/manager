@@ -3,11 +3,11 @@
 // pattern needs, the times (a cron's duration), the range of dates, the window said back in a sentence and its next 5
 // occurrences in the schedule's zone, or why it cannot be saved under the field concerned. The window is the dialog's: a
 // change comes back as a new one, and what is not changed stays as it was stored.
-import { computed, watch } from 'vue';
+import { computed } from 'vue';
 import { mdiAlertOutline } from '@mdi/js';
-import { cronShortestGap, fieldProblems, localDate, nextOccurrences } from '../occurrences';
+import { cronShortestGap, editProblems, localDate, nextOccurrences } from '../occurrences';
 import {
-  DAYS, TIMES, browserZone, canonicalZone, dayLabel, occurrenceText, recurrenceText, repeatChoice, repeatText, windowBody, withChoice, withInterval,
+  DAYS, TIMES, browserZone, canonicalZone, dayLabel, newMemory, occurrenceText, recurrenceText, repeatChoice, repeatText, windowBody, withChoice, withFrom, withInterval,
   type Day, type Repeat, type RepeatChoice, type ScheduleWindow,
 } from '../schedule';
 
@@ -37,17 +37,11 @@ const setRepeat = (fields: Record<string, unknown>) => update({ ...w.value, repe
 const typed = (value: unknown): number => (value === '' || value === null || value === undefined ? NaN : Number(value));
 const shown = (value: number | undefined): number | string => (value === undefined || Number.isNaN(value) ? '' : value);
 
-// What a cron has no place for, kept for the way back: this row's own, so a slip on the select loses nothing.
-const memory: { days: Day[]; start: string; end: string } = { days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:00', end: '19:00' };
-watch(w, (now) => {
-  const days = now.repeat?.pattern === 'weekly' ? now.repeat.days : now.days;
-  if (days?.length) memory.days = days;
-  if (now.start) memory.start = now.start;
-  if (now.end) memory.end = now.end;
-}, { immediate: true });
+// This row's own, kept as long as the row is (a dialog gives each a stable key).
+const memory = newMemory();
 
 const body = computed(() => windowBody(w.value));
-const problems = computed(() => fieldProblems(body.value));
+const problems = computed(() => editProblems(w.value));
 const valid = computed(() => !Object.keys(problems.value).length);
 const days = computed(() => (w.value.repeat ? repeat.value?.days : w.value.days) ?? []);
 const setDays = (chosen: Day[]) => {
@@ -59,8 +53,13 @@ const daysProblem = computed(() => (choice.value === 'weekly' && (problems.value
 const monthly = computed(() => (repeat.value?.nth === undefined || repeat.value?.nth === null ? 'day' : 'nth'));
 const setMonthly = (mode: 'day' | 'nth') => {
   const { pattern, interval } = w.value.repeat as Repeat & { interval?: number };
+  if (mode === 'day' && choice.value) memory.filledDay[choice.value] = true;
   const fields = mode === 'day' ? { day: Number((w.value.from ?? today()).slice(8, 10)) } : { nth: 1, weekday: DAYS[(new Date(`${w.value.from ?? today()}T00:00:00Z`).getUTCDay() + 6) % 7] };
   update({ ...w.value, repeat: { pattern, ...(interval === undefined ? {} : { interval }), ...fields } as Repeat });
+};
+const setDay = (value: unknown) => {
+  if (choice.value) memory.filledDay[choice.value] = false;
+  setRepeat({ day: typed(value) });
 };
 const yearMonth = computed(() => MONTH_NAMES[Number(w.value.from?.slice(5, 7)) - 1] ?? '');
 
@@ -73,18 +72,17 @@ const frequent = computed(() => {
 
 const unit = computed(() => `${UNITS[choice.value!]}${repeat.value?.interval === undefined || repeat.value.interval === 1 ? '' : 's'}`);
 const needsFrom = computed(() => (repeat.value?.interval ?? 1) > 1);
-const setDate = (field: 'from' | 'until', value: string | null) => {
-  const { [field]: _, ...rest } = w.value;
-  update(value ? { ...rest, [field]: value } : rest);
-};
+// An end date kept blank stays "On a date": a problem until there is one, not an end date silently gone.
+const ended = computed(() => w.value.until !== undefined && w.value.until !== null);
 const setEnd = (kind: string) => {
-  if (kind === 'none') return setDate('until', null);
+  const { until: _, ...rest } = w.value;
+  if (kind === 'none') return update(rest);
   // A month after the start, or from today: a date to correct, valid meanwhile.
   const base = Date.parse(`${w.value.from ?? today()}T00:00:00Z`);
-  return setDate('until', new Date(base + 30 * 86_400_000).toISOString().slice(0, 10));
+  return update({ ...rest, until: new Date(base + 30 * 86_400_000).toISOString().slice(0, 10) });
 };
 
-const sentence = computed(() => (daysProblem.value ? '' : recurrenceText(body.value)));
+const sentence = computed(() => (daysProblem.value || w.value.until === '' ? '' : recurrenceText(body.value)));
 const head = computed(() => repeatText(body.value));
 const tail = computed(() => sentence.value.slice(head.value.length));
 const next = computed(() => (valid.value ? nextOccurrences({ timeZone: zone.value, windows: [body.value], exceptions: props.exceptions }, Date.now(), 5) : []));
@@ -95,11 +93,11 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
 
 <template>
   <div class="dm-recurrence">
-    <div class="d-flex flex-wrap ga-3 mt-3">
+    <div class="d-flex flex-wrap align-start ga-3 mt-3">
       <v-select :data-test="`${test}-pattern`" :model-value="choice" :items="CHOICES" label="Repeats" density="compact" hide-details class="dm-repeats" @update:model-value="update(withChoice(w, $event, today(), memory))" />
       <v-text-field
         v-if="choice && UNITS[choice]" :data-test="`${test}-interval`" :model-value="shown(repeat?.interval ?? 1)" label="Every" type="number" min="1" max="99" :suffix="unit" density="compact" class="dm-interval"
-        :error-messages="problems['repeat.interval'] ?? ''" :hide-details="!problems['repeat.interval']" @update:model-value="update(withInterval(w, typed($event), today()))"
+        :error-messages="problems['repeat.interval'] ?? ''" :hide-details="!problems['repeat.interval']" @update:model-value="update(withInterval(w, typed($event), today(), memory))"
       />
     </div>
 
@@ -116,7 +114,7 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
           <v-radio value="day" label="On day" class="dm-on__radio" />
           <v-text-field
             :data-test="`${test}-month-day`" :model-value="shown(repeat?.day)" :disabled="monthly !== 'day'" aria-label="Day of the month" type="number" min="1" max="31" density="compact" class="dm-interval"
-            :error-messages="problems['repeat.day'] ?? ''" :hide-details="!problems['repeat.day']" @update:model-value="setRepeat({ day: typed($event) })"
+            :error-messages="problems['repeat.day'] ?? ''" :hide-details="!problems['repeat.day']" @update:model-value="setDay($event)"
           />
         </div>
         <div class="dm-on mt-2">
@@ -140,7 +138,7 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
       </v-alert>
     </template>
 
-    <div class="d-flex flex-wrap ga-3 mt-3">
+    <div class="d-flex flex-wrap align-start ga-3 mt-3">
       <template v-if="choice === 'cron'">
         <v-text-field
           :data-test="`${test}-hours`" :model-value="hours" label="Lasts" suffix="h" type="number" min="0" max="168" density="compact" class="dm-interval" :error-messages="problems['repeat.minutes'] ?? ''" :hide-details="!problems['repeat.minutes']"
@@ -155,15 +153,15 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
       <slot />
     </div>
 
-    <div class="d-flex flex-wrap ga-3 mt-4">
+    <div class="d-flex flex-wrap align-start ga-3 mt-4">
       <v-text-field
         :data-test="`${test}-from`" :model-value="w.from ?? ''" :label="needsFrom ? 'Start date' : 'Start date (optional)'" type="date" density="compact" class="dm-date"
-        :error-messages="problems.from ?? ''" :hide-details="!problems.from" @update:model-value="setDate('from', $event)"
+        :error-messages="problems.from ?? ''" :hide-details="!problems.from" @update:model-value="update(withFrom(w, $event ?? '', memory))"
       />
-      <v-select :data-test="`${test}-end-kind`" :model-value="w.until ? 'date' : 'none'" :items="ENDS" label="End" density="compact" hide-details class="dm-date" @update:model-value="setEnd($event)" />
+      <v-select :data-test="`${test}-end-kind`" :model-value="ended ? 'date' : 'none'" :items="ENDS" label="End" density="compact" hide-details class="dm-date" @update:model-value="setEnd($event)" />
       <v-text-field
-        v-if="w.until" :data-test="`${test}-until`" :model-value="w.until" label="End date" type="date" density="compact" class="dm-date"
-        :error-messages="problems.until ?? ''" :hide-details="!problems.until" @update:model-value="setDate('until', $event)"
+        v-if="ended" :data-test="`${test}-until`" :model-value="w.until" label="End date" type="date" density="compact" class="dm-date"
+        :error-messages="problems.until ?? ''" :hide-details="!problems.until" @update:model-value="update({ ...w, until: $event ?? '' })"
       />
     </div>
 
@@ -171,7 +169,7 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
     <div v-if="sentence" :data-test="`${test}-sentence`" class="mt-3 text-body-medium"><strong :data-test="`${test}-repeats`">{{ head.charAt(0).toUpperCase() + head.slice(1) }}</strong>{{ tail }}</div>
     <div v-if="valid" :data-test="`${test}-next`" class="mt-2">
       <div class="dm-subhead mb-1">Next occurrences</div>
-      <ul v-if="next.length" class="dm-next text-body-small"><li v-for="o in next" :key="o.start">{{ occurrenceText(o, zone) }}</li></ul>
+      <ul v-if="next.length" class="dm-next text-body-small"><li v-for="(o, i) in next" :key="i">{{ occurrenceText(o, zone) }}</li></ul>
       <div v-else class="text-body-small text-medium-emphasis">No occurrence in the next 10 years.</div>
     </div>
   </div>

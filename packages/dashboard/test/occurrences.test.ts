@@ -1,7 +1,7 @@
 // The Schedules calendar's arithmetic: a schedule's occurrences at literal instants (overnight and 24-hour windows,
 // clock changes, exceptions, another zone than the browser's), and a calendar selection as a window in a zone.
 import { describe, expect, it } from 'vitest';
-import { allDayWindow, cronShortestGap, fieldProblems, localDate, nextEvents, nextOccurrences, occurrencesIn, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
+import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, nextOccurrences, occurrencesIn, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
 import { browserZone, type Schedule, type ScheduleWindow } from '../src/schedule';
 
 const at = (text: string): number => Date.parse(text);
@@ -245,7 +245,8 @@ describe('recurring windows', () => {
   it('a cron expression: its grammar, either day field, and each start its own occurrence', () => {
     expect(dates(utc(cron('0,30 8 * * *')), 3)).toEqual(['2027-01-01 08:00', '2027-01-01 08:30', '2027-01-02 08:00']);
     expect(dates(utc(cron('0 8 15 * MON')), 3)).toEqual(at8('2027-01-04', '2027-01-11', '2027-01-15'));
-    expect(dates(utc(cron('0 8 */10 * MON')), 3)).toEqual(at8('2027-01-01', '2027-01-04', '2027-01-11'));
+    expect(dates(utc(cron('0 8 */10 * *')), 3)).toEqual(at8('2027-01-01', '2027-01-11', '2027-01-21'));
+    expect(dates(utc(cron('0 8 *,5 * *')), 2)).toEqual(at8('2027-01-01', '2027-01-02'));
     expect(dates(utc(cron('0 8 * * FRI-SUN')), 3)).toEqual(at8('2027-01-01', '2027-01-02', '2027-01-03'));
     expect(dates(utc(cron('0 8 * * 0')), 1)).toEqual(at8('2027-01-03'));
     expect(dates(utc(cron('0 8 * * 7')), 1)).toEqual(at8('2027-01-03'));
@@ -314,6 +315,21 @@ describe('recurring windows', () => {
   });
 });
 
+describe('what a form holds beyond a window', () => {
+  const window: ScheduleWindow = { kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' };
+
+  it('an end date chosen and left blank is a problem, though the body would drop it', () => {
+    expect(editProblems(window)).toEqual({});
+    expect(editProblems({ ...window, until: '' })).toEqual({ until: 'choose a date, or No end date' });
+    expect(editProblems({ ...window, until: '2027-01-01' })).toEqual({});
+    expect(editProblems({ ...window, from: '2027-01-02', until: '2027-01-01' })).toEqual({ until: 'not before from' });
+  });
+
+  it('a wake left on an awake window is the body\'s to drop', () => {
+    expect(editProblems({ ...window, wake: 'never' })).toEqual({});
+  });
+});
+
 describe('a window\'s problems, in the router\'s words', () => {
   const problems = (w: unknown) => windowProblems(w as ScheduleWindow, 'windows[1]');
   const cron = (expression: string) => ({ kind: 'awake', repeat: { pattern: 'cron', cron: expression, minutes: 60 } });
@@ -338,6 +354,14 @@ describe('a window\'s problems, in the router\'s words', () => {
     expect(problems({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00', from: '2027-01-05', until: '2027-01-04' })).toEqual(['windows[1].until: not before from']);
     expect(problems({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 7 } })).toEqual(['windows[1].repeat.minutes: a multiple of 5 from 5 to 10080']);
     expect(problems({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily', interval: NaN } })).toEqual(['windows[1].repeat.interval: a whole number from 1 to 99']);
+  });
+
+  it('refuses a day field starting with * beside the other one, and more than a line', () => {
+    const STAR_DAY = 'windows[1].repeat.cron: a day field starting with * goes alone: cron versions read */2 with the other day field differently, so give a list or a range';
+    const ONE_LINE = 'windows[1].repeat.cron: one line, without control characters';
+    for (const expression of ['0 8 */2 * 1', '0 8 15 * */2', '0 8 *,5 * MON', '0 8 */2 * */3']) expect(problems(cron(expression)), expression).toEqual([STAR_DAY]);
+    for (const expression of ['0 8 * * 1\n', '0\r8 * * 1', '0 8\n* * 1', '0 8 * * \x7f1', '0 8 \0* * 1']) expect(problems(cron(expression)), expression).toEqual([ONE_LINE]);
+    for (const expression of ['0 8 */2 * *', '0 8 * * */2', '0 8 */2 * ?', '0\t8 * * 1', '0 8 1-31 * 1']) expect(problems(cron(expression)), expression).toEqual([]);
   });
 
   it('reads them by field for a form', () => {

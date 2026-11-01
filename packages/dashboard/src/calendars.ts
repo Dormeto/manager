@@ -1,7 +1,7 @@
 // The Schedules calendar's data: the fixed palette, the enabled calendars kept in the browser (per user), the support of
 // routers, and the events drawn from a workload's schedule. Pure apart from the storage helpers.
 import { browserZone, recurrenceText, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
-import { occurrencesIn, type Occurrence } from './occurrences';
+import { occurrencesByDay, type Occurrence } from './occurrences';
 
 export const MAX_CALENDARS = 20;
 export const MIN_ROUTER = '0.31.0';
@@ -96,6 +96,7 @@ export interface CalendarEvent {
 
 // One formatter a zone: a frequent cron window has thousands of occurrences on a month.
 const clocks = new Map<string, Intl.DateTimeFormat>();
+const dates = new Map<string, Intl.DateTimeFormat>();
 const clock = (t: number, timeZone: string, day = true) => {
   const key = `${timeZone} ${day}`;
   let f = clocks.get(key);
@@ -103,42 +104,75 @@ const clock = (t: number, timeZone: string, day = true) => {
   return f.format(new Date(t)).replace(',', '');
 };
 
+// An occurrence's times in a zone, "Wed 20:00–07:00", and the dates too when it runs past a day: "Sun 3 Jan 08:00–Mon 11 Jan 08:00".
+const FULL_DAY = 25 * 3_600_000;
+function spanText(o: Occurrence, timeZone: string): string {
+  if (o.end - o.start <= FULL_DAY) return `${clock(o.start, timeZone)}–${clock(o.end, timeZone, false)}`;
+  let f = dates.get(timeZone);
+  if (!f) dates.set(timeZone, f = new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }));
+  const full = (t: number) => f!.format(new Date(t)).replace(/,/g, '');
+  return `${full(o.start)}–${full(o.end)}`;
+}
+
 // A window on weekly days and nothing else reads on the calendar as it always did; any other says its recurrence.
 const isPlain = (w: ScheduleWindow | undefined): boolean => !w || !(w.repeat || w.from || w.until);
 
-// Occurrences of a cron window that touch or overlap are one bar: every 5 minutes for 5 minutes draws the hours it holds,
-// not a tile for each start. Others stay one a day, as they always were.
-function drawn(occurrences: Occurrence[], windows: ScheduleWindow[]): Occurrence[] {
+// What the calendar draws of one workload in a view. In a month view it puts every event in the page, hidden or not, about 0.1 s
+// for each 1,000 (the demo in Edge: 1,008 in 0.13 s, 5,040 in 0.5 s, 20,160 in 1.9 to 2.3 s, 30,240 in 2.6 to 4.4 s, 120,960 in
+// 10 to 30 s). 1,200 leaves room for the largest plain schedule (20 windows on each of a month view's 42 days: 840) and an hourly
+// cron window (1,008), and 20 calendars at the most stay near 2 s.
+export const CALENDAR_EVENTS_MAX = 1200;
+
+// The bars of a schedule in [from, to), the first CALENDAR_EVENTS_MAX, and whether there are more. Occurrences of a cron window
+// that touch or overlap are one bar: every 5 minutes for 5 minutes draws the hours it holds, not a tile for each start. Others
+// stay one a day, as they always were. It reads no further than it draws.
+function barsOf(s: Schedule, from: number, to: number): { bars: Occurrence[]; more: boolean } {
+  const windows = s.windows ?? [];
   const bars: Occurrence[] = [];
   const last = new Map<number, Occurrence>();
-  for (const o of occurrences) {
-    const bar = windows[o.window]?.repeat?.pattern === 'cron' ? last.get(o.window) : undefined;
-    if (bar && o.start <= bar.end) {
-      bar.end = Math.max(bar.end, o.end);
-      continue;
+  for (const day of occurrencesByDay(s, from, to)) {
+    for (const o of day) {
+      const bar = windows[o.window]?.repeat?.pattern === 'cron' ? last.get(o.window) : undefined;
+      if (bar && o.start <= bar.end) {
+        bar.end = Math.max(bar.end, o.end);
+        continue;
+      }
+      const copy = { ...o };
+      last.set(o.window, copy);
+      bars.push(copy);
     }
-    const copy = { ...o };
-    last.set(o.window, copy);
-    bars.push(copy);
+    if (bars.length > CALENDAR_EVENTS_MAX) return { bars: bars.slice(0, CALENDAR_EVENTS_MAX), more: true };
   }
-  return bars;
+  return { bars, more: false };
+}
+
+export interface Capped { key: string; name: string; until: Date }
+
+// What the calendars leave out of a view, for a note: "Blog: only the first 1,200 occurrences are drawn, up to 8 Jan".
+export function cappedText(capped: Capped[], here: string = browserZone()): string {
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone: here, day: 'numeric', month: 'short' });
+  const names = capped.map((c) => `${c.name}: only the first ${CALENDAR_EVENTS_MAX.toLocaleString('en-US')} occurrences are drawn here, up to ${day.format(c.until)}`);
+  return `${names.join('; ')}. Too many to draw, and the schedule applies in full.`;
 }
 
 // The events of the calendars in [from, to): a window's occurrence is "<workload> · Awake" filled, or "· Nap (wake: header)"
 // outlined (its text readable on the theme's surface); a maximum nap's maintenance due time of an asleep workload is a short marker. The tooltip gives the times in the
 // schedule's own zone when it is not the browser's, and a recurrence in its words. An occurrence that ended before `now` carries `dm-past` (drawn dimmed).
-export function eventsFor(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false, now: number = Date.now()): CalendarEvent[] {
+export function calendarEvents(calendars: Calendar[], from: number, to: number, here: string = browserZone(), dark = false, now: number = Date.now()): { events: CalendarEvent[]; capped: Capped[] } {
   const surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
   const out: CalendarEvent[] = [];
+  const capped: Capped[] = [];
   for (const c of calendars) {
     const s = c.schedule;
     if (!s) continue;
     const windows = s.windows ?? [];
-    for (const o of drawn(occurrencesIn(s, from, to), windows)) {
+    const { bars, more } = barsOf(s, from, to);
+    if (more) capped.push({ key: c.key, name: c.name, until: new Date(bars.at(-1)!.start) });
+    for (const o of bars) {
       const nap = o.kind === 'nap';
       const label = nap ? `Nap${o.wake === 'header' ? ' (wake: header)' : ''}` : 'Awake';
       const title = `${c.name} · ${label}`;
-      const there = s.timeZone && s.timeZone !== here ? ` — ${clock(o.start, s.timeZone)}–${clock(o.end, s.timeZone, false)} ${s.timeZone}` : '';
+      const there = s.timeZone && s.timeZone !== here ? ` — ${spanText(o, s.timeZone)} ${s.timeZone}` : '';
       const words = isPlain(windows[o.window]) ? '' : ` — ${recurrenceText(windows[o.window]!)}`;
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
@@ -157,8 +191,10 @@ export function eventsFor(calendars: Calendar[], from: number, to: number, here:
       });
     }
   }
-  return out;
+  return { events: out, capped };
 }
+
+export const eventsFor = (...args: Parameters<typeof calendarEvents>): CalendarEvent[] => calendarEvents(...args).events;
 
 // A workload as the calendars panel lists it.
 export interface PanelRow { key: string; id: string; router: string; name: string; scheduled?: boolean; supported: boolean; locked: boolean }

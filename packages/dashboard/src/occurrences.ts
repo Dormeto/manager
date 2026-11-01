@@ -2,7 +2,7 @@
 // dates) expanded into occurrences (instants, epoch ms), a window's refusals and a calendar selection turned into a window.
 // Ported from the router's lambda/src/lib/schedule.mjs (R12 and the schedule recurrence design) with its names, held to it by
 // test/occurrences-parity.test.ts. Pure: local wall times come from Intl only.
-import { DAYS, canonicalZone, type Day, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
+import { DAYS, canonicalZone, windowBody, type Day, type NextEvent, type Schedule, type ScheduleWindow } from './schedule';
 
 export type Occurrence = { kind: 'awake' | 'nap'; window: number; start: number; end: number; wake?: 'never' | 'header' };
 
@@ -161,6 +161,8 @@ interface ParsedCron { starts?: number[]; days?: Set<number>; months?: Set<numbe
 function parseCron(text: unknown): ParsedCron {
   if (typeof text !== 'string') return { problem: CRON_WORDING };
   if (text.length > CRON_LENGTH_MAX) return { problem: `at most ${CRON_LENGTH_MAX} characters` };
+  // eslint-disable-next-line no-control-regex
+  if (/[\0-\x08\x0a-\x1f\x7f]/.test(text)) return { problem: 'one line, without control characters' };
   const fields = text.trim().split(/\s+/);
   if (fields.length !== CRON_FIELDS.length || CRON_FOREIGN.test(text.trim())) return { problem: CRON_WORDING };
   const values: Set<number>[] = [];
@@ -175,6 +177,9 @@ function parseCron(text: unknown): ParsedCron {
   const [minutes, hours, days, months, weekdays] = values as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
   if ([...minutes].some((m) => m % 5 !== 0)) return { problem: 'minutes must be multiples of 5, as schedule times are: * is every minute, */5 every five' };
   const open = (i: number) => fields[i] === '*' || fields[i] === '?';
+  // Crontab's manual and its implementations disagree on whether */2 restricts a day field: refused beside the other one.
+  const starred = (i: number) => fields[i]!.startsWith('*') && !open(i);
+  if ((starred(2) && !open(4)) || (starred(4) && !open(2))) return { problem: 'a day field starting with * goes alone: cron versions read */2 with the other day field differently, so give a list or a range' };
   // A weekday comes in every month, so only a day of the month alone can never match.
   if (open(4) && ![...months].some((m) => [...days].some((d) => d <= MONTH_DAYS[m]!))) return { problem: 'never matches: no such date in that month' };
   return {
@@ -207,8 +212,9 @@ interface PlanWindow {
 interface Plan { timeZone: string; exceptions: Set<string>; windows: PlanWindow[]; midnights: Map<number, number>; lookback: number; horizonDays: number }
 
 // A window ready for arithmetic: plain days are a weekly pattern, and an occurrence is a start minute and a length in wall
-// minutes, from `end` (up to 24 hours) or from a cron's `minutes`. Null for one the router has no occurrence of: a pattern
-// or a cron it cannot read, a time off the 5-minute step, an interval with nothing to count from.
+// minutes, from `end` (up to 24 hours) or from a cron's `minutes`. Null for a pattern or a cron it cannot read, which has no
+// occurrence on the router's side either, and for a time off the 5-minute step or an interval with nothing to count from: the
+// router would still give those occurrences, but both refuse such a window at validation, so neither is ever stored.
 function prepareWindow(w: ScheduleWindow, window: number): PlanWindow | null {
   const repeat = (w.repeat ?? { pattern: 'weekly', days: w.days }) as { pattern: string; interval?: number; days?: Day[]; day?: number; nth?: number; weekday?: Day; cron?: string; minutes?: number };
   const cron = repeat.pattern === 'cron' ? parseCron(repeat.cron) : null;
@@ -228,8 +234,8 @@ function prepareWindow(w: ScheduleWindow, window: number): PlanWindow | null {
 // How many days before a day an occurrence of this length can have started and still run on that day.
 const lookbackOf = (w: PlanWindow): number => Math.max(1, Math.ceil(w.length / 1440));
 
-// A schedule's windows ready for arithmetic, or null when it has none (or a zone Intl does not know). A window the
-// router has no occurrence of is left out; the others keep their index.
+// A schedule's windows ready for arithmetic, or null when it has none (or a zone Intl does not know). A window prepareWindow
+// gives nothing for is left out; the others keep their index.
 function prepare(s: Schedule): Plan | null {
   if (!s?.timeZone || !s.windows?.length || !canonicalZone(s.timeZone)) return null;
   const windows = s.windows.flatMap((w, window) => prepareWindow(w, window) ?? []);
@@ -282,18 +288,23 @@ function occurrencesOn(plan: Plan, day: number): Occurrence[] {
 
 const byStart = (a: Occurrence, b: Occurrence): number => a.start - b.start;
 
-// Every occurrence that overlaps [from, to), exceptions applied, in order of start (then window): each window's own
-// occurrences, as the router computes them, not the union its occurrenceAt reports.
-export function occurrencesIn(s: Schedule, from: number, to: number): Occurrence[] {
+// The occurrences that overlap [from, to), exceptions applied, a local day at a time in order of start (then window): each
+// window's own occurrences, as the router computes them, not the union its occurrenceAt reports. A reader who has enough stops
+// there, and the days after it cost nothing.
+export function* occurrencesByDay(s: Schedule, from: number, to: number): Generator<Occurrence[]> {
   const plan = prepare(s);
-  if (!plan || !(from < to)) return [];
-  const occurrences: Occurrence[] = [];
+  if (!plan || !(from < to)) return;
   // An occurrence ends within its look back of the local day it starts on, so those of the days before the range's first
   // run into it; one more day each side covers a clock going back over midnight.
   for (let day = localDay(from, plan.timeZone) - plan.lookback - 1; day <= localDay(to, plan.timeZone) + 1; day++) {
-    occurrences.push(...occurrencesOn(plan, day).filter((o) => o.start < to && o.end > from));
+    const found = occurrencesOn(plan, day).filter((o) => o.start < to && o.end > from);
+    if (found.length) yield found.sort((a, b) => a.start - b.start || a.window - b.window);
   }
-  return occurrences.sort((a, b) => a.start - b.start || a.window - b.window);
+}
+
+// Every occurrence that overlaps [from, to), in order of start (then window).
+export function occurrencesIn(s: Schedule, from: number, to: number): Occurrence[] {
+  return [...occurrencesByDay(s, from, to)].flat().sort((a, b) => a.start - b.start || a.window - b.window);
 }
 
 // The next `count` occurrences that start after t, within 10 years of the later of t and the windows' from dates, exceptions
@@ -438,6 +449,13 @@ export function fieldProblems(w: ScheduleWindow): Record<string, string> {
     const [, name, why] = /^w\.?([^:]*): (.*)$/.exec(problem)!;
     found[name!] ??= why!;
   }
+  return found;
+}
+
+// A window's problems in a form: the body's, and an end date chosen and left blank, which the body would drop as no end date.
+export function editProblems(w: ScheduleWindow): Record<string, string> {
+  const found = fieldProblems(windowBody(w));
+  if (w.until === '') found.until ??= 'choose a date, or No end date';
   return found;
 }
 

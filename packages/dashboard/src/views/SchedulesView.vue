@@ -13,7 +13,7 @@ import interactionPlugin from '@fullcalendar/interaction';
 import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventContentArg, EventMountArg } from '@fullcalendar/core';
 import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
 import { api } from '../api';
-import { MAX_CALENDARS, calendarKey, eventsFor, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
+import { MAX_CALENDARS, calendarEvents, calendarKey, cappedText, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
 import { DAYS, browserZone, type Day, type Schedule } from '../schedule';
 import { windowFromSelection } from '../occurrences';
 import type { WorkloadStatus, WorkloadSummary } from '../types';
@@ -168,7 +168,8 @@ const calendars = computed<Calendar[]>(() => enabled.value.flatMap((e) => {
   if (!data) return [];
   return [{ key: e.key, name: nameOf(e.key), color: colorFor(e.color), schedule: data.schedule ?? null, state: data.state, maintenanceDue: data.maintenanceDue ?? null, next: data.next }];
 }));
-const events = computed(() => (range.value ? eventsFor(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark, Date.now()) : []));
+const drawing = computed(() => (range.value ? calendarEvents(calendars.value, range.value.from, range.value.to, undefined, theme.global.current.value.dark, Date.now()) : { events: [], capped: [] }));
+const events = computed(() => drawing.value.events);
 
 const dateText = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 function datesSet(arg: DatesSetArg) {
@@ -331,6 +332,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
   <v-alert v-if="incomplete" data-test="list-incomplete" type="warning" variant="tonal" density="compact" class="mb-4" text="The list of workloads is incomplete: some may be missing from the panel." />
   <v-alert v-if="smAndDown" data-test="touch-hint" type="info" variant="tonal" density="compact" class="mb-4" text="Touch and hold, then drag, to create a window — or use New window." />
   <v-alert v-if="notice" data-test="select-notice" type="warning" variant="tonal" closable class="mb-4" :text="notice" @click:close="notice = ''" />
+  <v-alert v-if="drawing.capped.length" data-test="calendar-capped" type="info" variant="tonal" density="compact" class="mb-4" :text="cappedText(drawing.capped)" />
   <div class="dm-sched">
     <v-card v-if="!smAndDown" class="dm-sched__panel pa-4">
       <CalendarsPanel :rows="panelRows" :enabled="enabledColors" :status="statuses" :message="message" :loading="listing" @toggle="toggle" />

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { h as vh } from 'vue';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
@@ -161,6 +161,8 @@ describe('Schedule dialog: recurrences', () => {
       ['cron(0 8 * * ? *)', 'five fields: minute hour day-of-month month day-of-week'],
       ['0 8 31 2 *', 'never matches'],
       ['0 25 * * *', 'the hour field takes'],
+      ['0 8 */2 * 1', 'a day field starting with * goes alone'],
+      ['0 8 * * 1\n', 'one line, without control characters'],
     ] as const) {
       await set(wrapper, 'w-cron', expression);
       expect(q('w-cron')!.closest('.v-input')!.textContent).toContain(why);
@@ -211,6 +213,109 @@ describe('Schedule dialog: recurrences', () => {
     expect(q('w-interval')!.textContent).not.toContain('months');
     await set(wrapper, 'w-interval', '2');
     expect(q('w-interval')!.textContent).toContain('months');
+  });
+
+  it('restores a pattern after a slip on the select, the stored window included', async () => {
+    const stored: NonNullable<Schedule['windows']>[number] = { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 1 * 1-5', minutes: 630 } };
+    const wrapper = await open(paris(stored));
+    await set(wrapper, 'w-pattern', 'weekly');
+    await set(wrapper, 'w-pattern', 'cron');
+    expect(text('w-sentence')).toBe('Cron 30 8 1 * 1-5, 10 h 30 min');
+    await click('Save');
+    expect(submitted!.windows![0]).toEqual(stored);
+  });
+
+  it('keeps each row\'s memory with its row when one is removed', async () => {
+    const wrapper = await open(paris(
+      { kind: 'nap', days: ['sat'], start: '00:00', end: '00:00', wake: 'never' },
+      { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+    ));
+    // The first row has held Saturday in its memory.
+    await set(wrapper, 'w-pattern', 'daily');
+    (document.querySelector('[data-test="remove-window"]') as HTMLElement).click();
+    await flushPromises();
+    expect(wrapper.findAllComponents({ name: 'WindowRecurrence' })).toHaveLength(1);
+    await set(wrapper, 'w-pattern', 'weekly');
+    expect(text('w-sentence')).toBe('Mon–Fri, 08:00–19:00');
+    await set(wrapper, 'w-pattern', 'cron');
+    expect(text('w-sentence')).toBe('Cron 30 8 * * 1-5, 10 h 30 min');
+  });
+
+  it('adding a row after removing one gives it a memory of its own', async () => {
+    const wrapper = await open(paris({ kind: 'awake', days: ['sat'], start: '10:00', end: '11:00' }));
+    await set(wrapper, 'w-pattern', 'daily');
+    (document.querySelector('[data-test="remove-window"]') as HTMLElement).click();
+    await flushPromises();
+    await click('Add awake window');
+    await set(wrapper, 'w-pattern', 'daily');
+    await set(wrapper, 'w-pattern', 'weekly');
+    expect(text('w-sentence')).toBe('Mon–Fri, 08:00–19:00');
+  });
+
+  it('a Yearly day the helper filled in follows the start date', async () => {
+    const wrapper = await open(paris({ kind: 'nap', days: ['mon'], start: '00:00', end: '00:00', wake: 'never' }));
+    await set(wrapper, 'w-pattern', 'yearly');
+    await set(wrapper, 'w-from', '2099-12-25');
+    expect(text('w-sentence')).toBe('Yearly on 25 Dec, all day (24 hours), from 25 Dec 2099, no end date');
+    expect(document.querySelectorAll('[data-test="w-next"] li')[0]!.textContent).toContain('25 Dec 2099');
+    await set(wrapper, 'w-month-day', '7');
+    await set(wrapper, 'w-from', '2099-11-02');
+    expect(text('w-sentence')).toBe('Yearly on 7 Nov, all day (24 hours), from 2 Nov 2099, no end date');
+  });
+
+  it('an end date cleared stays On a date, says a date is needed, and keeps Save off', async () => {
+    const wrapper = await open(paris({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00', until: '2099-06-30' }));
+    expect(saved()!.disabled).toBe(false);
+    await set(wrapper, 'w-until', '');
+    expect(q('w-until')).not.toBeNull();
+    expect((fields(wrapper).findComponent('[data-test="w-end-kind"]') as unknown as { props(n: string): unknown }).props('modelValue')).toBe('date');
+    expect(q('w-until')!.closest('.v-input')!.textContent).toContain('choose a date, or No end date');
+    expect(saved()!.disabled).toBe(true);
+    expect(q('w-sentence')).toBeNull();
+    expect(q('w-next')).toBeNull();
+    await set(wrapper, 'w-until', '2099-07-01');
+    expect(saved()!.disabled).toBe(false);
+    await set(wrapper, 'w-until', '');
+    await set(wrapper, 'w-end-kind', 'none');
+    expect(q('w-until')).toBeNull();
+    expect(saved()!.disabled).toBe(false);
+    await click('Save');
+    expect(submitted!.windows![0]).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' });
+  });
+
+  it('interval 2 then back to 1 sends a plain window, without the start date it filled in', async () => {
+    const wrapper = await open(paris({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' }));
+    await set(wrapper, 'w-interval', '2');
+    await set(wrapper, 'w-interval', '1');
+    await click('Save');
+    expect(submitted!.windows![0]).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' });
+  });
+
+  it('a blank number reads as none in the sentence', async () => {
+    const wrapper = await open(paris({ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily' } }));
+    await set(wrapper, 'w-interval', '');
+    expect(text('w-sentence')).toBe('Every … days, 08:00–09:00');
+    expect(saved()!.disabled).toBe(true);
+  });
+
+  it('lists starts a spring clock change brings together, without a key twice', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await open(paris({ kind: 'nap', wake: 'never', repeat: { pattern: 'cron', cron: '*/15 2 * * *', minutes: 60 }, from: '2099-03-29', until: '2099-03-29' }));
+    const rows = [...document.querySelectorAll('[data-test="w-next"] li')].map((r) => r.textContent?.trim());
+    expect(rows.length).toBeGreaterThan(1);
+    expect(new Set(rows.map((r) => r!.slice(0, 22))).size).toBe(1);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('Duplicate keys'))).toEqual([]);
+    warn.mockRestore();
+  });
+
+  it('shows a stored nap without a wake as what it means, and saves the one chosen', async () => {
+    const wrapper = await open(paris({ kind: 'nap', days: ['sat'], start: '00:00', end: '00:00' }));
+    const wake = wrapper.findAllComponents({ name: 'VSelect' }).find((c) => c.props('label') === 'Wake')!;
+    expect(wake.props('modelValue')).toBe('never');
+    wake.vm.$emit('update:modelValue', 'header');
+    await flushPromises();
+    await click('Save');
+    expect(submitted!.windows![0]!.wake).toBe('header');
   });
 
   it('says when no occurrence comes', async () => {

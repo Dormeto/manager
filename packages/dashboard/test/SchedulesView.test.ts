@@ -555,7 +555,7 @@ describe('Schedules view: creating a window', () => {
     await field(wrapper, 'nw-start').vm.$emit('update:modelValue', '09:15');
     await field(wrapper, 'nw-end').vm.$emit('update:modelValue', '09:15');
     await flushPromises();
-    expect(text('[data-test="nw-sentence"]')).toContain('all day (24 hours)');
+    expect(text('[data-test="nw-sentence"]')).toContain('09:15–09:15 next day');
     expect(text('[data-test="nw-repeats"]')).toContain('Mon, Tue');
     await field(wrapper, 'nw-workload').vm.$emit('update:modelValue', 'dmt-dev/b');
     await flushPromises();
@@ -673,6 +673,29 @@ describe('Schedules view: creating a window', () => {
     await flushPromises();
     await click('[data-test="nw-save"]');
     expect(JSON.parse(puts()[0]!.body!).windows.at(-1)).toEqual({ kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 60 } });
+  });
+
+  it('keeps Save off on an end date left blank', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await select(wrapper, at('2026-10-19', '12:00'), at('2026-10-19', '13:00'));
+    await field(wrapper, 'nw-end-kind').vm.$emit('update:modelValue', 'date');
+    await flushPromises();
+    expect((body().querySelector('[data-test="nw-save"]') as HTMLButtonElement).disabled).toBe(false);
+    await field(wrapper, 'nw-until').vm.$emit('update:modelValue', '');
+    await flushPromises();
+    expect((body().querySelector('[data-test="nw-save"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(body().querySelector('[data-test="nw-until"]')!.closest('.v-input')!.textContent).toContain('choose a date');
+  });
+
+  it('shows a note when a calendar has more occurrences than it draws', async () => {
+    const dense = Array.from({ length: 20 }, () => ({ kind: 'awake', repeat: { pattern: 'cron', cron: '0,10,20,30,40,50 * * * *', minutes: 5 } }));
+    h.status['/workloads/dmt-dev/a'] = { ...(h.status['/workloads/dmt-dev/a'] as object), schedule: { timeZone: 'Europe/Paris', windows: dense } };
+    const { wrapper } = await open();
+    expect(body().querySelector('[data-test="calendar-capped"]')).toBeNull();
+    await enable(wrapper, 'dmt-dev/a');
+    expect(text('[data-test="calendar-capped"]')).toMatch(/^Shop: only the first [\d,]+ occurrences are drawn here, up to \d+ \w+\./);
+    expect(text('[data-test="calendar-capped"]')).toContain('the schedule applies in full');
   });
 
   it('saves a recurring window already in the schedule as it was, beside the new one', async () => {

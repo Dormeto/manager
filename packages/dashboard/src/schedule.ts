@@ -41,8 +41,8 @@ export function durationText(minutes: number): string {
 
 export function hoursText(w: ScheduleWindow): string {
   if (w.repeat?.pattern === 'cron') return durationText(w.repeat.minutes);
-  if (w.start === w.end) return 'all day (24 hours)';
-  return `${w.start}–${w.end}${w.end! < w.start! ? ' next day' : ''}`;
+  if (w.start === '00:00' && w.end === '00:00') return 'all day (24 hours)';
+  return `${w.start}–${w.end}${w.end! <= w.start! ? ' next day' : ''}`;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -53,11 +53,14 @@ const monthOf = (date: string | undefined): string | undefined => MONTHS[Number(
 // "4 Jan 2027", from a date YYYY-MM-DD.
 export const dateText = (date: string): string => `${Number(date.slice(8, 10))} ${monthOf(date)} ${date.slice(0, 4)}`;
 
+// A number in the words, none until there is one: a field being typed is blank.
+const numberText = (n: number | undefined): string => (Number.isFinite(n) ? String(n) : '…');
+
 // What a window repeats on: "Mon–Fri" as it always read, "Every 2 weeks on Mon, Thu", "Yearly on 25 Dec", "Cron 30 8 * * 1-5".
 export function repeatText(w: ScheduleWindow): string {
   const { repeat } = w;
   if (!repeat) return daysText(w.days ?? []);
-  const every = (unit: string, once: string, interval = (repeat as { interval?: number }).interval ?? 1) => (interval === 1 ? once : `Every ${interval} ${unit}`);
+  const every = (unit: string, once: string, interval = (repeat as { interval?: number }).interval ?? 1) => (interval === 1 ? once : `Every ${numberText(interval)} ${unit}`);
   switch (repeat.pattern) {
     case 'cron': return `Cron ${String(repeat.cron ?? '').trim().replace(/\s+/g, ' ')}`;
     case 'daily': return every('days', 'Every day');
@@ -67,9 +70,9 @@ export function repeatText(w: ScheduleWindow): string {
       return `${every('weeks', 'Weekly')} on ${days}`;
     }
     case 'monthly': {
-      const on = repeat.nth === undefined || repeat.nth === null ? `day ${repeat.day}` : `the ${nthWord(repeat.nth)} ${repeat.weekday ? LABEL[repeat.weekday] : ''}`;
+      const on = repeat.nth === undefined || repeat.nth === null ? `day ${numberText(repeat.day)}` : `the ${nthWord(repeat.nth)} ${repeat.weekday ? LABEL[repeat.weekday] : ''}`;
       const month = repeat.interval === 12 ? monthOf(w.from) : undefined;
-      if (month) return repeat.nth === undefined || repeat.nth === null ? `Yearly on ${repeat.day} ${month}` : `Yearly on ${on} of ${month}`;
+      if (month) return repeat.nth === undefined || repeat.nth === null ? `Yearly on ${numberText(repeat.day)} ${month}` : `Yearly on ${on} of ${month}`;
       return `${every('months', 'Monthly')} on ${on}`;
     }
     default: return `Repeats by ${(repeat as { pattern: string }).pattern}`;
@@ -143,44 +146,92 @@ const lengthOf = (start: string, end: string): number => {
   return b > a ? b - a : b - a + 1440;
 };
 
-// A window moved to another pattern: its kind, wake and range stay, its times where the pattern has them. `today` is the
-// start date a yearly window needs, and its day; `memory` what a cron has lost, for the way back. A cron starts as the
-// window did, on its days, for as long.
-export function withChoice(w: ScheduleWindow, choice: RepeatChoice, today: string, memory: { days: Day[]; start: string; end: string }): ScheduleWindow {
+// What the helper remembers of a row while it is edited: per pattern what the row last held, the stored window included, so
+// that a slip on the select loses nothing; the times and days for a pattern it has not held yet; the start date it filled in
+// itself (it goes when no longer needed, unlike one stored or chosen); and whether it filled in a pattern's day (which then
+// follows the start date, until the user edits it).
+export interface RepeatMemory {
+  days: Day[];
+  start: string;
+  end: string;
+  held: Partial<Record<RepeatChoice, Pick<ScheduleWindow, 'repeat' | 'days'>>>;
+  filledFrom?: string;
+  filledDay: Partial<Record<RepeatChoice, boolean>>;
+}
+export const newMemory = (): RepeatMemory => ({ days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '08:00', end: '19:00', held: {}, filledDay: {} });
+
+// A window's start date settled with what it now repeats on: above 1 it needs one, today by default, and one the helper filled
+// in goes when nothing counts from it. A number being typed (NaN) changes nothing yet.
+function settleFrom(w: ScheduleWindow, today: string, memory: RepeatMemory): ScheduleWindow {
+  const interval = (w.repeat as { interval?: number } | undefined)?.interval ?? 1;
+  if (Number.isNaN(interval)) return w;
+  if (interval > 1 && !w.from) {
+    memory.filledFrom = today;
+    return { ...w, from: today };
+  }
+  if (interval <= 1 && w.from && w.from === memory.filledFrom) {
+    memory.filledFrom = undefined;
+    const { from: _, ...rest } = w;
+    return rest;
+  }
+  return w;
+}
+
+// A window moved to another pattern: its kind, wake and range stay, its times where the pattern has them, and what the row last
+// held for that pattern comes back as it was. For one it has not held: a yearly window needs a start date, by default `today`,
+// and takes its day from it; monthly and yearly keep the day or weekday of each other; a cron starts as the window did, on its
+// days, for as long.
+export function withChoice(w: ScheduleWindow, choice: RepeatChoice, today: string, memory: RepeatMemory): ScheduleWindow {
+  const leaving = repeatChoice(w);
+  if (leaving) memory.held[leaving] = { ...(w.repeat ? { repeat: w.repeat } : {}), ...(w.days ? { days: w.days } : {}) };
+  if (w.start) memory.start = w.start;
+  if (w.end) memory.end = w.end;
   const { repeat, days, start = memory.start, end = memory.end, ...rest } = w;
+  const times = choice === 'cron' ? {} : { start, end };
+  const held = memory.held[choice];
+  if (held) return settleFrom({ ...rest, ...times, ...held }, today, memory);
   const weekly = repeat?.pattern === 'weekly' ? repeat.days : days;
-  const times = { start, end };
-  // Monthly and yearly keep the day or weekday they were on.
+  // Monthly and yearly keep the day or weekday they were on, and whether it was filled in.
   const onDay = repeat?.pattern === 'monthly' ? (repeat.nth ? { nth: repeat.nth, weekday: repeat.weekday } : { day: repeat.day }) : null;
+  const fill = (date: string) => {
+    memory.filledDay[choice] = onDay ? Boolean(leaving && memory.filledDay[leaving]) : true;
+    return onDay ?? { day: Number(date.slice(8, 10)) };
+  };
   switch (choice) {
-    case 'weekly': return { ...rest, days: weekly ?? memory.days, ...times };
-    case 'daily': return { ...rest, ...times, repeat: { pattern: 'daily' } };
-    case 'monthly': return { ...rest, ...times, repeat: { pattern: 'monthly', ...(onDay ?? { day: Number((w.from ?? today).slice(8, 10)) }) } };
-    case 'yearly': {
-      const from = w.from ?? today;
-      return { ...rest, from, ...times, repeat: { pattern: 'monthly', interval: 12, ...(onDay ?? { day: Number(from.slice(8, 10)) }) } };
-    }
+    case 'weekly': return settleFrom({ ...rest, days: weekly ?? memory.days, ...times }, today, memory);
+    case 'daily': return settleFrom({ ...rest, ...times, repeat: { pattern: 'daily' } }, today, memory);
+    case 'monthly': return settleFrom({ ...rest, ...times, repeat: { pattern: 'monthly', ...fill(w.from ?? today) } }, today, memory);
+    case 'yearly': return settleFrom({ ...rest, ...times, repeat: { pattern: 'monthly', interval: 12, ...fill(w.from ?? today) } }, today, memory);
     default: {
       const on = weekly?.length && weekly.length < 7 ? DAYS.filter((d) => weekly.includes(d)).map((d) => DAYS.indexOf(d) + 1).join(',') : '*';
-      return { ...rest, repeat: { pattern: 'cron', cron: `${Number(start.slice(3, 5))} ${Number(start.slice(0, 2))} * * ${on}`, minutes: lengthOf(start, end) } };
+      return settleFrom({ ...rest, repeat: { pattern: 'cron', cron: `${Number(start.slice(3, 5))} ${Number(start.slice(0, 2))} * * ${on}`, minutes: lengthOf(start, end) } }, today, memory);
     }
   }
 }
 
 // A window repeating every `interval` days, weeks or months: above 1 it needs a start date, today by default, and plain
-// weekly days take a repeat for it; back at 1 they are plain days again, which a router of any version reads. NaN is what
-// is being typed: refused, and kept so that the field stays blank.
-export function withInterval(w: ScheduleWindow, interval: number, today: string): ScheduleWindow {
-  const needs = interval > 1 ? { from: w.from || today } : {};
+// weekly days take a repeat for it; back at 1 they are plain days again and the start date the helper filled in goes, so that a
+// router of any version reads it. NaN is what is being typed: refused, and kept so that the field stays blank.
+export function withInterval(w: ScheduleWindow, interval: number, today: string, memory: RepeatMemory): ScheduleWindow {
   if (!w.repeat || w.repeat.pattern === 'weekly') {
     const { repeat, days, ...rest } = w;
     const chosen = repeat?.pattern === 'weekly' ? repeat.days : days ?? [];
-    if (interval === 1) return { ...rest, days: chosen };
-    return { ...rest, ...needs, repeat: { pattern: 'weekly', interval, days: chosen } };
+    return settleFrom(interval === 1 ? { ...rest, days: chosen } : { ...rest, repeat: { pattern: 'weekly', interval, days: chosen } }, today, memory);
   }
   if (w.repeat.pattern === 'cron') return w;
   const { interval: _, ...repeat } = w.repeat as { interval?: number } & Repeat;
-  return { ...w, ...needs, repeat: { ...repeat, ...(interval === 1 ? {} : { interval }) } as Repeat };
+  return settleFrom({ ...w, repeat: { ...repeat, ...(interval === 1 ? {} : { interval }) } as Repeat }, today, memory);
+}
+
+// A start date the user chose (blank when cleared): one the helper had filled in is theirs now, and a day the helper filled in
+// follows it, so that the first occurrence is on that date.
+export function withFrom(w: ScheduleWindow, value: string, memory: RepeatMemory): ScheduleWindow {
+  memory.filledFrom = undefined;
+  const { from: _, ...rest } = w;
+  if (!value) return rest;
+  const choice = repeatChoice(w);
+  const follows = choice && memory.filledDay[choice] && w.repeat?.pattern === 'monthly' && !w.repeat.nth;
+  return { ...rest, from: value, ...(follows ? { repeat: { ...w.repeat, day: Number(value.slice(8, 10)) } as Repeat } : {}) };
 }
 
 const isEmpty = (value: unknown): boolean => value === undefined || value === null || value === '';
