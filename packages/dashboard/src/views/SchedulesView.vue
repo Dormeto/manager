@@ -10,17 +10,20 @@ import FullCalendar from '@fullcalendar/vue3';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { CalendarOptions, DatesSetArg, DateSelectArg, EventClickArg, EventContentArg, EventDropArg, EventMountArg } from '@fullcalendar/core';
+import type { CalendarOptions, DatesSetArg, DateSelectArg, Duration, EventClickArg, EventContentArg, EventDropArg, EventMountArg } from '@fullcalendar/core';
+import type { EventResizeDoneArg } from '@fullcalendar/interaction';
 import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
 import { api } from '../api';
 import { MAX_CALENDARS, calendarEvents, calendarKey, cappedText, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
-import { DAYS, browserZone, joinInForce, movedText, recurrenceError, scheduleBody, windowBody, writableSchedule, type Day, type Schedule } from '../schedule';
-import { dragMinutes, localDate, moveWindow, movesDay, windowFromSelection } from '../occurrences';
+import { DAYS, browserZone, joinInForce, occurrenceText, recurrenceError, scheduleBody, windowBody, writableSchedule, type Day, type Schedule } from '../schedule';
+import { dragMinutes, localDate, windowFromSelection } from '../occurrences';
+import { asksScope, editSchedule, partsOf, type Edge, type Scope } from '../drag';
 import type { WorkloadStatus, WorkloadSummary } from '../types';
 import { useSession } from '../stores/session';
 import CalendarsPanel from '../components/CalendarsPanel.vue';
 import ScheduleDialog from '../components/ScheduleDialog.vue';
 import NewWindowDialog, { type Candidate, type Selection } from '../components/NewWindowDialog.vue';
+import DragScopeDialog, { type ScopeAsk } from '../components/DragScopeDialog.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import type { Notice } from '../components/NoticeAlert.vue';
 
@@ -306,48 +309,69 @@ async function saveNew(arg: { key: string; schedule: Schedule }) {
 }
 watch(newOpen, (open) => { if (!open) fc()?.unselect(); });
 
-// Dragging an occurrence moves its whole window: the model has no edit of one occurrence. From a fresh read, for that workload
-// only, and put back on anything but a save. The drawing keeps the drop until the workload is read again, so nothing jumps.
+// Dragging an item, or its start or end (the user, 2026-11-02), changes this occurrence alone or the whole series (drag.ts): asked
+// on the drop when a window it changes repeats. From a fresh read, for that workload only, and put back on anything but a save. The
+// drawing keeps the drop until the workload is read again, so nothing jumps.
 const moving = ref(false);
-async function eventDrop(arg: EventDropArg) {
+const ALONE_NEEDS = 'Moving one occurrence alone needs router 0.36.0 or later: change the whole series, or update the router.';
+const scopeAsk = ref<ScopeAsk | null>(null);
+let answer: ((scope: Scope | null) => void) | null = null;
+const ask = (question: ScopeAsk) => new Promise<Scope | null>((resolve) => { scopeAsk.value = question; answer = resolve; });
+function chosen(scope: Scope | null) {
+  scopeAsk.value = null;
+  answer?.(scope);
+  answer = null;
+}
+type Change = (EventDropArg | EventResizeDoneArg) & { delta?: Duration; startDelta?: Duration; endDelta?: Duration };
+async function change(arg: Change, edge: Edge) {
   const key = arg.event.extendedProps.key as string;
-  const index = arg.event.extendedProps.window as number;
+  const windows = (arg.event.extendedProps.windows as number[] | undefined) ?? [arg.event.extendedProps.window as number];
   const name = nameOf(key);
   if (moving.value) { arg.revert(); return; }
-  moving.value = true;
+  const minutes = dragMinutes((edge === 'move' ? arg.delta : edge === 'start' ? arg.startDelta : arg.endDelta)!);
+  if (!minutes) { arg.revert(); return; }
+  const [oldStart, oldEnd] = [arg.oldEvent.start!.getTime(), (arg.oldEvent.end ?? arg.oldEvent.start)!.getTime()];
+  const [newStart, newEnd] = [arg.event.start!.getTime(), (arg.event.end ?? arg.event.start)!.getTime()];
+  const edit = { edge, minutes, ms: edge === 'end' ? newEnd - oldEnd : newStart - oldStart };
   // As drawn, before any wait: another read can land during the fresh one, and its windows may be in another order.
   const drawn = reads[key]?.data;
-  const known = drawn?.schedule?.windows?.[index];
+  const schedule = drawn?.schedule;
+  if (!schedule?.windows?.length) { arg.revert(); return; }
+  const parts = partsOf(schedule, windows, oldStart, oldEnd);
+  const known = JSON.stringify(parts.map((p) => windowBody(schedule.windows![p.window]!)));
+  moving.value = true;
   try {
+    let scope: Scope = 'series';
+    if (asksScope(schedule, parts, edge)) {
+      const today = localDate(Date.now(), schedule.timeZone);
+      const choice = await ask({
+        name, edge, before: occurrenceText({ start: oldStart, end: oldEnd }, schedule.timeZone), after: occurrenceText({ start: newStart, end: newEnd }, schedule.timeZone),
+        // A router before 0.36.0 (it answers no join levels) knows no window's own dates, nor windows of one date.
+        occurrence: drawn!.joinInherited ? editSchedule(schedule, parts, edit, 'occurrence', today, name) : { problem: ALONE_NEEDS },
+        series: editSchedule(schedule, parts, edit, 'series', today, name),
+      });
+      if (!choice) { arg.revert(); return; }
+      scope = choice;
+    }
     const fresh = await api<WorkloadStatus>(pathOf(key));
-    const schedule = fresh.schedule;
-    const window = schedule?.windows?.[index];
+    const current = fresh.schedule;
     // The bar was drawn with the value in force too: another one could have drawn another bar.
-    if (!schedule || !window || !known || JSON.stringify(windowBody(window)) !== JSON.stringify(windowBody(known)) || joinInForce(fresh) !== joinInForce(drawn)) {
+    if (!current || parts.some((p) => !current.windows?.[p.window]) || JSON.stringify(parts.map((p) => windowBody(current.windows![p.window]!))) !== known || joinInForce(fresh) !== joinInForce(drawn)) {
       arg.revert();
-      said('warning', `The schedule of ${name} changed since it was read: look at it again before moving this window.`);
+      said('warning', `The schedule of ${name} changed since it was read: look at it again before changing this window.`);
       await readOne(key);
       return;
     }
-    const minutes = dragMinutes(arg.delta);
-    if (!minutes) { arg.revert(); return; }
-    const today = localDate(Date.now(), schedule.timeZone);
-    const moved = moveWindow(window, minutes, today);
-    if (!moved) {
+    const edited = editSchedule(current, parts, edit, scope, localDate(Date.now(), current.timeZone), name);
+    if ('problem' in edited) {
       arg.revert();
-      said('warning', 'This window can\'t be moved by dragging: edit it in the dialog.');
+      said('warning', edited.problem);
       return;
     }
-    // A date that has passed skips nothing any more.
-    if (movesDay(window, minutes) && schedule.exceptions?.some((date) => date >= today)) {
-      arg.revert();
-      said('warning', 'This schedule has dates without a window, and this move would change which occurrence they skip: edit it in the dialog.');
-      return;
-    }
-    const body = scheduleBody({ ...writableSchedule(schedule, fresh), windows: schedule.windows!.map((w, i) => (i === index ? moved : w)) }, schedule.maxNapDays ? String(schedule.maxNapDays) : '');
+    const body = scheduleBody(writableSchedule(edited.schedule, fresh), current.maxNapDays ? String(current.maxNapDays) : '');
     await api(`${pathOf(key)}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
     reads[key] = { status: 'ok', data: { ...fresh, schedule: body } };
-    said('success', movedText(name, windowBody(moved)));
+    said('success', edited.done);
     await readOne(key);
   } catch (err) {
     arg.revert();
@@ -356,6 +380,9 @@ async function eventDrop(arg: EventDropArg) {
     moving.value = false;
   }
 }
+const eventDrop = (arg: EventDropArg) => change(arg, 'move');
+// A resize moves one edge: the start when its delta is not nothing, else the end.
+const eventResize = (arg: EventResizeDoneArg) => change(arg, dragMinutes(arg.startDelta) ? 'start' : 'end');
 
 // One tooltip for every item, a view can draw 1,200 per workload: its activator follows the item hovered or focused.
 const tips = new WeakMap<Element, () => string[]>();
@@ -391,11 +418,13 @@ const options = computed<CalendarOptions>(() => ({
     // nap) is not shown again at 00:00 on the next day.
     dayGridMonth: { eventDisplay: 'list-item', dayMaxEvents: true, nextDayThreshold: '12:00' },
   },
-  events: events.value, datesSet, eventClick, eventDidMount, eventWillUnmount, eventDrop,
-  // The whole window moves: drag only, never a resize, and only the items marked so.
-  eventDurationEditable: false,
+  events: events.value, datesSet, eventClick, eventDidMount, eventWillUnmount, eventDrop, eventResize,
+  // Only the items marked so move, and their start or end: the handles show on hover in the time grids.
+  eventResizableFromStart: true,
   eventDragStart: () => { dragging.value = true; tipFor.value = null; },
   eventDragStop: () => { dragging.value = false; },
+  eventResizeStart: () => { dragging.value = true; tipFor.value = null; },
+  eventResizeStop: () => { dragging.value = false; },
 }));
 
 const drawer = ref(false);
@@ -462,6 +491,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     <div v-if="tipFor" data-test="event-tip"><div v-for="(line, i) in tipFor.lines" :key="i" :class="{ 'font-weight-medium': i === 0 }">{{ line }}</div></div>
   </v-tooltip>
   <NoticeToast :notice="toast" @close="toast = null" />
+  <DragScopeDialog :ask="scopeAsk" @choose="chosen" />
   <NewWindowDialog v-model="newOpen" :candidates="editable" :selection="newSelection" :last="last" :error="newError" :saving="newSaving" @submit="saveNew" />
   <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :join="dialogJoin" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
 </template>
@@ -502,6 +532,12 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 .dm-sched__calendar :deep(.fc-icon-minus-square::before) { content: '\2212'; }
 .dm-sched__calendar :deep(.fc-icon-plus-square::before) { content: '+'; }
 .dm-sched__calendar :deep(.fc-event:focus-visible) { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 1px; }
+/* A start or end handle, shown on hover (FullCalendar's is an invisible strip): a short bar across the edge. */
+.dm-sched__calendar :deep(.fc) { --fc-event-resizer-thickness: 10px; }
+.dm-sched__calendar :deep(.fc-v-event:not(.fc-event-selected) .fc-event-resizer::after) {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 28px; height: 4px; margin: -2px 0 0 -14px; border-radius: 2px;
+  background: rgb(var(--v-theme-surface)); box-shadow: 0 0 0 1px rgba(var(--v-theme-on-surface), 0.55);
+}
 .dm-ev__body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; padding: 1px 4px; overflow: hidden; line-height: 1.25; }
 .dm-ev__body--grid { flex-wrap: nowrap; align-items: baseline; padding: 0 4px; }
 .dm-ev__body > span:not(.dm-ev__moon) { max-width: 100%; min-width: 0; overflow: hidden; overflow-wrap: normal; word-break: normal; white-space: nowrap; text-overflow: ellipsis; }

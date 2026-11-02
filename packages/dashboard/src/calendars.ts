@@ -100,7 +100,8 @@ export interface CalendarEvent {
   startEditable: boolean;
   durationEditable: boolean;
   // tip: the tooltip's lines, read only when it opens (a view can draw 24,000 items).
-  extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; window?: number; tip: () => string[] };
+  // windows: the windows a bar holds (a gap that joins), which a drag changes.
+  extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; window?: number; windows?: number[]; tip: () => string[] };
 }
 
 // One formatter a zone: a frequent cron window has thousands of occurrences on a month.
@@ -123,10 +124,8 @@ function spanText(o: Occurrence, timeZone: string): string {
   return `${full(o.start)}–${full(o.end)}`;
 }
 
-const CAN_DRAG = 'Drag to move every occurrence of this window.';
-const CRON_STAYS = 'A cron window can\'t be dragged: edit it in the dialog.';
+const CAN_DRAG = 'Drag it, or its top or bottom edge, to change this occurrence or the whole series.';
 const READ_ONLY = 'You may not edit this workload: it can\'t be dragged.';
-const JOINED_STAYS = 'Joined with another window: edit them in the dialog.';
 
 // What the calendar draws of one workload in a view. In a month view it puts every event in the page, hidden or not, about 0.1 s
 // for each 1,000 (the demo in Edge: 1,008 in 0.13 s, 5,040 in 0.5 s, 20,160 in 1.9 to 2.3 s, 30,240 in 2.6 to 4.4 s, 120,960 in
@@ -199,21 +198,18 @@ export function calendarEvents(calendars: Calendar[], from: number, to: number, 
       const label = nap ? `Nap${o.wake === 'header' ? ' (wake: header)' : ''}` : 'Awake';
       const title = `${c.name} · ${label}`;
       const w = windows[o.window]!;
-      const cron = w.repeat?.pattern === 'cron';
-      // A drag moves one window: a bar of two would not stay what was dragged.
-      const several = o.windows.size > 1;
       const tip = () => [
         title, recurrenceText(w), ...[...o.windows].filter((i) => i !== o.window).map((i) => recurrenceText(windows[i]!)),
         `${spanText(o, here)}${s.timeZone && s.timeZone !== here ? ` here, ${spanText(o, s.timeZone)} ${s.timeZone}` : ''}`,
         ...(o.joined ? [`Windows of one kind up to ${c.joinMinutes} min apart read as one.`] : []),
-        cron ? CRON_STAYS : !c.canEdit ? READ_ONLY : several ? JOINED_STAYS : CAN_DRAG,
+        c.canEdit ? CAN_DRAG : READ_ONLY,
       ];
       out.push({
         id: `${c.key}#${o.window}@${o.start}`, title, start: new Date(o.start), end: new Date(o.end),
         classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake', ...(o.end < now ? ['dm-past'] : [])],
         backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
-        startEditable: Boolean(c.canEdit) && !cron && !several, durationEditable: false,
-        extendedProps: { key: c.key, kind: o.kind, window: o.window, tip },
+        startEditable: Boolean(c.canEdit), durationEditable: Boolean(c.canEdit),
+        extendedProps: { key: c.key, kind: o.kind, window: o.window, windows: [...o.windows].sort((a, b) => a - b), tip },
       });
     }
     const due = c.maintenanceDue ? Date.parse(c.maintenanceDue) : NaN;

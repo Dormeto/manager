@@ -104,7 +104,7 @@ describe('eventsFor', () => {
       ['Blog · Nap (wake: header)', '2027-01-04T20:00:00.000Z'],
       ['Blog · Awake', '2027-01-05T08:30:00.000Z'],
     ]);
-    expect(drawn[0]!.extendedProps.tip()).toEqual(['Blog · Awake', 'Cron 30 8 * * 1-5, 10 h 30 min', 'Mon 08:30–19:00', 'A cron window can\'t be dragged: edit it in the dialog.']);
+    expect(drawn[0]!.extendedProps.tip()).toEqual(['Blog · Awake', 'Cron 30 8 * * 1-5, 10 h 30 min', 'Mon 08:30–19:00', 'You may not edit this workload: it can\'t be dragged.']);
     expect(drawn[1]!.extendedProps.tip().slice(0, 3)).toEqual(['Blog · Nap (wake: header)', 'Every 2 weeks on Mon, Thu, 20:00–07:00 next day, from 4 Jan 2027 to 30 Jun 2027', 'Mon 20:00–07:00']);
   });
   it('draws the touching starts of a frequent cron window as one bar, not one a start', () => {
@@ -136,7 +136,7 @@ describe('eventsFor', () => {
     const autumn = Date.parse('2026-10-25T00:00:00+02:00');
     expect(eventsFor([day], autumn, autumn + 3_600_000, 'UTC', false, autumn)[0]!.extendedProps.tip().join(' | ')).toContain('Sun 00:00–00:00 Europe/Paris');
   });
-  it('says in the tooltip what it is, and only a window a user may edit, with a start to move, can be dragged', () => {
+  it('says in the tooltip what it is, and every window of a workload the user may edit can be dragged and resized', () => {
     const c: Calendar = { key: 'r/b', name: 'Blog', color: '#112233', canEdit: true, state: 'ASLEEP', maintenanceDue: '2027-01-04T10:00:00.000Z', schedule: { timeZone: 'UTC', maxNapDays: 7, windows: [
       { kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' },
       { kind: 'nap', repeat: { pattern: 'cron', cron: '*/5 12 * * *', minutes: 5 } },
@@ -145,15 +145,19 @@ describe('eventsFor', () => {
     const of = (calendar: Calendar) => calendarEvents([calendar], from, from + 86_400_000, 'UTC', false, from).events;
     const [plain, due] = [...of(c)].sort((a, b) => a.start.getTime() - b.start.getTime());
     expect(plain!.startEditable).toBe(true);
-    expect(plain!.durationEditable).toBe(false);
-    expect(plain!.extendedProps.tip()).toEqual(['Blog · Awake', 'Mon, 08:00–09:00', 'Mon 08:00–09:00', 'Drag to move every occurrence of this window.']);
+    expect(plain!.durationEditable).toBe(true);
+    expect(plain!.extendedProps.windows).toEqual([0]);
+    expect(plain!.extendedProps.tip()).toEqual(['Blog · Awake', 'Mon, 08:00–09:00', 'Mon 08:00–09:00', 'Drag it, or its top or bottom edge, to change this occurrence or the whole series.']);
     expect(due!.extendedProps.kind).toBe('maintenance');
     expect(due!.startEditable).toBe(false);
+    expect(due!.durationEditable).toBe(false);
     const cron = of(c).find((e) => e.extendedProps.kind === 'nap')!;
-    expect(cron.startEditable).toBe(false);
-    expect(cron.extendedProps.tip().at(-1)).toBe('A cron window can\'t be dragged: edit it in the dialog.');
+    expect(cron.startEditable).toBe(true);
+    expect(cron.durationEditable).toBe(true);
+    expect(cron.extendedProps.tip().at(-1)).toBe('Drag it, or its top or bottom edge, to change this occurrence or the whole series.');
     const read = of({ ...c, canEdit: false }).find((e) => e.extendedProps.kind === 'awake')!;
     expect(read.startEditable).toBe(false);
+    expect(read.durationEditable).toBe(false);
     expect(read.extendedProps.tip().at(-1)).toBe('You may not edit this workload: it can\'t be dragged.');
   });
   it('draws at most so many occurrences of a calendar, the first ones, and says how many it has', () => {
@@ -237,11 +241,13 @@ describe('joined windows on the calendar', () => {
     expect(bars(touching)).toHaveLength(2);
   });
 
-  it('a bar of two windows says both, cannot be dragged (a drag moves one window), and tells why', () => {
+  it('a bar of two windows says both, and can be dragged: a drag changes both, an edge its own window', () => {
     const [bar] = eventsFor([{ ...naps, joinMinutes: 15 }], FROM, FROM + 86_400_000, 'UTC', false, FROM);
-    expect(bar!.startEditable).toBe(false);
+    expect(bar!.startEditable).toBe(true);
+    expect(bar!.durationEditable).toBe(true);
+    expect(bar!.extendedProps.windows).toEqual([0, 1]);
     expect(bar!.extendedProps.tip()).toEqual([
-      'Blog · Nap', 'Mon, 08:00–12:00', 'Mon, 12:10–18:00', 'Mon 08:00–18:00', 'Windows of one kind up to 15 min apart read as one.', 'Joined with another window: edit them in the dialog.',
+      'Blog · Nap', 'Mon, 08:00–12:00', 'Mon, 12:10–18:00', 'Mon 08:00–18:00', 'Windows of one kind up to 15 min apart read as one.', 'Drag it, or its top or bottom edge, to change this occurrence or the whole series.',
     ]);
     expect(bar!.id).toBe('r/b#0@' + Date.UTC(2027, 0, 4, 8));
   });
@@ -250,7 +256,7 @@ describe('joined windows on the calendar', () => {
     const daily: Calendar = { ...naps, joinMinutes: 15, schedule: { timeZone: 'UTC', windows: [{ kind: 'nap', repeat: { pattern: 'daily' }, start: '00:00', end: '23:50' }] } };
     const [bar] = eventsFor([daily], FROM, FROM + 3 * 86_400_000, 'UTC', false, FROM);
     expect(bar!.startEditable).toBe(true);
-    expect(bar!.extendedProps.tip().at(-1)).toBe('Drag to move every occurrence of this window.');
+    expect(bar!.extendedProps.tip().at(-1)).toBe('Drag it, or its top or bottom edge, to change this occurrence or the whole series.');
   });
 
   it('a bar\'s wake: never when either part says so, as the router\'s union', () => {

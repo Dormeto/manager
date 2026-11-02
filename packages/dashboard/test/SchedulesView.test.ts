@@ -904,7 +904,7 @@ describe('Schedules view: the shared tooltip of the calendar items', () => {
     await vi.waitFor(() => expect(tip()).toContain('Blog · Awake'));
     expect(tip()).toContain('Wed, 09:00–12:00');
     expect(tip()).toContain('America/New_York');
-    expect(tip()).toContain('Drag to move every occurrence');
+    expect(tip()).toContain('Drag it, or its top or bottom edge');
     await ev.trigger('mouseout');
     await vi.waitFor(() => expect(tip()).toBeUndefined());
     await ev.trigger('focusin');
@@ -917,21 +917,54 @@ describe('Schedules view: the shared tooltip of the calendar items', () => {
 
 describe('Schedules view: moving a window by dragging it', () => {
   type Delta = { years: number; months: number; days: number; milliseconds: number };
-  type Drop = { event: { start: Date; extendedProps: Record<string, unknown> }; oldEvent: { start: Date }; delta: Delta; revert(): void };
+  type Drawn = { start: Date; end: Date; extendedProps: Record<string, unknown> };
+  type Drop = { event: Drawn; oldEvent: Drawn; delta: Delta; revert(): void };
+  type Resize = { event: Drawn; oldEvent: Drawn; startDelta: Delta; endDelta: Delta; revert(): void };
+  type Options = { events: Drawn[]; eventDrop(arg: Drop): Promise<void>; eventResize(arg: Resize): Promise<void> };
   // FullCalendar's delta between two instants: days and time of day on the calendar's clock, the browser's here (diffDayAndTime).
   const deltaOf = (from: Date, to: Date): Delta => {
     const day = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
     const time = (d: Date) => (d.getHours() * 60 + d.getMinutes()) * 60_000;
     return { years: 0, months: 0, days: Math.round((day(to) - day(from)) / 86_400_000), milliseconds: time(to) - time(from) };
   };
-  const dropOf = (w: VueWrapper) => (w.findComponent(FullCalendar).props('options') as { eventDrop(arg: Drop): Promise<void> }).eventDrop;
-  const drop = async (w: VueWrapper, key: string, window: number, from: string, to: string) => {
+  const optionsOf = (w: VueWrapper) => w.findComponent(FullCalendar).props('options') as Options;
+  // The item as drawn, or one of an hour where the view does not show it.
+  const drawnAt = (w: VueWrapper, key: string, window: number, from: string): Drawn => optionsOf(w).events.find((e) => e.extendedProps.key === key && e.start.getTime() === Date.parse(from))
+    ?? { start: new Date(from), end: new Date(Date.parse(from) + 3_600_000), extendedProps: { key, window, windows: [window] } };
+  const scopeDialog = () => document.querySelector('[data-test="scope-dialog"]');
+  // Answers the question when it is asked: a scope, or Cancel (null).
+  const answer = async (scope: 'series' | 'occurrence' | null) => {
+    if (!scopeDialog()) return;
+    (document.querySelector(`[data-test="scope-${scope ?? 'cancel'}"]`) as HTMLButtonElement).click();
+    await flushPromises();
+  };
+  const drop = async (w: VueWrapper, key: string, window: number, from: string, to: string, scope: 'series' | 'occurrence' | null = 'series') => {
     const revert = vi.fn();
-    await dropOf(w)({ event: { start: new Date(to), extendedProps: { key, window } }, oldEvent: { start: new Date(from) }, delta: deltaOf(new Date(from), new Date(to)), revert });
+    const old = drawnAt(w, key, window, from);
+    const shift = Date.parse(to) - Date.parse(from);
+    const done = optionsOf(w).eventDrop({ event: { ...old, start: new Date(to), end: new Date(old.end.getTime() + shift) }, oldEvent: old, delta: deltaOf(new Date(from), new Date(to)), revert });
+    await flushPromises();
+    await answer(scope);
+    await done;
+    await flushPromises();
+    return revert;
+  };
+  const NONE = { years: 0, months: 0, days: 0, milliseconds: 0 };
+  const resize = async (w: VueWrapper, key: string, window: number, from: string, edge: 'start' | 'end', to: string, scope: 'series' | 'occurrence' | null = 'series') => {
+    const revert = vi.fn();
+    const old = drawnAt(w, key, window, from);
+    const moved = edge === 'start' ? { ...old, start: new Date(to) } : { ...old, end: new Date(to) };
+    const delta = edge === 'start' ? deltaOf(old.start, new Date(to)) : deltaOf(old.end, new Date(to));
+    const done = optionsOf(w).eventResize({ event: moved, oldEvent: old, startDelta: edge === 'start' ? delta : NONE, endDelta: edge === 'end' ? delta : NONE, revert });
+    await flushPromises();
+    await answer(scope);
+    await done;
     await flushPromises();
     return revert;
   };
   const SHOP_MON = '2026-10-19T08:00:00+02:00';
+  // A router since 0.36.0: it answers the join levels.
+  const recent = (name: string, schedule: Schedule) => ({ ...status(name, schedule), joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } });
 
   it('moves every occurrence from a fresh read, leaves the others and the exceptions alone, and says so', async () => {
     h.status['/workloads/dmt-dev/a'] = status('Shop', { ...shopSchedule, exceptions: ['2026-12-25'], maxNapDays: 7 });
@@ -971,14 +1004,89 @@ describe('Schedules view: moving a window by dragging it', () => {
     expect(JSON.parse(puts()[0]!.body!).windows[0]).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' });
   });
 
-  it('puts back what a shift cannot give, saying so, and writes nothing', async () => {
-    h.status['/workloads/dmt-dev/a'] = status('Shop', { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'monthly', day: 31 } }] });
+  it('says why the series can\'t move, offers this occurrence alone, and Cancel puts the item back and writes nothing', async () => {
+    h.status['/workloads/dmt-dev/a'] = recent('Shop', { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'monthly', day: 31 } }] });
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');
-    const revert = await drop(wrapper, 'dmt-dev/a', 0, '2026-10-31T08:00:00+01:00', '2026-11-01T08:00:00+01:00');
+    const revert = vi.fn();
+    const old = drawnAt(wrapper, 'dmt-dev/a', 0, '2026-10-31T08:00:00+01:00');
+    const done = optionsOf(wrapper).eventDrop({ event: { ...old, start: new Date('2026-11-01T08:00:00+01:00'), end: new Date('2026-11-01T09:00:00+01:00') }, oldEvent: old, delta: deltaOf(old.start, new Date('2026-11-01T08:00:00+01:00')), revert });
+    await flushPromises();
+    expect(document.querySelector('[data-test="scope-change"]')!.textContent).toBe('Shop: Sat 31 Oct 2026, 08:00–09:00 → Sun 1 Nov 2026, 08:00–09:00');
+    expect((document.querySelector('[data-test="scope-series"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector('[data-test="scope-series-line"]')!.textContent).toContain('would not all move alike');
+    expect((document.querySelector('[data-test="scope-occurrence"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.querySelector('[data-test="scope-occurrence-line"]')!.textContent).toBe('Sun 1 Nov 2026, 08:00–09:00 only; the series skips 31 Oct 2026.');
+    await answer(null);
+    await done;
     expect(revert).toHaveBeenCalledOnce();
     expect(puts()).toEqual([]);
-    expect(toast()).toBe('This window can\'t be moved by dragging: edit it in the dialog.');
+    expect(scopeDialog()).toBeNull();
+  });
+
+  it('moves this occurrence alone: its date skipped on the series, a window of that date at the new times', async () => {
+    h.status['/workloads/dmt-dev/a'] = recent('Shop', shopSchedule);
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00', 'occurrence');
+    expect(revert).not.toHaveBeenCalled();
+    expect(JSON.parse(puts()[0]!.body!).windows).toEqual([
+      { ...shopSchedule.windows![0], exceptions: ['2026-10-19'] }, shopSchedule.windows![1],
+      { kind: 'awake', start: '09:30', end: '20:30', repeat: { pattern: 'daily' }, from: '2026-10-19', until: '2026-10-19' },
+    ]);
+    expect(toast()).toBe('One occurrence of Shop moved: Mon 19 Oct 2026, 09:30–20:30; the series skips 19 Oct 2026');
+  });
+
+  it('moves a window of one date without asking', async () => {
+    const single = { kind: 'awake' as const, start: '08:00', end: '12:00', repeat: { pattern: 'daily' as const }, from: '2026-10-20', until: '2026-10-20' };
+    h.status['/workloads/dmt-dev/a'] = status('Shop', { timeZone: 'Europe/Paris', windows: [single] });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    const revert = vi.fn();
+    const old = drawnAt(wrapper, 'dmt-dev/a', 0, '2026-10-20T08:00:00+02:00');
+    await optionsOf(wrapper).eventDrop({ event: { ...old, start: new Date('2026-10-21T08:00:00+02:00'), end: new Date('2026-10-21T12:00:00+02:00') }, oldEvent: old, delta: deltaOf(old.start, new Date('2026-10-21T08:00:00+02:00')), revert });
+    await flushPromises();
+    expect(scopeDialog()).toBeNull();
+    expect(JSON.parse(puts()[0]!.body!).windows).toEqual([{ ...single, from: '2026-10-21', until: '2026-10-21' }]);
+    expect(toast()).toBe('Window moved: Shop now runs once on 21 Oct 2026, 08:00–12:00');
+  });
+
+  it('changes the end of the series, or the start of this occurrence alone, by its edges', async () => {
+    h.status['/workloads/dmt-dev/a'] = recent('Shop', shopSchedule);
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await resize(wrapper, 'dmt-dev/a', 0, SHOP_MON, 'end', '2026-10-19T19:30:00+02:00');
+    expect(JSON.parse(puts()[0]!.body!).windows[0]).toEqual({ ...shopSchedule.windows![0], end: '19:30' });
+    expect(toast()).toBe('Window changed: every occurrence of Shop now runs Mon–Fri, 08:00–19:30');
+    h.calls.length = 0;
+    await resize(wrapper, 'dmt-dev/a', 0, SHOP_MON, 'start', '2026-10-19T07:00:00+02:00', 'occurrence');
+    const windows = JSON.parse(puts()[0]!.body!).windows;
+    expect(windows.at(-1)).toEqual({ kind: 'awake', start: '07:00', end: '19:00', repeat: { pattern: 'daily' }, from: '2026-10-19', until: '2026-10-19' });
+    expect(toast()).toBe('One occurrence of Shop changed: Mon 19 Oct 2026, 07:00–19:00; the series skips 19 Oct 2026');
+  });
+
+  it('a router before 0.36.0 moves the series only, and says why not this occurrence', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    const revert = vi.fn();
+    const old = drawnAt(wrapper, 'dmt-dev/a', 0, SHOP_MON);
+    const done = optionsOf(wrapper).eventDrop({ event: { ...old, start: new Date('2026-10-19T09:00:00+02:00'), end: new Date(old.end.getTime() + 3_600_000) }, oldEvent: old, delta: deltaOf(old.start, new Date('2026-10-19T09:00:00+02:00')), revert });
+    await flushPromises();
+    expect((document.querySelector('[data-test="scope-occurrence"]') as HTMLButtonElement).disabled).toBe(true);
+    expect(document.querySelector('[data-test="scope-occurrence-line"]')!.textContent).toContain('needs router 0.36.0 or later');
+    await answer('series');
+    await done;
+    expect(JSON.parse(puts()[0]!.body!).windows[0]).toEqual({ ...shopSchedule.windows![0], start: '09:00', end: '20:00' });
+  });
+
+  it('a bar of two joined windows moves both', async () => {
+    const two = [{ kind: 'awake' as const, days: ['mon' as const], start: '08:00', end: '12:00' }, { kind: 'awake' as const, days: ['mon' as const], start: '12:10', end: '18:00' }];
+    h.status['/workloads/dmt-dev/a'] = { ...status('Shop', { timeZone: 'Europe/Paris', windows: two }), joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    expect(drawnAt(wrapper, 'dmt-dev/a', 0, SHOP_MON).extendedProps.windows).toEqual([0, 1]);
+    await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:00:00+02:00');
+    expect(JSON.parse(puts()[0]!.body!).windows).toEqual([{ ...two[0], start: '09:00', end: '13:00' }, { ...two[1], start: '13:10', end: '19:00' }]);
   });
 
   it('puts back on the router\'s refusal, in its words', async () => {
@@ -1056,15 +1164,19 @@ describe('Schedules view: moving a window by dragging it', () => {
       return wrapper;
     };
 
-    it('puts back a time crossing midnight, or a day\'s move: the date would skip another occurrence', async () => {
+    it('refuses the series a time crossing midnight, or a day\'s move: the date would skip another occurrence', async () => {
       const wrapper = await seeded(['2099-12-25']);
-      const late = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-05T01:00:00+01:00');
-      expect(late).toHaveBeenCalledOnce();
-      expect(toast()).toBe(WORDS);
-      const dayLater = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-05T23:00:00+01:00');
-      expect(dayLater).toHaveBeenCalledOnce();
-      const earlier = await drop(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00', '2027-01-03T23:00:00+01:00');
-      expect(earlier).toHaveBeenCalledOnce();
+      for (const to of ['2027-01-05T01:00:00+01:00', '2027-01-05T23:00:00+01:00', '2027-01-03T23:00:00+01:00']) {
+        const revert = vi.fn();
+        const old = drawnAt(wrapper, 'dmt-dev/a', 0, '2027-01-04T23:00:00+01:00');
+        const done = optionsOf(wrapper).eventDrop({ event: { ...old, start: new Date(to), end: new Date(Date.parse(to) + 1_800_000) }, oldEvent: old, delta: deltaOf(old.start, new Date(to)), revert });
+        await flushPromises();
+        expect((document.querySelector('[data-test="scope-series"]') as HTMLButtonElement).disabled, to).toBe(true);
+        expect(document.querySelector('[data-test="scope-series-line"]')!.textContent).toBe(WORDS);
+        await answer(null);
+        await done;
+        expect(revert).toHaveBeenCalledOnce();
+      }
       expect(puts()).toEqual([]);
     });
 
@@ -1113,15 +1225,18 @@ describe('Schedules view: moving a window by dragging it', () => {
     expect(wrapper.find('.fc-timeGridWeek-view').exists()).toBe(true);
   });
 
-  it('does not let a read-only workload or a cron window be dragged', async () => {
+  it('does not let a read-only workload be dragged or resized; a cron window can be', async () => {
     h.status['/workloads/dmt-dev/a'] = { ...status('Shop', shopSchedule), can: { wake: true, nap: false } };
     h.status['/workloads/dmt-dev/b'] = status('Blog', { timeZone: 'Europe/Paris', windows: [{ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 } }] });
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');
     await enable(wrapper, 'dmt-dev/b');
-    const events = (wrapper.findComponent(FullCalendar).props('options') as { events: { startEditable: boolean }[] }).events;
-    expect(events.length).toBeGreaterThan(0);
-    expect(events.every((e) => e.startEditable === false)).toBe(true);
+    const events = (wrapper.findComponent(FullCalendar).props('options') as { events: { startEditable: boolean; durationEditable: boolean; extendedProps: { key: string } }[] }).events;
+    const of = (key: string) => events.filter((e) => e.extendedProps.key === key);
+    expect(of('dmt-dev/a').length).toBeGreaterThan(0);
+    expect(of('dmt-dev/a').every((e) => !e.startEditable && !e.durationEditable)).toBe(true);
+    expect(of('dmt-dev/b').length).toBeGreaterThan(0);
+    expect(of('dmt-dev/b').every((e) => e.startEditable && e.durationEditable)).toBe(true);
   });
 });
 

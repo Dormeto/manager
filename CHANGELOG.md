@@ -26,9 +26,15 @@ manual Nap or Wake lasts until the next start, and an awake window blocks naps. 
 draws at most 1,200 occurrences of a workload in a view, and says when it leaves some out.
 
 "Do not repeat" is a new choice for a window: one date, written as a daily window from that date until that date. Drag an
-item on the Schedules calendar to move its window: every occurrence moves by the same offset on the schedule's clock, from a
-fresh read of the schedule. A cron window can't be dragged, and neither can one whose occurrences a shift would not move alike;
-the dashboard says so and puts the item back. Each save, move or clear of a schedule shows a notification naming the workload.
+item on the Schedules calendar, or its top or bottom edge (a handle shows on hover in the day and week views), to move it or
+change its times. For a window that repeats, the dashboard asks on the drop: only this occurrence, or the whole series. The
+series moves every occurrence by the same offset on the schedule's clock. This occurrence alone needs router 0.36.0 or later:
+its date goes into the window's own dates without it (`exceptions` on a window, router 0.36.0), and a window of that one date
+runs at the new times. The dialog says why a choice can't be made: a cron window's series starts by its expression, a series
+whose occurrences a shift would not move alike, a window past 24 hours, a cron window starting twice that day. A bar of joined
+windows moves both; its top edge changes the first, its bottom edge the last. Everything starts from a fresh read of the
+schedule, and is put back on Cancel or a refusal. A window's own dates show in its tab of the Schedule dialog and in its
+sentence ("except 4 Jan 2027"), and can be removed there. A schedule takes 100 windows (20 before router 0.36.0). Each save, move or clear of a schedule shows a notification naming the workload.
 The dialogs' help moved to tooltips: what a schedule overrides, what wins over it, and drawn samples of the overlap rules. A
 window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip. The Workload field of New window
 autocompletes, and workloads are sorted by name.
@@ -36,8 +42,7 @@ autocompletes, and workloads are sorted by name.
 Windows of one kind with a short gap read as one (routers 0.36.0 and later), so a workload is neither woken nor napped for the
 gap. The gap is 15 minutes at most by default, 0 never joins. Set it at the organization (Workload defaults), the router (its
 Configuration) or the workload (its schedule): the most specific wins, and routers read the organization's within 5 minutes. A
-joined gap draws as one bar on the calendars, and the next occurrence and the card say the value in force. A bar of two windows
-can't be dragged: edit them in the dialog. An older router does not join, and refuses a value. The organization's and the
+joined gap draws as one bar on the calendars, and the next occurrence and the card say the value in force. An older router does not join, and refuses a value. The organization's and the
 router's routes (`PUT /api/settings/workloads`, `PUT /api/routers/{router}/settings`) take `joinMinutes` without `hibernate`,
 and keep what a write does not send.
 
