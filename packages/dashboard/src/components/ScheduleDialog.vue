@@ -1,21 +1,24 @@
 <script setup lang="ts">
 // Edit a workload's schedule (R12): what applies to the whole schedule first (the time zone, the browser's by default, the
 // exceptions, the maximum nap), then a tab per window, then how far apart windows join, named by its kind's icon and its window in a
-// few words, with how it repeats (WindowRecurrence). A window keeps its kind: the buttons after the tabs add a nap or an awake one.
-// The router's refusals are shown as it words them.
+// few words, with how it repeats (WindowRecurrence). A window keeps its kind, a chip in its color: the buttons after the tabs add
+// a nap or an awake one. The title highlights the workload, after its services' icons. The router's refusals are shown as it
+// words them.
 import { computed, ref, watch } from 'vue';
-import { mdiAlertCircleOutline, mdiCalendarClock, mdiDeleteOutline, mdiPlus, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
+import { mdiAlertCircleOutline, mdiCalendarClock, mdiDeleteOutline, mdiInformationOutline, mdiPlus, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import { editProblems, nextOccurrences } from '../occurrences';
 import {
-  JOIN_MINUTES_MAX, browserZone, canonicalZone, formProblem, isJoinMinutes, joinDefaultText, newWindow, recurrenceError, scheduleBody, windowBody, windowTitle,
+  JOIN_MINUTES_MAX, browserZone, canonicalZone, formProblem, isJoinMinutes, joinDefaultText, kindColor, newWindow, recurrenceError, scheduleBody, windowBody, windowTitle,
   type JoinAnswer, type Schedule, type ScheduleWindow,
 } from '../schedule';
+import BackendKinds from './BackendKinds.vue';
 import JoinField from './JoinField.vue';
 import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
-// join: the status answer's value and what is inherited; a router that answers none does not join, and is not asked.
-const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; error?: string; saving?: boolean; join?: JoinAnswer | null }>();
+// join: the status answer's value and what is inherited; a router that answers none does not join, and is not asked. kinds: those
+// of the workload's backends, when known.
+const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; kinds?: string[]; error?: string; saving?: boolean; join?: JoinAnswer | null }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule]; clear: [] }>();
 const windows = ref<ScheduleWindow[]>([]);
 // A stable key for each window, beside it: a window is replaced as it is edited, and a tab keeps its helper's memory when
@@ -90,8 +93,11 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
 
 <template>
   <v-dialog :model-value="modelValue" max-width="1100" scrollable @update:model-value="emit('update:modelValue', $event)">
-    <v-card :title="`Schedule of ${name}`">
+    <v-card>
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiCalendarClock" size="20" /></v-avatar></template>
+      <template #title>
+        <span class="dm-title">Schedule of <BackendKinds v-if="kinds?.length" :kinds="kinds" /> <strong data-test="schedule-workload" class="text-primary">{{ name }}</strong></span>
+      </template>
       <v-card-text class="pt-3">
         <p class="mb-4 text-medium-emphasis"><span data-test="schedule-intro">Awake and nap windows override the idle rules, in local time.</span> <ScheduleHelp /></p>
         <div class="dm-settings">
@@ -100,14 +106,23 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
             v-model="exceptions" v-model:search="typed" data-test="exceptions" label="Dates without a window (YYYY-MM-DD)" multiple chips closable-chips density="compact" :items="[]" class="dm-settings__dates"
             :hint="badDate ? `${badDate} is not a date as YYYY-MM-DD` : 'A window that starts on one of these dates does not apply.'" persistent-hint :error="Boolean(badDate)" @blur="commitTyped"
           />
-          <v-text-field v-model="maxNap" data-test="max-nap" label="Maximum nap (days, 1 to 60)" density="compact" type="number" min="1" max="60" class="dm-settings__nap" hint="Past it, the workload wakes for maintenance, then naps again. Blank for none." persistent-hint />
+          <v-text-field v-model="maxNap" data-test="max-nap" label="Maximum nap (days, 1 to 60)" density="compact" type="number" min="1" max="60" class="dm-settings__nap" hint="Blank for none." persistent-hint>
+            <template #append-inner>
+              <v-tooltip location="top" max-width="320" open-on-focus>
+                <template #activator="{ props: activator }">
+                  <v-icon v-bind="activator" data-test="max-nap-more" :icon="mdiInformationOutline" size="16" tabindex="0" aria-label="What the maximum nap does" />
+                </template>
+                <span data-test="max-nap-tip">Past it, the workload wakes for maintenance, then naps again.</span>
+              </v-tooltip>
+            </template>
+          </v-text-field>
         </div>
         <div data-test="windows" class="dm-windows mt-4">
           <div class="dm-windows__bar">
             <v-tabs v-model="tab" data-test="window-tabs" density="compact" show-arrows color="primary" class="dm-windows__tabs">
               <v-tab v-for="(w, i) in windows" :key="keys[i]" :value="keys[i]" data-test="window-tab" class="text-none" :aria-label="`${kindName(w)} window: ${titles[i]}`">
-                <v-icon :icon="w.kind === 'nap' ? mdiWeatherNight : mdiWeatherSunny" size="18" class="me-2" />
-                <span class="dm-tab__title">{{ titles[i] }}</span>
+                <v-chip :color="kindColor(w.kind)" :prepend-icon="w.kind === 'nap' ? mdiWeatherNight : mdiWeatherSunny" variant="tonal" label size="small" class="me-2">{{ kindName(w) }}</v-chip>
+                <span data-test="window-tab-title" class="dm-tab__title">{{ titles[i] }}</span>
                 <v-icon v-if="invalid[i]" data-test="window-tab-problem" :icon="mdiAlertCircleOutline" color="error" size="16" class="ms-1" />
               </v-tab>
             </v-tabs>
@@ -166,6 +181,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
 </template>
 
 <style scoped>
+.dm-title .dm-kinds { vertical-align: middle; margin: 0 2px; }
 .dm-settings { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
 .dm-settings__zone { flex: 0 1 260px; min-width: 200px; }
 .dm-settings__dates { flex: 1 1 280px; }

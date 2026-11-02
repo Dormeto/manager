@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionMore, backendArn, backendHelp, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { attentionMore, backendArn, backendHelp, backendKinds, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -72,6 +72,13 @@ describe('route', () => {
     expect(routeLabel('mixed')).toBe('mixed: the rules disagree (repaired at the next idle check)');
     expect(routeLabel('unknown')).toBe('unknown: a rule is missing or changed');
     expect([routeColor('app'), routeColor('waker'), routeColor('mixed')]).toEqual(['success', 'info', 'warning']);
+  });
+});
+
+describe('backendKinds', () => {
+  it('gives the kinds of a workload\'s backends once each, its companion databases last, as the router lists them', () => {
+    expect(backendKinds([{ kind: 'rds-instance', companion: true }, { kind: 'ecs' }, { kind: 'ecs' }, { kind: 'k8s' }])).toEqual(['ecs', 'k8s', 'rds-instance']);
+    expect(backendKinds([])).toEqual([]);
   });
 });
 

@@ -3,7 +3,7 @@
 // exceptions, the maximum nap and the next events. Edited with the wake and nap permissions (both).
 import { computed, ref } from 'vue';
 import { mdiCalendarClock, mdiPencilOutline } from '@mdi/js';
-import { eventText, joinText, recurrenceText, type JoinAnswer, type NextEvent, type Schedule, type ScheduleWindow } from '../schedule';
+import { eventText, joinText, kindColor, recurrenceText, type JoinAnswer, type NextEvent, type Schedule, type ScheduleWindow } from '../schedule';
 import { relative } from '../format';
 
 // schedule: undefined when the router does not report schedules (before 0.31.0), null when it has none.
@@ -32,7 +32,7 @@ const wakeText = (w: ScheduleWindow) => (w.kind === 'nap' ? (w.wake === 'header'
       <v-card-text class="pb-0">
         <div v-if="schedule.windows?.length" class="text-body-medium mb-2">Time zone <strong>{{ zone }}</strong></div>
         <div v-for="(w, i) in schedule.windows ?? []" :key="i" data-test="window" class="d-flex flex-wrap align-center ga-2 py-1 text-body-medium">
-          <v-chip :color="w.kind === 'awake' ? 'success' : 'info'" variant="tonal" label size="small">{{ w.kind === 'awake' ? 'Awake' : 'Nap' }}</v-chip>
+          <v-chip :color="kindColor(w.kind)" variant="tonal" label size="small">{{ w.kind === 'awake' ? 'Awake' : 'Nap' }}</v-chip>
           <span class="dm-num">{{ recurrenceText(w) }}</span>
           <span v-if="wakeText(w)" class="text-medium-emphasis">{{ wakeText(w) }}</span>
         </div>

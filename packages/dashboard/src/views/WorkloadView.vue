@@ -8,7 +8,7 @@ import HibernateDialog from '../components/HibernateDialog.vue';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendArn, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
+import { backendArn, backendKinds, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
 import { equivalents, rounded } from '../energy';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
@@ -617,7 +617,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </v-card>
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
-  <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :join="status" :name="title" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
+  <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :join="status" :name="title" :kinds="backendKinds(status?.backends ?? [])" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
   <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" @submit="setTags" />
 </template>
 

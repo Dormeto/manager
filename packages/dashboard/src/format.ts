@@ -43,6 +43,9 @@ const BACKEND_HELP: Record<string, string> = {
 };
 // What Dormeto does with a kind of backend, for its tooltip.
 export const backendHelp = (kind: string): string => `${backendLabel(kind)}${BACKEND_HELP[kind] ? `: ${BACKEND_HELP[kind]}` : ''}`;
+// The kinds of a workload's backends once each, its companion databases last: the router's order in the workloads' list.
+export const backendKinds = (backends: { kind: string; companion?: boolean }[]): string[] =>
+  [...new Set([...backends.filter((b) => !b.companion), ...backends.filter((b) => b.companion)].map((b) => b.kind))];
 
 // The ARN of a candidate's backend: recorded by discovery (scans since 2026-10-05), or rebuilt for an instance or an ECS
 // service of an older scan; an Auto Scaling group's needs its id (null).

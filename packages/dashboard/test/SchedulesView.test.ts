@@ -285,6 +285,7 @@ describe('Schedules view: the calendar', () => {
   });
 
   it('opens the schedule dialog of a workload from its event, and re-reads the workload after the save', async () => {
+    h.list[0] = row('dmt-dev', 'a', 'Shop', { backends: ['ecs', 'rds-instance'] });
     const { wrapper } = await open();
     await enable(wrapper, 'dmt-dev/a');
     expect(wrapper.findComponent(ScheduleDialog).props('modelValue')).toBe(false);
@@ -293,6 +294,7 @@ describe('Schedules view: the calendar', () => {
     const dialog = wrapper.findComponent(ScheduleDialog);
     expect(dialog.props('modelValue')).toBe(true);
     expect(dialog.props('name')).toBe('Shop');
+    expect(dialog.props('kinds')).toEqual(['ecs', 'rds-instance']);
     expect(dialog.props('schedule')).toEqual(shopSchedule);
     dialog.vm.$emit('submit', { ...shopSchedule, windows: [shopSchedule.windows![0]] });
     await flushPromises();

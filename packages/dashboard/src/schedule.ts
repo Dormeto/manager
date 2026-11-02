@@ -184,6 +184,9 @@ export const browserZone = (): string => canonicalZone(Intl.DateTimeFormat().res
 
 export const TIMES: string[] = Array.from({ length: 288 }, (_, i) => `${String(Math.floor(i / 12)).padStart(2, '0')}:${String((i % 12) * 5).padStart(2, '0')}`);
 
+// A window's kind in its chip (the schedule card, the dialog's tabs): the awake state's color, or the asleep one's for a nap.
+export const kindColor = (kind: ScheduleWindow['kind']): string => (kind === 'awake' ? 'success' : 'info');
+
 export const newWindow = (kind: 'awake' | 'nap' = 'awake'): ScheduleWindow => ({ kind, days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: kind === 'awake' ? '08:00' : '20:00', end: kind === 'awake' ? '19:00' : '07:00', ...(kind === 'nap' ? { wake: 'never' as const } : {}) });
 
 // What the helper's Repeats select offers, and which of them a window is (null: a stored pattern this dashboard cannot read).

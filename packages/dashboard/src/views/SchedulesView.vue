@@ -168,7 +168,8 @@ onMounted(async () => {
 });
 
 // What is drawn.
-const nameOf = (key: string) => reads[key]?.data?.name ?? rows.value.find((w) => calendarKey(w.router, w.workloadId) === key)?.name ?? key.slice(key.indexOf('/') + 1);
+const rowOf = (key: string) => rows.value.find((w) => calendarKey(w.router, w.workloadId) === key);
+const nameOf = (key: string) => reads[key]?.data?.name ?? rowOf(key)?.name ?? key.slice(key.indexOf('/') + 1);
 const calendars = computed<Calendar[]>(() => enabled.value.flatMap((e) => {
   const data = reads[e.key]?.data;
   if (!data) return [];
@@ -505,7 +506,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
   <NoticeToast :notice="toast" @close="toast = null" />
   <DragScopeDialog :ask="scopeAsk" @choose="chosen" />
   <NewWindowDialog v-model="newOpen" :candidates="editable" :selection="newSelection" :last="last" :error="newError" :saving="newSaving" @submit="saveNew" />
-  <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :join="dialogJoin" :name="dialogKey ? nameOf(dialogKey) : ''" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
+  <ScheduleDialog v-model="dialogOpen" :schedule="dialogSchedule" :join="dialogJoin" :name="dialogKey ? nameOf(dialogKey) : ''" :kinds="dialogKey ? rowOf(dialogKey)?.backends : undefined" :error="dialogError" :saving="saving" @submit="saveSchedule" @clear="clearSchedule" />
 </template>
 
 <style scoped>

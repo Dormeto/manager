@@ -9,6 +9,7 @@ import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import IdleWindowCard from '../src/components/IdleWindowCard.vue';
 import DescriptionCard from '../src/components/DescriptionCard.vue';
+import ScheduleDialog from '../src/components/ScheduleDialog.vue';
 import { useSession } from '../src/stores/session';
 import { api } from '../src/api';
 import StateBar from '../src/components/StateBar.vue';
@@ -302,6 +303,15 @@ describe('Workload view', () => {
     const member = await mountView('member');
     expect(member.find('[data-test="edit-schedule"]').exists()).toBe(false);
     member.unmount();
+    current = status;
+  });
+
+  it('gives its schedule dialog the kinds of its backends, its companion databases last', async () => {
+    current = { ...status, can: { wake: true, nap: true }, schedule: null, next: [], maintenanceDue: null,
+      backends: [{ kind: 'rds-instance', id: 'shop-db', status: 'running', companion: true }, { kind: 'ecs', id: 'arn:aws:ecs:eu-west-3:111122223333:service/main/shop', status: 'running' }] };
+    const wrapper = await mountView('operator');
+    expect(wrapper.findComponent(ScheduleDialog).props('kinds')).toEqual(['ecs', 'rds-instance']);
+    wrapper.unmount();
     current = status;
   });
 
