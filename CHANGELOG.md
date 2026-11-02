@@ -38,7 +38,8 @@ schedule, and is put back on Cancel or a refusal. A window's own dates show in i
 sentence ("except 4 Jan 2027"), and can be removed there. A schedule takes 100 windows (20 before router 0.36.0). Each save, move or clear of a schedule shows a notification naming the workload.
 The dialogs' help moved to tooltips: what a schedule overrides, what wins over it, and drawn samples of the overlap rules. A
 window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip, titled by the workload's name and a chip of the window's kind with its sun or moon. In the Schedule dialog, each window's tab
-starts with that chip in its kind's color (awake green, nap blue, as on the Schedule card), the title highlights the workload
+starts with its sun or moon on a chip of its kind's color (awake green, nap blue, as on the Schedule card), the + buttons stay
+beside the tabs however many there are (the tabs scroll; on a phone, the buttons are under them), the title highlights the workload
 after its services' icons, and the maximum nap's hint is one line, its explanation in a tooltip. The Workload field of New window
 autocompletes, and workloads are sorted by name.
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Edit a workload's schedule (R12): what applies to the whole schedule first (the time zone, the browser's by default, the
 // exceptions, the maximum nap), then a tab per window, then how far apart windows join, named by its kind's icon and its window in a
-// few words, with how it repeats (WindowRecurrence). A window keeps its kind, a chip in its color: the buttons after the tabs add
+// few words, with how it repeats (WindowRecurrence). A window keeps its kind, its icon on a chip of its color: the buttons after the tabs add
 // a nap or an awake one. The title highlights the workload, after its services' icons. The router's refusals are shown as it
 // words them.
 import { computed, ref, watch } from 'vue';
@@ -121,7 +121,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
           <div class="dm-windows__bar">
             <v-tabs v-model="tab" data-test="window-tabs" density="compact" show-arrows color="primary" class="dm-windows__tabs">
               <v-tab v-for="(w, i) in windows" :key="keys[i]" :value="keys[i]" data-test="window-tab" class="text-none" :aria-label="`${kindName(w)} window: ${titles[i]}`">
-                <v-chip :color="kindColor(w.kind)" :prepend-icon="w.kind === 'nap' ? mdiWeatherNight : mdiWeatherSunny" variant="tonal" label size="small" class="me-2">{{ kindName(w) }}</v-chip>
+                <v-chip :color="kindColor(w.kind)" variant="tonal" label size="small" class="me-2 dm-tab__kind"><v-icon :icon="w.kind === 'nap' ? mdiWeatherNight : mdiWeatherSunny" size="16" /></v-chip>
                 <span data-test="window-tab-title" class="dm-tab__title">{{ titles[i] }}</span>
                 <v-icon v-if="invalid[i]" data-test="window-tab-problem" :icon="mdiAlertCircleOutline" color="error" size="16" class="ms-1" />
               </v-tab>
@@ -188,7 +188,9 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
 .dm-settings__nap { flex: 0 1 250px; min-width: 200px; }
 .dm-windows { border: 1px solid rgb(var(--v-theme-outline-variant, 128 128 128) / 0.4); border-radius: 12px; }
 .dm-windows__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; padding-right: 8px; border-bottom: 1px solid rgb(var(--v-theme-outline-variant, 128 128 128) / 0.4); }
-.dm-windows__tabs { flex: 1 1 auto; min-width: 0; }
+/* From no width: however many tabs, they scroll beside the + buttons rather than push them to a row of their own. */
+.dm-windows__tabs { flex: 1 1 0; min-width: 0; }
+.dm-tab__kind { padding: 0 6px; }
 .dm-tab__title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* On a phone the tabs take the whole row, the + buttons go under them. */
 @media (max-width: 600px) { .dm-windows__tabs { flex-basis: 100%; } .dm-tab__title { max-width: 180px; } }

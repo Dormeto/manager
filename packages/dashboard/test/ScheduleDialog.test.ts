@@ -481,8 +481,8 @@ describe('Schedule dialog: a tab per window', () => {
   const selected = () => tabs().map((t) => t.classList.contains('v-tab--selected'));
   // The icons an element holds, by the path each was given (the tests' Vuetify draws them as font classes).
   const icons = (wrapper: VueWrapper, el: Element) => wrapper.findAllComponents({ name: 'VIcon' }).filter((i) => el.contains(i.element)).map((i) => i.props('icon'));
-  // The kind's chip of each tab: its words, color and icon.
-  const kinds = (wrapper: VueWrapper) => tabs().map((t) => wrapper.findAllComponents({ name: 'VChip' }).filter((c) => t.contains(c.element)).map((c) => [c.text(), c.props('color'), c.props('prependIcon')]));
+  // The kind's chip of each tab: its words (none), color and icons.
+  const kinds = (wrapper: VueWrapper) => tabs().map((t) => wrapper.findAllComponents({ name: 'VChip' }).filter((c) => t.contains(c.element)).map((c) => [c.text(), c.props('color'), icons(wrapper, c.element)]));
   const titled = () => tabs().map((t) => t.querySelector('[data-test="window-tab-title"]')!.textContent);
   const hover = async (name: string, content: string) => {
     q(name)!.dispatchEvent(new MouseEvent('mouseenter'));
@@ -490,10 +490,11 @@ describe('Schedule dialog: a tab per window', () => {
     return document.querySelector(`.v-overlay--active [data-test="${content}"]`)!;
   };
 
-  it('names each tab with a chip of its kind, in the kind\'s color and with its icon, then its window in a few words; no kind to change', async () => {
+  it('names each tab with a chip of its kind, its icon alone in the kind\'s color, then its window in a few words; no kind to change', async () => {
     const wrapper = await open(sample);
     expect(titled()).toEqual(['Mon, 08:00–12:00', 'Tue, 08:00–12:00', 'Cron 30 8 * * 1-5, 10 h 30 min']);
-    expect(kinds(wrapper)).toEqual([[['Awake', 'success', mdiWeatherSunny]], [['Nap', 'info', mdiWeatherNight]], [['Awake', 'success', mdiWeatherSunny]]]);
+    expect(kinds(wrapper)).toEqual([[['', 'success', [mdiWeatherSunny]]], [['', 'info', [mdiWeatherNight]]], [['', 'success', [mdiWeatherSunny]]]]);
+    expect(tabs().map((t) => t.textContent!.trim())).toEqual(titled());
     const [first] = tabs();
     expect(first!.querySelector('.v-chip')!.compareDocumentPosition(first!.querySelector('[data-test="window-tab-title"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(tabs().map((t) => t.getAttribute('aria-label'))).toEqual(['Awake window: Mon, 08:00–12:00', 'Nap window: Tue, 08:00–12:00', 'Awake window: Cron 30 8 * * 1-5, 10 h 30 min']);
@@ -523,7 +524,7 @@ describe('Schedule dialog: a tab per window', () => {
     await flushPromises();
     expect(selected()).toEqual([false, false, false, true]);
     expect(shown()).toEqual([false, false, false, true]);
-    expect(kinds(wrapper)[3]).toEqual([['Nap', 'info', mdiWeatherNight]]);
+    expect(kinds(wrapper)[3]).toEqual([['', 'info', [mdiWeatherNight]]]);
     q('add-awake')!.click();
     await flushPromises();
     expect(selected()).toEqual([false, false, false, false, true]);
