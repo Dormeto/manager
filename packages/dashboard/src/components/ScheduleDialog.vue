@@ -170,9 +170,11 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
 .dm-settings__dates { flex: 1 1 280px; }
 .dm-settings__nap { flex: 0 1 250px; min-width: 200px; }
 .dm-windows { border: 1px solid rgb(var(--v-theme-outline-variant, 128 128 128) / 0.4); border-radius: 12px; }
-.dm-windows__bar { display: flex; align-items: center; gap: 2px; padding-right: 8px; border-bottom: 1px solid rgb(var(--v-theme-outline-variant, 128 128 128) / 0.4); }
+.dm-windows__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; padding-right: 8px; border-bottom: 1px solid rgb(var(--v-theme-outline-variant, 128 128 128) / 0.4); }
 .dm-windows__tabs { flex: 1 1 auto; min-width: 0; }
 .dm-tab__title { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* On a phone the tabs take the whole row, the + buttons go under them. */
+@media (max-width: 600px) { .dm-windows__tabs { flex-basis: 100%; } .dm-tab__title { max-width: 180px; } }
 .dm-add { min-width: 0; padding: 0 8px; }
 .dm-window { padding: 0 16px 16px; margin: 0; }
 p.dm-window { padding-top: 16px; }
