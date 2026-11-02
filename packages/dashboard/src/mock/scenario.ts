@@ -22,7 +22,7 @@ export interface Scenario {
 export const DEFAULT_SCENARIO: Scenario = {
   seed: 'dormeto', domain: 'example.com', people: 5, accounts: 6, regions: ['eu-west-1', 'eu-west-3', 'us-east-1'], routers: 3, workloads: 18, candidates: 13,
 };
-const LIMITS = { people: [1, 40], accounts: [1, 40], routers: [1, 60], workloads: [0, 400], candidates: [0, 300] } as const;
+const LIMITS = { people: [1, 40], accounts: [1, 40], routers: [1, 60], workloads: [0, 1000], candidates: [0, 300] } as const;
 
 // A scenario from its text; what is missing or wrong keeps the default's.
 export function parseScenario(text: string | null | undefined, base: Scenario = DEFAULT_SCENARIO): Scenario {

@@ -12,7 +12,7 @@ describe('demo scenario', () => {
   it('reads the seed and the sizes, keeping the default for what is missing or wrong', () => {
     expect(parseScenario(undefined)).toEqual(DEFAULT_SCENARIO);
     expect(parseScenario('acme, workloads=60 ,routers=5')).toMatchObject({ seed: 'acme', workloads: 60, routers: 5, accounts: DEFAULT_SCENARIO.accounts });
-    expect(parseScenario('workloads=100000,people=-3,accounts=x')).toMatchObject({ workloads: 400, people: 1, accounts: DEFAULT_SCENARIO.accounts });
+    expect(parseScenario('workloads=100000,people=-3,accounts=x')).toMatchObject({ workloads: 1000, people: 1, accounts: DEFAULT_SCENARIO.accounts });
     expect(parseScenario('regions=us-west-2+mars-1').regions).toEqual(['us-west-2']);
     expect(parseScenario('regions=mars-1').regions).toEqual(DEFAULT_SCENARIO.regions);
     expect(parseScenario('domain=acme.test').domain).toBe('acme.test');
@@ -27,7 +27,7 @@ describe('demo scenario', () => {
     expect(b.workloads.map((w) => w.name)).not.toEqual(a.workloads.map((w) => w.name));
   });
 
-  for (const text of ['', 'acme', 'tiny,people=1,accounts=1,routers=1,workloads=2,candidates=1', 'big,accounts=20,routers=30,workloads=300,candidates=120,people=12']) {
+  for (const text of ['', 'acme', 'tiny,people=1,accounts=1,routers=1,workloads=2,candidates=1', 'big,accounts=20,routers=30,workloads=300,candidates=120,people=12', 'scale,accounts=30,routers=40,workloads=1000,candidates=20']) {
     it(`builds a consistent organization (${text || 'default'})`, () => {
       const s = parseScenario(text);
       const org = organization(s);

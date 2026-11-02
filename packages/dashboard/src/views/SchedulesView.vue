@@ -450,7 +450,7 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
       <CalendarsPanel :rows="panelRows" :enabled="enabledColors" :status="statuses" :message="message" :loading="listing" @toggle="toggle" />
     </v-card>
     <v-navigation-drawer v-else v-model="drawer" temporary location="end" width="320">
-      <div class="pa-4"><CalendarsPanel :rows="panelRows" :enabled="enabledColors" :status="statuses" :message="message" :loading="listing" @toggle="toggle" /></div>
+      <div class="pa-4 dm-sched__drawer"><CalendarsPanel :rows="panelRows" :enabled="enabledColors" :status="statuses" :message="message" :loading="listing" @toggle="toggle" /></div>
     </v-navigation-drawer>
     <v-card class="dm-sched__main">
       <div class="dm-sched__bar">
@@ -496,8 +496,9 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 
 <style scoped>
 .dm-sched { display: flex; gap: 16px; align-items: flex-start; }
-.dm-sched__panel { flex: 0 0 280px; max-height: calc(100vh - 160px); overflow-y: auto; }
+.dm-sched__panel { flex: 0 0 280px; height: calc(100vh - 160px); min-height: 360px; display: flex; flex-direction: column; }
 .dm-sched__main { flex: 1 1 auto; min-width: 0; }
+.dm-sched__drawer { height: 100%; display: flex; flex-direction: column; }
 .dm-sched__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 12px 16px; border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
 .dm-sched__title { font-size: 1.05rem; font-weight: 600; margin-left: 8px; }
 .dm-sched__views { flex: none; }

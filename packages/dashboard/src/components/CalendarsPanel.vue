@@ -1,27 +1,33 @@
 <script setup lang="ts">
 // The Schedules view's calendars: the workloads the user may read, searched by name, id or router, with "Scheduled only"
-// on by default; a checkbox enables a calendar (the view enforces the limit), and an enabled one shows its color.
+// on by default; a checkbox enables a calendar (the view enforces the limit), and an enabled one shows its color. An organization
+// can have 1,000 workloads (the user, 2026-11-02): the list draws the rows in sight only, sorted once, and fills the panel.
 import { computed, ref } from 'vue';
-import { mdiAlertCircleOutline, mdiLockOutline, mdiMagnify } from '@mdi/js';
-import { MAX_CALENDARS, NEEDS_ROUTER, colorFor, naturalCompare, type CalendarStatus, type PanelRow } from '../calendars';
+import { mdiMagnify } from '@mdi/js';
+import { MAX_CALENDARS, colorFor, naturalCompare, type CalendarStatus, type PanelRow } from '../calendars';
+import CalendarRow from './CalendarRow.vue';
 
 const props = defineProps<{ rows: PanelRow[]; enabled: Record<string, number>; status: Record<string, CalendarStatus>; message?: string; loading?: boolean; error?: string }>();
 const emit = defineEmits<{ toggle: [key: string] }>();
 const search = ref('');
-// A refused checkbox is already ticked on screen (its value is the view's): the list is drawn again.
-const redraw = ref(0);
+// A refused checkbox is already ticked on screen (its value is the view's): its row is drawn again, the list stays where it is.
+const redraw = ref<{ key: string; n: number }>({ key: '', n: 0 });
 const scheduledOnly = ref(true);
+// In name order once per list, each with what a search reads.
+const sorted = computed(() => [...props.rows].sort((a, b) => naturalCompare(a.name, b.name)).map((r) => ({ row: r, text: `${r.name} ${r.id} ${r.router} ${r.router}/${r.id}`.toLowerCase() })));
 // Workloads of a router before 0.31.0 stay listed (disabled): whether they have a schedule is not known.
 const shown = computed(() => {
-  const q = search.value.trim().toLowerCase();
-  return props.rows.filter((r) => (!q || `${r.name} ${r.id} ${r.router} ${r.router}/${r.id}`.toLowerCase().includes(q)) && (!scheduledOnly.value || r.scheduled || !r.supported || r.key in props.enabled))
-    .sort((a, b) => naturalCompare(a.name, b.name));
+  const q = search.value?.trim().toLowerCase() ?? '';
+  return sorted.value.filter(({ row: r, text }) => (!q || text.includes(q)) && (!scheduledOnly.value || r.scheduled || !r.supported || r.key in props.enabled)).map(({ row }) => row);
 });
 const count = computed(() => Object.keys(props.enabled).length);
 function toggle(r: PanelRow) {
-  if (!(r.key in props.enabled) && count.value >= MAX_CALENDARS) redraw.value++;
+  if (!(r.key in props.enabled) && count.value >= MAX_CALENDARS) redraw.value = { key: r.key, n: redraw.value.n + 1 };
   emit('toggle', r.key);
 }
+// A list this long draws the rows in sight only; a shorter one draws them all.
+const VIRTUAL_FROM = 100;
+const rowKey = (r: PanelRow) => (redraw.value.key === r.key ? `${r.key}#${redraw.value.n}` : r.key);
 const swatch = (key: string) => (key in props.enabled ? colorFor(props.enabled[key]!) : 'transparent');
 </script>
 
@@ -34,35 +40,21 @@ const swatch = (key: string) => (key in props.enabled ? colorFor(props.enabled[k
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="my-2" :text="error" />
     <div v-if="loading && !rows.length" class="text-medium-emphasis py-4">Reading the workloads…</div>
     <div v-else-if="!shown.length" class="text-medium-emphasis py-4">{{ scheduledOnly && !search.trim() ? 'No workload has a schedule yet: turn off "Scheduled only" to choose one.' : 'No workload matches.' }}</div>
-    <ul :key="redraw" class="dm-panel__list">
-      <li v-for="r in shown" :key="r.key" :data-test="`calendar-${r.key}`" class="dm-panel__row">
-        <v-checkbox :model-value="r.key in enabled" :disabled="!r.supported && !(r.key in enabled)" density="compact" hide-details :aria-label="`Show ${r.name}`" @update:model-value="toggle(r)">
-          <template #label>
-            <span class="dm-panel__label">
-              <span data-test="swatch" class="dm-panel__swatch" :style="{ background: swatch(r.key), borderColor: r.key in enabled ? swatch(r.key) : 'currentColor' }" />
-              <span class="dm-panel__name">
-                <span class="dm-panel__title">{{ r.name }}</span>
-                <span class="dm-panel__sub mono">{{ r.router }}<template v-if="r.name !== r.id"> · {{ r.id }}</template></span>
-                <span v-if="!r.supported || status[r.key] === 'unsupported'" data-test="needs-router" class="dm-panel__sub">{{ NEEDS_ROUTER }}</span>
-              </span>
-            </span>
-          </template>
-        </v-checkbox>
-        <v-icon v-if="r.locked" data-test="locked" :icon="mdiLockOutline" size="16" class="text-medium-emphasis" title="Read only: you may not wake or nap this workload" aria-label="Read only" />
-        <v-progress-circular v-if="status[r.key] === 'loading'" indeterminate size="14" width="2" aria-label="Reading its schedule" />
-        <v-icon v-else-if="status[r.key] === 'failed'" data-test="failed" :icon="mdiAlertCircleOutline" size="16" color="error" title="Its schedule could not be read: refresh to try again" aria-label="Could not be read" />
-      </li>
-    </ul>
+    <v-virtual-scroll v-if="shown.length > VIRTUAL_FROM" :items="shown" item-key="key" :item-height="48" height="100%" class="dm-panel__list" role="list">
+      <template #default="{ item }">
+        <CalendarRow :key="rowKey(item)" :row="item" :on="item.key in enabled" :color="swatch(item.key)" :status="status[item.key]" @toggle="toggle(item)" />
+      </template>
+    </v-virtual-scroll>
+    <div v-else class="dm-panel__list dm-panel__list--plain" role="list">
+      <CalendarRow v-for="r in shown" :key="rowKey(r)" :row="r" :on="r.key in enabled" :color="swatch(r.key)" :status="status[r.key]" @toggle="toggle(r)" />
+    </div>
   </div>
 </template>
 
 <style scoped>
-.dm-panel__list { list-style: none; padding: 0; margin: 8px 0 0; }
-.dm-panel__row { display: flex; align-items: center; gap: 6px; }
-.dm-panel__row > :first-child { flex: 1 1 auto; min-width: 0; }
-.dm-panel__label { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.dm-panel__swatch { flex: none; width: 12px; height: 12px; border-radius: 4px; border: 2px solid; }
-.dm-panel__name { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-.dm-panel__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.dm-panel__sub { font-size: 0.7rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); overflow: hidden; text-overflow: ellipsis; }
+.dm-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* Only the list takes the panel's height: a field or a switch keeps its own. */
+.dm-panel > :not(.dm-panel__list) { flex: 0 0 auto; }
+.dm-panel__list { flex: 1 1 0; min-height: 120px; margin: 8px -4px 0 0; padding-right: 4px; }
+.dm-panel__list--plain { overflow-y: auto; }
 </style>

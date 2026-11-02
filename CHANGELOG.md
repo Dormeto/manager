@@ -65,6 +65,10 @@ occurrence ends the row of its sentence. The join is offered from two windows, o
 minutes, or a schedule with a value of its own; Inherit comes first on its row, and what joining does is in a tooltip, at the
 router and the organization too.
 
+The Schedules panel takes an organization of 1,000 workloads: past 100 rows it draws only those in sight, so a search, a tick or
+"Scheduled only" answers at once, and it fills the height of the page. The demo takes `workloads=1000` in its scenario
+(`?demo=dormeto,workloads=1000`).
+
 A first tap on a tooltip no longer opens and closes it at once on a phone (a pause, a setting, a router's health, an
 organization's access).
 
