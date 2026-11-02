@@ -125,7 +125,7 @@ async function confirm() {
     <v-card-text data-test="default-ended" class="d-flex flex-wrap align-center ga-4 py-2">
       <div class="dm-default">
         <div class="font-weight-medium">Ended windows</div>
-        <div class="text-body-small text-medium-emphasis">A window whose end date passed longer ago than this leaves its schedule, with the dates without a window as old; routers 0.36.0 and later remove them at their checks. 0 keeps them.</div>
+        <div class="text-body-small text-medium-emphasis">A window with no occurrence within this many days and none to come leaves its schedule, with the dates without a window as old; routers 0.36.0 and later remove them at their checks. 0 keeps them.</div>
       </div>
       <v-spacer />
       <span data-test="default-ended-value" class="dm-num">{{ endedLine() }}</span>

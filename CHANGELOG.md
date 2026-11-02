@@ -66,8 +66,9 @@ next occurrence ends the row of its sentence. The join is offered from two windo
 the checkbox unchecked while it inherits and the minutes enabled once checked, the default in force beside it and what joining
 does in a tooltip; the router's and the organization's dialogs read the same.
 
-Windows that ended long ago leave their schedule (routers 0.36.0 and later): a router's check removes a window whose end date
-passed more than a year ago, and the dates without a window as old, the schedule's and each window's; a schedule left with
+Windows that ended long ago leave their schedule (routers 0.36.0 and later): a router's check removes a window with no valid
+occurrence within the last year and none to come (its pattern, range and dates without a window decide, not its end date alone),
+and the dates without a window as old, the schedule's and each window's; a schedule left with
 nothing is removed. Routers › Workload defaults › Ended windows sets the delay for the organization (`endedWindowDays` in
 `settings.json`, `PUT /api/settings/workloads`): 0 keeps them, else 30 to 3650 days. A router removes nothing while it has never
 read the settings, never while a window is active, and never over a schedule saved since its check read it.
