@@ -24,6 +24,7 @@ import WaitingPageCard from '../components/WaitingPageCard.vue';
 import WorkloadDefaultsCard from '../components/WorkloadDefaultsCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
+import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 const session = useSession();
@@ -70,11 +71,8 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 
 
 <template>
-  <div class="d-flex flex-wrap align-end ga-4 mb-6">
-    <div>
-      <div class="dm-eyebrow mb-1">Fleet</div>
-      <h1 class="text-headline-small">Routers</h1>
-    </div>
+  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+    <PageTitle eyebrow="Fleet" title="Routers" />
     <v-spacer />
     <v-btn v-if="session.isAdmin" :prepend-icon="mdiPlusCircleOutline" variant="tonal" color="primary" @click="installOpen = true">Install a router</v-btn>
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />

@@ -2,7 +2,7 @@
 // A router's own view, reached from Routers as a workload's is from Workloads: its version, health and alert, its
 // workloads by state, its pauses, its health figures and configuration (with where each setting is changed), its actions.
 import { computed, onMounted, ref } from 'vue';
-import { mdiAlertOctagonOutline, mdiAlertOutline, mdiArrowLeft, mdiArrowRight, mdiBellRingOutline, mdiCheckCircleOutline, mdiHeartPulse, mdiLanDisconnect, mdiPauseCircleOutline } from '@mdi/js';
+import { mdiAlertOctagonOutline, mdiAlertOutline, mdiArrowRight, mdiBellRingOutline, mdiCheckCircleOutline, mdiHeartPulse, mdiLanDisconnect, mdiPauseCircleOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { relative, stateColor } from '../format';
@@ -25,6 +25,7 @@ import RouterDetails from '../components/RouterDetails.vue';
 import RouterVersion from '../components/RouterVersion.vue';
 import TerraformChip from '../components/TerraformChip.vue';
 import type { AlarmInfo, AlertsInfo, DescriptionInfo, RouterInfo } from '../types';
+import PageTitle from '../components/PageTitle.vue';
 
 const props = defineProps<{ name: string }>();
 const now = useNow();
@@ -101,14 +102,8 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-end ga-4 mb-6">
-    <div>
-      <div class="d-flex align-center mb-1">
-        <v-btn :icon="mdiArrowLeft" variant="text" size="x-small" class="dm-back" to="/routers" aria-label="Back to the routers" />
-        <span class="dm-eyebrow">Fleet</span>
-      </div>
-      <h1 class="text-headline-small">{{ name }}</h1>
-    </div>
+  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+    <PageTitle eyebrow="Fleet" :title="name" back="/routers" back-label="Back to the routers" />
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
   </div>
@@ -217,7 +212,6 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
 
 <style scoped>
 .dm-num { font-variant-numeric: tabular-nums; }
-.dm-back { margin: -6px 4px -6px -6px; }
 h1 { overflow-wrap: anywhere; }
 
 /* The hero: the router's icon in its sky, who and where it is, its health in a sentence, its key figures. */

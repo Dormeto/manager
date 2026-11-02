@@ -11,6 +11,7 @@ import { getConfig } from '../config';
 import { relative } from '../format';
 import { useSession, type Me } from '../stores/session';
 import DmLogo from '../components/DmLogo.vue';
+import PageTitle from '../components/PageTitle.vue';
 
 const session = useSession();
 const secret = ref('');
@@ -124,11 +125,8 @@ const ROLE_COLOR: Record<string, string | undefined> = { admin: 'secondary', ope
   <!-- A short page: one centred column, the profile above the two-step verification (side by side, setting it up left an
        empty card beside a tall one). -->
   <div>
-    <div class="d-flex flex-wrap align-end ga-4 mb-6">
-      <div>
-        <div class="dm-eyebrow mb-1">Account</div>
-        <h1 class="text-headline-small">Account</h1>
-      </div>
+    <div class="d-flex flex-wrap align-center ga-4 mb-4">
+      <PageTitle eyebrow="Account" title="Account" />
     </div>
     <v-card title="You" class="dm-profile mb-4">
       <template #image><div class="dm-profile__sky" aria-hidden="true" /></template>

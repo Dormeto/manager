@@ -7,7 +7,8 @@ CLI script, of the same release).
 
 ## Unreleased
 
-Every page takes the full width of the window (Update, Operations, Users, Account and Discovery's settings were capped). On
+Every page takes the full width of the window (Update, Operations, Users, Account and Discovery's settings were capped), and
+its title is one line, its section beside its name ("FLEET / Schedules"). On
 the Update page, Prepare and Confirm show a loading indicator from the click until the plan or the update ends. The waiting
 page's title and description take Markdown, in the preview too (routers 0.36.0 and later draw it for visitors). A card's or
 a dialog's title is centered on its icon.

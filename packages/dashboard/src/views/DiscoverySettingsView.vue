@@ -2,7 +2,7 @@
 // Discovery perimeter (administrators): mode, regions, refresh period, global excludes and filters, with the lint of
 // useless inclusions next to the criterion it concerns. The API validates and lists every error.
 import { computed, onMounted, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiDeleteOutline, mdiEarth, mdiFilterOutline, mdiLightningBoltOutline, mdiMinusCircleOutline, mdiPlus, mdiPlusCircleOutline } from '@mdi/js';
+import { mdiCancel, mdiDeleteOutline, mdiEarth, mdiFilterOutline, mdiLightningBoltOutline, mdiMinusCircleOutline, mdiPlus, mdiPlusCircleOutline } from '@mdi/js';
 import type { Criterion, DiscoveryConfig, LintFinding } from '@dormeto/discovery/types';
 import { api, ApiError } from '../api';
 import CriteriaEditor from '../components/CriteriaEditor.vue';
@@ -12,6 +12,7 @@ import { formatList, lintFor, parseList } from '../discovery';
 import { relative } from '../format';
 import { useNow } from '../now';
 import { procedureLink, type AccessReport } from '../access';
+import PageTitle from '../components/PageTitle.vue';
 
 type Answer = { config: DiscoveryConfig; lint: LintFinding[]; updatedAt?: string | null; updatedBy?: string | null };
 
@@ -99,14 +100,8 @@ onMounted(load);
 <template>
   <!-- A form: a centred column on a wide screen rather than fields stretched over it. -->
   <div>
-    <div class="d-flex flex-wrap align-end ga-4 mb-6">
-      <div>
-        <div class="d-flex align-center mb-1">
-          <v-btn :icon="mdiArrowLeft" variant="text" size="x-small" class="dm-back" to="/discovery" aria-label="Back to discovery" />
-          <span class="dm-eyebrow">Organization</span>
-        </div>
-        <h1 class="text-headline-small">Discovery perimeter</h1>
-      </div>
+    <div class="d-flex flex-wrap align-center ga-4 mb-4">
+      <PageTitle eyebrow="Organization" title="Discovery perimeter" back="/discovery" back-label="Back to discovery" />
       <v-spacer />
       <div class="d-none d-md-flex align-center ga-3">
         <span v-if="updated.at" class="text-body-small text-medium-emphasis">Saved {{ relative(updated.at, now) }}<template v-if="updated.by"> by {{ updated.by }}</template></span>
@@ -251,7 +246,6 @@ onMounted(load);
 .dm-pair__card > .dm-body > .dm-field { margin-top: auto; }
 .dm-scope { flex: 1 1 auto; align-content: space-between; }
 .dm-hours { max-width: 16rem; }
-.dm-back { margin: -6px 4px -6px -6px; }
 /* A switch that is off stays visible on the glass. */
 .dm-field :deep(.v-selection-control:not(.v-selection-control--dirty) .v-switch__track) { background-color: rgba(var(--v-theme-on-surface), 0.2); opacity: 1; }
 .dm-h2 { font-size: 1.35rem; font-weight: 600; line-height: 1.15; letter-spacing: -0.03em; }

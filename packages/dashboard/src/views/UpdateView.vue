@@ -10,6 +10,7 @@ import NoticeAlert from '../components/NoticeAlert.vue';
 import ReleaseNotes from '../components/ReleaseNotes.vue';
 import { useUpdateBadge } from '../stores/update';
 import { busy, codeParts, consoleLink, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateCheck, type UpdateState } from '../update';
+import PageTitle from '../components/PageTitle.vue';
 
 // Get started's "Updating the manager" (the CLI's ways) and "Upgrade" (the Terraform module's).
 const UPDATING = 'https://dormeto.com/get-started.html#update';
@@ -222,10 +223,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
-    <div class="mb-6">
-      <div class="dm-eyebrow mb-1">Administration</div>
-      <h1 class="text-headline-small">Update</h1>
-    </div>
+    <PageTitle eyebrow="Administration" title="Update" class="mb-4" />
     <NoticeAlert v-if="notice" :notice="notice" @close="notice = null" />
     <v-alert v-if="error" type="error" class="mb-4" :text="error" />
     <v-alert v-if="notAnswering" type="warning" class="mb-4" :icon="mdiAlertOutline">

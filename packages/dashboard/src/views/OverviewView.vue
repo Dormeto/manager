@@ -17,6 +17,7 @@ import UpdateBanner from '../components/UpdateBanner.vue';
 import DmLogo from '../components/DmLogo.vue';
 import FleetMap from '../components/FleetMap.vue';
 import type { AlertsInfo, FleetStates, RouterInfo, WorkloadSummary } from '../types';
+import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 // A member reads the workloads their grants cover, not the routers: the API sends none, so neither the map nor the list shows.
@@ -111,11 +112,8 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-end ga-4 mb-6">
-    <div>
-      <div class="dm-eyebrow mb-1">Fleet</div>
-      <h1 class="text-headline-small">Overview</h1>
-    </div>
+  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+    <PageTitle eyebrow="Fleet" title="Overview" />
     <v-spacer />
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
   </div>

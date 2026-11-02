@@ -26,6 +26,7 @@ import NewWindowDialog, { type Candidate, type Selection } from '../components/N
 import DragScopeDialog, { type ScopeAsk } from '../components/DragScopeDialog.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import type { Notice } from '../components/NoticeAlert.vue';
+import PageTitle from '../components/PageTitle.vue';
 
 const session = useSession();
 const route = useRoute();
@@ -435,11 +436,8 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-end ga-4 mb-4">
-    <div>
-      <div class="dm-eyebrow mb-1">Fleet</div>
-      <h1 class="text-headline-small">Schedules</h1>
-    </div>
+  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+    <PageTitle eyebrow="Fleet" title="Schedules" />
   </div>
   <v-alert v-if="listError" type="error" class="mb-4" :text="listError" />
   <v-alert v-for="e in routerErrors" :key="e.router" data-test="router-error" type="warning" variant="tonal" density="compact" class="mb-4" :title="`Router ${e.router} unreachable`" :text="`${e.message} Its workloads are missing from the panel; the calendars you enabled stay.`" />

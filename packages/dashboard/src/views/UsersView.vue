@@ -15,6 +15,7 @@ import GroupsCard from '../components/GroupsCard.vue';
 import type { Group } from '../groups';
 import NoticeAlert from '../components/NoticeAlert.vue';
 import { useCountUp } from '../count-up';
+import PageTitle from '../components/PageTitle.vue';
 
 // mfa: null when Cognito could not say.
 // groups: the custom groups (R11).
@@ -137,11 +138,8 @@ load();
 <template>
   <!-- A few rows: a centred column on a wide screen rather than a table spread over it. -->
   <div>
-    <div class="d-flex flex-wrap align-end ga-4 mb-6">
-      <div>
-        <div class="dm-eyebrow mb-1">Administration</div>
-        <h1 class="text-headline-small">Users</h1>
-      </div>
+    <div class="d-flex flex-wrap align-center ga-4 mb-4">
+      <PageTitle eyebrow="Administration" title="Users" />
       <v-spacer />
       <v-btn color="primary" variant="flat" :prepend-icon="mdiAccountPlus" @click="inviting = true">Invite</v-btn>
     </div>

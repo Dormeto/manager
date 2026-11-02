@@ -16,6 +16,7 @@ import DmLogo from '../components/DmLogo.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import type { Operation, OperationType } from '../types';
+import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 const operations = ref<Operation[]>([]);
@@ -57,14 +58,12 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
 <template>
   <!-- A list of cards, its content on their left: a centred column on a wide screen rather than cards wider than it. -->
   <div>
-    <div class="d-flex flex-wrap align-end ga-4 mb-6">
-      <div>
-        <div class="dm-eyebrow mb-1">Organization</div>
-        <div class="d-flex flex-wrap align-center ga-3">
-          <h1 class="text-headline-small">Operations</h1>
+    <div class="d-flex flex-wrap align-center ga-4 mb-4">
+      <PageTitle eyebrow="Organization" title="Operations">
+        <template #after>
           <v-chip v-if="running" color="primary" variant="tonal" label class="dm-running"><span class="dm-pulse" aria-hidden="true" />{{ running }} running</v-chip>
-        </div>
-      </div>
+        </template>
+      </PageTitle>
       <v-spacer />
       <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     </div>

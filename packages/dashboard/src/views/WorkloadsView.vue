@@ -20,6 +20,7 @@ import DmLogo from '../components/DmLogo.vue';
 import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
 import { tagsList } from '../tags';
 import { useSession } from '../stores/session';
+import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 // A member has no Routers view: the router column is text.
@@ -143,11 +144,8 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 
 <template>
   <div data-test="workloads-header" class="mb-4">
-    <div class="d-flex flex-wrap align-end ga-4 mb-6">
-      <div>
-        <div class="dm-eyebrow mb-1">Fleet</div>
-        <h1 class="text-headline-small">Workloads</h1>
-      </div>
+    <div class="d-flex flex-wrap align-center ga-4 mb-4">
+      <PageTitle eyebrow="Fleet" title="Workloads" />
       <v-spacer />
       <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     </div>

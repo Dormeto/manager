@@ -32,6 +32,7 @@ import StatusHelp from '../components/StatusHelp.vue';
 import { useNow } from '../now';
 import { useDiscoveryBadge } from '../stores/discovery';
 import { useSession } from '../stores/session';
+import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 const session = useSession();
@@ -320,11 +321,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-end ga-4 mb-6">
-    <div>
-      <div class="dm-eyebrow mb-1">Organization</div>
-      <h1 class="text-headline-small">Discovery</h1>
-    </div>
+  <div class="d-flex flex-wrap align-center ga-4 mb-4">
+    <PageTitle eyebrow="Organization" title="Discovery" />
     <v-spacer />
     <div class="d-flex flex-wrap align-center ga-2">
       <v-btn v-if="session.isAdmin" :prepend-icon="mdiCogOutline" variant="text" to="/discovery/settings">Perimeter</v-btn>

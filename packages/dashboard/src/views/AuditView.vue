@@ -7,6 +7,7 @@ import { api } from '../api';
 import { relative } from '../format';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
+import PageTitle from '../components/PageTitle.vue';
 
 interface Entry { id: string; at: string; who: string; role: string; action: string; target: string; result: string }
 
@@ -39,11 +40,10 @@ const failed = (e: Entry) => e.result.startsWith('error');
 </script>
 
 <template>
-  <div class="d-flex flex-wrap align-end ga-4 mb-6">
+  <div class="d-flex flex-wrap align-end ga-4 mb-4">
     <div>
-      <div class="dm-eyebrow mb-1">Administration</div>
-      <h1 class="text-headline-small">Audit</h1>
-      <p class="text-medium-emphasis mt-2 mb-0">Every action taken from the dashboard or the API, kept 90 days.</p>
+      <PageTitle eyebrow="Administration" title="Audit" />
+      <p class="text-medium-emphasis mt-1 mb-0">Every action taken from the dashboard or the API, kept 90 days.</p>
     </div>
   </div>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
