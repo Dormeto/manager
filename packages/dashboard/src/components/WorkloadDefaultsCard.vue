@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The defaults every workload inherits, set in the manager's settings (the routers read them within 5 minutes): hibernation,
-// joined windows and how long an ended window stays. Everyone reads them; administrators change them, after a dialog that says
-// what it affects.
+// joined windows and how long an ended window stays, each by its name and value, what it does in a tooltip. Everyone reads them;
+// administrators change them, after a dialog that says what it affects.
 import { ref } from 'vue';
 import { mdiCogOutline, mdiPencilOutline } from '@mdi/js';
 import { api } from '../api';
@@ -10,6 +10,7 @@ import { useNow } from '../now';
 import { ENDED_DAYS_DEFAULT, JOIN_DEFAULT_MINUTES, joinText } from '../schedule';
 import { useSession } from '../stores/session';
 import EndedDaysDialog from './EndedDaysDialog.vue';
+import InfoTip from './InfoTip.vue';
 import JoinDialog from './JoinDialog.vue';
 import type { WorkloadDefaults } from '../types';
 import type { Notice } from './NoticeAlert.vue';
@@ -103,10 +104,10 @@ async function confirm() {
     <v-card-text v-if="error" class="text-error">{{ error }}</v-card-text>
     <template v-else-if="defaults">
     <v-alert v-if="defaults.error" data-test="defaults-error" type="warning" variant="tonal" density="compact" class="mx-4 mb-2" :text="`${defaults.error}: these are the defaults it reads as. Repair the file, or set Hibernate, which replaces it.`" />
-    <v-card-text class="d-flex flex-wrap align-center ga-4 pb-2">
+    <v-card-text data-test="default-hibernate" class="d-flex flex-wrap align-center ga-4 pb-2">
       <div class="dm-default">
-        <div class="font-weight-medium">Hibernate</div>
-        <div class="text-body-small text-medium-emphasis">Whether standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are hibernated instead of stopped when a workload naps; a router or a workload can override this (a workload with fallback instance types hibernates only if set On on itself).</div>
+        <span class="font-weight-medium">Hibernate</span>
+        <InfoTip label="What Hibernate does" test="default-hibernate">Whether standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are hibernated instead of stopped when a workload naps; a router or a workload can override this (a workload with fallback instance types hibernates only if set On on itself).</InfoTip>
       </div>
       <v-spacer />
       <v-switch v-if="session.isAdmin" :key="switchKey" :model-value="defaults.hibernate" :label="defaults.hibernate ? 'On' : 'Off'" color="primary" hide-details inset aria-label="Hibernate by default"
@@ -115,8 +116,8 @@ async function confirm() {
     </v-card-text>
     <v-card-text data-test="default-join" class="d-flex flex-wrap align-center ga-4 py-2">
       <div class="dm-default">
-        <div class="font-weight-medium">Join windows</div>
-        <div class="text-body-small text-medium-emphasis">Two windows of one kind with a gap of at most this count as one, so a workload is neither woken nor napped for the gap; 0 never joins. A router or a workload can override this.</div>
+        <span class="font-weight-medium">Join windows</span>
+        <InfoTip label="What Join windows does" test="default-join">Two windows of one kind with a gap of at most this count as one, so a workload is neither woken nor napped for the gap; 0 never joins. A router or a workload can override this.</InfoTip>
       </div>
       <v-spacer />
       <span data-test="default-join-value" class="dm-num">{{ joinLine() }}</span>
@@ -124,8 +125,8 @@ async function confirm() {
     </v-card-text>
     <v-card-text data-test="default-ended" class="d-flex flex-wrap align-center ga-4 py-2">
       <div class="dm-default">
-        <div class="font-weight-medium">Ended windows</div>
-        <div class="text-body-small text-medium-emphasis">A window with no occurrence within this many days and none to come leaves its schedule, with the dates without a window as old; routers 0.36.0 and later remove them at their checks. 0 keeps them.</div>
+        <span class="font-weight-medium">Ended windows</span>
+        <InfoTip label="What Ended windows does" test="default-ended">A window with no occurrence within this many days and none to come leaves its schedule, with the dates without a window as old; routers 0.36.0 and later remove them at their checks. 0 keeps them.</InfoTip>
       </div>
       <v-spacer />
       <span data-test="default-ended-value" class="dm-num">{{ endedLine() }}</span>
@@ -153,7 +154,7 @@ async function confirm() {
 </template>
 
 <style scoped>
-/* The text beside its control: it wraps above the control only when the card has no room. */
-.dm-default { flex: 1 1 320px; min-width: 0; }
+/* The name and its tooltip's icon, beside the control. */
+.dm-default { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; }
 .dm-num { font-variant-numeric: tabular-nums; }
 </style>

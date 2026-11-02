@@ -32,6 +32,7 @@ import StatusHelp from '../components/StatusHelp.vue';
 import { useNow } from '../now';
 import { useDiscoveryBadge } from '../stores/discovery';
 import { useSession } from '../stores/session';
+import InfoTip from '../components/InfoTip.vue';
 import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
@@ -322,15 +323,18 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 
 <template>
   <div class="d-flex flex-wrap align-center ga-4 mb-4">
-    <PageTitle eyebrow="Organization" title="Discovery" />
+    <PageTitle eyebrow="Organization" title="Discovery">
+      <template #after>
+        <InfoTip label="What discovery reads" test="discovery" :max-width="440">Load balancer rules of every account and region of the perimeter, read with the read-only
+          <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</InfoTip>
+      </template>
+    </PageTitle>
     <v-spacer />
     <div class="d-flex flex-wrap align-center ga-2">
       <v-btn v-if="session.isAdmin" :prepend-icon="mdiCogOutline" variant="text" to="/discovery/settings">Perimeter</v-btn>
       <v-btn v-if="session.canOperate" :prepend-icon="mdiPlay" color="primary" variant="flat" :loading="running" :disabled="lastRun?.status === 'running'" @click="runNow">Run now</v-btn>
     </div>
   </div>
-  <p class="dm-lede text-medium-emphasis mb-6">Load balancer rules of every account and region of the perimeter, read with the read-only
-    <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</p>
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <NoticeToast :notice="notice" @close="notice = null" />
 
@@ -530,7 +534,6 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 .running { text-decoration: none; }
 /* Readable over the page: the overlay's glass, nearly opaque (the global glass of cards would let the page through). */
 .v-card.dm-dialog:not(.v-card--variant-text):not(.v-card--variant-plain) { background: rgba(var(--v-theme-surface), 0.95) !important; }
-.dm-lede { max-width: 78ch; }
 .dm-num { font-variant-numeric: tabular-nums; }
 /* An empty state: the sleeping icon and its sentence, centred in its card. */
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding-block: 24px !important; }

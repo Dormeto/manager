@@ -1,11 +1,13 @@
 <script setup lang="ts">
-// The manager's IP lists (R6b): downloaded once for every router by its list function, read by the routers from S3.
+// The manager's IP lists (R6b): downloaded once for every router by its list function, read by the routers from S3. What they are
+// is in the tooltip beside the title.
 import { onMounted, ref } from 'vue';
 import { mdiShieldSearch } from '@mdi/js';
 import { api } from '../api';
 import { listSourceHref, relative } from '../format';
 import { useNow } from '../now';
 import DmLogo from './DmLogo.vue';
+import InfoTip from './InfoTip.vue';
 import type { IpListRow, IpListsInfo } from '../types';
 
 const now = useNow();
@@ -34,14 +36,16 @@ const headers = [
       <template #prepend>
         <v-avatar color="primary" variant="tonal" rounded="lg" size="34"><v-icon :icon="mdiShieldSearch" size="19" /></v-avatar>
       </template>
-      <v-card-title>IP lists</v-card-title>
+      <v-card-title class="d-flex align-center ga-2">
+        IP lists
+        <InfoTip label="What the IP lists are" test="ip-lists" :max-width="440">
+          Lists of addresses that seldom belong to a visitor (scanners, cloud providers, known abusers), the manager's own: every router of the
+          organization reads them. <strong>defer</strong>: a request from a listed address does not wake a workload by itself (in a browser, the
+          waiting page's script still wakes it); <strong>ignore</strong>: it never wakes one. Set them with <code>ip_lists</code> in the manager's
+          Terraform; a router written in Terraform can add lists of its own (its view shows them).
+        </InfoTip>
+      </v-card-title>
     </v-card-item>
-    <v-card-text class="dm-iplists__lead text-body-medium text-medium-emphasis pb-2">
-      Lists of addresses that seldom belong to a visitor (scanners, cloud providers, known abusers), the manager's own: every router of the
-      organization reads them. <strong>defer</strong>: a request from a listed address does not wake a workload by itself (in a browser, the
-      waiting page's script still wakes it); <strong>ignore</strong>: it never wakes one. Set them with <code>ip_lists</code> in the manager's
-      Terraform; a router written in Terraform can add lists of its own (its view shows them).
-    </v-card-text>
     <v-data-table v-if="info.lists.length" :headers="headers" :items="info.lists" item-value="name" density="compact" hide-default-footer :items-per-page="-1" class="dm-iplists__table">
       <template #[`item.name`]="{ item }">
         <a v-if="listSourceHref(item.url)" :href="listSourceHref(item.url) ?? undefined" target="_blank" rel="noopener" class="dm-iplists__name">{{ item.name }}</a><span v-else class="dm-iplists__name">{{ item.name }}</span>
@@ -69,8 +73,6 @@ const headers = [
 <style scoped>
 .dm-iplists__head { padding: 16px 16px 4px !important; }
 .dm-iplists__head .v-card-title { padding-top: 0 !important; }
-.dm-iplists__lead { max-width: 72rem; text-wrap: pretty; }
-.dm-iplists__lead strong { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
 .dm-iplists__name { font-weight: 500; }
 a.dm-iplists__name { color: rgb(var(--v-theme-primary)); text-decoration: none; }
 a.dm-iplists__name:hover { text-decoration: underline; text-underline-offset: 3px; }

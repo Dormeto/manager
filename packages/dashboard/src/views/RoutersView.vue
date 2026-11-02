@@ -24,6 +24,7 @@ import WaitingPageCard from '../components/WaitingPageCard.vue';
 import WorkloadDefaultsCard from '../components/WorkloadDefaultsCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
+import InfoTip from '../components/InfoTip.vue';
 import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
@@ -72,13 +73,16 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 
 <template>
   <div class="d-flex flex-wrap align-center ga-4 mb-4">
-    <PageTitle eyebrow="Fleet" title="Routers" />
+    <PageTitle eyebrow="Fleet" title="Routers">
+      <template #after>
+        <InfoTip label="What a router does" test="routers" :max-width="440">One router per account and region naps and wakes its workloads. A paused router never naps any of
+          them (requests still wake); health comes from its idle check, its Lambda functions and its failure queues.</InfoTip>
+      </template>
+    </PageTitle>
     <v-spacer />
     <v-btn v-if="session.isAdmin" :prepend-icon="mdiPlusCircleOutline" variant="tonal" color="primary" @click="installOpen = true">Install a router</v-btn>
     <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
   </div>
-  <p class="dm-lead text-medium-emphasis mt-n2 mb-6">One router per account and region naps and wakes its workloads. A paused router never naps any of
-    them (requests still wake); health comes from its idle check, its Lambda functions and its failure queues.</p>
   <NoticeToast :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-card class="dm-routers">
@@ -174,7 +178,6 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 </template>
 
 <style scoped>
-.dm-lead { max-width: 68rem; font-size: 0.98rem; line-height: 1.55; text-wrap: pretty; }
 .dm-num { font-variant-numeric: tabular-nums; }
 .dm-defaults { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; margin-top: 24px; }
 @media (max-width: 960px) { .dm-defaults { grid-template-columns: minmax(0, 1fr); } }

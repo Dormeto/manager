@@ -75,6 +75,20 @@ describe('Discovery view', () => {
     vi.useRealTimers();
   });
 
+  it('says what discovery reads in a tooltip beside the page\'s title, not under it (the user, 2026-11-02)', async () => {
+    const wrapper = await mountView();
+    expect(wrapper.text()).not.toContain('Load balancer rules of every account');
+    const more = wrapper.find('[data-test="page-title"] [data-test="discovery-more"]');
+    expect(more.attributes('tabindex')).toBe('0');
+    expect(more.attributes('aria-label')).toBe('What discovery reads');
+    await more.trigger('mouseenter');
+    await sleep(300);
+    const tip = document.querySelector('.v-overlay--active [data-test="discovery-tip"]')!;
+    expect(tip.textContent!.replace(/\s+/g, ' ').trim()).toBe('Load balancer rules of every account and region of the perimeter, read with the read-only DmtDiscoveryRole. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.');
+    expect(tip.querySelector('code')!.textContent).toBe('DmtDiscoveryRole');
+    wrapper.unmount();
+  });
+
   it('shows an onboarding running on a candidate as an animated chip opening its operation, and offers no second onboarding', async () => {
     server.running = 'op-5';
     const wrapper = await mountView();

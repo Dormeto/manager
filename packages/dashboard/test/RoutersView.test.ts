@@ -281,6 +281,35 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
+  it('says what a router is in a tooltip beside the page\'s title, not under it (the user, 2026-11-02)', async () => {
+    const wrapper = await mountView();
+    expect(wrapper.text()).not.toContain('One router per account and region');
+    const more = wrapper.find('[data-test="page-title"] [data-test="routers-more"]');
+    expect(more.attributes('tabindex')).toBe('0');
+    expect(more.attributes('aria-label')).toBe('What a router does');
+    await hover(more);
+    const tip = document.querySelector('.v-overlay--active [data-test="routers-tip"]')!;
+    expect(tip.textContent!.replace(/\s+/g, ' ').trim()).toBe('One router per account and region naps and wakes its workloads. A paused router never naps any of them (requests still wake); health comes from its idle check, its Lambda functions and its failure queues.');
+    wrapper.unmount();
+  });
+
+  it('says what the IP lists are in a tooltip beside their title, not under it (the user, 2026-11-02)', async () => {
+    const wrapper = await mountView();
+    const panel = wrapper.find('#ip-lists');
+    expect(panel.text()).not.toContain('seldom belong to a visitor');
+    const more = panel.find('.v-card-title [data-test="ip-lists-more"]');
+    expect(more.attributes('tabindex')).toBe('0');
+    expect(more.attributes('aria-label')).toBe('What the IP lists are');
+    await hover(more);
+    const tip = document.querySelector('.v-overlay--active [data-test="ip-lists-tip"]')!;
+    const text = tip.textContent!.replace(/\s+/g, ' ');
+    // What they are and do (user request): the manager's lists, for every router of the organization.
+    expect(text).toMatch(/Lists of addresses .*seldom belong to a visitor.* every router of the organization reads them/);
+    expect(text).toMatch(/defer: a request from a listed address does not wake a workload by itself.*ignore: it never wakes one/);
+    expect(text).toMatch(/ip_lists in the manager's Terraform; a router written in Terraform can add lists of its own/);
+    wrapper.unmount();
+  });
+
   describe('the workload defaults card (hibernation)', () => {
     const card = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="workload-defaults"]');
     const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
@@ -295,24 +324,43 @@ describe('Routers view', () => {
       wrapper.unmount();
     });
 
-    it('says "Never changed." while no administrator set it, and which instances it concerns', async () => {
+    it('says "Never changed." while no administrator set it', async () => {
       neverChanged = true;
       const wrapper = await mountView();
       expect(card(wrapper).text()).toContain('Never changed.');
       expect(card(wrapper).text()).not.toContain('Never changed: on.');
-      expect(card(wrapper).text()).toContain('standalone EC2 instances (not Auto Scaling groups or ECS)');
       wrapper.unmount();
       neverChanged = false;
+    });
+
+    // What each setting does is in a tooltip on an icon beside its name, not under it (the user, 2026-11-02).
+    it('shows each setting by its name and value, what it does in a tooltip on a focusable icon', async () => {
+      const wrapper = await mountView();
+      for (const [name, label, words] of [
+        ['hibernate', 'What Hibernate does', 'standalone EC2 instances (not Auto Scaling groups or ECS)'],
+        ['join', 'What Join windows does', 'count as one'],
+        ['ended', 'What Ended windows does', 'leaves its schedule'],
+      ] as const) {
+        const row = card(wrapper).find(`[data-test="default-${name}"]`);
+        expect(row.text(), name).not.toContain(words);
+        const more = row.find(`[data-test="default-${name}-more"]`);
+        expect(more.attributes('tabindex'), name).toBe('0');
+        expect(more.attributes('aria-label'), name).toBe(label);
+        await hover(more);
+        expect(document.querySelector(`.v-overlay--active [data-test="default-${name}-tip"]`)?.textContent, name).toContain(words);
+        await more.trigger('mouseleave');
+        await sleep(300);
+      }
+      wrapper.unmount();
     });
 
     const joinButton = (w: Awaited<ReturnType<typeof mountView>>) => card(w).find('[data-test="edit-join"]');
     const joinDialog = () => document.querySelector('[data-test="join-dialog"]') as HTMLElement;
 
-    it('says the joined windows\' default and what it means, the built-in value while unset', async () => {
+    it('says the joined windows\' default, the built-in value while unset', async () => {
       const wrapper = await mountView();
       const row = card(wrapper).find('[data-test="default-join"]');
       expect(row.text()).toContain('Join windows');
-      expect(row.text()).toContain('count as one');
       expect(row.text()).toContain('15 min, the default');
       expect(joinButton(wrapper).exists()).toBe(true);
       wrapper.unmount();
@@ -354,7 +402,6 @@ describe('Routers view', () => {
       const wrapper = await mountView();
       const row = card(wrapper).find('[data-test="default-ended"]');
       expect(row.text()).toContain('Ended windows');
-      expect(row.text()).toContain('leaves its schedule');
       expect(row.text()).toContain('365 days, the default');
       expect(endedButton(wrapper).exists()).toBe(true);
       wrapper.unmount();
