@@ -99,9 +99,10 @@ export interface CalendarEvent {
   textColor: string;
   startEditable: boolean;
   durationEditable: boolean;
-  // tip: the tooltip's lines, read only when it opens (a view can draw 24,000 items).
+  // tip: the tooltip's lines, read only when it opens (a view can draw 24,000 items), the first its title: `name` and `label`,
+  // which the tooltip draws as the name and a chip of the kind.
   // windows: the windows a bar holds (a gap that joins), which a drag changes.
-  extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; window?: number; windows?: number[]; tip: () => string[] };
+  extendedProps: { key: string; kind: 'awake' | 'nap' | 'maintenance'; name: string; label: string; window?: number; windows?: number[]; tip: () => string[] };
 }
 
 // One formatter a zone: a frequent cron window has thousands of occurrences on a month.
@@ -217,17 +218,17 @@ export function calendarEvents(calendars: Calendar[], from: number, to: number, 
         classNames: ['dm-ev', nap ? 'dm-ev--nap' : 'dm-ev--awake', ...(o.end < now ? ['dm-past'] : [])],
         backgroundColor: nap ? 'transparent' : c.color, borderColor: c.color, textColor: nap ? readableOn(c.color, surface) : '#ffffff',
         startEditable: Boolean(c.canEdit), durationEditable: Boolean(c.canEdit),
-        extendedProps: { key: c.key, kind: o.kind, window: o.window, windows: [...o.windows].sort((a, b) => a - b), tip },
+        extendedProps: { key: c.key, kind: o.kind, name: c.name, label, window: o.window, windows: [...o.windows].sort((a, b) => a - b), tip },
       });
     }
     const due = c.maintenanceDue ? Date.parse(c.maintenanceDue) : NaN;
     if (s.maxNapDays && c.state === 'ASLEEP' && due >= from && due < to) {
-      const tip = `${c.name} · maintenance due (the maximum nap of ${s.maxNapDays} days)${s.timeZone && s.timeZone !== here ? ` — ${clock(due, s.timeZone)} ${s.timeZone}` : ''}`;
+      const tip = `The maximum nap of ${s.maxNapDays} days${s.timeZone && s.timeZone !== here ? `, ${clock(due, s.timeZone)} ${s.timeZone}` : ''}.`;
       out.push({
         id: `${c.key}#maintenance`, title: `${c.name} · maintenance due`, start: new Date(due), end: new Date(due + 15 * 60_000),
         classNames: ['dm-ev', 'dm-ev--maintenance'], backgroundColor: c.color, borderColor: c.color, textColor: '#ffffff',
         startEditable: false, durationEditable: false,
-        extendedProps: { key: c.key, kind: 'maintenance', tip: () => [tip] },
+        extendedProps: { key: c.key, kind: 'maintenance', name: c.name, label: 'Maintenance due', tip: () => [`${c.name} · maintenance due`, tip] },
       });
     }
   }

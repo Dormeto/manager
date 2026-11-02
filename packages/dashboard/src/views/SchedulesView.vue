@@ -12,7 +12,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { CalendarOptions, DatesSetArg, DateSelectArg, Duration, EventClickArg, EventContentArg, EventDropArg, EventMountArg } from '@fullcalendar/core';
 import type { EventResizeDoneArg } from '@fullcalendar/interaction';
-import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight } from '@mdi/js';
+import { mdiCalendarPlus, mdiChevronLeft, mdiChevronRight, mdiFormatListChecks, mdiRefresh, mdiWeatherNight, mdiWeatherSunny, mdiWrenchOutline } from '@mdi/js';
 import { api } from '../api';
 import { MAX_CALENDARS, calendarEvents, calendarKey, cappedText, freeColor, loadSaved, saveSaved, supportsSchedules, type Calendar, type CalendarStatus, type Enabled, type PanelRow, colorFor } from '../calendars';
 import { DAYS, browserZone, joinInForce, occurrenceText, recurrenceError, scheduleBody, windowBody, writableSchedule, type Day, type Schedule } from '../schedule';
@@ -390,11 +390,15 @@ const eventDrop = (arg: EventDropArg) => change(arg, 'move');
 const eventResize = (arg: EventResizeDoneArg) => change(arg, dragMinutes(arg.startDelta) ? 'start' : 'end');
 
 // One tooltip for every item, a view can draw 1,200 per workload: its activator follows the item hovered or focused.
-const tips = new WeakMap<Element, () => string[]>();
-const tipFor = ref<{ el: Element; lines: string[] } | null>(null);
+// The tooltip of an item: its title (the workload's name and its kind, drawn as a chip), then its lines.
+interface Tip { lines: string[]; name: string; label: string; kind: string }
+const tips = new WeakMap<Element, () => Tip>();
+const tipFor = ref<({ el: Element } & Tip) | null>(null);
+const TIP_ICONS: Record<string, string> = { awake: mdiWeatherSunny, nap: mdiWeatherNight, maintenance: mdiWrenchOutline };
 const dragging = ref(false);
 function eventDidMount(arg: EventMountArg) {
-  tips.set(arg.el, arg.event.extendedProps.tip as () => string[]);
+  const { tip, name, label, kind } = arg.event.extendedProps as { tip: () => string[]; name: string; label: string; kind: string };
+  tips.set(arg.el, () => ({ lines: tip().slice(1), name, label, kind }));
 }
 function eventWillUnmount(arg: EventMountArg) {
   if (tipFor.value?.el === arg.el) tipFor.value = null;
@@ -403,7 +407,7 @@ function showTip(e: Event) {
   const el = (e.target as Element).closest?.('.fc-event');
   const tip = el && tips.get(el);
   if (!tip || dragging.value || tipFor.value?.el === el) return;
-  tipFor.value = { el: el!, lines: tip() };
+  tipFor.value = { el: el!, ...tip() };
 }
 function hideTip(e: Event) {
   const el = (e.target as Element).closest?.('.fc-event');
@@ -490,7 +494,13 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
     </v-card>
   </div>
   <v-tooltip :model-value="Boolean(tipFor)" :activator="tipFor?.el ?? undefined" :open-on-hover="false" :open-on-focus="false" location="top" max-width="380" :transition="false">
-    <div v-if="tipFor" data-test="event-tip"><div v-for="(line, i) in tipFor.lines" :key="i" :class="{ 'font-weight-medium': i === 0 }">{{ line }}</div></div>
+    <div v-if="tipFor" data-test="event-tip">
+      <div data-test="event-tip-head" class="dm-tip__head">
+        <span data-test="event-tip-name" class="font-weight-medium">{{ tipFor.name }}</span>
+        <v-chip data-test="event-tip-kind" size="x-small" label variant="tonal" :prepend-icon="TIP_ICONS[tipFor.kind]">{{ tipFor.label }}</v-chip>
+      </div>
+      <div v-for="(line, i) in tipFor.lines" :key="i">{{ line }}</div>
+    </div>
   </v-tooltip>
   <NoticeToast :notice="toast" @close="toast = null" />
   <DragScopeDialog :ask="scopeAsk" @choose="chosen" />
@@ -551,6 +561,8 @@ const eventLabel = (arg: EventContentArg) => arg.event.title;
 .dm-sched__calendar :deep(.fc-popover-header) { background: rgba(var(--v-theme-on-surface), 0.06); }
 .dm-ev__moon { align-self: center; }
 .dm-ev__body .fc-event-time { font-weight: 600; }
+
+.dm-tip__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 2px; }
 
 @media (max-width: 960px) {
   .dm-sched__bar { padding: 10px 12px; }

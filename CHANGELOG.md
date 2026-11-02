@@ -37,7 +37,7 @@ windows moves both; its top edge changes the first, its bottom edge the last. Ev
 schedule, and is put back on Cancel or a refusal. A window's own dates show in its tab of the Schedule dialog and in its
 sentence ("except 4 Jan 2027"), and can be removed there. A schedule takes 100 windows (20 before router 0.36.0). Each save, move or clear of a schedule shows a notification naming the workload.
 The dialogs' help moved to tooltips: what a schedule overrides, what wins over it, and drawn samples of the overlap rules. A
-window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip. The Workload field of New window
+window shows its next occurrence, the next 5 in a tooltip. Calendar items have a real tooltip, titled by the workload's name and a chip of the window's kind with its sun or moon. The Workload field of New window
 autocompletes, and workloads are sorted by name.
 
 Windows of one kind with a short gap read as one (routers 0.36.0 and later), so a workload is neither woken nor napped for the

@@ -2,6 +2,7 @@ process.env.TZ = 'Europe/Paris';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { h as vh } from 'vue';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { createVuetify } from 'vuetify';
@@ -901,17 +902,35 @@ describe('Schedules view: the shared tooltip of the calendar items', () => {
     const tip = () => document.querySelector('.v-overlay--active [data-test="event-tip"]')?.textContent;
     expect(tip()).toBeUndefined();
     await ev.trigger('mouseover');
-    await vi.waitFor(() => expect(tip()).toContain('Blog · Awake'));
-    expect(tip()).toContain('Wed, 09:00–12:00');
+    await vi.waitFor(() => expect(tip()).toContain('Wed, 09:00–12:00'));
     expect(tip()).toContain('America/New_York');
     expect(tip()).toContain('Drag it, or its top or bottom edge');
     await ev.trigger('mouseout');
     await vi.waitFor(() => expect(tip()).toBeUndefined());
     await ev.trigger('focusin');
-    await vi.waitFor(() => expect(tip()).toContain('Blog · Awake'));
+    await vi.waitFor(() => expect(tip()).toContain('Wed, 09:00–12:00'));
     await ev.trigger('focusout');
     await vi.waitFor(() => expect(tip()).toBeUndefined());
     expect(wrapper.findAllComponents({ name: 'VTooltip' }).filter((t) => t.attributes('data-test') === 'event-tooltip' || t.props('activator') !== undefined).length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('Schedules view: the title of a calendar item\'s tooltip', () => {
+  it('is the workload\'s name and a chip of its kind with its icon: a sun for awake, a moon for a nap', async () => {
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    const head = () => document.querySelector('.v-overlay--active [data-test="event-tip-head"]');
+    const chip = () => wrapper.findAllComponents({ name: 'VChip' }).find((c) => c.attributes('data-test') === 'event-tip-kind')!;
+    for (const [kind, label, icon] of [['awake', 'Awake', mdiWeatherSunny], ['nap', 'Nap (wake: header)', mdiWeatherNight]] as const) {
+      const ev = wrapper.find(`.fc-event.dm-ev--${kind}`);
+      await ev.trigger('mouseover');
+      await vi.waitFor(() => expect(head()?.textContent).toContain(label));
+      expect(head()!.querySelector('[data-test="event-tip-name"]')!.textContent).toBe('Shop');
+      expect(chip().text()).toBe(label);
+      expect(chip().props('prependIcon')).toBe(icon);
+      await ev.trigger('mouseout');
+      await vi.waitFor(() => expect(head()).toBeNull());
+    }
   });
 });
 
