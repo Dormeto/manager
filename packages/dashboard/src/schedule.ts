@@ -25,6 +25,10 @@ export const DAYS: Day[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 export const JOIN_DEFAULT_MINUTES = 15;
 export const JOIN_MINUTES_MAX = 120;
 export const JOIN_PROBLEM = `joinMinutes: a whole number from 0 to ${JOIN_MINUTES_MAX}, a multiple of 5`;
+// How long after its end a window stays in its schedule, the organization's (router 0.36.0): 0 keeps them, else 30 to 3650 days.
+export const ENDED_DAYS_DEFAULT = 365;
+export const ENDED_PROBLEM = 'endedWindowDays: 0 to keep them, or 30 to 3650 days';
+export const isEndedDays = (value: unknown): value is number => Number.isInteger(value) && ((value as number) === 0 || ((value as number) >= 30 && (value as number) <= 3650));
 export const isJoinMinutes = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= JOIN_MINUTES_MAX && (value as number) % 5 === 0;
 const JOIN_FROM: Record<JoinFrom, string> = { workload: 'set on this workload', router: 'from the router', organization: 'from the organization', default: 'the default' };
 // "15 min, from the organization".

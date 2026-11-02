@@ -51,19 +51,19 @@ describe('GET /api/settings/workloads', () => {
     const s = setup();
     for (const groups of ['dmt-viewer', 'dmt-operator', 'dmt-admin', 'payments']) {
       const res = await s.api(event('GET', '/api/settings/workloads', groups));
-      expect([res.statusCode, json(res)], groups).toEqual([200, { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null }]);
+      expect([res.statusCode, json(res)], groups).toEqual([200, { hibernate: true, joinMinutes: null, endedWindowDays: null, updatedAt: null, updatedBy: null }]);
     }
   });
 
   it('answers what the object holds, and true when it holds no hibernate', async () => {
     const doc = { workloads: { hibernate: false }, updatedAt: '2026-10-20T10:00:00.000Z', updatedBy: 'a@example.com', other: 1 };
-    expect(json(await setup({ doc }).api(event('GET', '/api/settings/workloads', 'dmt-viewer')))).toEqual({ hibernate: false, joinMinutes: null, updatedAt: doc.updatedAt, updatedBy: 'a@example.com' });
+    expect(json(await setup({ doc }).api(event('GET', '/api/settings/workloads', 'dmt-viewer')))).toEqual({ hibernate: false, joinMinutes: null, endedWindowDays: null, updatedAt: doc.updatedAt, updatedBy: 'a@example.com' });
     expect(json(await setup({ doc: { other: 1 } }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'))).hibernate).toBe(true);
   });
 
   it('answers the defaults in a manager without a lists bucket', async () => {
     const res = await setup({ noStore: true }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'));
-    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, joinMinutes: null, endedWindowDays: null, updatedAt: null, updatedBy: null }]);
   });
 
   it('is reached through /iam/ too', async () => {
@@ -76,7 +76,7 @@ describe('PUT /api/settings/workloads', () => {
     const s = setup({ doc: { other: 1 } });
     const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
     const at = new Date(NOW).toISOString();
-    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, joinMinutes: null, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, joinMinutes: null, endedWindowDays: null, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
     expect(s.store.writes).toEqual([{ workloads: { hibernate: false }, updatedAt: at, updatedBy: 'dmt-admin@example.com', other: 1 }]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'hibernate off', who: 'dmt-admin@example.com' });
   });
@@ -143,7 +143,7 @@ describe('the organization\'s joinMinutes in /api/settings/workloads', () => {
     const s = setup({ doc: { workloads: { hibernate: false, later: 2 }, waitingPage: { mode: 'template' }, other: 1 } });
     const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: 30 }));
     const at = new Date(NOW).toISOString();
-    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, joinMinutes: 30, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { hibernate: false, joinMinutes: 30, endedWindowDays: null, updatedAt: at, updatedBy: 'dmt-admin@example.com', note: NOTE }]);
     expect(s.store.writes).toEqual([{ workloads: { hibernate: false, later: 2, joinMinutes: 30 }, waitingPage: { mode: 'template' }, other: 1, updatedAt: at, updatedBy: 'dmt-admin@example.com' }]);
     expect(s.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'joinMinutes 30' });
     const fresh = setup();
@@ -188,6 +188,45 @@ describe('the organization\'s joinMinutes in /api/settings/workloads', () => {
   });
 });
 
+const ENDED_PROBLEM = 'endedWindowDays: 0 to keep ended windows, or a whole number of days from 30 to 3650';
+const BAD_ENDED = [-1, 1, 29, 3651, 2.5, '365', true, {}, []];
+
+describe('the organization\'s endedWindowDays in /api/settings/workloads (the user, 2026-11-02)', () => {
+  const read = async (doc: Record<string, unknown>) => json(await setup({ doc }).api(event('GET', '/api/settings/workloads', 'dmt-viewer')));
+
+  it('reads what the object holds, 0 included, and null (a year) when it is unset or not a value', async () => {
+    expect((await read({ workloads: { endedWindowDays: 90 } })).endedWindowDays).toBe(90);
+    expect((await read({ workloads: { endedWindowDays: 0 } })).endedWindowDays).toBe(0);
+    for (const endedWindowDays of [...BAD_ENDED, null]) expect((await read({ workloads: { endedWindowDays } })).endedWindowDays, JSON.stringify(endedWindowDays)).toBeNull();
+  });
+
+  it('writing it alone keeps the rest; null unsets it; another value is refused, nothing written', async () => {
+    const s = setup({ doc: { workloads: { hibernate: false, joinMinutes: 30, later: 2 }, other: 1 } });
+    const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { endedWindowDays: 90 }));
+    expect(json(res)).toMatchObject({ hibernate: false, joinMinutes: 30, endedWindowDays: 90 });
+    expect(s.store.writes[0]!.workloads).toEqual({ hibernate: false, joinMinutes: 30, later: 2, endedWindowDays: 90 });
+    expect(s.audit.at(-1)!.result).toBe('endedWindowDays 90');
+    await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { joinMinutes: 15 }));
+    expect(s.store.writes[1]!.workloads).toMatchObject({ endedWindowDays: 90, joinMinutes: 15 });
+    await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { endedWindowDays: null }));
+    expect(s.store.writes[2]!.workloads).not.toHaveProperty('endedWindowDays');
+    expect(s.audit.at(-1)!.result).toBe('endedWindowDays default');
+    for (const endedWindowDays of BAD_ENDED) {
+      const bad = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { endedWindowDays }));
+      expect([bad.statusCode, json(bad).message], JSON.stringify(endedWindowDays)).toEqual([400, ENDED_PROBLEM]);
+    }
+    expect(s.store.writes).toHaveLength(3);
+    expect((await s.api(event('PUT', '/api/settings/workloads', 'dmt-operator', { endedWindowDays: 90 }))).statusCode).toBe(403);
+  });
+
+  it('an unreadable settings.json is not replaced by it alone', async () => {
+    const s = setup({ read: async () => [1] });
+    const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { endedWindowDays: 90 }));
+    expect([res.statusCode, json(res).message]).toEqual([409, UNREADABLE]);
+    expect(s.store.writes).toEqual([]);
+  });
+});
+
 describe('a corrupt settings.json (not JSON, or not an object)', () => {
   const corrupt = [
     async () => { throw new SyntaxError('Unexpected token \'<\', "<html>" is not valid JSON'); },
@@ -197,7 +236,7 @@ describe('a corrupt settings.json (not JSON, or not an object)', () => {
   it('GET answers the defaults and says it is unreadable', async () => {
     for (const read of corrupt) {
       const res = await setup({ read }).api(event('GET', '/api/settings/workloads', 'dmt-viewer'));
-      expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' }]);
+      expect([res.statusCode, json(res)]).toEqual([200, { hibernate: true, joinMinutes: null, endedWindowDays: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' }]);
     }
   });
 

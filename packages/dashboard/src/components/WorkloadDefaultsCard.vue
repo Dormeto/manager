@@ -1,13 +1,15 @@
 <script setup lang="ts">
-// The defaults every workload inherits, set in the manager's settings (the routers read them within 5 minutes): hibernation and
-// joined windows. Everyone reads them; administrators change them, after a dialog that says what it affects.
+// The defaults every workload inherits, set in the manager's settings (the routers read them within 5 minutes): hibernation,
+// joined windows and how long an ended window stays. Everyone reads them; administrators change them, after a dialog that says
+// what it affects.
 import { ref } from 'vue';
 import { mdiCogOutline, mdiPencilOutline } from '@mdi/js';
 import { api } from '../api';
 import { relative } from '../format';
 import { useNow } from '../now';
-import { JOIN_DEFAULT_MINUTES, joinText } from '../schedule';
+import { ENDED_DAYS_DEFAULT, JOIN_DEFAULT_MINUTES, joinText } from '../schedule';
 import { useSession } from '../stores/session';
+import EndedDaysDialog from './EndedDaysDialog.vue';
 import JoinDialog from './JoinDialog.vue';
 import type { WorkloadDefaults } from '../types';
 import type { Notice } from './NoticeAlert.vue';
@@ -41,6 +43,28 @@ async function saveJoin(joinMinutes: number | null) {
   } finally {
     savingJoin.value = false;
     joinOpen.value = false;
+  }
+}
+
+// Ended windows: the days set, kept for 0, or the default while none is. Only this key is sent.
+const endedOpen = ref(false);
+const savingEnded = ref(false);
+const endedLine = () => {
+  const days = defaults.value?.endedWindowDays ?? null;
+  return days === null ? `${ENDED_DAYS_DEFAULT} days, the default` : days === 0 ? 'Kept' : `${days} days`;
+};
+async function saveEnded(endedWindowDays: number | null) {
+  savingEnded.value = true;
+  try {
+    const saved = await api<WorkloadDefaults & { note: string }>('/settings/workloads', { method: 'PUT', body: JSON.stringify({ endedWindowDays }) });
+    defaults.value = saved;
+    emit('notice', { type: 'success', text: `${endedWindowDays === 0 ? 'Ended windows are kept' : `Windows that ended more than ${endedWindowDays ?? ENDED_DAYS_DEFAULT} days ago leave their schedule`}: ${saved.note}.` });
+  } catch (err) {
+    emit('notice', { type: 'error', text: (err as Error).message });
+    void load();
+  } finally {
+    savingEnded.value = false;
+    endedOpen.value = false;
   }
 }
 
@@ -98,12 +122,22 @@ async function confirm() {
       <span data-test="default-join-value" class="dm-num">{{ joinLine() }}</span>
       <v-btn v-if="session.isAdmin" data-test="edit-join" :prepend-icon="mdiPencilOutline" variant="text" size="small" @click="joinOpen = true">Edit</v-btn>
     </v-card-text>
+    <v-card-text data-test="default-ended" class="d-flex flex-wrap align-center ga-4 py-2">
+      <div class="dm-default">
+        <div class="font-weight-medium">Ended windows</div>
+        <div class="text-body-small text-medium-emphasis">A window whose end date passed longer ago than this leaves its schedule, with the dates without a window as old; routers 0.36.0 and later remove them at their checks. 0 keeps them.</div>
+      </div>
+      <v-spacer />
+      <span data-test="default-ended-value" class="dm-num">{{ endedLine() }}</span>
+      <v-btn v-if="session.isAdmin" data-test="edit-ended" :prepend-icon="mdiPencilOutline" variant="text" size="small" @click="endedOpen = true">Edit</v-btn>
+    </v-card-text>
     <v-card-text class="pt-0 text-body-small text-medium-emphasis">{{ defaults.updatedAt ? `Changed by ${defaults.updatedBy ?? 'someone'} ${relative(defaults.updatedAt, now)}.` : 'Never changed.' }}</v-card-text>
     </template>
   </v-card>
   <JoinDialog v-if="defaults" v-model="joinOpen" title="Join windows by default" :current="defaults.joinMinutes ?? null" :inherited="JOIN_DEFAULT_MINUTES" :inherit-label="`Default (${JOIN_DEFAULT_MINUTES} min)`" :saving="savingJoin" @submit="saveJoin">
     Two windows of one kind with a gap of at most this count as one. It applies in every router that reads the manager's settings, within 5 minutes; a router or a workload that sets its own value keeps it.
   </JoinDialog>
+  <EndedDaysDialog v-if="defaults" v-model="endedOpen" :current="defaults.endedWindowDays ?? null" :saving="savingEnded" @submit="saveEnded" />
   <v-dialog :model-value="asked !== null" max-width="480" @update:model-value="cancel">
     <v-card :title="`Turn hibernation ${asked ? 'on' : 'off'} by default?`">
       <v-card-text class="text-medium-emphasis">It applies to standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation, in every router that

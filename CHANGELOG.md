@@ -65,6 +65,12 @@ occurrence ends the row of its sentence. The join is offered from two windows, o
 minutes, or a schedule with a value of its own; Inherit comes first on its row, and what joining does is in a tooltip, at the
 router and the organization too.
 
+Windows that ended long ago leave their schedule (routers 0.36.0 and later): a router's check removes a window whose end date
+passed more than a year ago, and the dates without a window as old, the schedule's and each window's; a schedule left with
+nothing is removed. Routers › Workload defaults › Ended windows sets the delay for the organization (`endedWindowDays` in
+`settings.json`, `PUT /api/settings/workloads`): 0 keeps them, else 30 to 3650 days. A router removes nothing while it has never
+read the settings, never while a window is active, and never over a schedule saved since its check read it.
+
 The Schedules panel takes an organization of 1,000 workloads: past 100 rows it draws only those in sight, so a search, a tick or
 "Scheduled only" answers at once, and it fills the height of the page. The demo takes `workloads=1000` in its scenario
 (`?demo=dormeto,workloads=1000`).

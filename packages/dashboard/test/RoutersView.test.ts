@@ -14,6 +14,7 @@ let failPut = false;
 // The workload defaults as never set by an administrator (no who, no when).
 let neverChanged = false;
 let defaultsJoin: number | null = null;
+let defaultsEnded: number | null = null;
 let defaultsError: string | null = null;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
@@ -36,7 +37,7 @@ vi.mock('../src/api', () => ({
     if (path === '/settings/workloads') {
       if (init?.method === 'PUT' && failPut) throw new Error('settings.json: access denied');
       if (init?.method === 'PUT') return { ...JSON.parse(String(init.body)), updatedAt: new Date().toISOString(), updatedBy: 'ops@example.com', note: 'routers apply it at their next check, within 5 minutes' };
-      return neverChanged ? { hibernate: true, joinMinutes: defaultsJoin, updatedAt: null, updatedBy: null, ...(defaultsError ? { error: defaultsError } : {}) } : { hibernate: true, joinMinutes: defaultsJoin, ...(defaultsError ? { error: defaultsError } : {}), updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
+      return neverChanged ? { hibernate: true, joinMinutes: defaultsJoin, endedWindowDays: defaultsEnded, updatedAt: null, updatedBy: null, ...(defaultsError ? { error: defaultsError } : {}) } : { hibernate: true, joinMinutes: defaultsJoin, endedWindowDays: defaultsEnded, ...(defaultsError ? { error: defaultsError } : {}), updatedAt: new Date(Date.now() - 3 * 3_600_000).toISOString(), updatedBy: 'admin@example.com' };
     }
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
@@ -342,6 +343,48 @@ describe('Routers view', () => {
       await flushPromises();
       const put = calls.find((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')!;
       expect(JSON.parse(String(put.init!.body))).toEqual({ joinMinutes: 30 });
+      wrapper.unmount();
+    });
+
+    const endedButton = (w: Awaited<ReturnType<typeof mountView>>) => card(w).find('[data-test="edit-ended"]');
+    const endedDialog = () => document.querySelector('[data-test="ended-dialog"]') as HTMLElement;
+
+    it('says how long an ended window stays, a year while unset, and kept for 0 (the user, 2026-11-02)', async () => {
+      const wrapper = await mountView();
+      const row = card(wrapper).find('[data-test="default-ended"]');
+      expect(row.text()).toContain('Ended windows');
+      expect(row.text()).toContain('leaves its schedule');
+      expect(row.text()).toContain('365 days, the default');
+      expect(endedButton(wrapper).exists()).toBe(true);
+      wrapper.unmount();
+      defaultsEnded = 0;
+      const kept = await mountView('/routers', 'operator');
+      expect(card(kept).find('[data-test="default-ended"]').text()).toContain('Kept');
+      expect(endedButton(kept).exists()).toBe(false);
+      kept.unmount();
+      defaultsEnded = null;
+    });
+
+    it('sends only endedWindowDays: its days, 0 to keep them, refused out of range, null for the default', async () => {
+      const wrapper = await mountView();
+      await endedButton(wrapper).trigger('click');
+      await flushPromises();
+      expect(endedDialog().textContent).toContain('Default (365 days)');
+      expect(endedDialog().textContent).toContain('within 5 minutes');
+      (endedDialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await flushPromises();
+      const input = endedDialog().querySelector('input[type="number"]') as HTMLInputElement;
+      for (const [value, ok] of [['10', false], ['4000', false], ['', false], ['0', true], ['90', true]] as const) {
+        input.value = value;
+        input.dispatchEvent(new Event('input'));
+        await flushPromises();
+        expect(dialogButton('Save').disabled, value).toBe(!ok);
+        expect(endedDialog().textContent!.includes('0 to keep them, or 30 to 3650 days'), value).toBe(!ok);
+      }
+      dialogButton('Save').click();
+      await flushPromises();
+      const put = calls.filter((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT').at(-1)!;
+      expect(JSON.parse(String(put.init!.body))).toEqual({ endedWindowDays: 90 });
       wrapper.unmount();
     });
 

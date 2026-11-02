@@ -218,7 +218,7 @@ export interface Demo {
   preferences: { refreshSeconds: number; dismissedUpdate?: string };
   updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
-  hibernation: { hibernate: boolean; joinMinutes: number | null; updatedAt: string | null; updatedBy: string | null }; // the manager's defaults for every workload
+  hibernation: { hibernate: boolean; joinMinutes: number | null; endedWindowDays: number | null; updatedAt: string | null; updatedBy: string | null }; // the manager's defaults for every workload
   waitingPage: { page: StoredPage | null; at: string | null; by: string | null }; // the organization's waiting page
   routers: DemoRouter[];
   workloads: DemoWorkload[];
@@ -614,7 +614,7 @@ function build(now: number): Demo {
     preferences: { refreshSeconds: 10 },
     updateCheck: { enabled: false, alert: false, updatedAt: null, updatedBy: null },
     savings: { compute: 0, databases: 0, updatedAt: null, updatedBy: null },
-    hibernation: { hibernate: true, joinMinutes: ORGANIZATION_JOIN, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
+    hibernation: { hibernate: true, joinMinutes: ORGANIZATION_JOIN, endedWindowDays: null, updatedAt: iso(now - 5 * DAY - 2 * HOUR), updatedBy: ME },
     waitingPage: { page: null, at: null, by: null },
     routers,
     workloads,

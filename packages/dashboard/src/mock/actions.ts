@@ -1,7 +1,7 @@
 // What the dashboard's actions change in the demo (npm run dev:mock), validated and audited as the API does.
 import type { Candidate, DiscoveryConfig } from '@dormeto/discovery/types';
 import type { DescriptionInfo, Pause } from '../types';
-import { JOIN_PROBLEM, isJoinMinutes } from '../schedule';
+import { JOIN_PROBLEM, isEndedDays, isJoinMinutes } from '../schedule';
 import { AVAILABLE } from './fixtures';
 import { descriptionProblem } from '@dormeto/fleet/description';
 import { groupNameProblem, tagsProblem } from '../tags';
@@ -529,15 +529,27 @@ const joinIn = (body: Body): number | null => {
   return v === null || isJoinMinutes(v) ? v as number | null : fail(400, 'bad_request', JOIN_PROBLEM);
 };
 const joinText = (join: number | null, unset: string) => `joinMinutes ${join === null ? unset : join}`;
+const endedIn = (body: Body): number | null => {
+  const v = body.endedWindowDays;
+  return v === null || isEndedDays(v) ? v as number | null : fail(400, 'bad_request', 'endedWindowDays: 0 to keep ended windows, or a whole number of days from 30 to 3650');
+};
 
 // The manager's defaults for every workload (administrators; the routers read them at their next check): what is not sent stays.
 export function putWorkloadDefaults(d: Demo, body: Body, now: number) {
-  if (body.hibernate === undefined && body.joinMinutes === undefined) fail(400, 'bad_request', 'hibernate must be true or false, or joinMinutes given');
+  if (body.hibernate === undefined && body.joinMinutes === undefined && body.endedWindowDays === undefined) fail(400, 'bad_request', 'hibernate, joinMinutes or endedWindowDays is required');
   const hibernate = body.hibernate === undefined ? undefined : hibernateIn(body, false) as boolean;
   const joinMinutes = body.joinMinutes === undefined ? undefined : joinIn(body);
+  const endedWindowDays = body.endedWindowDays === undefined ? undefined : endedIn(body);
   return audited(d, 'settings', 'workloads', () => {
-    d.hibernation = { hibernate: hibernate ?? d.hibernation.hibernate, joinMinutes: joinMinutes === undefined ? d.hibernation.joinMinutes : joinMinutes, updatedAt: iso(now), updatedBy: ME };
-    const said = [...(hibernate === undefined ? [] : [`hibernate ${hibernate ? 'on' : 'off'}`]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, 'default')])];
+    const h = d.hibernation;
+    d.hibernation = {
+      hibernate: hibernate ?? h.hibernate, joinMinutes: joinMinutes === undefined ? h.joinMinutes : joinMinutes, endedWindowDays: endedWindowDays === undefined ? h.endedWindowDays : endedWindowDays,
+      updatedAt: iso(now), updatedBy: ME,
+    };
+    const said = [
+      ...(hibernate === undefined ? [] : [`hibernate ${hibernate ? 'on' : 'off'}`]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, 'default')]),
+      ...(endedWindowDays === undefined ? [] : [`endedWindowDays ${endedWindowDays ?? 'default'}`]),
+    ];
     return { result: said.join(', '), response: { ...d.hibernation, note: 'routers apply it at their next check, within 5 minutes' } };
   });
 }

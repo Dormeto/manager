@@ -29,8 +29,10 @@ time per target group, router or workload, one per load balancer (lock), three p
   Terraform `ip_lists_catalog`); the Routers view shows them (`GET /api/ip-lists`), the watchdog alarms on a list that
   failed or grew old.
 - **Workload defaults:** the same bucket holds `settings.json`, the administrators' defaults for every router (EC2
-  hibernation and joined windows: `{"workloads": {"hibernate": …, "joinMinutes": …}, "updatedAt", "updatedBy"}`; a write sends
-  either, the other stays; `joinMinutes` null removes it, and a router reads an absent or invalid one as unset, then 15), written
+  hibernation, joined windows and ended windows: `{"workloads": {"hibernate": …, "joinMinutes": …, "endedWindowDays": …},
+  "updatedAt", "updatedBy"}`; a write sends any of them, the others stay; `joinMinutes` or `endedWindowDays` null removes it,
+  and a router reads an absent or invalid one as unset: joined up to 15 minutes, ended windows removed after 365 days, 0
+  keeping them), written
   by the API only (`PUT /api/settings/workloads`, Routers › Workload defaults), never by Terraform, so an apply keeps it; the bucket's
   `force_destroy` removes it with the bucket at uninstall. Routers 0.32.0 read it beside `catalog.json` (within 5
   minutes); a router without `ip_lists_catalog` reads none and uses its own level or the built-in default. A

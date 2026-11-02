@@ -392,6 +392,14 @@ function hibernateOf(body: Record<string, unknown>): boolean | null {
 }
 // Joined windows (schedule recurrence design, section 11): the largest gap that joins, in the router's words.
 const isJoinMinutes = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 120 && (value as number) % 5 === 0;
+// How long after its end a window stays in its schedule, the organization's (the user, 2026-11-02): 0 keeps them, else 30 to 3650
+// days; unset, a year. In the router's words.
+const isEndedDays = (value: unknown): value is number => Number.isInteger(value) && ((value as number) === 0 || ((value as number) >= 30 && (value as number) <= 3650));
+function endedDaysOf(body: Record<string, unknown>): number | null {
+  const days = body.endedWindowDays;
+  if (days !== null && !isEndedDays(days)) throw new HttpError(400, 'bad_request', 'endedWindowDays: 0 to keep ended windows, or a whole number of days from 30 to 3650');
+  return days;
+}
 // A level's joinMinutes in a body: its minutes, or null to unset it.
 function joinMinutesOf(body: Record<string, unknown>): number | null {
   const join = body.joinMinutes;
@@ -424,8 +432,9 @@ function pageText(level: string, page: Record<string, unknown> | null, before: u
 const hibernateText = (h: boolean | null) => `hibernate ${h === null ? 'inherit' : h ? 'on' : 'off'}`;
 const joinText = (join: number | null, unset: string) => `joinMinutes ${join === null ? unset : join}`;
 // What the audit keeps of a settings write, each key sent.
-const settingsText = ({ hibernate, joinMinutes }: { hibernate?: boolean | null; joinMinutes?: number | null }, unset: string) => [
+const settingsText = ({ hibernate, joinMinutes, endedWindowDays }: { hibernate?: boolean | null; joinMinutes?: number | null; endedWindowDays?: number | null }, unset: string) => [
   ...(hibernate === undefined ? [] : [hibernateText(hibernate)]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, unset)]),
+  ...(endedWindowDays === undefined ? [] : [`endedWindowDays ${endedWindowDays === null ? unset : endedWindowDays}`]),
 ].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
@@ -1225,15 +1234,16 @@ export function createApi({
       });
     }
 
-    // The defaults of every router, hibernation (EC2 hibernation §3) and joined windows (schedule recurrence design, section 11):
-    // everyone reads them, administrators set them. What a write does not send stays.
+    // The defaults of every router, hibernation (EC2 hibernation §3), joined windows (schedule recurrence design, section 11) and
+    // how long an ended window stays: everyone reads them, administrators set them. What a write does not send stays.
     if (resource === 'settings' && a === 'workloads' && !b && (method === 'GET' || method === 'PUT')) {
       const shown = (doc: Record<string, unknown> | null | 'unreadable') => {
-        if (doc === 'unreadable') return { hibernate: true, joinMinutes: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
-        const { hibernate, joinMinutes } = (doc?.workloads ?? {}) as { hibernate?: unknown; joinMinutes?: unknown };
+        if (doc === 'unreadable') return { hibernate: true, joinMinutes: null, endedWindowDays: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
+        const { hibernate, joinMinutes, endedWindowDays } = (doc?.workloads ?? {}) as { hibernate?: unknown; joinMinutes?: unknown; endedWindowDays?: unknown };
         return {
           hibernate: typeof hibernate === 'boolean' ? hibernate : true,
           joinMinutes: isJoinMinutes(joinMinutes) ? joinMinutes : null,
+          endedWindowDays: isEndedDays(endedWindowDays) ? endedWindowDays : null,
           updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         };
       };
@@ -1242,9 +1252,10 @@ export function createApi({
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
       const body = bodyOf(event);
       const { hibernate } = body;
-      if (hibernate === undefined && body.joinMinutes === undefined) throw new HttpError(400, 'bad_request', 'hibernate or joinMinutes is required');
+      if (hibernate === undefined && body.joinMinutes === undefined && body.endedWindowDays === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or endedWindowDays is required');
       if (hibernate !== undefined && typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
       const joinMinutes = body.joinMinutes === undefined ? undefined : joinMinutesOf(body);
+      const endedWindowDays = body.endedWindowDays === undefined ? undefined : endedDaysOf(body);
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
         const found = await readSettings();
@@ -1253,11 +1264,17 @@ export function createApi({
         const doc = found === 'unreadable' ? {} : found ?? {};
         const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
         const updatedAt = new Date(now()).toISOString();
-        const { joinMinutes: stored, ...others } = workloads;
+        const { joinMinutes: stored, endedWindowDays: storedDays, ...others } = workloads;
         const join = joinMinutes === undefined ? stored : joinMinutes;
-        const next = { ...doc, workloads: { ...others, ...(hibernate === undefined ? {} : { hibernate }), ...(join === undefined || join === null ? {} : { joinMinutes: join }) }, updatedAt, updatedBy: identity.email };
+        const days = endedWindowDays === undefined ? storedDays : endedWindowDays;
+        const next = {
+          ...doc,
+          workloads: { ...others, ...(hibernate === undefined ? {} : { hibernate }), ...(join === undefined || join === null ? {} : { joinMinutes: join }), ...(days === undefined || days === null ? {} : { endedWindowDays: days }) },
+          updatedAt, updatedBy: identity.email,
+        };
         await globalSettings.write(next);
-        return { result: settingsText({ ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }) }, 'default'), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
+        const sent = { ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }), ...(endedWindowDays === undefined ? {} : { endedWindowDays }) };
+        return { result: settingsText(sent, 'default'), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
     }
 
