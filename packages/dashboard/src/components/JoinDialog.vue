@@ -6,7 +6,7 @@ import { mdiCalendarClock } from '@mdi/js';
 import { isJoinMinutes } from '../schedule';
 import JoinField from './JoinField.vue';
 
-const props = withDefaults(defineProps<{ modelValue: boolean; title: string; current: number | null; inherited: number; inheritLabel: string; saving?: boolean }>(), { saving: false });
+const props = withDefaults(defineProps<{ modelValue: boolean; title: string; current: number | null; inherited: number; defaultLabel: string; saving?: boolean }>(), { saving: false });
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [number | null] }>();
 const value = ref<number | null>(null);
 watch(() => props.modelValue, (open) => { if (open) value.value = props.current; });
@@ -19,7 +19,7 @@ const invalid = computed(() => value.value !== null && !isJoinMinutes(value.valu
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiCalendarClock" size="20" /></v-avatar></template>
       <v-card-text>
         <p class="mb-4 text-medium-emphasis"><slot /></p>
-        <JoinField v-model="value" :inherited="inherited" :inherit-label="inheritLabel" />
+        <JoinField v-model="value" :inherited="inherited" :default-label="defaultLabel" />
       </v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />

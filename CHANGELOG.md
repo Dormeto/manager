@@ -60,10 +60,11 @@ In a custom waiting page, `napUntil.at` and `napUntil.local` of the `dormeto:sta
 
 The Schedule dialog is wider and puts each window in a tab, named by its kind's icon and its window in a few words, marked when
 the window can't be saved. A window keeps its kind: the + buttons after the tabs add a nap or an awake window. The time zone,
-the dates without a window, the maximum nap and the join stay above the tabs. A window's fields share rows, and its next
-occurrence ends the row of its sentence. The join is offered from two windows, or for one window that comes back within 120
-minutes, or a schedule with a value of its own; Inherit comes first on its row, and what joining does is in a tooltip, at the
-router and the organization too.
+the dates without a window and the maximum nap stay above the tabs, the join below them. A window's fields share rows, and its
+next occurrence ends the row of its sentence. The join is offered from two windows, or for one window that comes back within
+120 minutes, or a schedule with a value of its own. It reads "Override default join: windows of one kind up to N minutes apart",
+the checkbox unchecked while it inherits and the minutes enabled once checked, the default in force beside it and what joining
+does in a tooltip; the router's and the organization's dialogs read the same.
 
 Windows that ended long ago leave their schedule (routers 0.36.0 and later): a router's check removes a window whose end date
 passed more than a year ago, and the dates without a window as old, the schedule's and each window's; a schedule left with

@@ -331,7 +331,8 @@ describe('Routers view', () => {
       const wrapper = await mountView();
       await joinButton(wrapper).trigger('click');
       await flushPromises();
-      expect(joinDialog().textContent).toContain('Default (15 min)');
+      expect(joinDialog().textContent).toContain('Override default join');
+      expect(joinDialog().textContent).toContain('default: 15 min, built in');
       expect(joinDialog().textContent).toContain('within 5 minutes');
       (joinDialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
       await flushPromises();

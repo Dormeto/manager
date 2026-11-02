@@ -134,7 +134,7 @@ async function confirm() {
     <v-card-text class="pt-0 text-body-small text-medium-emphasis">{{ defaults.updatedAt ? `Changed by ${defaults.updatedBy ?? 'someone'} ${relative(defaults.updatedAt, now)}.` : 'Never changed.' }}</v-card-text>
     </template>
   </v-card>
-  <JoinDialog v-if="defaults" v-model="joinOpen" title="Join windows by default" :current="defaults.joinMinutes ?? null" :inherited="JOIN_DEFAULT_MINUTES" :inherit-label="`Default (${JOIN_DEFAULT_MINUTES} min)`" :saving="savingJoin" @submit="saveJoin">
+  <JoinDialog v-if="defaults" v-model="joinOpen" title="Join windows by default" :current="defaults.joinMinutes ?? null" :inherited="JOIN_DEFAULT_MINUTES" :default-label="`${JOIN_DEFAULT_MINUTES} min, built in`" :saving="savingJoin" @submit="saveJoin">
     Two windows of one kind with a gap of at most this count as one. It applies in every router that reads the manager's settings, within 5 minutes; a router or a workload that sets its own value keeps it.
   </JoinDialog>
   <EndedDaysDialog v-if="defaults" v-model="endedOpen" :current="defaults.endedWindowDays ?? null" :saving="savingEnded" @submit="saveEnded" />

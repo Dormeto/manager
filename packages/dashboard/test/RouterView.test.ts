@@ -199,7 +199,8 @@ describe('Router view', () => {
       calls.length = 0;
       await row(admin).find('[data-test="edit-join"]').trigger('click');
       await flushPromises();
-      expect(dialog().textContent).toContain('Inherit (20 min, from the organization)');
+      expect(dialog().textContent).toContain('Override default join');
+      expect(dialog().textContent).toContain('default: 20 min, from the organization');
       (dialog().querySelector('input[type="checkbox"]') as HTMLInputElement).click();
       await flushPromises();
       await type('45');

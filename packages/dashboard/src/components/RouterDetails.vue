@@ -9,7 +9,7 @@ import { CLUSTER_ROLE } from '../kubernetes';
 import { useNow } from '../now';
 import { terraformSettingHelp } from '../router-actions';
 import { routerInheritText } from '../hibernation';
-import { joinText, recurrenceError, routerJoinInherited } from '../schedule';
+import { joinDefaultText, joinText, recurrenceError, routerJoinInherited } from '../schedule';
 import { useSession } from '../stores/session';
 import DmLoader from './DmLoader.vue';
 import HibernateDialog from './HibernateDialog.vue';
@@ -225,7 +225,7 @@ const columns = computed<Section[][]>(() => {
     <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"
-      :inherit-label="`Inherit (${joinText(joinInherited)})`" :saving="savingJoin" @submit="saveJoin">
+      :default-label="joinDefaultText(joinInherited)" :saving="savingJoin" @submit="saveJoin">
       Two windows of one kind with a gap of at most this count as one, on the workloads of this router that set no value of their own.
     </JoinDialog>
   </template>

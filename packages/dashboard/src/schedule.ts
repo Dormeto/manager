@@ -33,6 +33,8 @@ export const isJoinMinutes = (value: unknown): value is number => Number.isInteg
 const JOIN_FROM: Record<JoinFrom, string> = { workload: 'set on this workload', router: 'from the router', organization: 'from the organization', default: 'the default' };
 // "15 min, from the organization".
 export const joinText = ({ joinMinutes, joinFrom }: JoinLevel): string => `${joinMinutes} min, ${JOIN_FROM[joinFrom]}`;
+// What a level inherits, after "default:": "20 min, from the organization", "15 min, built in".
+export const joinDefaultText = (level: JoinLevel): string => (level.joinFrom === 'default' ? `${level.joinMinutes} min, built in` : joinText(level));
 // What a router inherits: the organization's as it last read it, else the default.
 export const routerJoinInherited = (m: { joinMinutes?: number | null }): JoinLevel => (isJoinMinutes(m.joinMinutes) ? { joinMinutes: m.joinMinutes, joinFrom: 'organization' } : { joinMinutes: JOIN_DEFAULT_MINUTES, joinFrom: 'default' });
 // The value a calendar and a helper compute with: the status answer's. A router that answers none does not join.

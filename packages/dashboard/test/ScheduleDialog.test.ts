@@ -596,27 +596,31 @@ describe('Schedule dialog: joined windows', () => {
   const JOIN: JoinAnswer = { joinMinutes: 15, joinFrom: 'organization', joinInherited: { joinMinutes: 15, joinFrom: 'organization' } };
   const field = () => document.querySelector('[data-test="join"]') as HTMLElement | null;
   const number = () => field()!.querySelector('input[type="number"]') as HTMLInputElement;
-  const inherit = () => field()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  // The override (the user, 2026-11-02): unchecked, the workload inherits; checked, its own value.
+  const override = () => field()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
   const save = async () => { button('Save')!.click(); await flushPromises(); };
   const type = async (value: string) => { number().value = value; number().dispatchEvent(new Event('input')); await flushPromises(); };
   const PAIR: Schedule = { ...schedule, windows: [...schedule.windows!, { kind: 'nap', days: ['tue'], start: '20:00', end: '07:00', wake: 'never' }] };
   const add = async (kind: 'awake' | 'nap') => { (document.querySelector(`[data-test="add-${kind}"]`) as HTMLElement).click(); await flushPromises(); };
 
-  it('says the inherited value and level, with the words asked', async () => {
+  it('says the inherited value and level, with the words asked, the override off', async () => {
     await open(PAIR, '', JOIN);
-    expect(field()!.textContent).toContain('Join windows of one kind up to');
+    expect(field()!.querySelector('.v-checkbox')!.textContent).toBe('Override default join:');
+    expect(field()!.textContent).toContain('windows of one kind up to');
     expect(field()!.textContent).toContain('minutes apart');
-    expect(field()!.textContent).toContain('Inherit (15 min, from the organization)');
-    expect(inherit().checked).toBe(true);
+    expect(field()!.textContent).toContain('default: 15 min, from the organization');
+    expect(override().checked).toBe(false);
     expect(number().disabled).toBe(true);
     expect(number().value).toBe('15');
   });
 
-  it('puts Inherit first, on the row of the words, and why in a tooltip', async () => {
+  it('puts the override first, on the row of the words, and why in a tooltip; below the tabs', async () => {
     await open(PAIR, '', JOIN);
     const row = field()!.querySelector('[data-test="join-row"]')!;
-    expect(row.contains(inherit()) && row.contains(number())).toBe(true);
-    expect(inherit().compareDocumentPosition(number()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.contains(override()) && row.contains(number())).toBe(true);
+    expect(override().compareDocumentPosition(number()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelector('[data-test="windows"]')!.compareDocumentPosition(field()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelector('[data-test="windows"]')!.contains(field()!)).toBe(false);
     expect(field()!.textContent).not.toContain('neither wakes nor naps');
     document.querySelector('[data-test="join-more"]')!.dispatchEvent(new MouseEvent('mouseenter'));
     await vi.waitFor(() => expect(document.querySelector('.v-overlay--active [data-test="join-tip"]')).not.toBeNull());
@@ -631,7 +635,7 @@ describe('Schedule dialog: joined windows', () => {
     await add('awake');
     expect(field()).toBeNull();
     await add('nap');
-    expect(field()!.textContent).toContain('Inherit (30 min, from the router)');
+    expect(field()!.textContent).toContain('default: 30 min, from the router');
   });
 
   it('is offered from two windows, and for one window only where it matters', async () => {
@@ -643,10 +647,10 @@ describe('Schedule dialog: joined windows', () => {
     await flushPromises();
     expect(field()).toBeNull();
     mounted.splice(0).forEach((w) => w.unmount());
-    // A value of its own stays in sight, Inherit clicked or not.
+    // A value of its own stays in sight, overridden or not.
     await open({ ...schedule, joinMinutes: 30 }, '', JOIN);
     expect(field()).not.toBeNull();
-    inherit().click();
+    override().click();
     await flushPromises();
     expect(field()).not.toBeNull();
     mounted.splice(0).forEach((w) => w.unmount());
@@ -669,7 +673,7 @@ describe('Schedule dialog: joined windows', () => {
   it('a read-back schedule saved again keeps it, 0 included', async () => {
     for (const joinMinutes of [0, 30]) {
       await open({ ...schedule, joinMinutes }, '', { joinMinutes, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' } });
-      expect(inherit().checked).toBe(false);
+      expect(override().checked).toBe(true);
       expect(number().value).toBe(String(joinMinutes));
       await save();
       expect(submitted!.joinMinutes).toBe(joinMinutes);
@@ -678,9 +682,9 @@ describe('Schedule dialog: joined windows', () => {
     }
   });
 
-  it('sets its own from the inherited value, and Inherit removes it', async () => {
+  it('the override sets its own from the inherited value, and unchecking it removes it', async () => {
     await open(PAIR, '', JOIN);
-    inherit().click();
+    override().click();
     await flushPromises();
     expect(number().disabled).toBe(false);
     expect(number().value).toBe('15');
@@ -690,7 +694,7 @@ describe('Schedule dialog: joined windows', () => {
     mounted.splice(0).forEach((w) => w.unmount());
     document.body.innerHTML = '';
     await open({ ...schedule, joinMinutes: 30 }, '', JOIN);
-    inherit().click();
+    override().click();
     await flushPromises();
     await save();
     expect(submitted).not.toHaveProperty('joinMinutes');
@@ -716,7 +720,7 @@ describe('Schedule dialog: joined windows', () => {
   it('the next occurrence in the helper uses the value in force, and the schedule\'s other windows', async () => {
     await open(TWO, '', { joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } });
     expect(firstNext()).toContain('08:00–12:10');
-    inherit().click();
+    override().click();
     await flushPromises();
     await type('0');
     expect(firstNext()).toContain('08:00–12:00');

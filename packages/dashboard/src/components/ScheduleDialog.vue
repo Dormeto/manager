@@ -1,13 +1,13 @@
 <script setup lang="ts">
 // Edit a workload's schedule (R12): what applies to the whole schedule first (the time zone, the browser's by default, the
-// exceptions, the maximum nap and how far apart windows join), then a tab per window, named by its kind's icon and its window in a
+// exceptions, the maximum nap), then a tab per window, then how far apart windows join, named by its kind's icon and its window in a
 // few words, with how it repeats (WindowRecurrence). A window keeps its kind: the buttons after the tabs add a nap or an awake one.
 // The router's refusals are shown as it words them.
 import { computed, ref, watch } from 'vue';
 import { mdiAlertCircleOutline, mdiCalendarClock, mdiDeleteOutline, mdiPlus, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import { editProblems, nextOccurrences } from '../occurrences';
 import {
-  JOIN_MINUTES_MAX, browserZone, canonicalZone, formProblem, isJoinMinutes, joinText, newWindow, recurrenceError, scheduleBody, windowBody, windowTitle,
+  JOIN_MINUTES_MAX, browserZone, canonicalZone, formProblem, isJoinMinutes, joinDefaultText, newWindow, recurrenceError, scheduleBody, windowBody, windowTitle,
   type JoinAnswer, type Schedule, type ScheduleWindow,
 } from '../schedule';
 import JoinField from './JoinField.vue';
@@ -102,7 +102,6 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
           />
           <v-text-field v-model="maxNap" data-test="max-nap" label="Maximum nap (days, 1 to 60)" density="compact" type="number" min="1" max="60" class="dm-settings__nap" hint="Past it, the workload wakes for maintenance, then naps again. Blank for none." persistent-hint />
         </div>
-        <JoinField v-if="joinShown" v-model="joinMinutes" :inherited="inherited!.joinMinutes" :inherit-label="`Inherit (${joinText(inherited!)})`" class="mt-2" />
         <div data-test="windows" class="dm-windows mt-4">
           <div class="dm-windows__bar">
             <v-tabs v-model="tab" data-test="window-tabs" density="compact" show-arrows color="primary" class="dm-windows__tabs">
@@ -140,6 +139,8 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
           </div>
           <p v-if="!windows.length" data-test="no-window" class="dm-window text-medium-emphasis">No window yet: add a nap or an awake window with the + buttons.</p>
         </div>
+        <!-- Below the tabs: it joins windows, and shows from two of them. -->
+        <JoinField v-if="joinShown" v-model="joinMinutes" :inherited="inherited!.joinMinutes" :default-label="joinDefaultText(inherited!)" class="mt-3" />
         <v-alert v-if="problem && windows.length + Number(Boolean(maxNap)) > 0" type="warning" variant="tonal" density="compact" class="mt-3" :text="problem" />
         <v-alert v-if="error" data-test="schedule-error" type="error" variant="tonal" density="compact" class="mt-3" :text="recurrenceError(error)" />
       </v-card-text>
