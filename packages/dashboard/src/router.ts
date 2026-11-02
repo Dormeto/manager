@@ -51,3 +51,25 @@ router.beforeEach(async (to) => {
   if (to.meta.admin && !session.isAdmin) return '/';
   return true;
 });
+
+// A view's code that cannot be fetched (the dev server rebuilt its dependencies, an update replaced the files of the release this
+// page came from): the page it leads to is loaded in full, once, rather than the click left without effect.
+const STALE = /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i;
+const RELOADED = 'dm-reloaded';
+export const navigation = { load: (path: string) => window.location.assign(path) };
+router.onError((err: unknown, to) => {
+  if (!STALE.test(err instanceof Error ? err.message : String(err))) return;
+  try {
+    // Loaded in full already and still failing: no loop.
+    if (sessionStorage.getItem(RELOADED) === to.fullPath) return;
+    sessionStorage.setItem(RELOADED, to.fullPath);
+  } catch {
+    // No storage to remember it by: no load that could repeat.
+    return;
+  }
+  navigation.load(to.fullPath);
+});
+router.afterEach((_to, _from, failure) => {
+  if (failure) return;
+  try { sessionStorage.removeItem(RELOADED); } catch { /* no storage */ }
+});

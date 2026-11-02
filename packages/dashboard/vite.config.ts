@@ -16,6 +16,10 @@ export default defineConfig(({ command, mode }) => {
   }
   return {
     plugins: [vue(), vuetify({ autoImport: true })],
+    // The components the plugin imports as it compiles a view escape the dev server's first scan: each view's first visit found
+    // new ones, rebuilt the dependencies and reloaded, and the view's code could not be fetched meanwhile (its menu item did
+    // nothing). All of them, from the start.
+    optimizeDeps: { include: ['vuetify/components/*', 'vuetify/directives/*'] },
     server: { proxy: { '/api': { target: remote, changeOrigin: true }, '/config.json': { target: remote, changeOrigin: true } } },
     build: { sourcemap: false, chunkSizeWarningLimit: 1500 },
     test: { environment: 'jsdom', server: { deps: { inline: ['vuetify'] } } },

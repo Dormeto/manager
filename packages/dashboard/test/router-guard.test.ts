@@ -34,4 +34,27 @@ describe('router guard', () => {
     await router.push('/workloads/dmt-dev/abc');
     expect(router.currentRoute.value.path).toBe('/workloads/dmt-dev/abc');
   });
+
+  // The user, 2026-11-02: in the demo, Operations and Users could not be clicked. The dev server rebuilt its dependencies on their
+  // first visit and their code could not be fetched; a release that replaced the files of an open page does the same.
+  it('loads the page in full, once, when its code cannot be fetched; another error is not a reload', async () => {
+    setActivePinia(createPinia());
+    sessionStorage.clear();
+    me.value = { email: 'a@example.com', role: 'admin', effectiveRole: 'admin' };
+    const { router, navigation } = await import('../src/router');
+    const load = vi.spyOn(navigation, 'load').mockImplementation(() => {});
+    router.addRoute({ path: '/stale', component: () => Promise.reject(new TypeError('Failed to fetch dynamically imported module: http://localhost:5173/src/views/StaleView.vue')) });
+    router.addRoute({ path: '/broken', component: () => Promise.reject(new Error('boom')) });
+    await router.push('/stale').catch(() => {});
+    expect(load).toHaveBeenCalledWith('/stale');
+    // Loaded in full, it fails again: no second load, no loop.
+    await router.push('/stale').catch(() => {});
+    expect(load).toHaveBeenCalledTimes(1);
+    await router.push('/broken').catch(() => {});
+    expect(load).toHaveBeenCalledTimes(1);
+    // A page reached forgets it: its code failing later is loaded in full again.
+    await router.push('/workloads');
+    await router.push('/stale').catch(() => {});
+    expect(load).toHaveBeenCalledTimes(2);
+  });
 });
