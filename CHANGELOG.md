@@ -71,7 +71,8 @@ occurrence within the last year and none to come (its pattern, range and dates w
 and the dates without a window as old, the schedule's and each window's; a schedule left with
 nothing is removed. Routers › Workload defaults › Ended windows sets the delay for the organization (`endedWindowDays` in
 `settings.json`, `PUT /api/settings/workloads`): 0 keeps them, else 30 to 3650 days. A router removes nothing while it has never
-read the settings, never while a window is active, and never over a schedule saved since its check read it.
+read the settings (nor before it has read them once since its upgrade), never while a window is active, and never over a schedule
+saved since its check read it.
 
 The Schedules panel takes an organization of 1,000 workloads: past 100 rows it draws only those in sight, so a search, a tick or
 "Scheduled only" answers at once, and it fills the height of the page. The demo takes `workloads=1000` in its scenario
