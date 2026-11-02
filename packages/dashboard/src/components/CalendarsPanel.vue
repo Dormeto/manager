@@ -39,7 +39,7 @@ const swatch = (key: string) => (key in props.enabled ? colorFor(props.enabled[k
     <v-alert v-if="message" data-test="limit-message" type="warning" variant="tonal" density="compact" class="my-2" :text="message" />
     <v-alert v-if="error" type="error" variant="tonal" density="compact" class="my-2" :text="error" />
     <div v-if="loading && !rows.length" class="text-medium-emphasis py-4">Reading the workloads…</div>
-    <div v-else-if="!shown.length" class="text-medium-emphasis py-4">{{ scheduledOnly && !search.trim() ? 'No workload has a schedule yet: turn off "Scheduled only" to choose one.' : 'No workload matches.' }}</div>
+    <div v-else-if="!shown.length" class="text-medium-emphasis py-4">{{ scheduledOnly && !search?.trim() ? 'No workload has a schedule yet: turn off "Scheduled only" to choose one.' : 'No workload matches.' }}</div>
     <v-virtual-scroll v-if="shown.length > VIRTUAL_FROM" :items="shown" item-key="key" :item-height="48" height="100%" class="dm-panel__list" role="list">
       <template #default="{ item }">
         <CalendarRow :key="rowKey(item)" :row="item" :on="item.key in enabled" :color="swatch(item.key)" :status="status[item.key]" @toggle="toggle(item)" />

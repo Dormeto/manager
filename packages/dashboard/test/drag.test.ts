@@ -24,8 +24,21 @@ const move = (minutes: number) => ({ edge: 'move' as const, minutes, ms: minutes
 
 describe('the parts of a bar', () => {
   it('are its windows\' occurrences as written, by start', () => {
-    expect(partsOf(utc(morning, afternoon), [0, 1], at('2027-01-04T08:00:00Z'), at('2027-01-04T18:00:00Z'))).toEqual(bar);
-    expect(partsOf(utc(morning, afternoon), [1], at('2027-01-04T12:10:00Z'), at('2027-01-04T18:00:00Z'))).toEqual([bar[1]]);
+    expect(partsOf(utc(morning, afternoon), 15, at('2027-01-04T08:00:00Z'), at('2027-01-04T18:00:00Z'), 0)).toEqual(bar);
+    expect(partsOf(utc(morning, afternoon), 0, at('2027-01-04T12:10:00Z'), at('2027-01-04T18:00:00Z'), 1)).toEqual([bar[1]]);
+  });
+
+  it('are what the drawing chained, not another bar of the same windows starting inside it', () => {
+    // Fri 8 Jan 2027: the daily window joins Friday's night window (10 minutes apart); Saturday's daily occurrence, inside that
+    // bar, is a bar of its own.
+    const daily: ScheduleWindow = { kind: 'awake', start: '08:00', end: '20:00', repeat: { pattern: 'daily' } };
+    const friday: ScheduleWindow = { kind: 'awake', days: ['fri'], start: '20:10', end: '09:00' };
+    const s = utc(daily, friday);
+    const parts = partsOf(s, 15, at('2027-01-08T08:00:00Z'), at('2027-01-09T09:00:00Z'), 0);
+    expect(parts).toEqual([part(0, '2027-01-08T08:00:00Z', '2027-01-08T20:00:00Z'), part(1, '2027-01-08T20:10:00Z', '2027-01-09T09:00:00Z')]);
+    // Its bottom edge is Friday's night window.
+    expect(done(editSchedule(s, parts, { edge: 'end', minutes: 60, ms: H }, 'series', TODAY, 'Shop')).schedule.windows).toEqual([daily, { ...friday, end: '10:00' }]);
+    expect(partsOf(s, 15, at('2027-01-09T08:00:00Z'), at('2027-01-09T20:00:00Z'), 0)).toEqual([part(0, '2027-01-09T08:00:00Z', '2027-01-09T20:00:00Z')]);
   });
 });
 
@@ -61,6 +74,16 @@ describe('the series', () => {
     const r = done(editSchedule(utc(once('2027-01-05', '08:00', '12:00')), [tue], move(60), 'series', TODAY, 'Shop'));
     expect(r.schedule.windows).toEqual([once('2027-01-05', '09:00', '13:00')]);
     expect(r.done).toBe('Window moved: Shop now runs once on 5 Jan 2027, 09:00–13:00');
+  });
+
+  it('a window of one date goes where it was dropped, by its instants, whatever the browser\'s clock says', () => {
+    // A browser in Paris, a schedule in New York: dropped a week later on the browser's clock across 14 March 2027 (New York's
+    // change, not Paris's), it is 168 hours of instants later, which New York's clock reads 10:00, where it was dropped.
+    const ny: Schedule = { timeZone: 'America/New_York', windows: [once('2027-03-08', '09:00', '12:00')] };
+    const monday = part(0, '2027-03-08T14:00:00Z', '2027-03-08T17:00:00Z');
+    const week = { edge: 'move' as const, minutes: 7 * 1440, ms: 168 * H };
+    expect(done(editSchedule(ny, [monday], week, 'series', TODAY, 'Shop')).schedule.windows).toEqual([once('2027-03-15', '10:00', '13:00')]);
+    expect(problem(editSchedule({ ...ny, exceptions: ['2027-03-15'] }, [monday], week, 'series', TODAY, 'Shop'))).toContain('15 Mar 2027 is a date without a window');
   });
 
   it('refuses what a series cannot do, and says why', () => {

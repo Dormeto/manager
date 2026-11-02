@@ -326,7 +326,7 @@ function chosen(scope: Scope | null) {
 type Change = (EventDropArg | EventResizeDoneArg) & { delta?: Duration; startDelta?: Duration; endDelta?: Duration };
 async function change(arg: Change, edge: Edge) {
   const key = arg.event.extendedProps.key as string;
-  const windows = (arg.event.extendedProps.windows as number[] | undefined) ?? [arg.event.extendedProps.window as number];
+  const window = arg.event.extendedProps.window as number;
   const name = nameOf(key);
   if (moving.value) { arg.revert(); return; }
   const minutes = dragMinutes((edge === 'move' ? arg.delta : edge === 'start' ? arg.startDelta : arg.endDelta)!);
@@ -338,8 +338,12 @@ async function change(arg: Change, edge: Edge) {
   const drawn = reads[key]?.data;
   const schedule = drawn?.schedule;
   if (!schedule?.windows?.length) { arg.revert(); return; }
-  const parts = partsOf(schedule, windows, oldStart, oldEnd);
-  const known = JSON.stringify(parts.map((p) => windowBody(schedule.windows![p.window]!)));
+  // The bar's parts as the calendar chained them, at the join it was drawn with.
+  const parts = partsOf(schedule, joinInForce(drawn), oldStart, oldEnd, window);
+  // What the parts are read with: their windows, the zone that turns them into wall times, and the dates without a window.
+  const readWith = (s: Schedule) => JSON.stringify([parts.map((p) => windowBody(s.windows![p.window]!)), s.timeZone, [...(s.exceptions ?? [])].sort()]);
+  if (!parts.length) { arg.revert(); return; }
+  const known = readWith(schedule);
   moving.value = true;
   try {
     let scope: Scope = 'series';
@@ -357,7 +361,7 @@ async function change(arg: Change, edge: Edge) {
     const fresh = await api<WorkloadStatus>(pathOf(key));
     const current = fresh.schedule;
     // The bar was drawn with the value in force too: another one could have drawn another bar.
-    if (!current || parts.some((p) => !current.windows?.[p.window]) || JSON.stringify(parts.map((p) => windowBody(current.windows![p.window]!))) !== known || joinInForce(fresh) !== joinInForce(drawn)) {
+    if (!current || parts.some((p) => !current.windows?.[p.window]) || readWith(current) !== known || joinInForce(fresh) !== joinInForce(drawn)) {
       arg.revert();
       said('warning', `The schedule of ${name} changed since it was read: look at it again before changing this window.`);
       await readOne(key);

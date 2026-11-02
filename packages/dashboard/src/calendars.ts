@@ -134,7 +134,8 @@ const READ_ONLY = 'You may not edit this workload: it can\'t be dragged.';
 export const CALENDAR_EVENTS_MAX = 1200;
 
 // A bar: its occurrences as one, with the windows they are of, the first's above all.
-type Bar = Occurrence & { windows: Set<number> };
+// members: the occurrences it draws, each its window and start.
+type Bar = Occurrence & { windows: Set<number>; members: { window: number; start: number }[] };
 
 // The bars of a schedule in [from, to), the first CALENDAR_EVENTS_MAX, and whether there are more. Occurrences of a cron window
 // that touch or overlap are one bar: every 5 minutes for 5 minutes draws the hours it holds, not a tile for each start. So is a
@@ -156,12 +157,13 @@ function barsOf(s: Schedule, from: number, to: number, joinMinutes: number): { b
         joining.delete(started);
         bar.end = Math.max(bar.end, o.end);
         bar.windows.add(o.window);
+        bar.members.push({ window: o.window, start: o.start });
         if (o.wake === 'never') bar.wake = 'never';
         if (o.joined) { bar.joined = true; joining.set(reaching(o), bar); }
         last.set(o.window, bar);
         continue;
       }
-      const copy = { ...o, windows: new Set([o.window]) };
+      const copy = { ...o, windows: new Set([o.window]), members: [{ window: o.window, start: o.start }] };
       if (o.joined) joining.set(reaching(o), copy);
       last.set(o.window, copy);
       bars.push(copy);
@@ -169,6 +171,12 @@ function barsOf(s: Schedule, from: number, to: number, joinMinutes: number): { b
     if (bars.length > CALENDAR_EVENTS_MAX) return { bars: bars.slice(0, CALENDAR_EVENTS_MAX), more: true };
   }
   return { bars, more: false };
+}
+
+// The occurrences the bar drawn from `start` to `end` with `window` holds, as the calendar chained them (a gap that joins, a cron's
+// that touch): what a drag of it changes. Another bar of the same windows starting inside it is not one of them.
+export function barMembers(s: Schedule, joinMinutes: number, start: number, end: number, window: number): { window: number; start: number }[] {
+  return barsOf(s, start, end, joinMinutes).bars.find((b) => b.start === start && b.windows.has(window))?.members ?? [];
 }
 
 export interface Capped { key: string; name: string; until: Date }

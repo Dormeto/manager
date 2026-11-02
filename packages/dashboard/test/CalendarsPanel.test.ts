@@ -33,6 +33,17 @@ describe('Calendars panel: many workloads', () => {
     wrapper.unmount();
   });
 
+  it('a search cleared with its button (null) says there is no scheduled workload yet, and throws nothing', async () => {
+    const none = rows.slice(0, 3).map((r) => ({ ...r, scheduled: false }));
+    const errors: unknown[] = [];
+    const wrapper = mount(CalendarsPanel, { props: { rows: none, enabled: {}, status: {} }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives })], config: { errorHandler: (err) => { errors.push(err); } } } });
+    wrapper.findComponent({ name: 'VTextField' }).vm.$emit('update:modelValue', null);
+    await flushPromises();
+    expect(errors).toEqual([]);
+    expect(wrapper.text()).toContain('No workload has a schedule yet');
+    wrapper.unmount();
+  });
+
   it('a tick refused past the limit is drawn again in its row, the list where it was', async () => {
     const wrapper = mountPanel(Object.fromEntries(rows.slice(-MAX_CALENDARS).map((r, i) => [r.key, i])));
     await flushPromises();

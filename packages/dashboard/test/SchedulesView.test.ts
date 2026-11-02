@@ -1108,6 +1108,21 @@ describe('Schedules view: moving a window by dragging it', () => {
     expect(toast()).toContain('changed since');
   });
 
+  it('puts back when the zone or the dates without a window changed since it was drawn: the instants read otherwise', async () => {
+    for (const changed of [{ ...shopSchedule, timeZone: 'America/New_York' }, { ...shopSchedule, exceptions: ['2026-10-19'] }]) {
+      h.status['/workloads/dmt-dev/a'] = recent('Shop', shopSchedule);
+      const { wrapper } = await open();
+      await enable(wrapper, 'dmt-dev/a');
+      h.status['/workloads/dmt-dev/a'] = recent('Shop', changed);
+      h.calls.length = 0;
+      const revert = await drop(wrapper, 'dmt-dev/a', 0, SHOP_MON, '2026-10-19T09:30:00+02:00', 'occurrence');
+      expect(revert, JSON.stringify(changed)).toHaveBeenCalledOnce();
+      expect(puts()).toEqual([]);
+      expect(toast()).toContain('changed since');
+      wrapper.unmount();
+    }
+  });
+
   it('a schedule with its own value keeps it through a drag, 0 included', async () => {
     for (const joinMinutes of [0, 30]) {
       h.status['/workloads/dmt-dev/a'] = { ...status('Shop', { ...shopSchedule, joinMinutes }), joinMinutes, joinFrom: 'workload', joinInherited: { joinMinutes: 15, joinFrom: 'default' } };

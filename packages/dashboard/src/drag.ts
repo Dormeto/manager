@@ -3,6 +3,7 @@
 // exceptions) and a window of that one date (Do not repeat) runs at the new times. A bar the calendar draws can hold several
 // occurrences (a gap that joins, a cron's that touch): its parts are those occurrences as written; a move changes every part, a
 // start the first, an end the last.
+import { barMembers } from './calendars';
 import { moveWindow, movesDay, occurrencesIn, resizeWindow, startsOnDate, wallOf } from './occurrences';
 import { dateText, isOnce, occurrenceText, recurrenceText, windowBody, type Schedule, type ScheduleWindow } from './schedule';
 
@@ -28,11 +29,14 @@ const withoutDate = (date: string) => `${dateText(date)} is a date without a win
 // A sentence inside another: "every occurrence of Shop now runs every day, …", as movedText words it.
 const lower = (text: string): string => text.replace(/^(Every|Weekly|Monthly|Yearly|Once|Cron)\b/, (word) => word.toLowerCase());
 
-// The parts of a bar drawn from `start` to `end` for these windows.
-export function partsOf(s: Schedule, windows: number[], start: number, end: number): Part[] {
-  return occurrencesIn(s, start, end, { joinMinutes: 0 })
-    .filter((o) => windows.includes(o.window) && o.start >= start && o.start < end)
-    .map((o) => ({ window: o.window, start: o.start, end: o.end }));
+// The parts of the bar drawn from `start` to `end` with `window`, at the join it was drawn with: the occurrences the drawing chained,
+// each with its end as written.
+export function partsOf(s: Schedule, joinMinutes: number, start: number, end: number, window: number): Part[] {
+  const written = occurrencesIn(s, start, end, { joinMinutes: 0 });
+  return barMembers(s, joinMinutes, start, end, window).flatMap((m) => {
+    const o = written.find((w) => w.window === m.window && w.start === m.start);
+    return o ? [{ window: o.window, start: o.start, end: o.end }] : [];
+  });
 }
 
 // The parts an edge changes: a move all, a start the one that starts first, an end the one that ends last.
@@ -57,21 +61,38 @@ export function editSchedule(s: Schedule, parts: Part[], edit: CalendarEdit, sco
   return scope === 'series' ? series(s, touched, edit, today, name) : occurrence(s, touched, edit, name);
 }
 
+// A part at its new instants on the schedule's clock, as a window of that one date with `w`'s kind and wake, or why it can't be.
+function placed(s: Schedule, w: ScheduleWindow, p: Part, edit: CalendarEdit): { window: ScheduleWindow; start: number; end: number } | { problem: string } {
+  const [start, end] = edit.edge === 'move' ? [p.start + edit.ms, p.end + edit.ms] : edit.edge === 'start' ? [p.start + edit.ms, p.end] : [p.start, p.end + edit.ms];
+  const [a, b] = [wallOf(start, s.timeZone), wallOf(end, s.timeZone)];
+  const length = (Date.parse(b.date) - Date.parse(a.date)) / 60_000 + b.minutes - a.minutes;
+  if (length < STEP || length > 1440) return { problem: WINDOW_SIZE };
+  if (s.exceptions?.includes(a.date)) return { problem: withoutDate(a.date) };
+  return {
+    window: { kind: w.kind, start: hhmm(a.minutes), end: hhmm(b.minutes), repeat: { pattern: 'daily' }, from: a.date, until: a.date, ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}) },
+    start, end,
+  };
+}
+
 function series(s: Schedule, touched: Part[], edit: CalendarEdit, today: string, name: string): Edited {
   const windows = [...s.windows!];
   const indexes = [...new Set(touched.map((p) => p.window))];
   for (const i of indexes) {
     const w = windows[i]!;
+    // A window of one date goes where it was dropped, by its instants: the browser's clock can change on another day than the
+    // schedule's.
+    if (isOnce(w)) {
+      const at = placed(s, w, touched.find((p) => p.window === i)!, edit);
+      if ('problem' in at) return at;
+      windows[i] = { ...w, ...at.window };
+      continue;
+    }
     const cron = w.repeat?.pattern === 'cron';
     if (cron && edit.edge !== 'end') return { problem: CRON_SERIES };
     if (edit.edge !== 'end' && !moveWindow(w, edit.minutes, today)) return { problem: NOT_ALIKE };
     const next = edit.edge === 'move' ? moveWindow(w, edit.minutes, today) : resizeWindow(w, edit.edge, edit.minutes, today);
     if (!next) return { problem: cron ? CRON_SIZE : WINDOW_SIZE };
-    if (isOnce(next)) {
-      if (s.exceptions?.includes(next.from!)) return { problem: withoutDate(next.from!) };
-    } else if (edit.edge !== 'end' && movesDay(w, edit.minutes) && s.exceptions?.some((date) => date >= today)) {
-      return { problem: EXCEPTED };
-    }
+    if (edit.edge !== 'end' && movesDay(w, edit.minutes) && s.exceptions?.some((date) => date >= today)) return { problem: EXCEPTED };
     windows[i] = next;
   }
   const changed = indexes.map((i) => windows[i]!);
@@ -94,16 +115,10 @@ function occurrence(s: Schedule, touched: Part[], edit: CalendarEdit, name: stri
   const skipped = new Set<string>();
   for (const p of touched) {
     const w = windows[p.window]!;
-    const [start, end] = edit.edge === 'move' ? [p.start + edit.ms, p.end + edit.ms] : edit.edge === 'start' ? [p.start + edit.ms, p.end] : [p.start, p.end + edit.ms];
-    const [a, b] = [wallOf(start, zone), wallOf(end, zone)];
-    const length = (Date.parse(b.date) - Date.parse(a.date)) / 60_000 + b.minutes - a.minutes;
-    if (length < STEP || length > 1440) return { problem: WINDOW_SIZE };
-    if (s.exceptions?.includes(a.date)) return { problem: withoutDate(a.date) };
-    const single: ScheduleWindow = {
-      kind: w.kind, start: hhmm(a.minutes), end: hhmm(b.minutes), repeat: { pattern: 'daily' }, from: a.date, until: a.date,
-      ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}),
-    };
-    said.push(occurrenceText({ start, end }, zone));
+    const at = placed(s, w, p, edit);
+    if ('problem' in at) return at;
+    const single = at.window;
+    said.push(occurrenceText(at, zone));
     if (isOnce(w)) {
       windows[p.window] = { ...w, ...single };
       continue;
