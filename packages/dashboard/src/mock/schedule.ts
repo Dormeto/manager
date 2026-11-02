@@ -12,7 +12,7 @@ type Body = Record<string, unknown>;
 function unknownToOlder(s: Body): string[] {
   const windows = Array.isArray(s.windows) ? (s.windows as Body[]) : [];
   return [
-    ...windows.flatMap((w, i) => ['repeat', 'from', 'until'].filter((f) => f in w).map((f) => `windows[${i}].${f}: unknown field`)),
+    ...windows.flatMap((w, i) => ['repeat', 'from', 'until', 'exceptions'].filter((f) => f in w).map((f) => `windows[${i}].${f}: unknown field`)),
     ...('joinMinutes' in s ? ['joinMinutes: unknown field'] : []),
   ];
 }
@@ -21,7 +21,7 @@ function problems(s: Body): string[] {
   const out: string[] = [];
   const windows = Array.isArray(s.windows) ? (s.windows as Body[]) : null;
   if (!windows) return ['windows: an array'];
-  if (windows.length > 20) out.push('windows: at most 20');
+  if (windows.length > 100) out.push('windows: at most 100');
   if (windows.length && !canonicalZone(String(s.timeZone ?? ''))) out.push('timeZone: required when there are windows, an IANA time zone');
   windows.forEach((w, i) => out.push(...windowProblems(w as unknown as ScheduleWindow, `windows[${i}]`)));
   if (Array.isArray(s.exceptions) && s.exceptions.length > 100) out.push('exceptions: at most 100');

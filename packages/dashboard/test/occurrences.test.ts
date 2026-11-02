@@ -1,7 +1,7 @@
 // The Schedules calendar's arithmetic: a schedule's occurrences at literal instants (overnight and 24-hour windows,
 // clock changes, exceptions, another zone than the browser's), and a calendar selection as a window in a zone.
 import { describe, expect, it } from 'vitest';
-import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, moveWindow, movesDay, dragMinutes, nextOccurrences, occurrencesIn, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
+import { allDayWindow, cronShortestGap, editProblems, fieldProblems, localDate, nextEvents, moveWindow, movesDay, dragMinutes, nextOccurrences, occurrencesIn, resizeWindow, startsOnDate, windowFromSelection, windowProblems, type Occurrence } from '../src/occurrences';
 import { browserZone, type Schedule, type ScheduleWindow } from '../src/schedule';
 
 const at = (text: string): number => Date.parse(text);
@@ -450,6 +450,67 @@ describe('moving a whole window by dragging an occurrence', () => {
 
   it('leaves the wake and the kind as they are', () => {
     expect(moveWindow({ kind: 'nap', days: ['mon'], start: '20:00', end: '07:00', wake: 'header' }, HOUR, TODAY)).toEqual({ kind: 'nap', days: ['mon'], start: '21:00', end: '08:00', wake: 'header' });
+  });
+
+  it('moves the window\'s own dates with its days, and keeps them within a day', () => {
+    expect(moveWindow(awake({ days: ['mon'], exceptions: ['2027-01-04'] }), DAY_MIN, TODAY)).toEqual(awake({ days: ['tue'], exceptions: ['2027-01-05'] }));
+    expect(moveWindow(awake({ days: ['mon'], exceptions: ['2027-01-04'] }), HOUR, TODAY)).toEqual(awake({ days: ['mon'], start: '09:00', end: '13:00', exceptions: ['2027-01-04'] }));
+  });
+});
+
+describe('changing a window\'s start or end by dragging an edge', () => {
+  const TODAY = '2026-11-01';
+  const HOUR = 60;
+  const awake = (fields: Partial<ScheduleWindow>): ScheduleWindow => ({ kind: 'awake', days: ['mon'], start: '08:00', end: '12:00', ...fields });
+  const cron = (minutes: number): ScheduleWindow => ({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * 1-5', minutes } });
+
+  it('the end: later or earlier, past midnight too, the start where it was', () => {
+    expect(resizeWindow(awake({}), 'end', HOUR, TODAY)).toEqual(awake({ end: '13:00' }));
+    expect(resizeWindow(awake({}), 'end', -3 * HOUR, TODAY)).toEqual(awake({ end: '09:00' }));
+    expect(resizeWindow(awake({}), 'end', 14 * HOUR, TODAY)).toEqual(awake({ end: '02:00' }));
+    expect(resizeWindow(awake({}), 'end', 20 * HOUR, TODAY)).toEqual(awake({ end: '08:00' }));
+  });
+
+  it('the start: earlier or later, the end where it was; a start before midnight moves the day', () => {
+    expect(resizeWindow(awake({}), 'start', -2 * HOUR, TODAY)).toEqual(awake({ start: '06:00' }));
+    expect(resizeWindow(awake({}), 'start', HOUR, TODAY)).toEqual(awake({ start: '09:00' }));
+    expect(resizeWindow(awake({ start: '01:00', end: '02:00' }), 'start', -2 * HOUR, TODAY)).toEqual(awake({ days: ['sun'], start: '23:00', end: '02:00' }));
+    expect(resizeWindow(awake({ start: '01:00', end: '02:00', from: '2027-01-04', exceptions: ['2027-01-11'] }), 'start', -2 * HOUR, TODAY))
+      .toEqual(awake({ days: ['sun'], start: '23:00', end: '02:00', from: '2027-01-03', exceptions: ['2027-01-10'] }));
+  });
+
+  it('refuses a window shorter than 5 minutes or longer than 24 hours', () => {
+    expect(resizeWindow(awake({}), 'end', -4 * HOUR, TODAY)).toBeNull();
+    expect(resizeWindow(awake({}), 'end', 21 * HOUR, TODAY)).toBeNull();
+    expect(resizeWindow(awake({}), 'start', -21 * HOUR, TODAY)).toBeNull();
+    expect(resizeWindow(awake({}), 'start', 4 * HOUR, TODAY)).toBeNull();
+  });
+
+  it('a cron window\'s end is its length, from 5 minutes to 7 days; its start is its expression\'s', () => {
+    expect(resizeWindow(cron(60), 'end', 90, TODAY)).toEqual(cron(150));
+    expect(resizeWindow(cron(60), 'end', -60, TODAY)).toBeNull();
+    expect(resizeWindow(cron(10080), 'end', 5, TODAY)).toBeNull();
+    expect(resizeWindow(cron(60), 'start', -60, TODAY)).toBeNull();
+  });
+});
+
+describe('a window\'s own dates without it', () => {
+  const s = (exceptions?: string[]): Schedule => ({ timeZone: 'UTC', windows: [
+    { kind: 'awake', start: '08:00', end: '09:00', repeat: { pattern: 'daily' }, ...(exceptions ? { exceptions } : {}) },
+    { kind: 'nap', start: '20:00', end: '21:00', repeat: { pattern: 'daily' }, wake: 'never' },
+  ] });
+  const starts = (schedule: Schedule) => occurrencesIn(schedule, at('2027-01-04T00:00:00Z'), at('2027-01-07T00:00:00Z')).map((o) => `${o.kind} ${new Date(o.start).toISOString().slice(5, 16)}`);
+
+  it('skip that window only', () => {
+    expect(starts(s(['2027-01-05']))).toEqual(['awake 01-04T08:00', 'nap 01-04T20:00', 'nap 01-05T20:00', 'awake 01-06T08:00', 'nap 01-06T20:00']);
+  });
+
+  it('are refused in the router\'s words, and counted by start', () => {
+    expect(windowProblems({ ...s().windows![0]!, exceptions: ['2027-02-30'] }, 'w')).toEqual(['w.exceptions[0]: a date YYYY-MM-DD']);
+    expect(windowProblems({ ...s().windows![0]!, exceptions: '2027-01-05' as unknown as string[] }, 'w')).toEqual(['w.exceptions: a list']);
+    expect(startsOnDate({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8,12 * * *', minutes: 60 } }, '2027-01-05')).toBe(2);
+    expect(startsOnDate({ kind: 'awake', repeat: { pattern: 'cron', cron: '0 8 * * *', minutes: 60 }, exceptions: ['2027-01-05'] }, '2027-01-05')).toBe(0);
+    expect(startsOnDate({ kind: 'awake', days: ['tue'], start: '08:00', end: '09:00' }, '2027-01-05')).toBe(1);
   });
 });
 

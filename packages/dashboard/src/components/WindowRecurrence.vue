@@ -94,9 +94,11 @@ const sentence = computed(() => (daysProblem.value || w.value.until === '' ? '' 
 const head = computed(() => repeatText(body.value));
 const tail = computed(() => sentence.value.slice(head.value.length));
 const next = computed(() => (valid.value ? nextOccurrences({ timeZone: zone.value, windows: [body.value, ...props.others], exceptions: props.exceptions }, Date.now(), 5, { joinMinutes: props.joinMinutes, window: 0 }) : []));
+// The window's own dates without it: a dragged occurrence moved alone leaves its date there. Shown when it has some.
+const ownProblem = computed(() => Object.entries(problems.value).find(([field]) => field.startsWith('exceptions'))?.[1] ?? '');
 // A problem that has no field of its own here: a stored window nothing else shows it for.
 const SHOWN = ['days', 'repeat.days', 'repeat.interval', 'repeat.day', 'repeat.nth', 'repeat.weekday', 'repeat', 'repeat.cron', 'repeat.minutes', 'from', 'until'];
-const other = computed(() => Object.entries(problems.value).filter(([field]) => !SHOWN.includes(field)).map(([field, why]) => `${field}: ${why}`));
+const other = computed(() => Object.entries(problems.value).filter(([field]) => !SHOWN.includes(field) && !field.startsWith('exceptions')).map(([field, why]) => `${field}: ${why}`));
 </script>
 
 <template>
@@ -170,6 +172,10 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
           :error-messages="problems.until ?? ''" :hide-details="!problems.until" @update:model-value="update({ ...w, until: $event ?? '' })"
         />
       </template>
+      <v-combobox
+        v-if="w.exceptions?.length" :data-test="`${test}-own-dates`" :model-value="w.exceptions" :items="[]" label="Dates it skips" multiple chips closable-chips density="compact" class="dm-own"
+        :error-messages="ownProblem" :hide-details="!ownProblem" @update:model-value="update({ ...w, exceptions: $event })"
+      />
     </div>
     <div v-if="oncePast" :data-test="`${test}-once-past`" class="text-body-small text-warning mt-1">This date is past: the window will never run.</div>
 
@@ -198,6 +204,7 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
 .dm-time { max-width: 130px; min-width: 110px; }
 .dm-nth { max-width: 130px; min-width: 100px; }
 .dm-date { max-width: 190px; min-width: 150px; }
+.dm-own { flex: 1 1 260px; min-width: 220px; }
 .dm-cron :deep(input) { font-family: var(--dm-mono); }
 .dm-days { flex: 0 1 auto; padding: 4px 0 0; }
 .dm-cron { flex: 1 1 260px; max-width: 420px; }

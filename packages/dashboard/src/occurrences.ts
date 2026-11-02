@@ -24,7 +24,8 @@ const INTERVAL_MAX = 99;
 const CRON_LENGTH_MAX = 200;
 const CRON_MINUTES_MAX = WEEK;
 const WAKES = ['never', 'header'];
-const WINDOW_FIELDS = ['kind', 'days', 'start', 'end', 'repeat', 'from', 'until', 'wake'];
+const WINDOW_FIELDS = ['kind', 'days', 'start', 'end', 'repeat', 'from', 'until', 'wake', 'exceptions'];
+const EXCEPTIONS_MAX = 100;
 // The fields of a repeat, by pattern.
 const REPEAT_FIELDS: Record<string, string[]> = {
   daily: ['pattern', 'interval'],
@@ -213,7 +214,7 @@ export function cronShortestGap(text: unknown): number | null {
 }
 
 interface PlanWindow {
-  window: number; kind: 'awake' | 'nap'; from: number | null; until: number | null; pattern: string; interval: number;
+  window: number; kind: 'awake' | 'nap'; from: number | null; until: number | null; skips: Set<string>; pattern: string; interval: number;
   days: Set<Day>; day?: number; nth?: number; weekday: number; cron: ParsedCron | null; starts: number[]; length: number; wake?: 'never' | 'header';
 }
 interface Written { all: Occurrence[]; awake: Occurrence[]; nap: Occurrence[] }
@@ -231,7 +232,7 @@ function prepareWindow(w: ScheduleWindow, window: number): PlanWindow | null {
   const interval = repeat.interval ?? 1;
   if (!PATTERNS.includes(repeat.pattern) || cron?.problem || (!cron && (start === null || end === null)) || (interval > 1 && absent(w.from))) return null;
   return {
-    window, kind: w.kind, from: dayOfDate(w.from), until: dayOfDate(w.until), pattern: repeat.pattern, interval,
+    window, kind: w.kind, from: dayOfDate(w.from), until: dayOfDate(w.until), skips: new Set(w.exceptions ?? []), pattern: repeat.pattern, interval,
     days: new Set(repeat.days), day: repeat.day, nth: repeat.nth, weekday: DAYS.indexOf(repeat.weekday!), cron,
     starts: cron ? cron.starts! : [start!],
     length: cron ? Number(repeat.minutes) || 0 : (end! > start! ? end! - start! : end! - start! + 1440),
@@ -276,9 +277,11 @@ function patternHas(w: PlanWindow, day: number): boolean {
 
 const NO_STARTS: number[] = [];
 
-// The start minutes of a window's occurrences on local day `day`: none outside its range or its pattern.
+// The start minutes of a window's occurrences on local day `day`: none outside its range or its pattern, or on a date of its own
+// without it.
 function startsOn(w: PlanWindow, day: number): number[] {
   if ((w.from !== null && day < w.from) || (w.until !== null && day > w.until)) return NO_STARTS;
+  if (w.skips.size && w.skips.has(dateOf(day))) return NO_STARTS;
   return patternHas(w, day) ? w.starts : NO_STARTS;
 }
 
@@ -491,6 +494,9 @@ export function windowProblems(window: ScheduleWindow, field = ''): string[] {
     if (w.kind === 'awake') problems.push(`${field}.wake: nap windows only`);
     else if (!WAKES.includes(w.wake as string)) problems.push(`${field}.wake: never or header`);
   }
+  if (!absent(w.exceptions) && !Array.isArray(w.exceptions)) problems.push(`${field}.exceptions: a list`);
+  else if ((w.exceptions as unknown[] | undefined)?.length! > EXCEPTIONS_MAX) problems.push(`${field}.exceptions: at most ${EXCEPTIONS_MAX}`);
+  else ((w.exceptions ?? []) as unknown[]).forEach((d, i) => !isDate(d) && problems.push(`${field}.exceptions[${i}]: a date YYYY-MM-DD`));
   if (!absent(w.from) && !isDate(w.from)) problems.push(`${field}.from: a date YYYY-MM-DD`);
   if (!absent(w.until) && !isDate(w.until)) problems.push(`${field}.until: a date YYYY-MM-DD`);
   else if (!absent(w.until) && isDate(w.from) && (w.until as string) < (w.from as string)) problems.push(`${field}.until: not before from`);
@@ -526,7 +532,8 @@ export function movesDay(w: ScheduleWindow, minutes: number): boolean {
 }
 
 // The same window `minutes` of wall time later: the times shift, a start crossing midnight adds to a day offset, which rotates
-// weekly days, moves from and until, and moves a monthly day or weekday. Null for a window with no start of its own (a cron).
+// weekly days, moves from, until and the window's own dates, and moves a monthly day or weekday. Null for a window with no start
+// of its own (a cron).
 function shifted(w: ScheduleWindow, minutes: number): ScheduleWindow | null {
   const [start, end] = [minutesOf(w.start), minutesOf(w.end)];
   if (w.repeat?.pattern === 'cron' || start === null || end === null) return null;
@@ -543,6 +550,7 @@ function shifted(w: ScheduleWindow, minutes: number): ScheduleWindow | null {
     ...(w.days ? { days: rotate(w.days) } : {}),
     ...(w.from ? { from: date(w.from) } : {}),
     ...(w.until ? { until: date(w.until) } : {}),
+    ...(w.exceptions?.length ? { exceptions: w.exceptions.map(date) } : {}),
     ...(repeat?.pattern === 'weekly' ? { repeat: { ...repeat, days: rotate(repeat.days) } } : {}),
     ...(repeat?.pattern === 'monthly' && !absent(repeat.day) ? { repeat: { ...repeat, day: repeat.day + days } } : {}),
     ...(repeat?.pattern === 'monthly' && !absent(repeat.nth) ? { repeat: { ...repeat, weekday: DAYS[weekday(DAYS.indexOf(repeat.weekday!) + days - 3)] } } : {}),
@@ -566,6 +574,36 @@ export function moveWindow(w: ScheduleWindow, minutes: number, today: string): S
   };
   const [old, fresh] = [startsOf(before, first).map((t) => t + minutes), startsOf(after, first + days)];
   return old.length === fresh.length && old.every((t, i) => t === fresh[i]) ? moved : null;
+}
+
+// A window with its start or its end `minutes` of wall time later (earlier when negative), the other where it was: the end, its
+// length; the start, a move whose end stays (a start moved past midnight moves the day, as a move does). A window lasts from 5
+// minutes to 24 hours, a cron window's `minutes` 5 minutes to 7 days, and its start is its expression's: null for what it cannot
+// take.
+export function resizeWindow(w: ScheduleWindow, edge: 'start' | 'end', minutes: number, today: string): ScheduleWindow | null {
+  if (w.repeat?.pattern === 'cron') {
+    const total = w.repeat.minutes + minutes;
+    return edge === 'end' && total >= STEP && total <= CRON_MINUTES_MAX ? { ...w, repeat: { ...w.repeat, minutes: total } } : null;
+  }
+  const [start, end] = [minutesOf(w.start), minutesOf(w.end)];
+  if (start === null || end === null) return null;
+  const length = (end > start ? end - start : end - start + 1440) + (edge === 'end' ? minutes : -minutes);
+  if (length < STEP || length > 1440) return null;
+  if (edge === 'end') return { ...w, end: hhmm((start + length) % 1440) };
+  const moved = moveWindow(w, minutes, today);
+  return moved && { ...moved, end: w.end };
+}
+
+// How many times a window starts on a local date: its pattern, its range and its own dates (not the schedule's).
+export function startsOnDate(w: ScheduleWindow, date: string): number {
+  const plan = prepareWindow(w, 0);
+  return plan ? startsOn(plan, dayOfDate(date)!).length : 0;
+}
+
+// An instant on a zone's clock, on the 5-minute step: its local date and minutes after midnight.
+export function wallOf(t: number, timeZone: string): { date: string; minutes: number } {
+  const wall = Math.round(wallClock(t, timeZone) / (STEP * MINUTE)) * STEP;
+  return { date: dateOf(Math.floor(wall / 1440)), minutes: wall % 1440 };
 }
 
 // A selection of the calendar (instants) as a weekly window in `timeZone`: the local weekday of its start, its times on

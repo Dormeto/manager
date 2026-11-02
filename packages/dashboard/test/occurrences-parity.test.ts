@@ -144,15 +144,18 @@ function randomRecurring(random: () => number, anchor: number): ScheduleWindow {
   }
 }
 
-// 1 to 4 recurring windows the router takes together (the overlap check reads from before the anchor), up to 3 exception
-// dates around the anchor.
+// 1 to 4 recurring windows the router takes together (the overlap check reads from before the anchor), a third with up to 3 dates
+// of their own, up to 3 exception dates around the anchor.
 function randomRecurringSchedule(random: () => number, r: RouterSchedule, zone: string, anchor: number): Schedule {
   const windows: ScheduleWindow[] = [];
   const count = 1 + Math.floor(random() * 4);
   const now = anchor - 12 * DAY;
   for (let tries = 0; tries < count * 6 && windows.length < count; tries++) {
     const w = randomRecurring(random, anchor);
-    if (!r.scheduleProblems({ timeZone: zone, windows: [...windows, w] }, { now }).length) windows.push(w);
+    // A third have dates of their own without them, around the anchor.
+    const own = random() < 0.35 ? Array.from({ length: 1 + Math.floor(random() * 3) }, () => iso(anchor + Math.floor(random() * 9 - 4) * DAY).slice(0, 10)) : [];
+    const window = own.length ? { ...w, exceptions: own } : w;
+    if (!r.scheduleProblems({ timeZone: zone, windows: [...windows, window] }, { now }).length) windows.push(window);
   }
   const exceptions = Array.from({ length: Math.floor(random() * 4) }, () => iso(anchor + Math.floor(random() * 9 - 4) * DAY).slice(0, 10));
   return r.normalizeSchedule({ timeZone: zone, windows, ...(exceptions.length ? { exceptions } : {}) });
@@ -319,7 +322,7 @@ if (!router) {
       const zoneChanges = new Map(ZONES.map((zone) => [zone, changes(zone)]));
       const mismatches: string[] = [];
       const counts = newCounts();
-      const patterns = { once: 0, daily: 0, weekly: 0, monthly: 0, yearly: 0, cron: 0, longCron: 0, nextEvents: 0 };
+      const patterns = { once: 0, daily: 0, weekly: 0, monthly: 0, yearly: 0, cron: 0, longCron: 0, nextEvents: 0, own: 0 };
       for (let n = 0; n < RECURRING; n++) {
         const zone = ZONES[n % ZONES.length]!;
         const near = zoneChanges.get(zone)!;
@@ -332,6 +335,7 @@ if (!router) {
           else if (w.repeat?.pattern === 'monthly' && w.repeat.interval === 12) patterns.yearly += 1;
           else if (w.repeat) patterns[w.repeat.pattern] += 1;
           if (w.repeat?.pattern === 'cron' && w.repeat.minutes > 1440) patterns.longCron += 1;
+          patterns.own += w.exceptions?.length ?? 0;
         }
         compare(s, n, anchor, near, random, counts, mismatches);
         // The port's own nextEvents, on the router's default horizon, stopping early or not.

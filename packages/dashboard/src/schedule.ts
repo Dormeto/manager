@@ -8,7 +8,8 @@ export type Repeat =
   | { pattern: 'monthly'; interval?: number; day?: number; nth?: number; weekday?: Day }
   | { pattern: 'cron'; cron: string; minutes: number };
 // `days` or `repeat`, never both; `start` and `end` but with a cron repeat, whose `minutes` say how long.
-export interface ScheduleWindow { kind: 'awake' | 'nap'; days?: Day[]; start?: string; end?: string; repeat?: Repeat; from?: string; until?: string; wake?: 'never' | 'header' }
+// exceptions: the window's own dates without it (router 0.36.0); the schedule's skip every window.
+export interface ScheduleWindow { kind: 'awake' | 'nap'; days?: Day[]; start?: string; end?: string; repeat?: Repeat; from?: string; until?: string; wake?: 'never' | 'header'; exceptions?: string[] }
 // `joinMinutes`: the workload's own level of joined windows; null is the same as absent, 0 is kept.
 export interface Schedule { timeZone: string; windows?: ScheduleWindow[]; exceptions?: string[]; maxNapDays?: number; joinMinutes?: number | null; by?: string; at?: string }
 export interface NextEvent { at: string; kind: 'awake-start' | 'awake-end' | 'nap-start' | 'nap-end'; window: number }
@@ -113,9 +114,18 @@ export function rangeText(w: ScheduleWindow): string {
   return w.until ? `until ${dateText(w.until)}` : '';
 }
 
+// A window's own dates without it, in date order, three at most: "except 4 Jan 2027 and 11 Jan 2027", "except 4 Jan 2027, 11 Jan
+// 2027, 18 Jan 2027 and 2 more".
+export function exceptText(w: ScheduleWindow): string {
+  const dates = [...(w.exceptions ?? [])].sort().map(dateText);
+  if (!dates.length) return '';
+  const shown = dates.length > 3 ? [...dates.slice(0, 3), `${dates.length - 3} more`] : dates;
+  return `except ${shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}` : shown[0]}`;
+}
+
 // A recurrence in one sentence, as the helper says it back and the card reads it.
 export function recurrenceText(w: ScheduleWindow): string {
-  const text = [repeatText(w), hoursText(w), rangeText(w)].filter(Boolean).join(', ');
+  const text = [repeatText(w), hoursText(w), rangeText(w), exceptText(w)].filter(Boolean).join(', ');
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -303,6 +313,7 @@ export function windowBody(w: ScheduleWindow): ScheduleWindow {
     ...(repeat ? { repeat: repeat.pattern === 'weekly' ? { ...repeat, days: weekOrder(repeat.days) } : repeat } : {}),
     ...filled({ from: w.from, until: w.until }),
     ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}),
+    ...(w.exceptions?.length ? { exceptions: [...w.exceptions] } : {}),
   };
 }
 

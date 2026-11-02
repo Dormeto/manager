@@ -338,6 +338,25 @@ describe('Schedule dialog: recurrences', () => {
     expect(text('w-days-hint')).toBe('Choose at least one day.');
     expect(saved()!.disabled).toBe(true);
   });
+
+  it('shows a window\'s own dates without it, says them, and saves without the one removed', async () => {
+    const wrapper = await open(paris({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00', exceptions: ['2099-01-05', '2099-01-12'] }));
+    expect(q('w-own-dates')!.textContent).toContain('2099-01-05');
+    expect(text('w-sentence')).toBe('Mon, 08:00–09:00, except 5 Jan 2099 and 12 Jan 2099');
+    await set(wrapper, 'w-own-dates', ['2099-01-12']);
+    expect(text('w-sentence')).toBe('Mon, 08:00–09:00, except 12 Jan 2099');
+    await set(wrapper, 'w-own-dates', ['2099-01-12', 'soon']);
+    expect(q('w-own-dates')!.closest('.v-input')!.textContent).toContain('a date YYYY-MM-DD');
+    expect(saved()!.disabled).toBe(true);
+    await set(wrapper, 'w-own-dates', ['2099-01-12']);
+    await click('Save');
+    expect(submitted!.windows![0]).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00', exceptions: ['2099-01-12'] });
+  });
+
+  it('has no field for a window\'s own dates when it has none', async () => {
+    await open(paris({ kind: 'awake', days: ['mon'], start: '08:00', end: '09:00' }));
+    expect(q('w-own-dates')).toBeNull();
+  });
 });
 
 describe('Schedule dialog: the next occurrence, on one line', () => {

@@ -150,6 +150,16 @@ describe('a recurrence in words', () => {
     expect(windowTitle({ kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } })).toBe('Cron 30 8 * * 1-5, 10 h 30 min');
     expect(windowTitle(hours({ repeat: { pattern: 'daily' }, from: '2027-01-05', until: '2027-01-05' }))).toBe('Once on 5 Jan 2027, 08:00–18:00');
     expect(windowTitle(hours({ days: [] }))).toBe('08:00–18:00');
+    expect(windowTitle(hours({ days: ['mon'], exceptions: ['2027-01-04'] }))).toBe('Mon, 08:00–18:00');
+  });
+
+  it('says a window\'s own dates without it last, in date order, three at most', () => {
+    expect(recurrenceText(hours({ days: ['mon'], exceptions: ['2027-01-11', '2027-01-04'] }))).toBe('Mon, 08:00–18:00, except 4 Jan 2027 and 11 Jan 2027');
+    expect(recurrenceText(hours({ days: ['mon'], from: '2027-01-04', exceptions: ['2027-01-11'] }))).toBe('Mon, 08:00–18:00, from 4 Jan 2027, no end date, except 11 Jan 2027');
+    expect(recurrenceText(hours({ days: ['mon'], exceptions: ['2027-01-04', '2027-01-11', '2027-01-18', '2027-01-25', '2027-02-01'] })))
+      .toBe('Mon, 08:00–18:00, except 4 Jan 2027, 11 Jan 2027, 18 Jan 2027 and 2 more');
+    expect(windowBody(hours({ days: ['mon'], exceptions: ['2027-01-04'] }))).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '18:00', exceptions: ['2027-01-04'] });
+    expect(windowBody(hours({ days: ['mon'], exceptions: [] }))).toEqual({ kind: 'awake', days: ['mon'], start: '08:00', end: '18:00' });
   });
 
   it('reads an occurrence in the schedule\'s zone, the year on its first day only', () => {
