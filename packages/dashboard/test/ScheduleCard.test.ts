@@ -150,8 +150,8 @@ describe('ScheduleDialog', () => {
     await wrapper.setProps({ modelValue: true });
     await flushPromises();
     expect(dialogOf().querySelectorAll('[data-test="window"]')).toHaveLength(0);
-    click('Add awake window');
-    click('Add nap window');
+    (dialogOf().querySelector('[data-test="add-awake"]') as HTMLElement).click();
+    (dialogOf().querySelector('[data-test="add-nap"]') as HTMLElement).click();
     await flushPromises();
     expect(dialogOf().querySelectorAll('[data-test="window"]')).toHaveLength(2);
     (dialogOf().querySelector('[data-test="remove-window"]') as HTMLElement).click();

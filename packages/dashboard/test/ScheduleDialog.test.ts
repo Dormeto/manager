@@ -4,6 +4,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
+import { mdiPlus, mdiWeatherNight, mdiWeatherSunny } from '@mdi/js';
 import ScheduleDialog from '../src/components/ScheduleDialog.vue';
 import type { JoinAnswer, Schedule } from '../src/schedule';
 
@@ -246,7 +247,8 @@ describe('Schedule dialog: recurrences', () => {
     await set(wrapper, 'w-pattern', 'daily');
     (document.querySelector('[data-test="remove-window"]') as HTMLElement).click();
     await flushPromises();
-    await click('Add awake window');
+    (document.querySelector('[data-test="add-awake"]') as HTMLElement).click();
+    await flushPromises();
     await set(wrapper, 'w-pattern', 'daily');
     await set(wrapper, 'w-pattern', 'weekly');
     expect(text('w-sentence')).toBe('Mon–Fri, 08:00–19:00');
@@ -402,13 +404,127 @@ describe('Schedule dialog: what it says of itself', () => {
     expect(document.querySelector('.v-overlay--active [data-test="overlap-samples"]')).not.toBeNull();
   });
 
-  it('has icons on Awake and Nap, and a tooltip on the delete button', async () => {
+  it('has a tooltip on the delete button', async () => {
     await open(sample);
-    const toggle = [...document.querySelectorAll('[data-test="window"] .v-btn-toggle button')];
-    expect(toggle.map((b) => b.textContent?.trim())).toEqual(['Awake', 'Nap', 'Awake', 'Nap']);
-    for (const b of toggle) expect(b.querySelector('.v-icon')).not.toBeNull();
     const tip = await hover('[data-test="remove-window"]', '[data-test="remove-window-tip"]');
     expect(tip.textContent).toBe('Remove this window');
+  });
+
+  it('is wide: the zone, the dates and the maximum nap share a row', async () => {
+    const wrapper = await open(sample);
+    expect(wrapper.findComponent({ name: 'VDialog' }).props('maxWidth')).toBe('1100');
+    const row = document.querySelector('[data-test="time-zone"]')!.parentElement;
+    expect(row!.querySelector('[data-test="exceptions"]')).not.toBeNull();
+    expect(row!.querySelector('[data-test="max-nap"]')).not.toBeNull();
+  });
+});
+
+describe('Schedule dialog: a tab per window', () => {
+  const sample: Schedule = { timeZone: 'Europe/Paris', windows: [
+    { kind: 'awake', days: ['mon'], start: '08:00', end: '12:00' },
+    { kind: 'nap', days: ['tue'], start: '08:00', end: '12:00', wake: 'never' },
+    { kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } },
+  ] };
+  const q = (name: string) => document.querySelector(`[data-test="${name}"]`) as HTMLElement | null;
+  const tabs = () => [...document.querySelectorAll('[data-test="window-tab"]')] as HTMLElement[];
+  const panels = () => [...document.querySelectorAll('[data-test="window"]')] as HTMLElement[];
+  const shown = () => panels().map((p) => p.style.display !== 'none');
+  const selected = () => tabs().map((t) => t.classList.contains('v-tab--selected'));
+  // The icons an element holds, by the path each was given (the tests' Vuetify draws them as font classes).
+  const icons = (wrapper: VueWrapper, el: Element) => wrapper.findAllComponents({ name: 'VIcon' }).filter((i) => el.contains(i.element)).map((i) => i.props('icon'));
+  const hover = async (name: string, content: string) => {
+    q(name)!.dispatchEvent(new MouseEvent('mouseenter'));
+    await vi.waitFor(() => expect(document.querySelector(`.v-overlay--active [data-test="${content}"]`)).not.toBeNull());
+    return document.querySelector(`.v-overlay--active [data-test="${content}"]`)!;
+  };
+
+  it('names each tab with its kind\'s icon and its window in a few words, and has no kind to change', async () => {
+    const wrapper = await open(sample);
+    expect(tabs().map((t) => t.textContent?.trim())).toEqual(['Mon, 08:00–12:00', 'Tue, 08:00–12:00', 'Cron 30 8 * * 1-5, 10 h 30 min']);
+    expect(tabs().map((t) => icons(wrapper, t)[0])).toEqual([mdiWeatherSunny, mdiWeatherNight, mdiWeatherSunny]);
+    expect(tabs().map((t) => t.getAttribute('aria-label'))).toEqual(['Awake window: Mon, 08:00–12:00', 'Nap window: Tue, 08:00–12:00', 'Awake window: Cron 30 8 * * 1-5, 10 h 30 min']);
+    expect(document.querySelector('.v-dialog .v-btn-toggle')).toBeNull();
+  });
+
+  it('shows the selected tab\'s window only, the first at the opening', async () => {
+    await open(sample);
+    expect(selected()).toEqual([true, false, false]);
+    expect(shown()).toEqual([true, false, false]);
+    tabs()[1]!.click();
+    await flushPromises();
+    expect(selected()).toEqual([false, true, false]);
+    expect(shown()).toEqual([false, true, false]);
+    expect(panels()[1]!.textContent).toContain('Requests never wake it');
+  });
+
+  it('adds a nap or an awake window from the buttons after the tabs, and selects it', async () => {
+    const wrapper = await open(sample);
+    expect(q('window-tabs')!.compareDocumentPosition(q('add-nap')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(q('add-nap')!.compareDocumentPosition(q('add-awake')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(icons(wrapper, q('add-nap')!)).toEqual([mdiPlus, mdiWeatherNight]);
+    expect(icons(wrapper, q('add-awake')!)).toEqual([mdiPlus, mdiWeatherSunny]);
+    expect((await hover('add-nap', 'add-nap-tip')).textContent).toBe('Add a nap window');
+    expect((await hover('add-awake', 'add-awake-tip')).textContent).toBe('Add an awake window');
+    q('add-nap')!.click();
+    await flushPromises();
+    expect(selected()).toEqual([false, false, false, true]);
+    expect(shown()).toEqual([false, false, false, true]);
+    expect(icons(wrapper, tabs()[3]!)[0]).toBe(mdiWeatherNight);
+    q('add-awake')!.click();
+    await flushPromises();
+    expect(selected()).toEqual([false, false, false, false, true]);
+    button('Save')!.click();
+    await flushPromises();
+    expect(submitted!.windows!.map((w) => w.kind)).toEqual(['awake', 'nap', 'awake', 'nap', 'awake']);
+  });
+
+  it('removing the selected window selects the one after it, or the one before the last', async () => {
+    await open(sample);
+    tabs()[1]!.click();
+    await flushPromises();
+    (panels()[1]!.querySelector('[data-test="remove-window"]') as HTMLElement).click();
+    await flushPromises();
+    expect(tabs().map((t) => t.textContent?.trim())).toEqual(['Mon, 08:00–12:00', 'Cron 30 8 * * 1-5, 10 h 30 min']);
+    expect(selected()).toEqual([false, true]);
+    expect(shown()).toEqual([false, true]);
+    (panels()[1]!.querySelector('[data-test="remove-window"]') as HTMLElement).click();
+    await flushPromises();
+    expect(selected()).toEqual([true]);
+    expect(shown()).toEqual([true]);
+  });
+
+  it('marks the tab of a window that cannot be saved', async () => {
+    const wrapper = await open(sample);
+    expect(q('window-tab-problem')).toBeNull();
+    (wrapper.findAllComponents({ name: 'WindowRecurrence' })[0]!.findComponent('[data-test="w-days"]') as unknown as { vm: { $emit(...a: unknown[]): void } }).vm.$emit('update:modelValue', []);
+    await flushPromises();
+    expect(tabs()[0]!.querySelector('[data-test="window-tab-problem"]')).not.toBeNull();
+    expect(tabs()[1]!.querySelector('[data-test="window-tab-problem"]')).toBeNull();
+  });
+
+  it('says how to add a window when there is none', async () => {
+    await open(null);
+    expect(tabs()).toEqual([]);
+    expect(q('no-window')!.textContent).toContain('No window yet');
+    q('add-awake')!.click();
+    await flushPromises();
+    expect(q('no-window')).toBeNull();
+    expect(selected()).toEqual([true]);
+  });
+
+  it('keeps the time zone, the dates, the maximum nap and the join outside the tabs', async () => {
+    await open(sample, '', { joinMinutes: 15, joinFrom: 'default', joinInherited: { joinMinutes: 15, joinFrom: 'default' } });
+    for (const name of ['time-zone', 'exceptions', 'max-nap', 'join']) {
+      expect(q(name), name).not.toBeNull();
+      expect(q(name)!.closest('[data-test="windows"]'), name).toBeNull();
+    }
+  });
+
+  it('ends the sentence\'s row with the next occurrence', async () => {
+    await open({ timeZone: 'Europe/Paris', windows: [{ kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2099-01-04' }] });
+    expect(q('w-next')!.parentElement).toBe(q('w-recap'));
+    expect(q('w-sentence')!.parentElement).toBe(q('w-recap'));
+    expect(q('w-sentence')!.compareDocumentPosition(q('w-next')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
@@ -464,9 +580,11 @@ describe('Schedule dialog: joined windows', () => {
   const inherit = () => field()!.querySelector('input[type="checkbox"]') as HTMLInputElement;
   const save = async () => { button('Save')!.click(); await flushPromises(); };
   const type = async (value: string) => { number().value = value; number().dispatchEvent(new Event('input')); await flushPromises(); };
+  const PAIR: Schedule = { ...schedule, windows: [...schedule.windows!, { kind: 'nap', days: ['tue'], start: '20:00', end: '07:00', wake: 'never' }] };
+  const add = async (kind: 'awake' | 'nap') => { (document.querySelector(`[data-test="add-${kind}"]`) as HTMLElement).click(); await flushPromises(); };
 
   it('says the inherited value and level, with the words asked', async () => {
-    await open(schedule, '', JOIN);
+    await open(PAIR, '', JOIN);
     expect(field()!.textContent).toContain('Join windows of one kind up to');
     expect(field()!.textContent).toContain('minutes apart');
     expect(field()!.textContent).toContain('Inherit (15 min, from the organization)');
@@ -475,18 +593,56 @@ describe('Schedule dialog: joined windows', () => {
     expect(number().value).toBe('15');
   });
 
-  it('is there for a first schedule, whose status answers what it would inherit', async () => {
+  it('puts Inherit first, on the row of the words, and why in a tooltip', async () => {
+    await open(PAIR, '', JOIN);
+    const row = field()!.querySelector('[data-test="join-row"]')!;
+    expect(row.contains(inherit()) && row.contains(number())).toBe(true);
+    expect(inherit().compareDocumentPosition(number()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(field()!.textContent).not.toContain('neither wakes nor naps');
+    document.querySelector('[data-test="join-more"]')!.dispatchEvent(new MouseEvent('mouseenter'));
+    await vi.waitFor(() => expect(document.querySelector('.v-overlay--active [data-test="join-tip"]')).not.toBeNull());
+    const tip = document.querySelector('.v-overlay--active [data-test="join-tip"]')!.textContent;
+    expect(tip).toContain('neither wakes nor naps');
+    expect(tip).toContain('0 never joins');
+  });
+
+  it('is there for a first schedule from its second window, whose status answers what it would inherit', async () => {
     await open(null, '', { joinMinutes: 30, joinFrom: 'router', joinInherited: { joinMinutes: 30, joinFrom: 'router' } });
+    expect(field()).toBeNull();
+    await add('awake');
+    expect(field()).toBeNull();
+    await add('nap');
     expect(field()!.textContent).toContain('Inherit (30 min, from the router)');
   });
 
+  it('is offered from two windows, and for one window only where it matters', async () => {
+    await open(schedule, '', JOIN);
+    expect(field()).toBeNull();
+    await add('nap');
+    expect(field()).not.toBeNull();
+    (document.querySelectorAll('[data-test="remove-window"]')[1] as HTMLElement).click();
+    await flushPromises();
+    expect(field()).toBeNull();
+    mounted.splice(0).forEach((w) => w.unmount());
+    // A value of its own stays in sight, Inherit clicked or not.
+    await open({ ...schedule, joinMinutes: 30 }, '', JOIN);
+    expect(field()).not.toBeNull();
+    inherit().click();
+    await flushPromises();
+    expect(field()).not.toBeNull();
+    mounted.splice(0).forEach((w) => w.unmount());
+    // One window that comes back within the largest gap joins itself: a daily nap to 23:45.
+    await open({ timeZone: 'UTC', windows: [{ kind: 'nap', start: '00:00', end: '23:45', repeat: { pattern: 'daily' }, wake: 'never' }] }, '', JOIN);
+    expect(field()).not.toBeNull();
+  });
+
   it('is not offered on a router that answers no value', async () => {
-    await open(schedule);
+    await open(PAIR);
     expect(field()).toBeNull();
   });
 
   it('a schedule without one is sent without it', async () => {
-    await open(schedule, '', JOIN);
+    await open(PAIR, '', JOIN);
     await save();
     expect(submitted).not.toHaveProperty('joinMinutes');
   });
@@ -504,7 +660,7 @@ describe('Schedule dialog: joined windows', () => {
   });
 
   it('sets its own from the inherited value, and Inherit removes it', async () => {
-    await open(schedule, '', JOIN);
+    await open(PAIR, '', JOIN);
     inherit().click();
     await flushPromises();
     expect(number().disabled).toBe(false);

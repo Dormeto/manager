@@ -322,7 +322,7 @@ describe('Workload view', () => {
     await flushPromises();
     const dialog = () => document.querySelector('.v-dialog')!;
     const click = (label: string) => ([...dialog().querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLElement).click();
-    click('Add awake window');
+    (dialog().querySelector('[data-test="add-awake"]') as HTMLElement).click();
     await flushPromises();
     click('Save');
     await flushPromises();
@@ -396,7 +396,7 @@ describe('Workload view', () => {
     await flushPromises();
     const dialog = () => document.querySelector('.v-dialog')!;
     const click = (label: string) => ([...dialog().querySelectorAll('button')].find((b) => b.textContent?.trim() === label) as HTMLElement).click();
-    click('Add awake window');
+    (dialog().querySelector('[data-test="add-awake"]') as HTMLElement).click();
     await flushPromises();
     click('Save');
     await flushPromises();

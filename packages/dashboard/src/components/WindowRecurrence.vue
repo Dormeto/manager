@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // How a window repeats (schedule recurrence design), in the Schedule and New window dialogs: the Repeats select and what that
 // pattern needs, the times (a cron's duration), the range of dates or a date, the window said back in a sentence and its next
-// occurrence in the schedule's zone (the next 5 in a tooltip), or why it cannot be saved under the field concerned. The window is the dialog's: a
-// change comes back as a new one, and what is not changed stays as it was stored.
+// occurrence in the schedule's zone at the end of that row (the next 5 in a tooltip), or why it cannot be saved under the field
+// concerned. Rows hold as many fields as they fit, to save height. The window is the dialog's: a change comes back as a new one, and
+// what is not changed stays as it was stored. The default slot follows the times; `actions` ends the first row.
 import { computed } from 'vue';
 import { mdiAlertOutline, mdiInformationOutline } from '@mdi/js';
 import { cronShortestGap, editProblems, localDate, nextOccurrences } from '../occurrences';
@@ -106,17 +107,19 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
         v-if="choice && UNITS[choice]" :data-test="`${test}-interval`" :model-value="shown(repeat?.interval ?? 1)" label="Every" type="number" min="1" max="99" :suffix="unit" density="compact" class="dm-interval"
         :error-messages="problems['repeat.interval'] ?? ''" :hide-details="!problems['repeat.interval']" @update:model-value="update(withInterval(w, typed($event), today(), memory))"
       />
-    </div>
-
-    <template v-if="choice === 'weekly'">
-      <v-chip-group :data-test="`${test}-days`" :model-value="days" multiple column aria-label="Days" class="mt-1" @update:model-value="setDays">
+      <v-chip-group v-if="choice === 'weekly'" :data-test="`${test}-days`" :model-value="days" multiple column aria-label="Days" class="dm-days" @update:model-value="setDays">
         <v-chip v-for="d in DAYS" :key="d" :value="d" :data-test="`${test}-day-${d}`" filter size="small" variant="outlined">{{ dayLabel(d) }}</v-chip>
       </v-chip-group>
-      <div v-if="daysProblem" :data-test="`${test}-days-hint`" class="text-body-small text-error">{{ daysProblem }}</div>
-    </template>
+      <v-text-field
+        v-if="choice === 'cron'" :data-test="`${test}-cron`" :model-value="repeat?.cron" label="Cron expression" density="compact" class="dm-cron" spellcheck="false" autocomplete="off" persistent-hint
+        hint="minute hour day-of-month month day-of-week, minutes multiples of 5" :error-messages="problems['repeat.cron'] ?? ''" @update:model-value="setRepeat({ cron: $event ?? '' })"
+      />
+      <div v-if="$slots.actions" class="ms-auto"><slot name="actions" /></div>
+    </div>
+    <div v-if="daysProblem" :data-test="`${test}-days-hint`" class="text-body-small text-error">{{ daysProblem }}</div>
 
     <template v-if="choice === 'monthly' || choice === 'yearly'">
-      <v-radio-group :data-test="`${test}-monthly`" :model-value="monthly" hide-details class="mt-2" @update:model-value="setMonthly($event as 'day' | 'nth')">
+      <v-radio-group :data-test="`${test}-monthly`" :model-value="monthly" inline hide-details class="mt-2" @update:model-value="setMonthly($event as 'day' | 'nth')">
         <div class="dm-on">
           <v-radio value="day" label="On day" class="dm-on__radio" />
           <v-text-field
@@ -124,7 +127,7 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
             :error-messages="problems['repeat.day'] ?? ''" :hide-details="!problems['repeat.day']" @update:model-value="setDay($event)"
           />
         </div>
-        <div class="dm-on mt-2">
+        <div class="dm-on">
           <v-radio value="nth" label="On the" class="dm-on__radio" />
           <v-select :data-test="`${test}-nth`" :model-value="repeat?.nth" :disabled="monthly !== 'nth'" :items="NTHS" aria-label="Which one in the month" density="compact" hide-details class="dm-nth" @update:model-value="setRepeat({ nth: $event })" />
           <v-select :data-test="`${test}-weekday`" :model-value="repeat?.weekday" :disabled="monthly !== 'nth'" :items="WEEKDAYS" aria-label="Weekday" density="compact" hide-details class="dm-nth" @update:model-value="setRepeat({ weekday: $event })" />
@@ -135,15 +138,9 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
       <div v-if="choice === 'yearly'" :data-test="`${test}-year-hint`" class="text-body-small text-medium-emphasis mt-1">The month is the start date's{{ yearMonth ? `: ${yearMonth}` : '' }}.</div>
     </template>
 
-    <template v-if="choice === 'cron'">
-      <v-text-field
-        :data-test="`${test}-cron`" :model-value="repeat?.cron" label="Cron expression" density="compact" class="dm-cron mt-3" spellcheck="false" autocomplete="off" persistent-hint
-        hint="minute hour day-of-month month day-of-week, minutes multiples of 5" :error-messages="problems['repeat.cron'] ?? ''" @update:model-value="setRepeat({ cron: $event ?? '' })"
-      />
-      <v-alert v-if="frequent" :data-test="`${test}-cron-warning`" type="warning" variant="tonal" density="compact" :icon="mdiAlertOutline" class="mt-2 text-body-small">
-        This starts as often as every {{ frequent }} minutes, and each start applies again: a manual Nap or Wake lasts until the next start, and an awake window blocks naps.
-      </v-alert>
-    </template>
+    <v-alert v-if="frequent" :data-test="`${test}-cron-warning`" type="warning" variant="tonal" density="compact" :icon="mdiAlertOutline" class="mt-2 text-body-small">
+      This starts as often as every {{ frequent }} minutes, and each start applies again: a manual Nap or Wake lasts until the next start, and an awake window blocks naps.
+    </v-alert>
 
     <div class="d-flex flex-wrap align-start ga-3 mt-3">
       <template v-if="choice === 'cron'">
@@ -158,40 +155,39 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
         <v-select :data-test="`${test}-end`" :model-value="w.end" :items="TIMES" label="To" density="compact" hide-details class="dm-time" @update:model-value="update({ ...w, end: $event })" />
       </template>
       <slot />
-    </div>
-
-    <div v-if="choice === 'once'" class="mt-4">
       <v-text-field
-        :data-test="`${test}-once-date`" :model-value="w.from ?? ''" label="Date" type="date" density="compact" class="dm-date"
+        v-if="choice === 'once'" :data-test="`${test}-once-date`" :model-value="w.from ?? ''" label="Date" type="date" density="compact" class="dm-date"
         :error-messages="problems.until ?? problems.from ?? ''" :hide-details="!problems.until && !problems.from" @update:model-value="update(withOnceDate(w, $event ?? ''))"
       />
-      <div v-if="oncePast" :data-test="`${test}-once-past`" class="text-body-small text-warning mt-1">This date is past: the window will never run.</div>
+      <template v-else>
+        <v-text-field
+          :data-test="`${test}-from`" :model-value="w.from ?? ''" :label="needsFrom ? 'Start date' : 'Start date (optional)'" type="date" density="compact" class="dm-date"
+          :error-messages="problems.from ?? ''" :hide-details="!problems.from" @update:model-value="update(withFrom(w, $event ?? '', memory))"
+        />
+        <v-select :data-test="`${test}-end-kind`" :model-value="ended ? 'date' : 'none'" :items="ENDS" label="End" density="compact" hide-details class="dm-date" @update:model-value="setEnd($event)" />
+        <v-text-field
+          v-if="ended" :data-test="`${test}-until`" :model-value="w.until" label="End date" type="date" density="compact" class="dm-date"
+          :error-messages="problems.until ?? ''" :hide-details="!problems.until" @update:model-value="update({ ...w, until: $event ?? '' })"
+        />
+      </template>
     </div>
-    <div v-else class="d-flex flex-wrap align-start ga-3 mt-4">
-      <v-text-field
-        :data-test="`${test}-from`" :model-value="w.from ?? ''" :label="needsFrom ? 'Start date' : 'Start date (optional)'" type="date" density="compact" class="dm-date"
-        :error-messages="problems.from ?? ''" :hide-details="!problems.from" @update:model-value="update(withFrom(w, $event ?? '', memory))"
-      />
-      <v-select :data-test="`${test}-end-kind`" :model-value="ended ? 'date' : 'none'" :items="ENDS" label="End" density="compact" hide-details class="dm-date" @update:model-value="setEnd($event)" />
-      <v-text-field
-        v-if="ended" :data-test="`${test}-until`" :model-value="w.until" label="End date" type="date" density="compact" class="dm-date"
-        :error-messages="problems.until ?? ''" :hide-details="!problems.until" @update:model-value="update({ ...w, until: $event ?? '' })"
-      />
-    </div>
+    <div v-if="oncePast" :data-test="`${test}-once-past`" class="text-body-small text-warning mt-1">This date is past: the window will never run.</div>
 
     <div v-if="other.length" class="text-body-small text-error mt-2">{{ other.join('; ') }}</div>
-    <div v-if="sentence" :data-test="`${test}-sentence`" class="mt-3 text-body-medium"><strong :data-test="`${test}-repeats`">{{ head.charAt(0).toUpperCase() + head.slice(1) }}</strong>{{ tail }}</div>
-    <div v-if="valid" :data-test="`${test}-next`" class="mt-2 text-body-small">
-      <v-tooltip v-if="next.length" location="top" max-width="340" open-on-focus>
-        <template #activator="{ props: activator }">
-          <span v-bind="activator" :data-test="`${test}-next-line`" class="dm-next-line" tabindex="0"><span class="text-medium-emphasis">Next:</span> {{ occurrenceText(next[0]!, zone) }} <v-icon :icon="mdiInformationOutline" size="14" /></span>
-        </template>
-        <div :data-test="`${test}-next-list`">
-          <div class="font-weight-medium mb-1">Next occurrences</div>
-          <ul class="dm-next"><li v-for="(o, i) in next" :key="i">{{ occurrenceText(o, zone) }}</li></ul>
-        </div>
-      </v-tooltip>
-      <span v-else class="text-medium-emphasis">No occurrence in the next 10 years.</span>
+    <div v-if="sentence || valid" :data-test="`${test}-recap`" class="dm-recap mt-3">
+      <div v-if="sentence" :data-test="`${test}-sentence`" class="text-body-medium"><strong :data-test="`${test}-repeats`">{{ head.charAt(0).toUpperCase() + head.slice(1) }}</strong>{{ tail }}</div>
+      <div v-if="valid" :data-test="`${test}-next`" class="dm-recap__next text-body-small">
+        <v-tooltip v-if="next.length" location="top" max-width="340" open-on-focus>
+          <template #activator="{ props: activator }">
+            <span v-bind="activator" :data-test="`${test}-next-line`" class="dm-next-line" tabindex="0"><span class="text-medium-emphasis">Next:</span> {{ occurrenceText(next[0]!, zone) }} <v-icon :icon="mdiInformationOutline" size="14" /></span>
+          </template>
+          <div :data-test="`${test}-next-list`">
+            <div class="font-weight-medium mb-1">Next occurrences</div>
+            <ul class="dm-next"><li v-for="(o, i) in next" :key="i">{{ occurrenceText(o, zone) }}</li></ul>
+          </div>
+        </v-tooltip>
+        <span v-else class="text-medium-emphasis">No occurrence in the next 10 years.</span>
+      </div>
     </div>
   </div>
 </template>
@@ -203,8 +199,12 @@ const other = computed(() => Object.entries(problems.value).filter(([field]) => 
 .dm-nth { max-width: 130px; min-width: 100px; }
 .dm-date { max-width: 190px; min-width: 150px; }
 .dm-cron :deep(input) { font-family: var(--dm-mono); }
-.dm-on { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dm-days { flex: 0 1 auto; padding: 4px 0 0; }
+.dm-cron { flex: 1 1 260px; max-width: 420px; }
+.dm-on { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-right: 24px; }
 .dm-on__radio { flex: 0 0 auto; }
+.dm-recap { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.dm-recap__next { margin-left: auto; }
 .dm-next-line { cursor: help; }
 .dm-next { margin: 0; padding-left: 18px; font-variant-numeric: tabular-nums; }
 </style>

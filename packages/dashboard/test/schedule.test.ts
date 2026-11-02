@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JOIN_PROBLEM, writableSchedule, canonicalZone, isJoinMinutes, joinInForce, joinText, routerJoinInherited, recurrenceError as joinError, scheduleBody as bodyOfSchedule, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
+import { JOIN_PROBLEM, writableSchedule, canonicalZone, isJoinMinutes, joinInForce, joinText, routerJoinInherited, recurrenceError as joinError, scheduleBody as bodyOfSchedule, dateText, daysText, durationText, eventText, formProblem, hoursText, newMemory, occurrenceText, rangeText, recurrenceText, recurrenceError, repeatChoice, repeatText, scheduleBody, TIMES, windowBody, withChoice, withFrom, withInterval, withOnceDate, isOnce, movedText, windowTitle, type RepeatChoice, type Schedule, type ScheduleWindow } from '../src/schedule';
 import { causeText } from '../src/history';
 
 describe('schedule formatting', () => {
@@ -142,6 +142,14 @@ describe('a recurrence in words', () => {
     expect(blank({ pattern: 'monthly', interval: 12, day: NaN })).toBe('Yearly on … Dec');
     expect(daysText([])).toBe('');
     expect(repeatText({ kind: 'awake', start: '08:00', end: '09:00' })).toBe('');
+  });
+
+  it('names a window in a few words for its tab: what it repeats on and its hours, not its dates', () => {
+    expect(windowTitle(hours({ days: ['mon', 'tue', 'wed', 'thu', 'fri'], from: '2027-01-04' }))).toBe('Mon–Fri, 08:00–18:00');
+    expect(windowTitle({ kind: 'nap', start: '20:00', end: '07:00', repeat: { pattern: 'weekly', interval: 2, days: ['mon', 'thu'] }, from: '2027-01-04' })).toBe('Every 2 weeks on Mon, Thu, 20:00–07:00 next day');
+    expect(windowTitle({ kind: 'awake', repeat: { pattern: 'cron', cron: '30 8 * * 1-5', minutes: 630 } })).toBe('Cron 30 8 * * 1-5, 10 h 30 min');
+    expect(windowTitle(hours({ repeat: { pattern: 'daily' }, from: '2027-01-05', until: '2027-01-05' }))).toBe('Once on 5 Jan 2027, 08:00–18:00');
+    expect(windowTitle(hours({ days: [] }))).toBe('08:00–18:00');
   });
 
   it('reads an occurrence in the schedule\'s zone, the year on its first day only', () => {

@@ -52,6 +52,13 @@ clicked. After a router's rollback, a save or a drag drops a stored `joinMinutes
 
 In a custom waiting page, `napUntil.at` and `napUntil.local` of the `dormeto:state` event can be null, for a nap with no end known.
 
+The Schedule dialog is wider and puts each window in a tab, named by its kind's icon and its window in a few words, marked when
+the window can't be saved. A window keeps its kind: the + buttons after the tabs add a nap or an awake window. The time zone,
+the dates without a window, the maximum nap and the join stay above the tabs. A window's fields share rows, and its next
+occurrence ends the row of its sentence. The join is offered from two windows, or for one window that comes back within 120
+minutes, or a schedule with a value of its own; Inherit comes first on its row, and what joining does is in a tooltip, at the
+router and the organization too.
+
 A first tap on a tooltip no longer opens and closes it at once on a phone (a pause, a setting, a router's health, an
 organization's access).
 

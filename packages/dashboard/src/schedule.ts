@@ -119,6 +119,12 @@ export function recurrenceText(w: ScheduleWindow): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// A window in a few words, for its tab in the Schedule dialog: what it repeats on and its hours, without its range of dates.
+export function windowTitle(w: ScheduleWindow): string {
+  const text = [repeatText(w), hoursText(w)].filter(Boolean).join(', ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 // What a drag says it did: the whole window moved, in the sentence's words.
 export function movedText(name: string, w: ScheduleWindow): string {
   return `Window moved: every occurrence of ${name} now runs ${recurrenceText(w).replace(/^(Every|Weekly|Monthly|Yearly|Once|Cron)\b/, (word) => word.toLowerCase())}`;
