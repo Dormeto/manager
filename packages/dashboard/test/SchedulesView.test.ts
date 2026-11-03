@@ -495,6 +495,15 @@ describe('Schedules view: creating a window', () => {
     expect(dialog(wrapper).props('candidates').map((c: { key: string }) => c.key)).toEqual(['dmt-dev/b']);
   });
 
+  it('gives each workload offered the kinds of its backends, for their icons', async () => {
+    h.list[1] = row('dmt-dev', 'b', 'Blog', { backends: ['ecs', 'rds-instance'] });
+    const { wrapper } = await open();
+    await enable(wrapper, 'dmt-dev/a');
+    await enable(wrapper, 'dmt-dev/b');
+    await select(wrapper, at('2026-10-19', '08:00'), at('2026-10-19', '10:00'));
+    expect(dialog(wrapper).props('candidates').map((c: { key: string; kinds?: string[] }) => [c.key, c.kinds])).toEqual([['dmt-dev/a', []], ['dmt-dev/b', ['ecs', 'rds-instance']]]);
+  });
+
   it('gives a first schedule the browser\'s zone', async () => {
     h.list = [row('dmt-dev', 'c', 'Docs', { scheduled: false })];
     const { wrapper } = await open();
@@ -1285,6 +1294,33 @@ describe('Schedules view: picking a workload', () => {
     expect(field.attributes('data-test')).toBe('nw-workload');
     expect((field.props('items') as { name: string }[]).map((c) => c.name)).toEqual(['alpha', 'w-2', 'W-3', 'w-10']);
     wrapper.unmount();
+  });
+
+  it('the New window field puts the service icons of each workload before its name, and the chosen one\'s at its start (the user, 2026-11-03)', async () => {
+    const candidates = [{ key: 'r/shop', name: 'Shop', schedule: null, kinds: ['instance', 'rds-instance'] }, { key: 'r/blog', name: 'Blog', schedule: null, kinds: ['ecs'] }, { key: 'r/docs', name: 'Docs', schedule: null }];
+    const wrapper = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates, last: 'r/shop', selection: { start: new Date(), end: new Date(Date.now() + 3_600_000), month: false } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    const alts = (el: Element) => [...el.querySelectorAll('img')].map((i) => i.getAttribute('alt'));
+    const field = document.querySelector('[data-test="nw-workload"]')!;
+    expect(alts(field.querySelector('.v-field__prepend-inner')!)).toEqual(['EC2 instance', 'RDS instance']);
+    field.querySelector('.v-field')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await flushPromises();
+    const items = [...document.querySelectorAll('.v-overlay--active .v-list-item')];
+    expect(items.map((i) => [alts(i), i.textContent!.trim()])).toEqual([[['ECS service'], 'Blog'], [[], 'Docs'], [['EC2 instance', 'RDS instance'], 'Shop']]);
+    expect(items.every((i) => i.getAttribute('role') === 'option')).toBe(true);
+    // The names line up: the icons' place as wide as the most icons of a workload (two of 22 px, 5 apart).
+    expect(items.map((i) => i.querySelector<HTMLElement>('.dm-nw-kinds')?.style.minWidth)).toEqual(['49px', '49px', '49px']);
+    // An icon in a choice explains nothing on its own: no tooltip, nothing to tab to.
+    expect(items.flatMap((i) => [...i.querySelectorAll('[tabindex="0"]')])).toHaveLength(0);
+    wrapper.unmount();
+    // No icon to show (routers before 0.23.3): no place kept.
+    const bare = mount({ render: () => vh(components.VApp, null, () => vh(NewWindowDialog, { modelValue: true, candidates: candidates.map((c) => ({ ...c, kinds: undefined })), selection: { start: new Date(), end: new Date(Date.now() + 3_600_000), month: false } })) }, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives })] } });
+    await flushPromises();
+    document.querySelector('[data-test="nw-workload"] .v-field')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await flushPromises();
+    expect(document.querySelectorAll('.v-overlay--active .v-list-item[role="option"]')).toHaveLength(3);
+    expect(document.querySelectorAll('.v-overlay--active .dm-nw-kinds')).toHaveLength(0);
+    bare.unmount();
   });
 
   it('the panel lists the workloads the same way', async () => {

@@ -10,11 +10,12 @@ import { useDisplay } from 'vuetify';
 import { allDayWindow, editProblems, localDate, occurrencesIn, windowFromSelection } from '../occurrences';
 import { naturalCompare } from '../calendars';
 import { browserZone, recurrenceError, scheduleBody, windowBody, type Day, type Schedule, type ScheduleWindow } from '../schedule';
+import BackendKinds from './BackendKinds.vue';
 import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
-// joinMinutes: the value in force, from its status answer.
-export interface Candidate { key: string; name: string; schedule: Schedule | null; joinMinutes?: number }
+// joinMinutes: the value in force, from its status answer; kinds: of its backends, for their icons.
+export interface Candidate { key: string; name: string; schedule: Schedule | null; joinMinutes?: number; kinds?: string[] }
 export interface Selection { start: Date; end: Date; month: boolean; days?: Day[] }
 
 const props = defineProps<{ modelValue: boolean; candidates: Candidate[]; selection: Selection | null; last?: string; error?: string; saving?: boolean }>();
@@ -36,6 +37,11 @@ const fill = () => {
   draft.value = 'problem' in p ? { kind: 'awake', days: [], start: draft.value.start ?? '08:00', end: draft.value.end ?? '09:00' } : { kind: 'awake', days: [...p.days], start: p.start, end: p.end };
 };
 const chosen = computed(() => options.value.find((c) => c.key === key.value) ?? null);
+// The names line up in the list: the icons' place as wide as the most icons of a workload (BackendKinds: 22 px, 5 apart).
+const kindsWidth = computed(() => {
+  const most = Math.max(0, ...options.value.map((c) => c.kinds?.length ?? 0));
+  return most ? `${most * 27 - 5}px` : null;
+});
 // Where a Do not repeat starts: the day of the selection on the zone's clock; a month cell is a date, the one clicked, whatever the zone.
 const selectedDate = computed(() => (props.selection ? localDate(props.selection.start.getTime(), props.selection.month ? browserZone() : zone.value) : null));
 const zone = computed(() => chosen.value?.schedule?.timeZone || browserZone());
@@ -107,7 +113,15 @@ function save() {
       <v-card-text class="pt-3" data-test="nw-body">
         <v-alert v-if="!options.length" data-test="nw-none" type="info" variant="tonal" density="compact" text="No enabled calendar may be edited: enable the calendar of a workload you may wake and nap, then try again." />
         <template v-else>
-          <v-autocomplete v-model="key" data-test="nw-workload" :items="options" item-title="name" item-value="key" label="Workload" density="compact" auto-select-first />
+          <!-- Each workload's service icons before its name, the chosen one's at the field's start (the user, 2026-11-03). -->
+          <v-autocomplete v-model="key" data-test="nw-workload" :items="options" item-title="name" item-value="key" label="Workload" density="compact" auto-select-first>
+            <template #prepend-inner><BackendKinds v-if="chosen?.kinds?.length" :kinds="chosen.kinds" plain /></template>
+            <template #item="{ props: itemProps, item }">
+              <v-list-item v-bind="itemProps" role="option">
+                <template #prepend><span v-if="kindsWidth" class="dm-nw-kinds me-3" :style="{ minWidth: kindsWidth }"><BackendKinds v-if="item.kinds?.length" :kinds="item.kinds" plain /></span></template>
+              </v-list-item>
+            </template>
+          </v-autocomplete>
           <div class="d-flex flex-wrap align-center ga-2 mb-3">
             <v-btn-toggle v-model="kind" data-test="nw-kind" mandatory density="compact" variant="outlined" divided>
               <v-btn value="awake" size="small" :prepend-icon="mdiWeatherSunny">Awake</v-btn>

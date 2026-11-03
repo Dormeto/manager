@@ -1,16 +1,17 @@
 <script setup lang="ts">
-// The kinds of a workload's backends as icons (its databases last), each explained in a tooltip.
+// The kinds of a workload's backends as icons (its databases last), each explained in a tooltip. plain: the icons alone,
+// inside a choice of a list (no tooltip, nothing to tab to).
 import { backendHelp, backendLabel } from '../format';
 import { backendIcon } from '../icons';
 
-defineProps<{ kinds: string[] }>();
+defineProps<{ kinds: string[]; plain?: boolean }>();
 </script>
 
 <template>
   <span class="dm-kinds">
-    <v-tooltip v-for="kind in kinds" :key="kind" location="top" max-width="380" :text="backendHelp(kind)">
+    <v-tooltip v-for="kind in kinds" :key="kind" location="top" max-width="380" :text="backendHelp(kind)" :disabled="plain">
       <template #activator="{ props }">
-        <span v-bind="props" class="dm-kinds__kind" tabindex="0" :aria-label="backendLabel(kind)">
+        <span v-bind="plain ? {} : props" class="dm-kinds__kind" :tabindex="plain ? undefined : 0" :aria-label="plain ? undefined : backendLabel(kind)">
           <img v-if="backendIcon(kind)" :src="backendIcon(kind)!" :alt="backendLabel(kind)" width="22" height="22" class="backend-icon">
           <v-chip v-else size="x-small" variant="tonal" label>{{ backendLabel(kind) }}</v-chip>
         </span>

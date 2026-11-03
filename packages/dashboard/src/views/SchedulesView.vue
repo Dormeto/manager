@@ -262,7 +262,7 @@ const editable = computed<Candidate[]>(() => enabled.value.flatMap((e) => {
   const r = reads[e.key];
   const can = r?.data?.can;
   if (r?.status !== 'ok' || !r.data || !(can?.wake && can.nap)) return [];
-  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ? writableSchedule(r.data.schedule, r.data) : null, joinMinutes: joinInForce(r.data) }];
+  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ? writableSchedule(r.data.schedule, r.data) : null, joinMinutes: joinInForce(r.data), kinds: rowOf(e.key)?.backends ?? [] }];
 }));
 function openNew(selection: Selection) {
   notice.value = '';
