@@ -15,6 +15,7 @@ import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 import { atLeastCore, compareVersions, VERSION, type UpdateService } from './update.js';
+import { BUILT_IN_TYPES, defaultsProblems, reachOf, typesProblems, validDefaults, validTypes } from './settings-levels.js';
 
 export type Router = FleetRouter;
 
@@ -434,9 +435,27 @@ function joinMinutesOf(body: Record<string, unknown>): number | null {
 }
 // The body of a router's settings: only the keys it holds, each to set or unset, so that one never rewrites the other. An empty
 // one is refused here: the router would take it and change nothing.
-function routerSettingsOf(body: Record<string, unknown>): { hibernate?: boolean | null; joinMinutes?: number | null } {
-  if (body.hibernate === undefined && body.joinMinutes === undefined) throw new HttpError(400, 'bad_request', 'hibernate or joinMinutes is required');
-  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }) };
+function routerSettingsOf(body: Record<string, unknown>): { hibernate?: boolean | null; joinMinutes?: number | null; defaults?: Record<string, unknown> | null } {
+  if (body.hibernate === undefined && body.joinMinutes === undefined && body.defaults === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or defaults is required');
+  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults) }) };
+}
+// What a router before 0.37.0 answers to a setting of the levels: unknown.
+const LEVEL_SETTING_UNKNOWN = /^settings: unknown setting (defaults|idleMinutes|waitSeconds|drainSeconds|wakeTimeoutSeconds|maxHolders|failedRetrySeconds|wakeMode|noWakeRules|wakeRules|type)$/;
+// A level's defaults in a body (settings at scale design §8): each key a value or null, null for all of them; refused in the router's words.
+function defaultsOf(defaults: unknown): Record<string, unknown> | null {
+  if (defaults === null) return null;
+  const problems = defaultsProblems(defaults);
+  if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
+  return defaults as Record<string, unknown>;
+}
+// A workload's settings in a body: hibernate, the levels' settings and its type, each a value or null; its join is on its schedule.
+function workloadSettingsOf(body: Record<string, unknown>): Record<string, unknown> {
+  if (body.joinMinutes !== undefined) throw new HttpError(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
+  if (!Object.keys(body).length) throw new HttpError(400, 'bad_request', 'a setting is required');
+  const { hibernate, ...rest } = body;
+  const problems = defaultsProblems(rest, { workload: true });
+  if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
+  return { ...(hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...rest };
 }
 // The body of a waiting page write: its page, an object (the validator or the router says what is wrong with it).
 function pageIn(body: Record<string, unknown>): Record<string, unknown> {
@@ -456,11 +475,21 @@ function pageText(level: string, page: Record<string, unknown> | null, before: u
   return gone ? `${base} (removed custom page: ${gone})` : base;
 }
 const hibernateText = (h: boolean | null) => `hibernate ${h === null ? 'inherit' : h ? 'on' : 'off'}`;
+// A setting's value in the audit: a number or a mode, a count of rules, or the word for unset.
+const valueText = (value: unknown, unset: string) => (value === null || value === undefined ? unset : Array.isArray(value) ? `${value.length} rule${value.length === 1 ? '' : 's'}` : String(value));
+// A level's defaults in the audit: each key sent, with what it was before when known (the organization's file).
+const defaultsText = (sent: Record<string, unknown> | null, unset: string, before?: Record<string, unknown>) => (sent === null
+  ? `defaults ${before ? `${Object.keys(before).join(', ') || 'none'} → ` : ''}${unset}`
+  : `defaults ${Object.entries(sent).map(([key, value]) => `${key} ${before ? `${valueText(before[key], unset)} → ` : ''}${valueText(value, unset)}`).join(', ')}`);
+// A workload's settings in the audit, each key sent.
+const workloadSettingsText = (settings: Record<string, unknown>) => Object.entries(settings)
+  .map(([key, value]) => (key === 'hibernate' ? hibernateText(value as boolean | null) : `${key} ${valueText(value, 'inherit')}`)).join(', ');
 const joinText = (join: number | null, unset: string) => `joinMinutes ${join === null ? unset : join}`;
 // What the audit keeps of a settings write, each key sent.
-const settingsText = ({ hibernate, joinMinutes, endedWindowDays }: { hibernate?: boolean | null; joinMinutes?: number | null; endedWindowDays?: number | null }, unset: string) => [
+const settingsText = ({ hibernate, joinMinutes, endedWindowDays, defaults }: { hibernate?: boolean | null; joinMinutes?: number | null; endedWindowDays?: number | null; defaults?: Record<string, unknown> | null }, unset: string, defaultsBefore?: Record<string, unknown>) => [
   ...(hibernate === undefined ? [] : [hibernateText(hibernate)]), ...(joinMinutes === undefined ? [] : [joinText(joinMinutes, unset)]),
   ...(endedWindowDays === undefined ? [] : [`endedWindowDays ${endedWindowDays === null ? unset : endedWindowDays}`]),
+  ...(defaults === undefined ? [] : [defaultsText(defaults, unset, defaultsBefore)]),
 ].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
@@ -1042,6 +1071,8 @@ export function createApi({
   async function settingsCall(router: Router, payload: Record<string, unknown>, by: string) {
     try {
       const result = await invoke(router, { action: 'settings', ...payload, by }) as { problems?: string[] } | null;
+      // A setting of the levels the router does not know: it predates them (settings at scale, router 0.37.0).
+      if (Array.isArray(result?.problems) && result.problems.some((p) => LEVEL_SETTING_UNKNOWN.test(p))) throw new HttpError(409, 'conflict', 'upgrade the router to 0.37.0');
       if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
       return result;
     } catch (err) {
@@ -1197,7 +1228,7 @@ export function createApi({
     if (resource === 'preferences') return !a && (method === 'GET' || method === 'PUT');
     if (extra !== undefined) return false;
     if (method === 'GET') {
-      if (resource === 'settings') return (a === 'workloads' || a === 'waiting-page') && !b;
+      if (resource === 'settings') return (a === 'workloads' || a === 'waiting-page' || a === 'types') && !b;
       if (resource === 'workloads') return !a || (a === 'states' && !b) || (!!b && (!action || action === 'history' || action === 'idle-window' || action === 'description' || action === 'waiting-page'));
       return (resource === 'savings' || resource === 'alerts') ? !a : resource === 'operations' && !b;
     }
@@ -1264,12 +1295,14 @@ export function createApi({
     // how long an ended window stays: everyone reads them, administrators set them. What a write does not send stays.
     if (resource === 'settings' && a === 'workloads' && !b && (method === 'GET' || method === 'PUT')) {
       const shown = (doc: Record<string, unknown> | null | 'unreadable') => {
-        if (doc === 'unreadable') return { hibernate: true, joinMinutes: null, endedWindowDays: null, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
-        const { hibernate, joinMinutes, endedWindowDays } = (doc?.workloads ?? {}) as { hibernate?: unknown; joinMinutes?: unknown; endedWindowDays?: unknown };
+        if (doc === 'unreadable') return { hibernate: true, joinMinutes: null, endedWindowDays: null, defaults: {}, updatedAt: null, updatedBy: null, error: 'settings.json is unreadable' };
+        const { hibernate, joinMinutes, endedWindowDays, defaults } = (doc?.workloads ?? {}) as { hibernate?: unknown; joinMinutes?: unknown; endedWindowDays?: unknown; defaults?: unknown };
         return {
           hibernate: typeof hibernate === 'boolean' ? hibernate : true,
           joinMinutes: isJoinMinutes(joinMinutes) ? joinMinutes : null,
           endedWindowDays: isEndedDays(endedWindowDays) ? endedWindowDays : null,
+          // The organization's defaults of the workload settings (settings at scale design §6), their valid keys.
+          defaults: validDefaults(defaults),
           updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         };
       };
@@ -1278,10 +1311,11 @@ export function createApi({
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
       const body = bodyOf(event);
       const { hibernate } = body;
-      if (hibernate === undefined && body.joinMinutes === undefined && body.endedWindowDays === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or endedWindowDays is required');
+      if (hibernate === undefined && body.joinMinutes === undefined && body.endedWindowDays === undefined && body.defaults === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes, endedWindowDays or defaults is required');
       if (hibernate !== undefined && typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
       const joinMinutes = body.joinMinutes === undefined ? undefined : joinMinutesOf(body);
       const endedWindowDays = body.endedWindowDays === undefined ? undefined : endedDaysOf(body);
+      const defaults = body.defaults === undefined ? undefined : defaultsOf(body.defaults);
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
         const found = await readSettings();
@@ -1290,18 +1324,66 @@ export function createApi({
         const doc = found === 'unreadable' ? {} : found ?? {};
         const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
         const updatedAt = new Date(now()).toISOString();
-        const { joinMinutes: stored, endedWindowDays: storedDays, ...others } = workloads;
+        const { joinMinutes: stored, endedWindowDays: storedDays, defaults: storedDefaults, ...others } = workloads;
         const join = joinMinutes === undefined ? stored : joinMinutes;
         const days = endedWindowDays === undefined ? storedDays : endedWindowDays;
+        // The defaults sent are merged with the valid ones held: a key sent null is removed, null for all of them clears them.
+        const before = validDefaults(storedDefaults);
+        const merged = defaults === undefined ? storedDefaults : defaults === null ? undefined
+          : Object.fromEntries(Object.entries({ ...before, ...defaults }).filter(([, value]) => value !== null));
+        const keptDefaults = merged && typeof merged === 'object' && Object.keys(merged).length ? { defaults: merged } : {};
         const next = {
           ...doc,
-          workloads: { ...others, ...(hibernate === undefined ? {} : { hibernate }), ...(join === undefined || join === null ? {} : { joinMinutes: join }), ...(days === undefined || days === null ? {} : { endedWindowDays: days }) },
+          workloads: {
+            ...others, ...(hibernate === undefined ? {} : { hibernate }), ...(join === undefined || join === null ? {} : { joinMinutes: join }),
+            ...(days === undefined || days === null ? {} : { endedWindowDays: days }), ...keptDefaults,
+          },
           updatedAt, updatedBy: identity.email,
         };
         await globalSettings.write(next);
-        const sent = { ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }), ...(endedWindowDays === undefined ? {} : { endedWindowDays }) };
-        return { result: settingsText(sent, 'default'), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
+        const sent = { ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }), ...(endedWindowDays === undefined ? {} : { endedWindowDays }), ...(defaults === undefined ? {} : { defaults }) };
+        return { result: settingsText(sent, 'default', before), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
+    }
+
+    // The organization's workload types (settings at scale design §5, §8): the custom ones and the built-in ones' defaults, under
+    // workloads.types of settings.json. Every role reads them, administrators replace them whole.
+    if (resource === 'settings' && a === 'types' && !b && (method === 'GET' || method === 'PUT')) {
+      const shownTypes = (doc: Record<string, unknown> | null | 'unreadable') => ({
+        types: doc === 'unreadable' ? [] : validTypes((doc?.workloads as Record<string, unknown> | undefined)?.types), builtIn: BUILT_IN_TYPES,
+        updatedAt: doc !== 'unreadable' && typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: doc !== 'unreadable' && typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
+        ...(doc === 'unreadable' ? { error: 'settings.json is unreadable' } : {}),
+      });
+      if (method === 'GET') return reply(200, shownTypes(await readSettings()));
+      await needAudited(identity, 'admin', 'types', 'organization');
+      if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
+      const { types } = bodyOf(event);
+      const problems = typesProblems(types);
+      if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
+      return audited(identity, 'types', 'organization', async () => {
+        const found = await readSettings();
+        if (found === 'unreadable') throw new HttpError(409, 'conflict', UNREADABLE_SETTINGS);
+        const doc = found ?? {};
+        const workloads = doc.workloads && typeof doc.workloads === 'object' && !Array.isArray(doc.workloads) ? doc.workloads as Record<string, unknown> : {};
+        const { types: _replaced, ...others } = workloads;
+        const list = types as { name: string }[];
+        const next = { ...doc, workloads: { ...others, ...(list.length ? { types: list } : {}) }, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
+        await globalSettings.write(next);
+        return { result: list.map((t) => t.name).join(', ') || 'none', response: reply(200, { ...shownTypes(next), note: 'routers apply it at their next check, within 5 minutes' }) };
+      });
+    }
+
+    // What a level's defaults reach (settings at scale design §8): per setting, the workloads of its scope whose value comes
+    // from that level or a level below, from the routers' last reports.
+    if (resource === 'settings' && a === 'reach' && !b && method === 'GET') {
+      need(identity, 'admin');
+      const { level, name } = event.queryStringParameters ?? {};
+      if (level !== 'organization' && level !== 'router' && level !== 'type') throw new HttpError(400, 'bad_request', 'level must be organization, router or type');
+      if (level !== 'organization' && !name) throw new HttpError(400, 'bad_request', `name is required for a ${level}`);
+      if (!fleet) throw new HttpError(404, 'not_found', 'no fleet in this manager');
+      const all = await fleet.listWorkloads();
+      const scope = level === 'organization' ? all : all.filter((w) => (level === 'router' ? w.router === name : w.type === name));
+      return reply(200, reachOf(scope, level));
     }
 
     // The organization's waiting page (branded waiting page §12): the waitingPage key of settings.json, which every router
@@ -1674,12 +1756,10 @@ export function createApi({
       if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && action === 'waiting-page' && !parts[4]) return waitingPageRoute(identity, event, method, router, id);
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
-        const body = bodyOf(event);
-        if (body.joinMinutes !== undefined) throw new HttpError(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
-        const hibernate = hibernateOf(body);
+        const settings = workloadSettingsOf(bodyOf(event));
         return audited(identity, 'workload-settings', `${router.name}/${id}`, async () => {
-          const result = await settingsCall(router, { workloadId: id, settings: { hibernate } }, identity.email);
-          return { result: hibernateText(hibernate), response: reply(200, result) };
+          const result = await settingsCall(router, { workloadId: id, settings }, identity.email);
+          return { result: workloadSettingsText(settings), response: reply(200, result) };
         });
       }
       if (method === 'PUT' && action === 'tags' && !parts[4]) {
