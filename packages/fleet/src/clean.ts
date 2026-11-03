@@ -173,7 +173,20 @@ export function workloadOf(w: unknown): Json | null {
     pauses: pausesOf(w.pauses),
     stats7d: numbers(w.stats7d, new Set(['wakes', 'ignored', 'deferred'])) ?? null,
     settings: numbers(w.settings, new Set(['waitSeconds', 'idleMinutes', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders'])),
+    // Its type and where each setting comes from (routers 0.37.0, settings at scale design §6): what a level reaches.
+    type: typeof w.type === 'string' && TYPE_NAME.test(w.type) ? w.type : undefined,
+    settingsFrom: settingsFromOf(w.settingsFrom),
   });
+}
+
+const TYPE_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+const SETTING_KEYS = new Set(['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode']);
+const LEVELS = new Set(['workload', 'type', 'router', 'organization', 'default']);
+// The known settings, each from a known level; none at all, undefined.
+function settingsFromOf(value: unknown): Record<string, string> | undefined {
+  if (!isObject(value)) return undefined;
+  const kept = Object.fromEntries(Object.entries(value).filter(([key, level]) => SETTING_KEYS.has(key) && typeof level === 'string' && LEVELS.has(level)));
+  return Object.keys(kept).length ? kept as Record<string, string> : undefined;
 }
 
 // The router's own fields of a check.

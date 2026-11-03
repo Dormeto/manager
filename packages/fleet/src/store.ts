@@ -46,6 +46,8 @@ export interface WorkloadSummary {
   checkedAt?: string; // the check that wrote it
   stateAt?: string; // when its state began: the last state change applied, or the router's (0.26.0)
   historySince?: string; // the time of its first history entry (R8)
+  type?: string; // its type (routers 0.37.0, settings at scale)
+  settingsFrom?: Record<string, string>; // the level each setting comes from (routers 0.37.0)
   [field: string]: unknown;
 }
 

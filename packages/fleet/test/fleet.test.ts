@@ -213,6 +213,19 @@ describe('fleet', () => {
     expect([a!.scheduled, 'scheduled' in b!, 'scheduled' in c!]).toEqual([true, false, false]);
   });
 
+  // Settings at scale (vision design §6, §8): what a level reaches is counted from these.
+  it('keeps a workload\'s type and the source of each setting, the known ones only (routers 0.37.0)', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [
+      workload('a', 'AWAKE', { type: 'api', settingsFrom: { idleMinutes: 'type', waitSeconds: 'nowhere', bogus: 'router', wakeMode: 'default', failedRetrySeconds: 'organization' } }),
+      workload('b', 'AWAKE', { type: 'Bad Name', settingsFrom: 'router' }),
+      workload('c', 'AWAKE', { type: null }),
+    ]));
+    const [a, b, c] = await s.store.listWorkloads();
+    expect([a!.type, a!.settingsFrom]).toEqual(['api', { idleMinutes: 'type', wakeMode: 'default', failedRetrySeconds: 'organization' }]);
+    expect([b!.type, b!.settingsFrom, c!.type, c!.settingsFrom]).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
   it('keeps the kinds of a workload\'s backends a router names (routers 0.23.3), the known ones only, once each', async () => {
     const s = setup();
     await s.ingest(checked(T1, [
