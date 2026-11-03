@@ -79,13 +79,18 @@ describe('/api/settings/types', () => {
     const res = await s.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [API_TYPE] }));
     expect([res.statusCode, json(res).types]).toEqual([200, [API_TYPE]]);
     expect(s.store.doc).toMatchObject({ workloads: { hibernate: false, types: [API_TYPE] }, updatedBy: 'dmt-admin@example.com' });
-    expect(s.audit.at(-1)).toMatchObject({ action: 'types', target: 'organization', result: 'api' });
+    expect(s.audit.at(-1)).toMatchObject({ action: 'types', target: 'organization', result: 'api added' });
+    // Each change said, with the values before and after (review, 2026-11-04).
+    await s.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [{ ...API_TYPE, settings: { idleMinutes: 5 } }, { name: 'web', tags: { team: 'shop' }, settings: {} }] }));
+    expect(s.audit.at(-1)!.result).toBe('api: idleMinutes 30 → 5; web added');
+    await s.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [API_TYPE] }));
+    expect(s.audit.at(-1)!.result).toBe('api: idleMinutes 5 → 30; web removed');
     await s.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [] }));
     expect((s.store.doc!.workloads as Record<string, unknown>).types).toBeUndefined();
     const bad = await s.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [{ name: 'ecs', tags: { kind: 'x' } }] }));
     expect([bad.statusCode, json(bad).message]).toEqual([400, 'type ecs: a built-in type has no tags']);
     expect((await s.api(event('PUT', '/api/settings/types', 'dmt-operator', { types: [] }))).statusCode).toBe(403);
-    expect(s.store.writes).toHaveLength(2);
+    expect(s.store.writes).toHaveLength(4);
   });
 });
 

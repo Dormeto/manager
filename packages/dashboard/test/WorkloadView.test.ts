@@ -172,7 +172,7 @@ describe('Workload view', () => {
     const card = wrapper.findComponent(IdleWindowCard);
     expect(card.exists()).toBe(true);
     // A Terraform workload (the fixture's router names no source: an older one) is not applied from here.
-    expect(card.props()).toEqual({ router: 'dmtr-dev', id: '5cdfbf844b925bf8', source: undefined, canApply: false });
+    expect(card.props()).toEqual({ router: 'dmtr-dev', id: '5cdfbf844b925bf8', source: undefined, canApply: false, levels: false });
     wrapper.unmount();
   });
 
@@ -818,7 +818,10 @@ describe('a workload\'s settings at scale (routers 0.37.0)', () => {
     settings: { ...status.settings, failedRetrySeconds: 60 },
     settingsFrom: { idleMinutes: 'workload', waitSeconds: 'type', drainSeconds: 'router', wakeTimeoutSeconds: 'default', maxHolders: 'organization', failedRetrySeconds: 'default', wakeMode: 'default' },
     type: { name: 'api', from: 'tags' },
-    noWakeRules: [{ name: 'health', level: 'organization', conditions: { pathPrefixes: ['/health'] } }, { name: 'own', level: 'workload', conditions: { pathPrefixes: ['/x'] } }],
+    noWakeRules: [
+      { name: 'health', level: 'organization', conditions: { pathPrefixes: ['/health'] } }, { name: 'health', level: 'router', terraform: true, conditions: { pathPrefixes: ['/health'] } },
+      { name: 'own', level: 'workload', conditions: { pathPrefixes: ['/x'] } },
+    ],
     wakeRules: [{ name: 'key', level: 'wake', from: 'type', conditions: { headers: [{ name: 'x-api-key', pattern: '.+' }] } }],
   };
 
@@ -827,7 +830,7 @@ describe('a workload\'s settings at scale (routers 0.37.0)', () => {
     const wrapper = await mountView('operator');
     expect(wrapper.findAll('[data-test="setting-source"]').map((c) => c.text())).toEqual(['set on this workload', 'type api', 'router', 'built-in', 'organization', 'built-in']);
     expect(wrapper.find('[data-test="workload-type"]').text()).toBe('Type api, from its tags');
-    expect(wrapper.findAll('[data-test="rule-level"]').map((c) => c.text())).toEqual(['no-wake · organization', 'no-wake · workload', 'wake · type']);
+    expect(wrapper.findAll('[data-test="rule-level"]').map((c) => c.text())).toEqual(['no-wake · organization', 'no-wake · router (Terraform)', 'no-wake · workload', 'wake · type']);
     expect(wrapper.find('[data-test="edit-settings"]').exists()).toBe(true);
     wrapper.unmount();
     current = status;

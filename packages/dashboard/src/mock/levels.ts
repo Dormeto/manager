@@ -60,11 +60,12 @@ export function resolvedOf(d: Demo, w: DemoWorkload) {
       continue;
     }
     const found = levels.find(([, set]) => set[key] !== undefined);
-    values[key] = found ? found[1][key]! : key === 'wakeTimeoutSeconds' && type.name === 'databases' ? 1800 : BUILT_IN[key as Scalar];
+    // The built-in values follow the backends, whatever type picks the workload (as the router, review 2026-11-04).
+    values[key] = found ? found[1][key]! : key === 'wakeTimeoutSeconds' && builtInType(w) === 'databases' ? 1800 : BUILT_IN[key as Scalar];
     from[key] = found ? found[0] : 'default';
   }
   const ruleLevels = (key: typeof RULE_KEYS[number]) => [
-    ...described('organization', organization[key]), ...(key === 'noWakeRules' ? ROUTER_RULES : []), ...described('router', router.defaults?.[key]),
+    ...described('organization', organization[key]), ...(key === 'noWakeRules' ? ROUTER_RULES.map((r) => ({ ...r, terraform: true as const })) : []), ...described('router', router.defaults?.[key]),
     ...described('type', typeSettings[key]), ...(key === 'noWakeRules' ? w.noWakeRules : described('workload', w.wakeRules as unknown[])),
   ];
   const { wakeMode, ...settings } = values;

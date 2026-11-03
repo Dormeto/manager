@@ -70,3 +70,16 @@ describe('the settings dialog\'s form', () => {
     expect(settingsChanges(initial, { ...initial, wakeRules: '{}' }).problem).toBe('Wake rules: a JSON list of rules');
   });
 });
+
+
+describe('review fixes (2026-11-04)', () => {
+  it('starts the type field from a type that no longer exists, so Inherit clears it', () => {
+    const status = {
+      settings: { waitSeconds: 60, idleMinutes: 15, drainSeconds: 30, wakeTimeoutSeconds: 600, maxHolders: 50 }, wakeMode: 'any',
+      settingsFrom: { idleMinutes: 'default' }, type: { name: 'ecs', from: 'backends', missing: 'gone' }, noWakeRules: [], wakeRules: [],
+    };
+    const initial = formOf(status as never);
+    expect(initial.type).toBe('gone');
+    expect(settingsChanges(initial, { ...initial, type: null }).changes).toEqual({ type: null });
+  });
+});

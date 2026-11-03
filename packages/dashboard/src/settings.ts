@@ -99,7 +99,8 @@ export function formOf(status: Pick<WorkloadStatus, 'settings' | 'wakeMode' | 's
     idleMinutes: own('idleMinutes'), waitSeconds: own('waitSeconds'), drainSeconds: own('drainSeconds'), wakeTimeoutSeconds: own('wakeTimeoutSeconds'),
     maxHolders: own('maxHolders'), failedRetrySeconds: own('failedRetrySeconds'),
     wakeMode: status.settingsFrom?.wakeMode === 'workload' ? status.wakeMode : null,
-    type: status.type?.from === 'workload' ? status.type.name : null,
+    // A type it named that no longer exists is still stored: Inherit then clears it (review, 2026-11-04).
+    type: status.type?.from === 'workload' ? status.type.name : status.type?.missing ?? null,
     noWakeRules: rulesJson(status.noWakeRules.filter((r) => r.level === 'workload')),
     wakeRules: rulesJson(status.wakeRules.filter((r) => r.from === 'workload')),
   };

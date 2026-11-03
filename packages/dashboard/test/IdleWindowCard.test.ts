@@ -81,7 +81,12 @@ describe('IdleWindowCard', () => {
     expect(terraform.find('[data-test="use-window"]').exists()).toBe(false);
     expect(terraform.text()).toContain('To change it: idle_minutes in the workload\'s Terraform module.');
     terraform.unmount();
-    const viewer = await mountCard(ADVICE, undefined, { source: 'manager', canApply: false });
+    // A router before 0.37.0 takes no window from here (review, 2026-11-04).
+    const older = await mountCard(ADVICE, undefined, { source: 'manager', canApply: false, levels: false });
+    expect(older.text()).toContain('To change it: upgrade its router to 0.37.0, or offboard the workload and onboard it again.');
+    expect(older.text()).not.toContain('An operator can apply it');
+    older.unmount();
+    const viewer = await mountCard(ADVICE, undefined, { source: 'manager', canApply: false, levels: true });
     expect(viewer.find('[data-test="use-window"]').exists()).toBe(false);
     expect(viewer.text()).toContain('An operator can apply it from here.');
     viewer.unmount();

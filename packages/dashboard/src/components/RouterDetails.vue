@@ -228,7 +228,7 @@ const columns = computed<Section[][]>(() => {
             <td class="dm-facts__src"><v-btn v-if="session.isAdmin" data-test="edit-join" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="joinError = ''; joinOpen = true">Edit</v-btn></td></tr>
           <tr v-if="details.settings" data-test="defaults"><th>Workload settings</th>
             <td>
-              <span v-if="!takesDefaults" class="text-medium-emphasis">The organization's, as every router before 0.37.0: upgrade the router to 0.37.0 to set its own.</span>
+              <span v-if="!takesDefaults" class="text-medium-emphasis">Its workloads keep their own values: a router before 0.37.0 ignores the organization's and a router's defaults; upgrade the router to 0.37.0 to use them.</span>
               <template v-else>
                 <span v-if="routerLines">{{ routerLines }}</span>
                 <span v-else>Inherit <span class="text-medium-emphasis">(the organization's, then the built-in values)</span></span>

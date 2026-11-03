@@ -514,7 +514,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <HistoryCard :router="router" :id="id" :now="now" />
       <RequestHeatmap :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
-      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" @apply="saveSettings({ idleMinutes: $event })" />
+      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
     </div>
 
     <div class="dm-stack">
@@ -573,8 +573,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <v-card title="Wake filtering" class="dm-links">
         <v-card-text>
           <div class="mb-3"><strong>Mode:</strong> {{ status.wakeMode === 'browser' ? 'browser (only the waiter page probe, the x-dormeto-wake header or a wake rule wakes)' : 'any request that passes the filters wakes' }}</div>
-          <div v-for="r in [...status.noWakeRules, ...status.wakeRules]" :key="`${r.level}/${r.name}`" class="mb-2 text-body-medium">
-            <v-chip :color="r.level === 'wake' ? 'success' : 'secondary'" variant="tonal" label class="mr-2" data-test="rule-level">{{ r.level === 'wake' ? (r.from ? `wake · ${r.from}` : 'wake') : `no-wake · ${r.level}` }}</v-chip>
+          <div v-for="(r, i) in [...status.noWakeRules, ...status.wakeRules]" :key="`${i}/${r.level}/${r.from ?? ''}/${r.name}`" class="mb-2 text-body-medium">
+            <v-chip :color="r.level === 'wake' ? 'success' : 'secondary'" variant="tonal" label class="mr-2" data-test="rule-level">{{ r.level === 'wake' ? (r.from ? `wake · ${r.from}` : 'wake') : `no-wake · ${r.level}${r.terraform ? ' (Terraform)' : ''}` }}</v-chip>
             <strong>{{ r.name }}</strong>: <span :class="{ 'text-error': r.invalid }">{{ r.invalid ? `invalid, ${r.invalid}` : ruleText(r.conditions) }}</span>
           </div>
           <div v-if="status.ipLists.length" class="mt-4">

@@ -11,7 +11,8 @@ import DmLoader from './DmLoader.vue';
 import type { IdleWindowAdvice, IdleWindowRow } from '../types';
 
 // source and canApply (settings at scale design §8): the recommendation one click away for an operator on a manager workload.
-const props = defineProps<{ router: string; id: string; source?: 'terraform' | 'manager'; canApply?: boolean }>();
+// levels: its router takes a workload's settings from the manager (0.37.0 and later).
+const props = defineProps<{ router: string; id: string; source?: 'terraform' | 'manager'; canApply?: boolean; levels?: boolean }>();
 const emit = defineEmits<{ apply: [minutes: number] }>();
 const advice = ref<IdleWindowAdvice | null>(null);
 const error = ref('');
@@ -97,6 +98,7 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
           <span v-if="!advice.wakerTargetGroup">The waker target group was not found: only the requests while awake are replayed.</span>
           <span v-if="!advice.priced">Nothing priced yet (no nap described, or an item without a price): hours asleep instead of dollars.</span>
           <span v-if="source === 'terraform'">To change it: <code>idle_minutes</code> in the workload's Terraform module.</span>
+          <span v-else-if="levels === false">To change it: upgrade its router to 0.37.0, or offboard the workload and onboard it again.</span>
           <span v-else-if="!canApply && advice.recommended !== advice.current">An operator can apply it from here.</span>
           <span>Every request counts as activity and as a wake. Computed {{ when(advice.computedAt) }}, from the 14 days to {{ date(advice.to) }}.</span>
         </div>

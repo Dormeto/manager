@@ -439,6 +439,26 @@ function routerSettingsOf(body: Record<string, unknown>): { hibernate?: boolean 
   if (body.hibernate === undefined && body.joinMinutes === undefined && body.defaults === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or defaults is required');
   return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults) }) };
 }
+// What a save of the types changed, for the audit (settings at scale design §8): each type added or removed, each changed
+// key of a type with its value before and after (review, 2026-11-04).
+function typesChangeText(before: Record<string, unknown>[], after: { name: string }[]): string {
+  const said: string[] = [];
+  const named = (list: Record<string, unknown>[], name: string) => list.find((t) => t.name === name);
+  for (const type of after as Record<string, unknown>[]) {
+    const old = named(before, type.name as string);
+    if (!old) {
+      said.push(`${type.name} added`);
+      continue;
+    }
+    const was = (old.settings ?? {}) as Record<string, unknown>;
+    const now = (type.settings ?? {}) as Record<string, unknown>;
+    const keys = [...new Set([...Object.keys(was), ...Object.keys(now)])].filter((k) => JSON.stringify(was[k]) !== JSON.stringify(now[k]));
+    const other = ['description', 'tags'].filter((k) => JSON.stringify(old[k]) !== JSON.stringify(type[k]));
+    if (keys.length || other.length) said.push(`${type.name}: ${[...keys.map((k) => `${k} ${valueText(was[k], 'default')} → ${valueText(now[k], 'default')}`), ...other.map((k) => `${k} changed`)].join(', ')}`);
+  }
+  for (const old of before) if (!named(after as Record<string, unknown>[], old.name as string)) said.push(`${old.name} removed`);
+  return said.join('; ') || 'no change';
+}
 // What a router before 0.37.0 answers to a setting of the levels: unknown.
 const LEVEL_SETTING_UNKNOWN = /^settings: unknown setting (defaults|idleMinutes|waitSeconds|drainSeconds|wakeTimeoutSeconds|maxHolders|failedRetrySeconds|wakeMode|noWakeRules|wakeRules|type)$/;
 // A level's defaults in a body (settings at scale design §8): each key a value or null, null for all of them; refused in the router's words.
@@ -1369,7 +1389,7 @@ export function createApi({
         const list = types as { name: string }[];
         const next = { ...doc, workloads: { ...others, ...(list.length ? { types: list } : {}) }, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
         await globalSettings.write(next);
-        return { result: list.map((t) => t.name).join(', ') || 'none', response: reply(200, { ...shownTypes(next), note: 'routers apply it at their next check, within 5 minutes' }) };
+        return { result: typesChangeText(validTypes(workloads.types), list), response: reply(200, { ...shownTypes(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
     }
 

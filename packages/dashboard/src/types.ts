@@ -153,6 +153,7 @@ export interface Rule {
   conditions: Record<string, unknown>;
   invalid?: string;
   from?: string; // a wake rule's level (routers 0.37.0)
+  terraform?: true; // a router's own rule, from its Terraform (routers 0.37.0)
 }
 
 export interface WorkloadStatus {
