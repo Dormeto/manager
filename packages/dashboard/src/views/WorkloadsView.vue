@@ -166,11 +166,11 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
           <div v-if="fleet.costs" class="dm-strip__figures">
             <div class="dm-figure">
               <div class="dm-figure__value text-success">{{ fleet.costs.saved.usd ? usd(fleetSaved) : saved(fleet.costs.saved) }}</div>
-              <div class="dm-figure__label">saved in the last 30 days</div>
+              <div class="dm-figure__label">saved in 30 days</div>
             </div>
             <div v-if="typeof fleet.costs.monthly === 'number'" class="dm-figure">
               <div class="dm-figure__value">{{ usd(fleetMonthly) }}</div>
-              <div class="dm-figure__label">a month at that rate</div>
+              <div class="dm-figure__label">a month</div>
             </div>
           </div>
         </div>

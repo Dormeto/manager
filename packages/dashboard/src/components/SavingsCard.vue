@@ -54,6 +54,10 @@ const covered = computed(() => {
   const days = Math.round((Date.parse(`${s.day}T00:00:00.000Z`) - Date.parse(`${s.cumulative.since}T00:00:00.000Z`)) / 86_400_000) + 1;
   return Math.max(1, Math.min(30, days));
 });
+const figures = computed(() => {
+  const s = summary.value;
+  return s ? [{ usd: s.last30.usd, label: 'last 30 days' }, { usd: s.month.usd, label: 'this month' }, { usd: s.cumulative.usd, label: `since ${day(s.cumulative.since)}` }] : [];
+});
 const peak = computed(() => Math.max(...(summary.value?.last30.days ?? []).map((d) => d.usd), 0.01));
 const baseline = computed(() => (summary.value?.baseline.kind === 'business-hours' ? `business hours (weekdays 08:00 to 20:00, ${summary.value.baseline.timeZone})` : '24/7'));
 const unpriced = computed(() => {
@@ -67,12 +71,12 @@ const unpriced = computed(() => {
     <v-card-text v-if="loaded && !summary" class="text-medium-emphasis">No estimate yet: the first one is computed tonight at 00:30 UTC, from the
       history of the naps.</v-card-text>
     <v-card-text v-else-if="summary">
+      <!-- Each a figure over a few plain words (the user, 2026-11-03). -->
       <div class="d-flex flex-wrap align-end ga-6">
-        <div>
-          <div class="text-headline-large dm-savings__total">{{ usd(summary.last30.usd) }}</div>
-          <div class="text-body-small text-medium-emphasis">last 30 days, {{ Math.round(summary.last30.asleepHours).toLocaleString('en-US') }} hours asleep</div>
+        <div v-for="(f, i) in figures" :key="f.label" data-test="savings-figure">
+          <div :class="i ? 'dm-savings__value' : 'text-headline-large dm-savings__total'">{{ usd(f.usd) }}</div>
+          <div class="text-body-small text-medium-emphasis">{{ f.label }}</div>
         </div>
-        <div class="text-body-medium dm-savings__more">this month {{ usd(summary.month.usd) }} · {{ usd(summary.cumulative.usd) }} since {{ day(summary.cumulative.since) }}</div>
       </div>
       <div class="bars my-3" role="img" :aria-label="`Savings by day, the last 30 days to ${day(summary.day)}`">
         <v-tooltip v-for="(d, i) in summary.last30.days" :key="d.date" location="top" :text="`${day(d.date)}: ${usd(d.usd)}`">
@@ -110,7 +114,7 @@ const unpriced = computed(() => {
 
 <style scoped>
 .dm-savings__total { font-size: clamp(2.2rem, 1.8rem + 1.2vw, 2.9rem) !important; font-weight: 600; letter-spacing: -0.05em; line-height: 1 !important; }
-.dm-savings__more { padding: 6px 12px; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.05); }
+.dm-savings__value { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .bars { display: flex; align-items: flex-end; gap: 3px; height: 84px; padding-top: 8px; }
 .bar { flex: 1; min-width: 3px; border-radius: 4px 4px 1px 1px; background: linear-gradient(180deg, rgb(var(--v-theme-secondary)), rgba(var(--v-theme-primary), 0.55));
   transform-origin: bottom; animation: dm-bar 0.7s var(--dm-ease) both; transition: filter 0.2s; }

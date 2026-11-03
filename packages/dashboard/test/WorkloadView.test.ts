@@ -217,6 +217,8 @@ describe('Workload view', () => {
     expect(energy.text()).toMatch(/4\.1\s*kWh/);
     expect(energy.text()).toMatch(/0\.21\s*kg CO₂e/);
     expect(energy.text()).toContain('Cloud Carbon Footprint\'s coefficients for AWS; not a measure');
+    // Its figures' labels in a few plain words, as the Workloads strip's (the user, 2026-11-03).
+    expect(wrapper.findAll('.dm-costs .dm-figure__label').map((l) => l.text())).toEqual(['saved by its naps', 'a month', 'base cost an hour']);
     wrapper.unmount();
     // Without an estimate (no priced nap yet, or nothing of a known size stopped), no energy is said.
     for (const without of [status, { ...current, energy: { kwh: 0, co2Kg: 0, estimated: 0 } }]) {

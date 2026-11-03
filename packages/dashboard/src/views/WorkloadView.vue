@@ -457,7 +457,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
             </div>
             <div v-if="typeof savings.monthly === 'number'" class="dm-figure">
               <div class="dm-figure__value">{{ usd(monthlyUp) }}</div>
-              <div class="dm-figure__label">a month at that rate</div>
+              <div class="dm-figure__label">a month</div>
             </div>
             <div v-if="typeof savings.hourly === 'number'" class="dm-figure">
               <div class="dm-figure__value">{{ usdHourly(hourlyUp) }}</div>

@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { mdiCar, mdiCellphone, mdiCoffeeOutline, mdiLeaf, mdiTelevisionPlay } from '@mdi/js';
 import { equivalents, rounded, type FleetEnergy } from '../energy';
 import DmLoader from './DmLoader.vue';
+import InfoTip from './InfoTip.vue';
 
 // energy: none without prices; loaded: the Overview has its answer; error: it could not read it.
 const props = defineProps<{ energy?: FleetEnergy | null; loaded: boolean; error?: string }>();
@@ -63,10 +64,12 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
             <div><b>≈ {{ rounded(e.value) }}</b><span>{{ e.text }}</span></div>
           </div>
         </div>
-        <div class="text-body-small text-medium-emphasis">Estimate from {{ workloads }} workload{{ workloads === 1 ? '' : 's' }}: each one's last nap's items
-          applied to every hour asleep within the savings baseline over the last 30 days (business hours or every hour, as the manager is
-          set), at 50% CPU use, in its region (an unknown region at the average); items of unknown size and pods without a node autoscaler left
-          out. Cloud Carbon Footprint's coefficients for AWS. Not a measure.</div>
+        <!-- One sentence, the method in its tooltip (the user, 2026-11-03). -->
+        <div data-test="energy-note" class="text-body-small text-medium-emphasis d-flex align-center ga-1">Estimate from {{ workloads }} workload{{ workloads === 1 ? '' : 's' }}, not a measure.
+          <InfoTip label="How the energy is estimated" test="energy" :max-width="400">Each workload's last nap's items applied to every hour asleep within the
+            savings baseline over the last 30 days (business hours or every hour, as the manager is set), at 50% CPU use, in its region (an unknown region
+            at the average); items of unknown size and pods without a node autoscaler left out. Cloud Carbon Footprint's coefficients for AWS.</InfoTip>
+        </div>
       </template>
       <div v-else-if="loaded" class="text-body-medium text-medium-emphasis">No estimate yet: it comes with the naps' figures, from what each nap
         stopped (its instances, databases, tasks or pods of a known size) and its hours asleep.</div>

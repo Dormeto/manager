@@ -5,6 +5,13 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+The Overview's Savings card shows the last 30 days, this month and since the start as three figures, each over a few words,
+without the hours asleep. The energy card says in one sentence how many workloads its estimate comes from; the method is in
+the tooltip of an icon beside it. The Workloads page's figures read "saved in 30 days" and "a month", as does a workload's
+monthly figure.
+
 ## 0.21.0 — 2026-11-03
 
 Router 0.36.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

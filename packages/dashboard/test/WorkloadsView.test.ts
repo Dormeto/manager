@@ -129,6 +129,8 @@ describe('Workloads view', () => {
       states: FLEET.states7d, title: 'All 2 workloads, last 7 days', savings: { saved: FLEET.costs.saved, hourly: 0.12, monthly: 70.08 },
       note: 'Computed 12 min ago; each workload\'s figures are kept 60 minutes.',
     });
+    // Its figures' labels in a few plain words (the user, 2026-11-03).
+    expect(wrapper.findAll('.dm-strip__figures .dm-figure__label').map((l) => l.text())).toEqual(['saved in 30 days', 'a month']);
     wrapper.unmount();
   });
 

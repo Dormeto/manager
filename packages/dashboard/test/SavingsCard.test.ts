@@ -40,9 +40,11 @@ describe('SavingsCard', () => {
   it('says the last 30 days, this month and since the start, net of Dormeto\'s cost, with a bar a day', async () => {
     const wrapper = await mountCard({ summary: SUMMARY });
     const text = wrapper.text();
-    expect(text).toContain('$15.75');
-    expect(text).toContain('this month $4.25');
-    expect(text).toMatch(/\$15\.75 since Sep 8/);
+    // Each a figure over a few plain words, not a line of them (the user, 2026-11-03); no hours asleep.
+    expect(wrapper.findAll('[data-test="savings-figure"]').map((f) => f.findAll('div').map((d) => d.text())))
+      .toEqual([['$15.75', 'last 30 days'], ['$4.25', 'this month'], ['$15.75', 'since Sep 8']]);
+    expect(text).not.toContain('hours asleep');
+    expect(text).not.toContain('·');
     expect(text).toContain('Dormeto costs about $5.78 a month');
     expect(wrapper.findAll('[data-test="bar"]')).toHaveLength(30);
     wrapper.unmount();
