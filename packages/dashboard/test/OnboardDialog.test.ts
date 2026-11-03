@@ -26,6 +26,22 @@ const input = (label: string) => [...document.querySelectorAll('.v-dialog .v-inp
 const onboardButton = () => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === 'Onboard') as HTMLButtonElement;
 
 describe('OnboardDialog', () => {
+  // Settings at scale (vision design §9): the idle window and the wake mode inherit unless set.
+  it('sends no idle window or wake mode by default: the levels decide; a value set is sent', async () => {
+    const wrapper = await openDialog();
+    onboardButton().click();
+    const first = (wrapper.emitted('submit')![0]![0] as { settings: Record<string, unknown> }).settings;
+    expect([first.idleMinutes, first.wakeMode]).toEqual([undefined, undefined]);
+    const idle = input('Idle window');
+    expect(idle.placeholder).toBe('Inherit');
+    idle.value = '30';
+    idle.dispatchEvent(new Event('input'));
+    await flushPromises();
+    onboardButton().click();
+    expect((wrapper.emitted('submit')![1]![0] as { settings: Record<string, unknown> }).settings.idleMinutes).toBe(30);
+    wrapper.unmount();
+  });
+
   it('sends the fallback instance types (R7b), none when empty', async () => {
     const wrapper = await openDialog();
     onboardButton().click();

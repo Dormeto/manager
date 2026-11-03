@@ -170,3 +170,12 @@ export const routeColor = (route: string): string => ROUTES[route]?.color ?? 'gr
 const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumSignificantDigits: 3 });
 export const usd = (v: number): string => USD.format(v);
 
+
+// A router's version x.y.z at least the floor (a feature's): an unknown or malformed one is not.
+export function atLeast(version: string | null | undefined, floor: string): boolean {
+  const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '')?.slice(1).map(Number);
+  if (!parts) return false;
+  const min = floor.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) if (parts[i] !== min[i]) return parts[i]! > min[i]!;
+  return true;
+}

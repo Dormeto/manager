@@ -52,6 +52,10 @@ const DESCRIPTIONS: Record<keyof Settings, { label: string; format: (v: number) 
 
 const ORDER: (keyof Settings)[] = ['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders', 'failedRetrySeconds'];
 export const SETTING_KEYS = ORDER;
+// A setting's name and a value of it, as the cards say them.
+export const settingLabel = (key: keyof Settings): string => DESCRIPTIONS[key].label;
+export const settingText = (key: keyof Settings, value: number): string => DESCRIPTIONS[key].format(value);
+export const settingHelp = (key: keyof Settings): string => `${DESCRIPTIONS[key].help} ${DESCRIPTIONS[key].range}`;
 
 // Each setting the router gives (an older one gives no retry), with the level it comes from when it says so.
 export const settingRows = (settings: Settings, from?: SettingsFrom): SettingRow[] => ORDER.filter((key) => typeof settings[key] === 'number').map((key) => {

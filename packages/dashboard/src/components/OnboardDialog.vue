@@ -18,8 +18,9 @@ const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: str
 // Tags at onboarding are the administrators' (the API refuses an operator's).
 const session = useSession();
 const name = ref('');
-const idleMinutes = ref(15);
-const wakeMode = ref('any');
+// Empty: the levels decide (settings at scale design §9), and nothing is sent.
+const idleMinutes = ref<number | string | null>(null);
+const wakeMode = ref<string | null>(null);
 const databases = ref('');
 // EC2 instances may start on another type when AWS has none of theirs (router 0.25.0); their own type back at the next nap.
 const fallbacks = ref('');
@@ -43,8 +44,8 @@ const fallbackRule = () => (fallbackTypes.value.length <= 5 && fallbackTypes.val
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   name.value = props.defaultName ?? '';
-  idleMinutes.value = 15;
-  wakeMode.value = 'any';
+  idleMinutes.value = null;
+  wakeMode.value = null;
   databases.value = '';
   fallbacks.value = '';
   hibernate.value = 'inherit';
@@ -66,7 +67,7 @@ const changes = computed(() => {
 
 function submit() {
   const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
-  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { idleMinutes: Number(idleMinutes.value), wakeMode: wakeMode.value, ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(!props.kubernetes && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
+  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { ...(idleMinutes.value === null || idleMinutes.value === '' ? {} : { idleMinutes: Number(idleMinutes.value) }), ...(wakeMode.value ? { wakeMode: wakeMode.value } : {}), ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(!props.kubernetes && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
 }
 </script>
 
@@ -121,10 +122,10 @@ function submit() {
         <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" hint="Shown in the manager; the target group name if empty. It can be changed later." persistent-hint autofocus class="mb-3" />
         <v-row dense>
           <v-col cols="12" sm="5">
-            <v-text-field v-model.number="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" />
+            <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" placeholder="Inherit" persistent-placeholder clearable />
           </v-col>
           <v-col cols="12" sm="7">
-            <v-select v-model="wakeMode" :items="[{ title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
+            <v-select v-model="wakeMode" :items="[{ title: 'Inherit', value: null }, { title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
           </v-col>
         </v-row>
         <v-text-field v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />

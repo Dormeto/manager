@@ -175,7 +175,7 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
 
     <!-- The health, short, heads the first of RouterDetails' two columns (the figures beside it): no empty space under it. -->
     <div class="dm-sections">
-      <RouterDetails :name="router.name" :source="router.source">
+      <RouterDetails :name="router.name" :source="router.source" :version="router.version ?? undefined">
         <v-card class="dm-health">
           <v-card-item class="dm-health__head">
             <template #prepend><v-avatar :color="healthTone" variant="tonal" rounded="lg" size="34"><v-icon :icon="mdiHeartPulse" size="19" /></v-avatar></template>

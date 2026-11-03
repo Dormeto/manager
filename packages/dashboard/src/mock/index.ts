@@ -13,6 +13,7 @@ import {
 import { organizationPage, routerPage, setOrganizationPage, workloadPage } from './waiting-page';
 import { clearSchedule, scheduleView, setSchedule } from './schedule';
 import { AVAILABLE } from './fixtures';
+import { organizationDefaults, putOrganizationDefaults, putTypes, reach, typesAnswer } from './levels';
 import { ME } from './org';
 import { updateChanges, updateRequest, updateState } from './update';
 import { MockError, advance, fail, lintOf, pausesOf, routerOf, state, workloadOf, type Demo } from './state';
@@ -64,9 +65,16 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
   }
   if (method === 'GET' && resource === 'ip-lists' && !a) return ipLists(now);
   if (resource === 'settings' && a === 'workloads' && !b) {
-    if (method === 'GET') return d.hibernation;
-    if (method === 'PUT') return putWorkloadDefaults(d, body, now);
+    if (method === 'GET') return organizationDefaults(d);
+    // Settings at scale: the defaults alone, or the rest as before.
+    if (method === 'PUT' && body.defaults !== undefined && body.hibernate === undefined && body.joinMinutes === undefined && body.endedWindowDays === undefined) return putOrganizationDefaults(d, body, now);
+    if (method === 'PUT') return { ...putWorkloadDefaults(d, body, now), defaults: d.hibernation.defaults ?? {} };
   }
+  if (resource === 'settings' && a === 'types' && !b) {
+    if (method === 'GET') return typesAnswer(d);
+    if (method === 'PUT') return putTypes(d, body, now);
+  }
+  if (method === 'GET' && resource === 'settings' && a === 'reach' && !b) return reach(d, Object.fromEntries(q));
   if (resource === 'settings' && a === 'waiting-page' && !b) {
     if (method === 'GET') return organizationPage(d);
     if (method === 'PUT') return setOrganizationPage(d, body, now);

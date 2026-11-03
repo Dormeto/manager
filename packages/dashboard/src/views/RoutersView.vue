@@ -22,6 +22,7 @@ import type { AlarmInfo, AlertsInfo, RouterInfo } from '../types';
 import IpListsPanel from '../components/IpListsPanel.vue';
 import WaitingPageCard from '../components/WaitingPageCard.vue';
 import WorkloadDefaultsCard from '../components/WorkloadDefaultsCard.vue';
+import WorkloadTypesCard from '../components/WorkloadTypesCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import InfoTip from '../components/InfoTip.vue';
@@ -153,6 +154,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
   </v-card>
   <div class="dm-defaults">
     <WorkloadDefaultsCard @notice="notice = $event" />
+    <WorkloadTypesCard @notice="notice = $event" />
     <WaitingPageCard level="organization" path="/settings/waiting-page" subject="the organization" @notice="notice = $event" />
   </div>
   <IpListsPanel />

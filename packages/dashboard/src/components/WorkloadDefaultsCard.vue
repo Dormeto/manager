@@ -9,9 +9,11 @@ import { relative } from '../format';
 import { useNow } from '../now';
 import { ENDED_DAYS_DEFAULT, JOIN_DEFAULT_MINUTES, joinText } from '../schedule';
 import { useSession } from '../stores/session';
+import DefaultsDialog from './DefaultsDialog.vue';
 import EndedDaysDialog from './EndedDaysDialog.vue';
 import InfoTip from './InfoTip.vue';
 import JoinDialog from './JoinDialog.vue';
+import { defaultsLines } from '../defaults';
 import type { WorkloadDefaults } from '../types';
 import type { Notice } from './NoticeAlert.vue';
 
@@ -66,6 +68,27 @@ async function saveEnded(endedWindowDays: number | null) {
   } finally {
     savingEnded.value = false;
     endedOpen.value = false;
+  }
+}
+
+// The organization's workload settings (settings at scale design §9): what it sets, the built-in values otherwise. Only the
+// defaults are sent.
+const settingsOpen = ref(false);
+const savingSettings = ref(false);
+const settingsError = ref('');
+const settingsLine = () => defaultsLines(defaults.value?.defaults).map((l) => `${l.label} ${l.value}`).join(' · ') || 'Built-in values';
+async function saveSettings(changes: Record<string, unknown>) {
+  savingSettings.value = true;
+  settingsError.value = '';
+  try {
+    const saved = await api<WorkloadDefaults & { note: string }>('/settings/workloads', { method: 'PUT', body: JSON.stringify({ defaults: changes }) });
+    defaults.value = saved;
+    settingsOpen.value = false;
+    emit('notice', { type: 'success', text: `The organization's workload settings are saved: ${saved.note}.` });
+  } catch (err) {
+    settingsError.value = (err as Error).message;
+  } finally {
+    savingSettings.value = false;
   }
 }
 
@@ -132,12 +155,22 @@ async function confirm() {
       <span data-test="default-ended-value" class="dm-num">{{ endedLine() }}</span>
       <v-btn v-if="session.isAdmin" data-test="edit-ended" :prepend-icon="mdiPencilOutline" variant="text" size="small" @click="endedOpen = true">Edit</v-btn>
     </v-card-text>
+    <v-card-text data-test="default-settings" class="d-flex flex-wrap align-center ga-4 py-2">
+      <div class="dm-default">
+        <span class="font-weight-medium">Settings</span>
+        <InfoTip label="What the workload settings are" test="default-settings">A workload's idle window, waits, timeouts, retries and wake mode come from the first level that sets them: the workload, its type, its router, the organization here, then the built-in values. Rules add up across the levels.</InfoTip>
+      </div>
+      <v-spacer />
+      <span data-test="default-settings-value" class="dm-num">{{ settingsLine() }}</span>
+      <v-btn v-if="session.isAdmin" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="small" @click="settingsError = ''; settingsOpen = true">Edit</v-btn>
+    </v-card-text>
     <v-card-text class="pt-0 text-body-small text-medium-emphasis">{{ defaults.updatedAt ? `Changed by ${defaults.updatedBy ?? 'someone'} ${relative(defaults.updatedAt, now)}.` : 'Never changed.' }}</v-card-text>
     </template>
   </v-card>
   <JoinDialog v-if="defaults" v-model="joinOpen" title="Join windows by default" :current="defaults.joinMinutes ?? null" :inherited="JOIN_DEFAULT_MINUTES" :default-label="`${JOIN_DEFAULT_MINUTES} min, built in`" :saving="savingJoin" @submit="saveJoin">
     Two windows of one kind with a gap of at most this count as one. It applies in every router that reads the manager's settings, within 5 minutes; a router or a workload that sets its own value keeps it.
   </JoinDialog>
+  <DefaultsDialog v-if="defaults" v-model="settingsOpen" title="The organization's workload settings" level="organization" :values="defaults.defaults ?? {}" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
   <EndedDaysDialog v-if="defaults" v-model="endedOpen" :current="defaults.endedWindowDays ?? null" :saving="savingEnded" @submit="saveEnded" />
   <v-dialog :model-value="asked !== null" max-width="480" @update:model-value="cancel">
     <v-card :title="`Turn hibernation ${asked ? 'on' : 'off'} by default?`">

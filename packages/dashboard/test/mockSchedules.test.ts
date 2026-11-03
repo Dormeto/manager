@@ -31,13 +31,13 @@ describe('the demo\'s schedules', () => {
     for (const kind of ['once', 'daily', 'monthly', 'yearly', 'cron']) expect(kinds, kind).toContain(kind);
     expect(recurring.flatMap((w) => w.schedule!.windows!).some((x) => x.repeat?.pattern === 'weekly' && (x.repeat.interval ?? 1) > 1)).toBe(true);
     expect(recurring.flatMap((w) => w.schedule!.windows!).some((x) => x.repeat?.pattern === 'monthly' && x.repeat.nth)).toBe(true);
-    for (const w of recurring) expect(state().routers.find((r) => r.name === w.router)!.version).toBe('0.36.0');
+    for (const w of recurring) expect(state().routers.find((r) => r.name === w.router)!.version).toBe(AVAILABLE.version);
   });
 });
 
 describe('the demo\'s schedule route', () => {
   const put = (router: string, id: string, body: unknown) => mockApi(`/workloads/${encodeURIComponent(router)}/${encodeURIComponent(id)}/schedule`, { method: 'PUT', body: JSON.stringify(body) }) as Promise<ScheduleView>;
-  const on = (older: boolean) => state().workloads.find((w) => (state().routers.find((r) => r.name === w.router)!.version === '0.36.0') !== older)!;
+  const on = (older: boolean) => state().workloads.find((w) => (state().routers.find((r) => r.name === w.router)!.version === AVAILABLE.version) !== older)!;
   const WINDOWS: ScheduleWindow[] = [
     { kind: 'awake', start: '08:00', end: '12:00', repeat: { pattern: 'daily', interval: 3 }, from: '2027-01-04' },
     { kind: 'awake', repeat: { pattern: 'cron', cron: '30 12 * * 1-5', minutes: 60 } },

@@ -1,3 +1,4 @@
+import { knowsLevels, resolvedOf } from './levels';
 // The manager API's answers, computed from the demo model at each request (npm run dev:mock).
 import type { Candidate } from '@dormeto/discovery/types';
 import { summaryOf } from '@dormeto/fleet/description';
@@ -88,6 +89,9 @@ export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetail
           : { url: null, hibernate: null, readAt: null, error: null }),
         // A router before joined windows answers none.
         ...(knowsRecurrences(r.version) ? { joinMinutes: r.readsManager ? d.hibernation.joinMinutes : null } : {}),
+        // Settings at scale (router 0.37.0): the organization's defaults and types it holds.
+        ...(knowsLevels(r.version) && r.readsManager && d.hibernation.defaults ? { defaults: d.hibernation.defaults } : {}),
+        ...(knowsLevels(r.version) && r.readsManager && d.hibernation.types ? { types: d.hibernation.types } : {}),
       },
     } : {}),
     workloads: { total: list.length, byState: byState(list), paused: pausedCount(r, list), lastActivityAt: lastActivity(list) },
@@ -266,6 +270,8 @@ export function workloadStatus(d: Demo, w: DemoWorkload, now: number): WorkloadS
       ...ORG.ipLists.map((l) => ({ name: l.name, action: l.action, url: l.url, entries: l.entries, fetchedAt: fetchedAt(l.refreshHours, now) })),
     ],
     wakeMode: w.wakeMode, wakeRules: w.wakeRules, noWakeRules: [...ROUTER_RULES, ...w.noWakeRules],
+    // Settings at scale (router 0.37.0): each setting resolved, where it comes from, the type and the rules of every level.
+    ...(knowsLevels(router.version) ? resolvedOf(d, w) : {}),
   };
 }
 

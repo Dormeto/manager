@@ -4,7 +4,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { mdiChartTimelineVariant, mdiCogOutline, mdiKubernetes, mdiPencilOutline, mdiShieldSearch } from '@mdi/js';
 import { api } from '../api';
-import { concurrencyText, listSourceHref, relative, ruleText } from '../format';
+import { atLeast, concurrencyText, listSourceHref, relative, ruleText } from '../format';
 import { CLUSTER_ROLE } from '../kubernetes';
 import { useNow } from '../now';
 import { terraformSettingHelp } from '../router-actions';
@@ -16,9 +16,13 @@ import HibernateDialog from './HibernateDialog.vue';
 import JoinDialog from './JoinDialog.vue';
 import TerraformChip from './TerraformChip.vue';
 import type { RouterDetails } from '../types';
+import DefaultsDialog from './DefaultsDialog.vue';
+import { builtInText, defaultsLines, levelText } from '../defaults';
+import { SETTING_KEYS } from '../settings';
 
 // source: who installed the router, so where its configuration is changed.
-const props = defineProps<{ name: string; source?: 'terraform' | 'manager' }>();
+// version: the router's, which says whether it takes defaults of its own (settings at scale, routers 0.37.0).
+const props = defineProps<{ name: string; source?: 'terraform' | 'manager'; version?: string }>();
 const now = useNow();
 const session = useSession();
 const details = ref<RouterDetails | null>(null);
@@ -72,6 +76,31 @@ async function saveJoin(joinMinutes: number | null) {
     joinError.value = recurrenceError((err as Error).message);
   } finally {
     savingJoin.value = false;
+  }
+}
+// The defaults of its workloads' settings (settings at scale design §9): administrators; routers 0.37.0 and later. Each field
+// empty inherits the organization's value, else the built-in one.
+const defaultsOpen = ref(false);
+const savingDefaults = ref(false);
+const defaultsError = ref('');
+const takesDefaults = computed(() => atLeast(props.version, '0.37.0'));
+const routerLines = computed(() => defaultsLines(details.value?.settings?.defaults).map((l) => `${l.label} ${l.value}`).join(' · '));
+const inheritedDefaults = computed(() => Object.fromEntries([...SETTING_KEYS, 'wakeMode' as const].map((key) => {
+  const value = details.value?.managerSettings?.defaults?.[key];
+  return [key, value === undefined ? `${builtInText(key)}, built-in` : `${levelText(key, value as number | string)}, organization`];
+})));
+async function saveDefaults(changes: Record<string, unknown>) {
+  savingDefaults.value = true;
+  defaultsError.value = '';
+  try {
+    await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify({ defaults: changes }) });
+    defaultsOpen.value = false;
+    await load();
+  } catch (err) {
+    defaultsOpen.value = false;
+    defaultsError.value = (err as Error).message;
+  } finally {
+    savingDefaults.value = false;
   }
 }
 // Layout only: two columns that end at about the same height. The parent's card (the router's health, short) heads the
@@ -197,6 +226,17 @@ const columns = computed<Section[][]>(() => {
               <div v-if="joinError" class="text-error text-body-small">{{ joinError }}</div>
             </td>
             <td class="dm-facts__src"><v-btn v-if="session.isAdmin" data-test="edit-join" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="joinError = ''; joinOpen = true">Edit</v-btn></td></tr>
+          <tr v-if="details.settings" data-test="defaults"><th>Workload settings</th>
+            <td>
+              <span v-if="!takesDefaults" class="text-medium-emphasis">The organization's, as every router before 0.37.0: upgrade the router to 0.37.0 to set its own.</span>
+              <template v-else>
+                <span v-if="routerLines">{{ routerLines }}</span>
+                <span v-else>Inherit <span class="text-medium-emphasis">(the organization's, then the built-in values)</span></span>
+                <div class="text-body-small text-medium-emphasis">For its workloads that set none of their own, and whose type sets none.</div>
+              </template>
+              <div v-if="defaultsError" class="text-error text-body-small">{{ defaultsError }}</div>
+            </td>
+            <td class="dm-facts__src"><v-btn v-if="session.isAdmin && takesDefaults" data-test="edit-defaults" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="defaultsError = ''; defaultsOpen = true">Edit</v-btn></td></tr>
           <tr><th>IP lists</th>
             <td>
               <div v-for="l in details.configuration.ipLists.value" :key="l.name" class="dm-facts__item">
@@ -222,6 +262,8 @@ const columns = computed<Section[][]>(() => {
         </tbody>
       </v-table>
     </v-card>
+    <DefaultsDialog v-if="details.settings && takesDefaults" v-model="defaultsOpen" :title="`Defaults of ${name}`" level="router" :name="name" :values="details.settings.defaults ?? {}"
+      :inherited="inheritedDefaults" :saving="savingDefaults" @submit="saveDefaults" />
     <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"

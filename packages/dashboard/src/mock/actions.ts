@@ -3,6 +3,7 @@ import type { Candidate, DiscoveryConfig } from '@dormeto/discovery/types';
 import type { DescriptionInfo, Pause } from '../types';
 import { JOIN_PROBLEM, isEndedDays, isJoinMinutes } from '../schedule';
 import { AVAILABLE } from './fixtures';
+import { putRouterDefaults, putWorkloadLevels } from './levels';
 import { descriptionProblem } from '@dormeto/fleet/description';
 import { groupNameProblem, tagsProblem } from '../tags';
 import { grantRowsProblem } from '../groups';
@@ -556,6 +557,15 @@ export function putWorkloadDefaults(d: Demo, body: Body, now: number) {
 
 // A router's own settings: what is not sent stays, and neither set leaves no record.
 export function setRouterSettings(d: Demo, router: DemoRouter, body: Body, now: number) {
+  // Settings at scale (router 0.37.0): its workloads' defaults.
+  if (body.defaults !== undefined) {
+    return audited(d, 'router-settings', router.name, () => {
+      putRouterDefaults(d, router, body.defaults);
+      router.settingsBy = ME;
+      router.settingsAt = now;
+      return { result: 'defaults', response: { level: 'router', settings: routerSettingsView(router) } };
+    });
+  }
   if (body.hibernate === undefined && body.joinMinutes === undefined) fail(400, 'bad_request', 'hibernate must be true, false or null, or joinMinutes given');
   const hibernate = body.hibernate === undefined ? undefined : hibernateIn(body, true);
   const joinMinutes = body.joinMinutes === undefined ? undefined : joinIn(body);
@@ -574,6 +584,14 @@ export function setRouterSettings(d: Demo, router: DemoRouter, body: Body, now: 
 
 export function setWorkloadSettings(d: Demo, router: string, id: string, body: Body, now: number) {
   const w = workloadOf(d, router, id);
+  if (body.joinMinutes !== undefined) fail(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
+  // Settings at scale (router 0.37.0): its own settings and type.
+  if (Object.keys(body).some((key) => key !== 'hibernate')) {
+    return audited(d, 'workload-settings', `${router}/${id}`, () => {
+      putWorkloadLevels(d, w, body);
+      return { result: Object.keys(body).join(', '), response: { level: 'workload', settings: body } };
+    });
+  }
   if (body.joinMinutes !== undefined) fail(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
   const hibernate = hibernateIn(body, true);
   return audited(d, 'workload-settings', `${router}/${id}`, () => {

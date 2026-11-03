@@ -1,3 +1,5 @@
+import type { Defaults } from '../defaults';
+import type { DemoType } from './levels';
 // The demo organization in memory (npm run dev:mock): built once per page load from the generated one (org.ts), relative to that
 // time; the dashboard's actions change it (naps, wakes, pauses, renames, operations, discovery decisions, users) and
 // what they start finishes over time, as the routers and the workflow would.
@@ -47,6 +49,7 @@ export interface DemoRouter {
   settingsBy: string | null;
   settingsAt: number | null;
   readsManager: boolean;
+  defaults?: Defaults; // its workloads' defaults (router 0.37.0: settings at scale)
   description: DescriptionInfo | null; // Markdown, by people (manager 0.19.0)
   page: StoredWaitingPage | null; // its waiting page (router 0.35.0)
 }
@@ -100,6 +103,8 @@ export interface DemoWorkload {
   idleHours7d: number | null;
   requests7d: number | null;
   seed: number;
+  ownKeys?: string[]; // the settings it sets itself (settings at scale); else those that differ from the built-in values
+  type?: string; // its own type (settings at scale)
 }
 
 interface PlannedStep { name: string; start: number; end: number; outcome: 'done' | 'skipped' | 'failed'; detail?: string; every?: number }
@@ -218,7 +223,8 @@ export interface Demo {
   preferences: { refreshSeconds: number; dismissedUpdate?: string };
   updateCheck: { enabled: boolean; alert: boolean; updatedAt: string | null; updatedBy: string | null };
   savings: SavingsSettings;
-  hibernation: { hibernate: boolean; joinMinutes: number | null; endedWindowDays: number | null; updatedAt: string | null; updatedBy: string | null }; // the manager's defaults for every workload
+  // The manager's defaults for every workload; its workload settings and types (settings at scale).
+  hibernation: { hibernate: boolean; joinMinutes: number | null; endedWindowDays: number | null; defaults?: Defaults; types?: DemoType[]; updatedAt: string | null; updatedBy: string | null };
   waitingPage: { page: StoredPage | null; at: string | null; by: string | null }; // the organization's waiting page
   routers: DemoRouter[];
   workloads: DemoWorkload[];
@@ -1088,7 +1094,8 @@ export const knowsRecurrences = (version: string): boolean => {
 };
 // A router's settings as it answers them: all null when unset; before joined windows, without joinMinutes.
 export const routerSettingsView = (r: DemoRouter) => ({
-  hibernate: r.hibernate, ...(knowsRecurrences(r.version) ? { joinMinutes: r.joinMinutes } : {}), by: r.settingsBy, at: r.settingsAt === null ? null : iso(r.settingsAt),
+  hibernate: r.hibernate, ...(knowsRecurrences(r.version) ? { joinMinutes: r.joinMinutes } : {}), ...(r.defaults ? { defaults: r.defaults } : {}),
+  by: r.settingsBy, at: r.settingsAt === null ? null : iso(r.settingsAt),
 });
 export const hasHibernation = (r: DemoRouter): boolean => {
   const [major, minor] = r.version.split('.').map(Number);

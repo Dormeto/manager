@@ -6,6 +6,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { createVuetify } from 'vuetify';
+import DefaultsDialog from '../src/components/DefaultsDialog.vue';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import RouterView from '../src/views/RouterView.vue';
@@ -454,5 +455,40 @@ describe('Router view', () => {
       expect(calls.some((c) => c.path === `/routers/${INSTALLED.name}/waiting-page`)).toBe(true);
       w.unmount();
     });
+  });
+});
+
+
+// Settings at scale (vision design §9): a router's defaults, what each inherits, edited by administrators (routers 0.37.0).
+describe('a router\'s defaults', () => {
+  it('says what the router sets, edits it as an administrator, and says to upgrade an older router', async () => {
+    withHibernation = true;
+    HIBERNATION.settings = { hibernate: null, joinMinutes: null, by: 'ops@example.com', at: minutesAgo(5), defaults: { idleMinutes: 30 } } as never;
+    HIBERNATION.managerSettings = { url: 's3://b/settings.json', hibernate: true, joinMinutes: null, defaults: { waitSeconds: 20 }, readAt: minutesAgo(3), error: null };
+    INSTALLED.version = '0.37.0';
+    const admin = await mountView('dmtr-dev-eu-west-3');
+    const row = admin.find('[data-test="defaults"]');
+    expect(row.text()).toContain('Idle window 30 min');
+    calls.length = 0;
+    await row.find('[data-test="edit-defaults"]').trigger('click');
+    await flushPromises();
+    const dialog = admin.findComponent(DefaultsDialog);
+    expect(dialog.props()).toMatchObject({ level: 'router', name: 'dmtr-dev-eu-west-3', values: { idleMinutes: 30 } });
+    expect(dialog.props('inherited')).toMatchObject({ waitSeconds: '20 s, organization', idleMinutes: '15 min, built-in' });
+    dialog.vm.$emit('submit', { idleMinutes: null });
+    await flushPromises();
+    const put = calls.find((c) => c.init?.method === 'PUT')!;
+    expect([put.path, JSON.parse(String(put.init!.body))]).toEqual(['/routers/dmtr-dev-eu-west-3/settings', { defaults: { idleMinutes: null } }]);
+    admin.unmount();
+    document.body.innerHTML = '';
+    INSTALLED.version = '0.36.0';
+    const old = await mountView('dmtr-dev-eu-west-3');
+    expect(old.find('[data-test="defaults"]').text()).toContain('upgrade the router to 0.37.0');
+    expect(old.find('[data-test="edit-defaults"]').exists()).toBe(false);
+    old.unmount();
+    document.body.innerHTML = '';
+    INSTALLED.version = '0.25.0';
+    HIBERNATION.settings = { hibernate: null, by: null, at: null };
+    HIBERNATION.managerSettings = { url: 's3://b/settings.json', hibernate: true, readAt: minutesAgo(3), error: null };
   });
 });

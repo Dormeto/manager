@@ -1,3 +1,4 @@
+import type { Defaults } from './defaults';
 // Shapes returned by the manager API (router controller actions).
 export interface Settings {
   waitSeconds: number;
@@ -45,8 +46,8 @@ export interface Hibernation {
 }
 // What a router last read of the manager's settings (url null: it reads none).
 // `joinMinutes` (joined windows): router 0.36.0 and later, null when the organization sets none.
-export interface ManagerSettings { url: string | null; hibernate: boolean | null; joinMinutes?: number | null; readAt: string | null; error: string | null }
-export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | null; endedWindowDays?: number | null; updatedAt: string | null; updatedBy: string | null; error?: string }
+export interface ManagerSettings { url: string | null; hibernate: boolean | null; joinMinutes?: number | null; defaults?: Defaults; types?: { name: string }[]; readAt: string | null; error: string | null }
+export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | null; endedWindowDays?: number | null; defaults?: Defaults; updatedAt: string | null; updatedBy: string | null; error?: string }
 
 export interface WorkloadSummary {
   router: string;
@@ -303,7 +304,7 @@ export interface RouterDetails {
     metrics: Configured<boolean | null>;
   };
   pauses: Pause[];
-  settings?: { hibernate: boolean | null; joinMinutes?: number | null; by: string | null; at: string | null }; // routers 0.32.0 and later, joinMinutes 0.36.0
+  settings?: { hibernate: boolean | null; joinMinutes?: number | null; defaults?: Defaults; by: string | null; at: string | null }; // routers 0.32.0 and later, joinMinutes 0.36.0, defaults 0.37.0
   description?: DescriptionInfo | null; // manager 0.19.0: null when none, absent when it could not be read
   managerSettings?: ManagerSettings;
   workloads: { total: number; byState: Record<string, number>; paused: number; lastActivityAt: string | null };
