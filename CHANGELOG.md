@@ -20,6 +20,18 @@ The API answers a refusal it had no status for with 400, 404 or 409 instead of 5
 A workload onboarded from the manager shows in the Workloads view as soon as its onboarding ends, instead of at its
 router's next check (routers 0.37.0 and later).
 
+Workload settings at scale (routers 0.37.0): a workload's idle window, hold, drain, wake timeout, held requests, retry after a
+failed wake and wake mode each come from the first level that sets them: the workload, its type, its router, the organization,
+then the built-in value. Its no-wake and wake rules add up across the levels, the organization's first. A type is built in
+(EC2 instance, Auto Scaling group, ECS, Kubernetes, or databases for a workload with RDS or Aurora, whose wake timeout is 30
+minutes) or one of the organization's, picked on the workload or by its tags. The Routers page sets the organization's
+defaults (Workload defaults, Settings) and the types (Workload types), a router's page its own, and a manager workload's page
+its own and its type; each value says where it comes from, and a dialog says how many workloads follow a level before it is
+saved. The idle window advisor's recommendation applies in one click. The Onboard dialog leaves the idle window and the wake
+mode to the levels unless set. A workload written by Terraform keeps what its module sets: the module's settings are null by
+default from router 0.37.0, which then follows the levels. No default is set at the upgrade, so no workload changes, but a
+workload with databases whose configuration leaves its wake timeout to the levels waits up to 30 minutes instead of 10.
+
 ## 0.21.0 — 2026-11-03
 
 Router 0.36.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

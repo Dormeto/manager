@@ -25,6 +25,12 @@ organization's `joinMinutes` (`GET /api/settings/workloads`), the built-in roles
 (`PUT /api/settings/workloads`, `PUT /api/routers/{router}/settings`, each write keeping what it does not send). A workload's is on
 its schedule (`joinMinutes`, written with the schedule by whoever may both wake and nap it), and its settings route refuses one.
 
+**Workload settings at scale** (routers 0.37.0) follow the same rights: every signed-in user reads the organization's
+defaults (`GET /api/settings/workloads`) and the workload types (`GET /api/settings/types`); administrators set them (`PUT`
+on both) and a router's (`PUT /api/routers/{router}/settings` with `defaults`), and read what a level reaches
+(`GET /api/settings/reach`); operators and administrators set a manager workload's own settings and type (`PUT
+/api/workloads/{router}/{id}/settings`). A Terraform workload's are set in its `workload` module.
+
 The **waiting page** (routers 0.35.0) is read at the organization (`/api/settings/waiting-page`, by every signed-in user, as
 the Hibernate default is), the router (`/api/routers/{router}/waiting-page`, by the built-in roles) and the workload
 (`/api/workloads/{router}/{id}/waiting-page`) level; a member reads a workload's page when their groups' grants read that
