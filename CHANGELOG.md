@@ -10,7 +10,8 @@ CLI script, of the same release).
 The Overview's Savings card shows the last 30 days, this month and since the start as three figures, each over a few words,
 without the hours asleep. The energy card says in one sentence how many workloads its estimate comes from; the method is in
 the tooltip of an icon beside it. The Workloads page's figures read "saved in 30 days" and "a month", as does a workload's
-monthly figure. A new window's Workload field shows each workload's service icons before its name.
+monthly figure. A new window's Workload field shows each workload's service icons before its name. Every amount has three
+significant digits, thousands as K and millions as M ($73.8, $951, $2.71K; an hourly price $0.0819).
 
 ## 0.21.0 — 2026-11-03
 

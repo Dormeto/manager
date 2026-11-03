@@ -8,7 +8,7 @@ import HibernateDialog from '../components/HibernateDialog.vue';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendArn, backendKinds, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, usdHourly, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
+import { backendArn, backendKinds, backendLabel, backendService, duration, listSourceHref, targetInfo, usd, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText } from '../format';
 import { equivalents, rounded } from '../energy';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
@@ -216,7 +216,7 @@ function costRows(b: Backend): { label: string; value: string }[] {
   if (!cost) return [{ label: 'Cost', value: 'known from its next nap (router 0.27.0 or later)' }];
   const shared = cost.shared > 1 ? ` (its ${cost.shared} backends of this kind together)` : '';
   return [
-    ...(cost.hourly === null ? [] : [{ label: 'Base cost', value: `${usdHourly(cost.hourly)} an hour · ${usd(cost.monthly!)} a month${shared}` }]),
+    ...(cost.hourly === null ? [] : [{ label: 'Base cost', value: `${usd(cost.hourly)} an hour · ${usd(cost.monthly!)} a month${shared}` }]),
     ...(cost.savedMonthly === null ? [] : [{ label: 'Saved', value: `about ${usd(cost.savedMonthly)} a month at the last 30 days' rate` }]),
     ...(cost.unpriced.length ? [{ label: 'Not priced', value: cost.unpriced.join(', ') }] : []),
   ];
@@ -460,7 +460,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
               <div class="dm-figure__label">a month</div>
             </div>
             <div v-if="typeof savings.hourly === 'number'" class="dm-figure">
-              <div class="dm-figure__value">{{ usdHourly(hourlyUp) }}</div>
+              <div class="dm-figure__value">{{ usd(hourlyUp) }}</div>
               <div class="dm-figure__label">base cost an hour</div>
             </div>
           </div>

@@ -31,12 +31,12 @@ describe('IdleWindowCard', () => {
   it('says the recommendation and shows every window, the current and the recommended marked', async () => {
     const wrapper = await mountCard(ADVICE);
     expect(vi.mocked(api)).toHaveBeenCalledWith('/workloads/dmt-dev/demo/idle-window');
-    expect(wrapper.text()).toContain('Recommended: 10 minutes, saves about $4.00 a month more than now, with 2 more wakes a day (about 25 seconds each)');
+    expect(wrapper.text()).toContain('Recommended: 10 minutes, saves about $4 a month more than now, with 2 more wakes a day (about 25 seconds each)');
     const rows = wrapper.findAll('[data-test="idle-row"]');
     expect(rows).toHaveLength(9);
     expect(rows[2]!.text()).toContain('current');
     expect(rows[1]!.text()).toContain('recommended');
-    expect(rows[0]!.text()).toContain('$40.00');
+    expect(rows[0]!.text()).toContain('$40');
     // A bar per measure, each against its own column's largest value.
     expect(rows[0]!.findAll('[data-test="idle-bar"]')).toHaveLength(2);
     expect(wrapper.text()).toContain('idle_minutes');

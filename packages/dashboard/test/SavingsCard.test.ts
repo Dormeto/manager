@@ -42,7 +42,7 @@ describe('SavingsCard', () => {
     const text = wrapper.text();
     // Each a figure over a few plain words, not a line of them (the user, 2026-11-03); no hours asleep.
     expect(wrapper.findAll('[data-test="savings-figure"]').map((f) => f.findAll('div').map((d) => d.text())))
-      .toEqual([['$15.75', 'last 30 days'], ['$4.25', 'this month'], ['$15.75', 'since Sep 8']]);
+      .toEqual([['$15.8', 'last 30 days'], ['$4.25', 'this month'], ['$15.8', 'since Sep 8']]);
     expect(text).not.toContain('hours asleep');
     expect(text).not.toContain('·');
     expect(text).toContain('Dormeto costs about $5.78 a month');
@@ -71,7 +71,7 @@ describe('SavingsCard', () => {
     const recent = { ...SUMMARY, last30: { ...SUMMARY.last30, usd: 1.5 }, cumulative: { usd: 1.5, since: '2026-10-05', lastDay: '2026-10-07' } };
     const wrapper = await mountCard({ summary: recent });
     // 3 days computed: $5.78 × 3 / 30 = $0.58 of Dormeto's cost.
-    expect(wrapper.text()).toContain('net about $0.92 over the 3 days computed');
+    expect(wrapper.text()).toContain('net about $0.922 over the 3 days computed');
     wrapper.unmount();
   });
 

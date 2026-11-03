@@ -165,8 +165,8 @@ const ROUTES: Record<string, { label: string; color: string }> = {
 export const routeLabel = (route: string): string => ROUTES[route]?.label ?? route;
 export const routeColor = (route: string): string => ROUTES[route]?.color ?? 'grey';
 
-// An amount in US dollars (the estimates use AWS's USD list prices).
-export const usd = (v: number): string => v.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-// An hourly price: four decimals ($0.0046).
-export const usdHourly = (v: number): string => v.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 });
+// An amount in US dollars (the estimates use AWS's USD list prices): three significant digits, no useless decimal,
+// thousands as K and millions as M ($73.8, $951, $2.71K; an hourly price $0.0046), the user, 2026-11-03.
+const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumSignificantDigits: 3 });
+export const usd = (v: number): string => USD.format(v);
 

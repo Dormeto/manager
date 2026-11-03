@@ -7,7 +7,7 @@
 import { computed } from 'vue';
 import { idleText } from '../discovery';
 import { MONTH_HOURS, discountText, type BarSavings } from '../costs';
-import { longDuration, stateColor, usd, usdHourly } from '../format';
+import { longDuration, stateColor, usd } from '../format';
 import { stateLabel } from '../history';
 import { stateBrief } from '../state';
 
@@ -61,7 +61,7 @@ const title = computed(() => (rows.value.length
 const label = computed(() => `${props.title}: ${rows.value.length ? rows.value.map((r) => `${stateLabel(r.state).toLowerCase()} ${r.share}`).join(', ') : 'no history yet'}`);
 const base = computed(() => {
   const h = props.savings?.hourly;
-  return typeof h === 'number' ? `Base cost of what the naps stop: ${usdHourly(h)} an hour · ${usd(h * MONTH_HOURS)} a month` : null;
+  return typeof h === 'number' ? `Base cost of what the naps stop: ${usd(h)} an hour · ${usd(h * MONTH_HOURS)} a month` : null;
 });
 const saved = computed(() => {
   const s = props.savings?.saved;

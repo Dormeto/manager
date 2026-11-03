@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { attentionMore, backendArn, backendHelp, backendKinds, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor } from '../src/format';
+import { attentionMore, backendArn, backendHelp, backendKinds, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor, usd } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -72,6 +72,15 @@ describe('route', () => {
     expect(routeLabel('mixed')).toBe('mixed: the rules disagree (repaired at the next idle check)');
     expect(routeLabel('unknown')).toBe('unknown: a rule is missing or changed');
     expect([routeColor('app'), routeColor('waker'), routeColor('mixed')]).toEqual(['success', 'info', 'warning']);
+  });
+});
+
+describe('usd', () => {
+  it('keeps three significant digits, without useless decimals, thousands as K (the user, 2026-11-03)', () => {
+    expect([73.82, 2707.25, 950.58, 25.4].map((v) => usd(v))).toEqual(['$73.8', '$2.71K', '$951', '$25.4']);
+  });
+  it('rounds before it picks the unit, keeps an hourly price\'s digits and the sign', () => {
+    expect([999.6, 12_345, 1_234_567, 0, 0.017, 0.0046, 5.78, -945.26].map((v) => usd(v))).toEqual(['$1K', '$12.3K', '$1.23M', '$0', '$0.017', '$0.0046', '$5.78', '-$945']);
   });
 });
 

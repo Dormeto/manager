@@ -69,7 +69,7 @@ describe('Workload view', () => {
       return [...document.querySelectorAll('.v-tooltip .resource')].map((t) => t.textContent).join(' | ');
     };
     const [, database] = wrapper.findAll('[data-test="backend"]');
-    expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS.*Base cost\$0\.0170 an hour · \$12\.41 a month.*Savedabout \$11\.17 a month/);
+    expect(await tip(database!)).toMatch(/Idshop-db.*ARNarn:aws:rds:eu-west-3:111122223333:db:shop-db.*ServiceAmazon RDS.*Base cost\$0\.017 an hour · \$12\.4 a month.*Savedabout \$11\.2 a month/);
     // R9.5: Spot at Spot prices; no discount set, none said.
     expect(document.body.textContent).toContain('Spot at Spot prices');
     expect(document.body.textContent).not.toContain('after discounts');

@@ -80,14 +80,14 @@ describe('HistoryCard', () => {
   it('estimates the period\'s savings when the history has them (R9)', async () => {
     vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0.957, hours: 21, items: [{ item: { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' }, hourly: 0.0456, hours: 21, usd: 0.957 }], unpriced: [], baseline: { kind: 'always' } } });
     const wrapper = await mountCard();
-    expect(wrapper.text()).toContain('saved about $0.96 (estimate)');
+    expect(wrapper.text()).toContain('saved about $0.957 (estimate)');
     wrapper.unmount();
   });
 
   it('says the period\'s savings are after discounts when some are set (R9.5)', async () => {
     vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0.766, hours: 21, items: [{ item: { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' }, hourly: 0.0365, hours: 21, usd: 0.766 }], unpriced: [], baseline: { kind: 'always' }, discounts: { compute: 20, databases: 30 } } });
     const wrapper = await mountCard();
-    expect(wrapper.text()).toContain('saved about $0.77 (estimate, after discounts)');
+    expect(wrapper.text()).toContain('saved about $0.766 (estimate, after discounts)');
     wrapper.unmount();
   });
 
@@ -95,7 +95,7 @@ describe('HistoryCard', () => {
     vi.mocked(api).mockResolvedValueOnce({ ...structuredClone(history), savings: { usd: 0, hours: 21, items: [], unpriced: [{ reason: 'not described (a router before 0.27.0)', hours: 21 }], baseline: { kind: 'always' } } });
     const wrapper = await mountCard();
     expect(wrapper.text()).toContain('savings not priced yet');
-    expect(wrapper.text()).not.toContain('$0.00');
+    expect(wrapper.text()).not.toMatch(/\$0(?![.\d])/);
     wrapper.unmount();
   });
 

@@ -54,9 +54,9 @@ describe('StateBar', () => {
     const savings = { saved: { usd: 3.2, hours: 600, unpricedHours: 20 }, monthly: 11.169, hourly: 0.017 };
     const wrapper = render({ states: STATES, savings });
     const text = await hover(wrapper);
-    expect(text).toContain('Base cost of what the naps stop: $0.0170 an hour · $12.41 a month');
-    expect(text).toContain('Saved in the last 30 days: about $3.20, part not priced');
-    expect(text).toContain('Estimated saving: about $11.17 a month at that rate');
+    expect(text).toContain('Base cost of what the naps stop: $0.017 an hour · $12.4 a month');
+    expect(text).toContain('Saved in the last 30 days: about $3.2, part not priced');
+    expect(text).toContain('Estimated saving: about $11.2 a month at that rate');
     wrapper.unmount();
     const unpriced = render({ states: STATES, savings: { saved: { usd: 0, hours: 720, unpricedHours: 720 }, monthly: null, hourly: null } });
     const other = await hover(unpriced);
