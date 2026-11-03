@@ -13,6 +13,10 @@ the tooltip of an icon beside it. The Workloads page's figures read "saved in 30
 monthly figure. A new window's Workload field shows each workload's service icons before its name. Every amount has three
 significant digits, thousands as K and millions as M ($73.8, $951, $2.71K; an hourly price $0.0819).
 
+A router's refusal (renaming a workload Terraform wrote, a workload offboarded meanwhile, a bad name, tags or pause) no
+longer counts as a Lambda error in its health with routers 0.37.0 and later: the manager asks for refusals as answers.
+The API answers a refusal it had no status for with 400, 404 or 409 instead of 502.
+
 ## 0.21.0 — 2026-11-03
 
 Router 0.36.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

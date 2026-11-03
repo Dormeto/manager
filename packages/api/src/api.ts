@@ -115,8 +115,34 @@ export interface DiscoveryApi {
   run(by: string): Promise<void>;
 }
 
-// A router answered with an error (function error, unknown workload): 502 for the caller.
-export class RouterError extends Error {}
+// A router answered with an error (function error, unknown workload): 502 for the caller. A refusal of a router 0.37.0
+// or later has its code (vision refusals design §1): invalid, not_found, conflict or unsupported.
+export type RefusalCode = 'invalid' | 'not_found' | 'conflict' | 'unsupported';
+export class RouterError extends Error {
+  constructor(message: string, readonly code?: RefusalCode) {
+    super(message);
+  }
+}
+// What each refusal is for the caller; unsupported stays a router error (the routes that know the action say "upgrade").
+const REFUSALS: Partial<Record<RefusalCode, [number, string]>> = { invalid: [400, 'bad_request'], not_found: [404, 'not_found'], conflict: [409, 'conflict'] };
+
+// The calls of a router's controller: a synchronous one asks for refusals as answers (no Lambda error for the router's
+// health) and reads one back as a RouterError with its code; a thrown error (a router before 0.37.0, a failure) is one
+// without. An asynchronous call is sent as it is: nothing reads its answer, and a refusal there stays an error.
+export type ControllerSend = (router: Router, input: { FunctionName: string; InvocationType: 'Event' | 'RequestResponse'; Payload: Uint8Array })
+  => Promise<{ Payload?: Uint8Array; FunctionError?: string }>;
+export function routerInvoker(send: ControllerSend): Invoke {
+  return async (router, payload, options = {}) => {
+    const body = options.async ? payload : { ...payload, refusals: true };
+    const out = await send(router, { FunctionName: router.controller, InvocationType: options.async ? 'Event' : 'RequestResponse', Payload: new Uint8Array(Buffer.from(JSON.stringify(body))) });
+    if (options.async) return null;
+    const answer = JSON.parse(out.Payload?.length ? Buffer.from(out.Payload).toString('utf8') : 'null');
+    if (out.FunctionError) throw new RouterError((answer as { errorMessage?: string } | null)?.errorMessage ?? out.FunctionError);
+    const refused = (answer as { refused?: { code?: RefusalCode; message?: string } } | null)?.refused;
+    if (refused) throw new RouterError(refused.message ?? 'refused', refused.code);
+    return answer;
+  };
+}
 
 // A request the API refuses: status code and machine-readable error.
 export class HttpError extends Error {
@@ -2346,7 +2372,10 @@ export function createApi({
       return await route(method, parts, identity, event);
     } catch (err) {
       if (err instanceof HttpError) return reply(err.statusCode, { error: err.code, message: err.message });
-      if (err instanceof RouterError) return reply(502, { error: 'router_error', message: err.message });
+      if (err instanceof RouterError) {
+        const [status, code] = (err.code && REFUSALS[err.code]) || [502, 'router_error'];
+        return reply(status, { error: code, message: err.message });
+      }
       console.error(JSON.stringify({ level: 'error', event: 'ApiError', error: (err as Error).message }));
       return reply(500, { error: 'internal', message: 'internal error' });
     }

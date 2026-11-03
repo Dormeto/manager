@@ -113,6 +113,20 @@ export function kubeProxyPorts(credentials: Credentials, region: string): KubePr
   });
 }
 
+// A synchronous call of a router's function (controller or onboarder): refusals asked as answers (routers 0.37.0 and
+// later: no Lambda error for the router's health, vision refusals design §1) and thrown back as errors with their message
+// and code, as a function error is (a router before 0.37.0 throws its refusals).
+export function functionInvoker(send: (input: { FunctionName: string; Payload: Uint8Array }) => Promise<{ Payload?: Uint8Array; FunctionError?: string }>) {
+  return async (functionArn: string, payload: Record<string, unknown>): Promise<any> => {
+    const out = await send({ FunctionName: functionArn, Payload: new Uint8Array(Buffer.from(JSON.stringify({ ...payload, refusals: true }))) });
+    const answer = JSON.parse(out.Payload?.length ? Buffer.from(out.Payload).toString('utf8') : 'null');
+    if (out.FunctionError) throw new Error((answer as { errorMessage?: string } | null)?.errorMessage ?? out.FunctionError);
+    const refused = (answer as { refused?: { code?: string; message?: string } } | null)?.refused;
+    if (refused) throw Object.assign(new Error(refused.message ?? 'refused'), { code: refused.code });
+    return answer;
+  };
+}
+
 // DmtCommandRole of the target account; credentials cached until 5 minutes before they expire.
 export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; roleName: string; sessionName: string }) {
   const cache = new Map<string, Credentials>();
@@ -133,12 +147,7 @@ export function createTargets({ sts, roleName, sessionName }: { sts: STSClient; 
       // Made when a step asks for them (the cluster steps only).
       get kubeProxies() { return kubeProxyPorts(credentials, region); },
       installer: (options) => createInstaller(installerPorts(credentials, region), options),
-      async invoke(functionArn, payload) {
-        const out = await lambda.send(new InvokeCommand({ FunctionName: functionArn, Payload: Buffer.from(JSON.stringify(payload)) }));
-        const text = out.Payload ? Buffer.from(out.Payload).toString('utf8') : 'null';
-        if (out.FunctionError) throw new Error((JSON.parse(text) as { errorMessage?: string }).errorMessage ?? out.FunctionError);
-        return JSON.parse(text);
-      },
+      invoke: functionInvoker((input) => lambda.send(new InvokeCommand(input))),
     };
   };
 }

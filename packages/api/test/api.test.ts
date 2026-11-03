@@ -102,6 +102,14 @@ describe('workloads', () => {
     expect(res.statusCode).toBe(502);
     expect(json(res)).toEqual({ error: 'router_error', message: 'workload not configured: demo' });
   });
+
+  it('maps a router\'s refusal by its code: invalid 400, not found 404, conflict 409; unsupported stays 502 (refusals design §1)', async () => {
+    for (const [code, status, error] of [['invalid', 400, 'bad_request'], ['not_found', 404, 'not_found'], ['conflict', 409, 'conflict'], ['unsupported', 502, 'router_error']] as const) {
+      const { api } = setup(async () => { throw new RouterError('the router refuses', code); });
+      const res = await api(event('GET', '/api/workloads/dmt-dev/demo'));
+      expect([res.statusCode, json(res)], code).toEqual([status, { error, message: 'the router refuses' }]);
+    }
+  });
 });
 
 describe('actions', () => {

@@ -19,7 +19,7 @@ import { createFleetStore, createPriceBook } from '@dormeto/fleet';
 import { createSpotPort } from './spot.js';
 import { baselineOf } from './baseline.js';
 import { createEngine, createRecords } from '@dormeto/operations';
-import { createApi, RouterError, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
+import { createApi, routerInvoker, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
 import { readJson, writeJson } from './s3-json.js';
@@ -36,20 +36,8 @@ const lambdaFor = (region: string) => {
   return lambdas.get(region)!;
 };
 
-async function invoke(router: Router, payload: Record<string, unknown>, options: { async?: boolean } = {}) {
-  const out = await lambdaFor(router.region).send(new InvokeCommand({
-    FunctionName: router.controller,
-    InvocationType: options.async ? 'Event' : 'RequestResponse',
-    Payload: Buffer.from(JSON.stringify(payload)),
-  }));
-  if (options.async) return null;
-  const text = out.Payload ? Buffer.from(out.Payload).toString('utf8') : 'null';
-  if (out.FunctionError) {
-    const { errorMessage } = JSON.parse(text) as { errorMessage?: string };
-    throw new RouterError(errorMessage ?? out.FunctionError);
-  }
-  return JSON.parse(text);
-}
+// The router's controller, in the router's region (refusals as answers: api.ts routerInvoker).
+const invoke = routerInvoker((router, input) => lambdaFor(router.region).send(new InvokeCommand(input)));
 
 const dynamo = new DynamoDBClient({});
 const audit = {
