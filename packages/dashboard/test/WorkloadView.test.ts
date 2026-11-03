@@ -8,6 +8,7 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import IdleWindowCard from '../src/components/IdleWindowCard.vue';
+import WorkloadSettingsDialog from '../src/components/WorkloadSettingsDialog.vue';
 import DescriptionCard from '../src/components/DescriptionCard.vue';
 import ScheduleDialog from '../src/components/ScheduleDialog.vue';
 import { useSession } from '../src/stores/session';
@@ -170,7 +171,8 @@ describe('Workload view', () => {
     const wrapper = await mountView();
     const card = wrapper.findComponent(IdleWindowCard);
     expect(card.exists()).toBe(true);
-    expect(card.props()).toEqual({ router: 'dmtr-dev', id: '5cdfbf844b925bf8' });
+    // A Terraform workload (the fixture's router names no source: an older one) is not applied from here.
+    expect(card.props()).toEqual({ router: 'dmtr-dev', id: '5cdfbf844b925bf8', source: undefined, canApply: false });
     wrapper.unmount();
   });
 
@@ -805,5 +807,84 @@ describe('Workload view', () => {
       expect(vi.mocked(api).mock.calls.some(([path]) => path === '/workloads/dmtr-dev/5cdfbf844b925bf8/waiting-page')).toBe(true);
       w.unmount();
     });
+  });
+});
+
+
+// Settings at scale (vision design §9): each setting with its source, edited per field, the advisor's window in one click.
+describe('a workload\'s settings at scale (routers 0.37.0)', () => {
+  const scaled = {
+    ...status, source: 'manager', router: { version: '0.37.0', build: 'b' },
+    settings: { ...status.settings, failedRetrySeconds: 60 },
+    settingsFrom: { idleMinutes: 'workload', waitSeconds: 'type', drainSeconds: 'router', wakeTimeoutSeconds: 'default', maxHolders: 'organization', failedRetrySeconds: 'default', wakeMode: 'default' },
+    type: { name: 'api', from: 'tags' },
+    noWakeRules: [{ name: 'health', level: 'organization', conditions: { pathPrefixes: ['/health'] } }, { name: 'own', level: 'workload', conditions: { pathPrefixes: ['/x'] } }],
+    wakeRules: [{ name: 'key', level: 'wake', from: 'type', conditions: { headers: [{ name: 'x-api-key', pattern: '.+' }] } }],
+  };
+
+  it('shows each setting with where it comes from, the type, and each rule\'s level', async () => {
+    current = scaled;
+    const wrapper = await mountView('operator');
+    expect(wrapper.findAll('[data-test="setting-source"]').map((c) => c.text())).toEqual(['set on this workload', 'type api', 'router', 'built-in', 'organization', 'built-in']);
+    expect(wrapper.find('[data-test="workload-type"]').text()).toBe('Type api, from its tags');
+    expect(wrapper.findAll('[data-test="rule-level"]').map((c) => c.text())).toEqual(['no-wake · organization', 'no-wake · workload', 'wake · type']);
+    expect(wrapper.find('[data-test="edit-settings"]').exists()).toBe(true);
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('shows an older router\'s values without sources, and offers no edit', async () => {
+    current = { ...status, source: 'manager' };
+    const wrapper = await mountView('operator');
+    expect(wrapper.findAll('[data-test="setting-source"]')).toHaveLength(0);
+    expect(wrapper.find('[data-test="workload-type"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="edit-settings"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('Idle window 30 min');
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('saves the keys the dialog changed, then reads the workload again', async () => {
+    current = scaled;
+    const wrapper = await mountView('operator');
+    vi.mocked(api).mockClear();
+    await wrapper.find('[data-test="edit-settings"]').trigger('click');
+    await flushPromises();
+    // Opening it reads the organization's types for its Type field.
+    expect(vi.mocked(api).mock.calls[0]![0]).toBe('/settings/types');
+    vi.mocked(api).mockClear();
+    wrapper.findComponent(WorkloadSettingsDialog).vm.$emit('submit', { waitSeconds: 20, idleMinutes: null });
+    await flushPromises();
+    expect(vi.mocked(api).mock.calls[0]).toEqual(['/workloads/dmtr-dev/5cdfbf844b925bf8/settings', { method: 'PUT', body: JSON.stringify({ waitSeconds: 20, idleMinutes: null }) }]);
+    expect(vi.mocked(api).mock.calls.length).toBeGreaterThan(1);
+    expect(wrapper.text()).toContain('Settings saved');
+    wrapper.unmount();
+    current = status;
+  });
+
+  it('a Terraform workload has no edit: its module sets them; a viewer has none either', async () => {
+    current = { ...scaled, source: 'terraform' };
+    const terraform = await mountView('admin');
+    expect(terraform.find('[data-test="edit-settings"]').exists()).toBe(false);
+    expect(terraform.text()).toContain('set them in its workload module');
+    terraform.unmount();
+    current = scaled;
+    const viewer = await mountView('viewer');
+    expect(viewer.find('[data-test="edit-settings"]').exists()).toBe(false);
+    viewer.unmount();
+    current = status;
+  });
+
+  it('applies the advisor\'s recommended window for an operator on a manager workload', async () => {
+    current = scaled;
+    const wrapper = await mountView('operator');
+    const card = wrapper.findComponent(IdleWindowCard);
+    expect(card.props()).toMatchObject({ source: 'manager', canApply: true });
+    vi.mocked(api).mockClear();
+    card.vm.$emit('apply', 10);
+    await flushPromises();
+    expect(vi.mocked(api).mock.calls[0]).toEqual(['/workloads/dmtr-dev/5cdfbf844b925bf8/settings', { method: 'PUT', body: JSON.stringify({ idleMinutes: 10 }) }]);
+    wrapper.unmount();
+    current = status;
   });
 });

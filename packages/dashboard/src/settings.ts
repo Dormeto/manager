@@ -1,6 +1,6 @@
 // Workload settings as shown on the workload view: value, what it changes, and the range it must stay in.
 import { duration } from './format';
-import type { Settings } from './types';
+import type { Rule, Settings, SettingsFrom, WorkloadStatus, WorkloadType } from './types';
 
 export interface SettingRow {
   key: keyof Settings;
@@ -8,6 +8,7 @@ export interface SettingRow {
   value: string;
   help: string;
   range: string;
+  from?: string; // the level it comes from (routers 0.37.0)
 }
 
 const DESCRIPTIONS: Record<keyof Settings, { label: string; format: (v: number) => string; help: string; range: string }> = {
@@ -41,11 +42,90 @@ const DESCRIPTIONS: Record<keyof Settings, { label: string; format: (v: number) 
     help: 'Most requests held at the same time. Each one keeps a waker Lambda running for up to the hold time; beyond this number, visitors get the waiting page at once.',
     range: 'From 1 to a share of the account Lambda concurrency quota, which all workloads share. Recommended: 50.',
   },
+  failedRetrySeconds: {
+    label: 'Retry after a failed wake',
+    format: (v) => `${v} s`,
+    help: 'After a failed wake, how long requests wait before they try again; the wait doubles after each failure in a row, at most 30 minutes. A wake from the manager does not wait.',
+    range: 'From 10 to 600 s. Recommended: 60 s.',
+  },
 };
 
-const ORDER: (keyof Settings)[] = ['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders'];
+const ORDER: (keyof Settings)[] = ['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders', 'failedRetrySeconds'];
+export const SETTING_KEYS = ORDER;
 
-export const settingRows = (settings: Settings): SettingRow[] => ORDER.map((key) => {
+// Each setting the router gives (an older one gives no retry), with the level it comes from when it says so.
+export const settingRows = (settings: Settings, from?: SettingsFrom): SettingRow[] => ORDER.filter((key) => typeof settings[key] === 'number').map((key) => {
   const d = DESCRIPTIONS[key];
-  return { key, label: d.label, value: d.format(settings[key]), help: d.help, range: d.range };
+  return { key, label: d.label, value: d.format(settings[key] as number), help: d.help, range: d.range, ...(from?.[key] ? { from: from[key] } : {}) };
 });
+
+// Where a setting comes from, in a few words (settings at scale design §9); nothing from an older router.
+export function sourceText(from: string | undefined, type?: Partial<WorkloadType>): string {
+  switch (from) {
+    case 'workload': return 'set on this workload';
+    case 'type': return `type ${type?.name ?? ''}`.trim();
+    case 'router': return 'router';
+    case 'organization': return 'organization';
+    case 'default': return 'built-in';
+    default: return '';
+  }
+}
+
+const TYPE_FROM: Record<string, string> = { workload: 'set on this workload', tags: 'from its tags', backends: 'from its backends' };
+// A workload's type and why: its own, its tags or its backends; a type it named that is gone.
+export function typeText(type: WorkloadType): string {
+  if (!type.name) return type.missing ? `none (its type ${type.missing} no longer exists)` : 'none';
+  return `${type.name}, ${TYPE_FROM[type.from ?? ''] ?? ''}${type.missing ? ` (its type ${type.missing} no longer exists)` : ''}`;
+}
+
+// The settings dialog's form: each setting the workload's own value or null (inherited), its wake mode and type alike,
+// its own rules as JSON.
+export interface SettingsForm {
+  idleMinutes: number | null; waitSeconds: number | null; drainSeconds: number | null; wakeTimeoutSeconds: number | null; maxHolders: number | null;
+  failedRetrySeconds: number | null; wakeMode: string | null; type: string | null; noWakeRules: string; wakeRules: string;
+}
+
+// A rule as the router takes it, from its description.
+const ruleOf = (rule: Rule) => ({ name: rule.name, ...rule.conditions });
+const rulesJson = (rules: Rule[]) => (rules.length ? JSON.stringify(rules.map(ruleOf), null, 2) : '[]');
+
+export function formOf(status: Pick<WorkloadStatus, 'settings' | 'wakeMode' | 'settingsFrom' | 'type' | 'noWakeRules' | 'wakeRules'>): SettingsForm {
+  const own = (key: keyof Settings) => (status.settingsFrom?.[key] === 'workload' ? (status.settings[key] ?? null) : null);
+  return {
+    idleMinutes: own('idleMinutes'), waitSeconds: own('waitSeconds'), drainSeconds: own('drainSeconds'), wakeTimeoutSeconds: own('wakeTimeoutSeconds'),
+    maxHolders: own('maxHolders'), failedRetrySeconds: own('failedRetrySeconds'),
+    wakeMode: status.settingsFrom?.wakeMode === 'workload' ? status.wakeMode : null,
+    type: status.type?.from === 'workload' ? status.type.name : null,
+    noWakeRules: rulesJson(status.noWakeRules.filter((r) => r.level === 'workload')),
+    wakeRules: rulesJson(status.wakeRules.filter((r) => r.from === 'workload')),
+  };
+}
+
+const RULE_LABELS = { noWakeRules: 'No-wake rules', wakeRules: 'Wake rules' } as const;
+// What the dialog sends: each key changed, null where an own value went back to the levels; the rules parsed (an empty
+// text or an empty list is none).
+export function settingsChanges(initial: SettingsForm, edited: SettingsForm): { changes: Record<string, unknown>; problem: string | null } {
+  const changes: Record<string, unknown> = {};
+  const value = (v: unknown) => (v === '' || v === null || v === undefined ? null : typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v);
+  for (const key of [...ORDER, 'wakeMode', 'type'] as const) {
+    const next = value(edited[key]);
+    if (next !== value(initial[key])) changes[key] = next;
+  }
+  for (const key of ['noWakeRules', 'wakeRules'] as const) {
+    const text = edited[key].trim();
+    if (text === initial[key].trim()) continue;
+    if (!text) {
+      changes[key] = null;
+      continue;
+    }
+    let rules: unknown;
+    try {
+      rules = JSON.parse(text);
+    } catch (err) {
+      return { changes, problem: `${RULE_LABELS[key]}: ${(err as Error).message}` };
+    }
+    if (!Array.isArray(rules)) return { changes, problem: `${RULE_LABELS[key]}: a JSON list of rules` };
+    changes[key] = rules.length ? rules : null;
+  }
+  return { changes, problem: null };
+}

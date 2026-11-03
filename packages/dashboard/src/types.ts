@@ -5,7 +5,13 @@ export interface Settings {
   drainSeconds: number;
   wakeTimeoutSeconds: number;
   maxHolders: number;
+  failedRetrySeconds?: number; // routers 0.37.0 and later
 }
+
+// Settings at scale (routers 0.37.0): the level each setting comes from, and the workload's type.
+export type Level = 'workload' | 'type' | 'router' | 'organization' | 'default';
+export type SettingsFrom = Partial<Record<keyof Settings | 'wakeMode', Level>>;
+export interface WorkloadType { name: string | null; from: 'workload' | 'tags' | 'backends' | null; missing?: string }
 
 // A pause of a workload or of its router (router management); exclusionId when a manual exclusion paused it.
 export interface Pause {
@@ -145,6 +151,7 @@ export interface Rule {
   level: string;
   conditions: Record<string, unknown>;
   invalid?: string;
+  from?: string; // a wake rule's level (routers 0.37.0)
 }
 
 export interface WorkloadStatus {
@@ -202,6 +209,8 @@ export interface WorkloadStatus {
   wakeMode: string;
   wakeRules: Rule[];
   noWakeRules: Rule[];
+  settingsFrom?: SettingsFrom; // routers 0.37.0 and later
+  type?: WorkloadType;
 }
 
 export interface Problem {

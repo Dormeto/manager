@@ -19,10 +19,10 @@ const answer: { value: unknown; fail?: string } = { value: ADVICE };
 vi.mock('../src/api', () => ({ api: vi.fn(async () => { if (answer.fail) throw new Error(answer.fail); return answer.value; }) }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
-async function mountCard(value: unknown, fail?: string) {
+async function mountCard(value: unknown, fail?: string, props: Record<string, unknown> = {}) {
   answer.value = value;
   answer.fail = fail;
-  const wrapper = mount(IdleWindowCard, { props: { router: 'dmt-dev', id: 'demo' }, global: { plugins: [createVuetify({ components, directives })] } });
+  const wrapper = mount(IdleWindowCard, { props: { router: 'dmt-dev', id: 'demo', ...props }, global: { plugins: [createVuetify({ components, directives })] } });
   await flushPromises();
   return wrapper;
 }
@@ -39,7 +39,7 @@ describe('IdleWindowCard', () => {
     expect(rows[0]!.text()).toContain('$40');
     // A bar per measure, each against its own column's largest value.
     expect(rows[0]!.findAll('[data-test="idle-bar"]')).toHaveLength(2);
-    expect(wrapper.text()).toContain('idle_minutes');
+    expect(wrapper.find('[data-test="use-window"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('requests the waker ignores');
   });
 
@@ -67,5 +67,23 @@ describe('IdleWindowCard', () => {
   it('says why when the advice cannot be computed', async () => {
     const wrapper = await mountCard(null, 'discovery is busy (a discovery run uses its capacity): try again in a few minutes');
     expect(wrapper.text()).toContain('try again in a few minutes');
+  });
+
+  // Settings at scale (vision design §8): the recommendation one click away for an operator on a manager workload.
+  it('offers to use the recommended window where it can be applied, says where to change it otherwise', async () => {
+    const applied = await mountCard(ADVICE, undefined, { source: 'manager', canApply: true });
+    const use = applied.find('[data-test="use-window"]');
+    expect(use.text()).toBe('Use 10 minutes');
+    await use.trigger('click');
+    expect(applied.emitted('apply')).toEqual([[10]]);
+    applied.unmount();
+    const terraform = await mountCard(ADVICE, undefined, { source: 'terraform', canApply: false });
+    expect(terraform.find('[data-test="use-window"]').exists()).toBe(false);
+    expect(terraform.text()).toContain('To change it: idle_minutes in the workload\'s Terraform module.');
+    terraform.unmount();
+    const viewer = await mountCard(ADVICE, undefined, { source: 'manager', canApply: false });
+    expect(viewer.find('[data-test="use-window"]').exists()).toBe(false);
+    expect(viewer.text()).toContain('An operator can apply it from here.');
+    viewer.unmount();
   });
 });

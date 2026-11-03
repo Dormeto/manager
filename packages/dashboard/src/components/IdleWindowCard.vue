@@ -10,7 +10,9 @@ import { mdiLightbulbOnOutline } from '@mdi/js';
 import DmLoader from './DmLoader.vue';
 import type { IdleWindowAdvice, IdleWindowRow } from '../types';
 
-const props = defineProps<{ router: string; id: string }>();
+// source and canApply (settings at scale design §8): the recommendation one click away for an operator on a manager workload.
+const props = defineProps<{ router: string; id: string; source?: 'terraform' | 'manager'; canApply?: boolean }>();
+const emit = defineEmits<{ apply: [minutes: number] }>();
 const advice = ref<IdleWindowAdvice | null>(null);
 const error = ref('');
 const loading = ref(true);
@@ -85,13 +87,17 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
             </tbody>
           </v-table>
         </div>
+        <div v-if="canApply && source === 'manager' && advice.recommended !== advice.current" class="d-flex mt-3">
+          <v-btn data-test="use-window" color="primary" variant="tonal" size="small" @click="emit('apply', advice.recommended)">Use {{ advice.recommended }} minutes</v-btn>
+        </div>
         <div class="dm-idle__notes text-body-small text-medium-emphasis mt-3">
           <span v-if="quiet">No request in 14 days: the workload sleeps whatever the window.</span>
           <span v-if="advice.actual.noisy">The replay counts {{ advice.actual.replayedWakes }} wakes over the 14 days for {{ advice.actual.wakes }} that happened: requests the waker ignores (scanners, no-wake rules, IP lists) count here as wakes, so real wakes are fewer.</span>
           <span v-if="advice.wakeSeconds === null">No wake measured yet: the visitors' wait is unknown.</span>
           <span v-if="!advice.wakerTargetGroup">The waker target group was not found: only the requests while awake are replayed.</span>
           <span v-if="!advice.priced">Nothing priced yet (no nap described, or an item without a price): hours asleep instead of dollars.</span>
-          <span>To change it: <code>idle_minutes</code> in the workload's Terraform module, or offboard the workload and onboard it again with the new window.</span>
+          <span v-if="source === 'terraform'">To change it: <code>idle_minutes</code> in the workload's Terraform module.</span>
+          <span v-else-if="!canApply && advice.recommended !== advice.current">An operator can apply it from here.</span>
           <span>Every request counts as activity and as a wake. Computed {{ when(advice.computedAt) }}, from the 14 days to {{ date(advice.to) }}.</span>
         </div>
       </template>

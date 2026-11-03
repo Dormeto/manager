@@ -2,9 +2,10 @@
 import { useNow } from '../now';
 import { computed, onMounted, ref } from 'vue';
 import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
-import { settingRows } from '../settings';
+import { settingRows, sourceText, typeText } from '../settings';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
+import WorkloadSettingsDialog from '../components/WorkloadSettingsDialog.vue';
 import { backendIcon } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
@@ -89,6 +90,35 @@ async function rename(name: string) {
 const hibernated = computed(() => status.value?.state === 'ASLEEP' && (status.value.hibernated === true || Boolean(status.value.hibernation?.instances?.some((i) => i.hibernated))));
 // Hibernation applies to standalone EC2 instances only (never Auto Scaling groups, ECS, Kubernetes or databases).
 const standalone = computed(() => Boolean(status.value?.backends.some((b) => b.kind === 'instance')));
+// Its own settings (settings at scale design §9): an operator's on a manager workload, from a router that says their sources.
+const settingsOpen = ref(false);
+const savingSettings = ref(false);
+const settingsError = ref('');
+const typeNames = ref<string[]>([]);
+const canEditSettings = computed(() => Boolean(session.canOperate && status.value?.source === 'manager' && status.value.settingsFrom));
+async function openSettings() {
+  settingsError.value = '';
+  const answer = await api<{ types?: { name: string }[]; builtIn?: string[] }>('/settings/types').catch(() => null);
+  const custom = (answer?.types ?? []).map((t) => t.name);
+  typeNames.value = [...new Set([...custom, ...(answer?.builtIn ?? ['instance', 'asg', 'ecs', 'k8s', 'databases'])])];
+  settingsOpen.value = true;
+}
+async function saveSettings(changes: Record<string, unknown>) {
+  savingSettings.value = true;
+  settingsError.value = '';
+  try {
+    await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify(changes) });
+    settingsOpen.value = false;
+    notice.value = { type: 'success', text: 'Settings saved: the router applies them at once, the idle window at its next check.' };
+    await run();
+  } catch (err) {
+    if (settingsOpen.value) settingsError.value = (err as Error).message;
+    else notice.value = { type: 'error', text: (err as Error).message };
+  } finally {
+    savingSettings.value = false;
+  }
+}
+
 async function setHibernate(hibernate: boolean | null) {
   savingHibernate.value = true;
   try {
@@ -484,7 +514,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <HistoryCard :router="router" :id="id" :now="now" />
       <RequestHeatmap :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
-      <IdleWindowCard :router="router" :id="id" />
+      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" @apply="saveSettings({ idleMinutes: $event })" />
     </div>
 
     <div class="dm-stack">
@@ -544,7 +574,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         <v-card-text>
           <div class="mb-3"><strong>Mode:</strong> {{ status.wakeMode === 'browser' ? 'browser (only the waiter page probe, the x-dormeto-wake header or a wake rule wakes)' : 'any request that passes the filters wakes' }}</div>
           <div v-for="r in [...status.noWakeRules, ...status.wakeRules]" :key="`${r.level}/${r.name}`" class="mb-2 text-body-medium">
-            <v-chip :color="r.level === 'wake' ? 'success' : 'secondary'" variant="tonal" label class="mr-2">{{ r.level === 'wake' ? 'wake' : `no-wake · ${r.level}` }}</v-chip>
+            <v-chip :color="r.level === 'wake' ? 'success' : 'secondary'" variant="tonal" label class="mr-2" data-test="rule-level">{{ r.level === 'wake' ? (r.from ? `wake · ${r.from}` : 'wake') : `no-wake · ${r.level}` }}</v-chip>
             <strong>{{ r.name }}</strong>: <span :class="{ 'text-error': r.invalid }">{{ r.invalid ? `invalid, ${r.invalid}` : ruleText(r.conditions) }}</span>
           </div>
           <div v-if="status.ipLists.length" class="mt-4">
@@ -565,10 +595,12 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card>
       <v-card title="Settings">
         <v-card-text class="d-flex flex-wrap align-center ga-2 text-body-medium">
-          <v-tooltip v-for="row in settingRows(status.settings)" :key="row.key" location="top" max-width="380" open-on-focus>
+          <v-tooltip v-for="row in settingRows(status.settings, status.settingsFrom)" :key="row.key" location="top" max-width="380" open-on-focus>
             <template #activator="{ props }">
               <span v-bind="props" class="setting dm-setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
-                {{ row.label }} <strong>{{ row.value }}</strong><v-icon :icon="mdiInformationOutline" size="x-small" class="ml-1 text-medium-emphasis" />
+                {{ row.label }} <strong>{{ row.value }}</strong>
+                <v-chip v-if="row.from" data-test="setting-source" size="x-small" label variant="tonal" :color="row.from === 'workload' ? 'primary' : undefined" class="ml-1">{{ sourceText(row.from, status.type) }}</v-chip>
+                <v-icon :icon="mdiInformationOutline" size="x-small" class="ml-1 text-medium-emphasis" />
               </span>
             </template>
             <div class="text-body-medium">{{ row.help }}</div>
@@ -576,6 +608,12 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           </v-tooltip>
           <v-spacer />
           <span class="text-medium-emphasis dm-version">Router {{ status.router.version }} ({{ status.router.build }})</span>
+        </v-card-text>
+        <v-card-text v-if="status.type || status.settingsFrom" class="pt-0 d-flex flex-wrap align-center ga-2 text-body-medium">
+          <span v-if="status.type" data-test="workload-type">Type <strong>{{ typeText(status.type) }}</strong></span>
+          <v-spacer />
+          <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set them in its workload module</span>
+          <v-btn v-else-if="canEditSettings" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="openSettings">Edit</v-btn>
         </v-card-text>
         <v-card-text v-if="status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
           Hibernate: <strong>does not apply</strong> (standalone EC2 instances only)
@@ -594,6 +632,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </div>
   </div>
 
+  <WorkloadSettingsDialog v-if="status?.settingsFrom" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
   <HibernateDialog v-if="status?.hibernation" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
   <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
