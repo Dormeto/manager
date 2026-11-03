@@ -652,3 +652,48 @@ describe('state history (R8)', () => {
     expect(await s.store.historyBefore(ACCOUNT, REGION, 'a', T1)).toBeNull();
   });
 });
+
+// A report after an onboarding (vision refusals design §2): one workload's row, written as a check writes its rows.
+describe('a workload listed (routers 0.37.0, after an onboarding)', () => {
+  const listed = (when: unknown, w: unknown, router: unknown = { name: 'dmtr-dev', region: REGION, version: '0.37.0', build: 'abc', checkSchedule: 'rate(5 minutes)' }): RouterEvent => ({
+    account: ACCOUNT, region: REGION, 'detail-type': 'Workload listed', detail: { router, at: when, workload: w },
+  });
+  const stateOf = async (s: ReturnType<typeof setup>, id: string) => (await s.store.getWorkload(ACCOUNT, REGION, id))?.state;
+
+  it('writes the workload at once with its first history entry; the router and its other workloads stay as they were', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a')]));
+    await s.ingest(listed(at(T1, 60), workload('new', 'AWAKE', { stateAt: at(T1, 30) })));
+    expect(await s.ids()).toEqual(['a', 'new']);
+    const fresh = (await s.store.getWorkload(ACCOUNT, REGION, 'new'))!;
+    expect([fresh.router, fresh.name, fresh.state, fresh.stateAt, fresh.checkedAt, fresh.targetGroupArn, fresh.historySince]).toEqual(['dmtr-dev', 'Name new', 'AWAKE', at(T1, 30), at(T1, 60), 'arn:tg/new', at(T1, 30)]);
+    expect((await s.store.listHistory(ACCOUNT, REGION, 'new', T1, T2)).entries.map((e) => [e.from, e.to, e.at, e.inferred])).toEqual([[null, 'AWAKE', at(T1, 30), true]]);
+    const [router] = await s.store.listRouters();
+    expect([router!.checkedAt, router!.version]).toEqual([T1, '0.21.0']);
+    // The next check lists it; one that does not removes it, as for any workload.
+    await s.ingest(checked(T2, [workload('a'), workload('new')]));
+    expect(await s.ids()).toEqual(['a', 'new']);
+    await s.ingest(checked(at(T2, 300), [workload('a')]));
+    expect(await s.ids()).toEqual(['a']);
+  });
+
+  it('never replaces a newer check or state change', async () => {
+    const s = setup();
+    await s.ingest(checked(T2, [workload('a', 'ASLEEP')]));
+    await s.ingest(listed(T1, workload('a', 'AWAKE')));
+    expect(await stateOf(s, 'a')).toBe('ASLEEP');
+    await s.ingest(stateChanged('a', 'ASLEEP', 'WAKING', at(T2, 10)));
+    await s.ingest(listed(at(T2, 5), workload('a', 'ASLEEP')));
+    expect(await stateOf(s, 'a')).toBe('WAKING');
+  });
+
+  it('refuses one dated ahead of the clock or not dated, without its router\'s name or without a workload', async () => {
+    const s = setup();
+    await s.ingest(listed('2099-01-01T00:00:00.000Z', workload('a')));
+    await s.ingest(listed(undefined, workload('a')));
+    await s.ingest(listed(T1, workload('a'), { region: REGION }));
+    await s.ingest(listed(T1, { name: 'no id' }));
+    expect(await s.ids()).toEqual([]);
+    expect(s.refused.map(([event]) => event)).toEqual(['RouterEventRefused', 'RouterEventRefused', 'RouterEventRefused', 'RouterEventRefused']);
+  });
+});

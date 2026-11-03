@@ -28,6 +28,16 @@ const slotWait = (attempts: number) => Math.min(60, 10 * 2 ** Math.max(0, attemp
 const SLOT_WAIT_MAX = 24 * 60 * MINUTE;
 // Retries of a step on a transient error (TRANSIENT) or RetryLater; its waits (a wait outcome) never count.
 const RETRY_MAX = 30;
+// The router version whose controller reports one workload (vision refusals design §2).
+const REPORT_SINCE = '0.37.0';
+// x.y.z at least the floor; a version not of that form (or none) is not.
+const atLeast = (version: string | undefined, floor: string) => {
+  const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '')?.slice(1).map(Number);
+  if (!parts) return false;
+  const min = floor.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) if (parts[i] !== min[i]) return parts[i]! > min[i]!;
+  return true;
+};
 const WAKE_GRACE = 2 * MINUTE;
 
 export interface RouterRef {
@@ -385,6 +395,20 @@ export function createEngine(deps: EngineDeps) {
     return (await access(op)).invoke(arn, payload);
   };
 
+  // The new workload in the manager at once (vision refusals design §2): a router 0.37.0 or later publishes its row; an
+  // older one, or one of unknown version, is not asked (an unknown action is a Lambda error for it). A failed report
+  // never fails the onboarding: the router's next check lists the workload.
+  async function reported(op: Operation): Promise<string> {
+    if (!atLeast((op.context.router as RouterRef).version, REPORT_SINCE)) return '';
+    try {
+      await invokeRouter(op, 'controller', { action: 'report', workloadId: op.context.workloadId });
+      return '; in the manager now';
+    } catch (err) {
+      deps.log.warn('WorkloadNotReported', { operation: op.id, workloadId: op.context.workloadId, error: (err as Error).message });
+      return `; in the manager at the router's next check (report: ${(err as Error).message})`;
+    }
+  }
+
   async function updateCandidate(op: Operation, change: (c: Candidate) => Candidate): Promise<Outcome> {
     const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? '');
     const c = id ? await deps.discovery?.getCandidate(id) : null;
@@ -695,7 +719,7 @@ export function createEngine(deps: EngineDeps) {
         if (!op.context.workloadId) await previewOf(op);
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
         if (status?.route !== 'app' || (status?.issues ?? []).length) throw new Error(`route ${status?.route}${status?.issues?.length ? `, issues: ${status.issues.join('; ')}` : ''}`);
-        return { status: 'done', detail: `${op.context.name} ${status.state}, route app` };
+        return { status: 'done', detail: `${op.context.name} ${status.state}, route app${await reported(op)}` };
       }
       case 'pause': {
         const result = await invokeRouter(op, 'controller', { action: 'pause', workloadId: op.target.workloadId, by: op.by, reason: 'offboarding', keepAsleep: false });

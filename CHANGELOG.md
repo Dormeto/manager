@@ -17,6 +17,9 @@ A router's refusal (renaming a workload Terraform wrote, a workload offboarded m
 longer counts as a Lambda error in its health with routers 0.37.0 and later: the manager asks for refusals as answers.
 The API answers a refusal it had no status for with 400, 404 or 409 instead of 502.
 
+A workload onboarded from the manager shows in the Workloads view as soon as its onboarding ends, instead of at its
+router's next check (routers 0.37.0 and later).
+
 ## 0.21.0 — 2026-11-03
 
 Router 0.36.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

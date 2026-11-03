@@ -137,6 +137,30 @@ describe('operations engine', () => {
     expect(await s.records.claimActive(`TG#${TG}`, 'other', 60_000)).toEqual({ ok: true });
   });
 
+  // Vision refusals design §2: the workload shows in the manager at once, not at the router's next check.
+  it('has a router 0.37.0 or later report the workload once its route is verified; an older router is not asked', async () => {
+    for (const [version, reported] of [['0.37.0', true], ['0.40.1', true], ['0.36.0', false], [undefined, false]] as const) {
+      const s = setup({ routers: [{ ...DEV_ROUTER, ...(version ? { version } : {}) }] });
+      s.answers.report = () => ({ reported: true });
+      const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {} }, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      const calls = s.invocations.filter(([fn]) => fn.endsWith('-controller')).map(([, p]) => p);
+      expect(calls, String(version)).toEqual([{ action: 'status', workloadId: WORKLOAD_ID }, ...(reported ? [{ action: 'report', workloadId: WORKLOAD_ID }] : [])]);
+      const verify = (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'verify')!;
+      expect([verify.status, verify.detail], String(version)).toEqual(['done', `Paris AWAKE, route app${reported ? '; in the manager now' : ''}`]);
+    }
+  });
+
+  it('never fails an onboarding for its report: the workload shows at the router\'s next check', async () => {
+    const s = setup({ routers: [{ ...DEV_ROUTER, version: '0.37.0' }] });
+    s.answers.report = () => { throw new Error('Rate exceeded'); };
+    const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {} }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const verify = (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'verify')!;
+    expect([verify.status, verify.detail]).toEqual(['done', 'Paris AWAKE, route app; in the manager at the router\'s next check (report: Rate exceeded)']);
+    expect(s.invocations.filter(([, p]) => p.action === 'report')).toHaveLength(1);
+  });
+
   it('passes the tags of its input to the preview and the onboarding', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {}, tags: { team: 'payments' } }, 'ops@example.com');

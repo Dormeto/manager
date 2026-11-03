@@ -48,36 +48,7 @@ export function createIngest({ store, now = Date.now, log }: {
     if (current && current.summary.check.checkedAt > checkedAt) return;
     const listed: unknown[] = Array.isArray(d.workloads) ? d.workloads.slice(0, CHUNK_WORKLOADS_MAX) : [];
     const workloads = listed.map(workloadOf).filter((w): w is Record<string, unknown> => w !== null);
-    await eachAtOnce(workloads, WRITES, async (w) => {
-      let before: WorkloadSummary | undefined;
-      let written: WorkloadSummary | null = null;
-      // When its state began, as the router says (0.26.0: the instant of its event), else the check's time; never ahead of
-      // the check or the clock (review I1: a time in the future would pin the summary, refusing every later change).
-      const { stateAt: said, hibernated, ...listed } = w;
-      const timed = timely(said, now());
-      const reported = timed && Date.parse(timed) <= Date.parse(checkedAt) + SKEW_MS ? timed : undefined;
-      await versioned(account, region, w.workloadId as string, (existing) => {
-        before = existing;
-        // A newer check wrote it already; a state change newer than this check is kept, with whether its nap hibernated.
-        if ((existing?.checkedAt ?? '') > checkedAt) return (written = null);
-        const newer = existing?.stateAt && existing.stateAt > checkedAt;
-        const stateAt = newer ? existing.stateAt : [existing?.stateAt, reported].filter((t): t is string => !!t).sort().at(-1);
-        const asleepHibernated = newer ? existing.state === 'ASLEEP' && existing.hibernated === true : hibernated === true;
-        return (written = {
-          ...listed, workloadId: w.workloadId as string, account, region, router: own.name, checkedAt,
-          ...(newer ? { state: existing.state } : {}), ...(asleepHibernated ? { hibernated: true } : {}), ...(stateAt ? { stateAt } : {}),
-          historySince: existing?.historySince ?? reported ?? checkedAt,
-        });
-      });
-      if (!written) return;
-      const summary = written as WorkloadSummary;
-      // The failure index follows the summaries (a lost event made good; written on a change only).
-      await syncFailure(before, summary, checkedAt);
-      // The history (R8): its first entry, or a transition whose event was lost (or not in yet: it replaces this one).
-      const base = { account, region, router: own.name, workloadId: summary.workloadId, to: summary.state ?? 'UNKNOWN', at: reported ?? checkedAt, inferred: true };
-      if (!before?.historySince) await store.putHistory({ ...base, from: null });
-      else if (before.state && before.state !== summary.state) await store.putHistory({ ...base, from: before.state });
-    });
+    await eachAtOnce(workloads, WRITES, (w) => writeRow(account, region, own.name, w, checkedAt));
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const stored = attempt === 0 ? current : await store.getRouter(account, region);
       const check = stored?.summary.check;
@@ -99,6 +70,51 @@ export function createIngest({ store, now = Date.now, log }: {
       return;
     }
     throw new Error(`router ${account}/${region}: summary kept changing`);
+  }
+
+  // A workload's row of a check (or of a report after its onboarding), at the time the router read it: a newer check or
+  // state change wins; its first history entry, or a transition whose event was lost; the failure index follows.
+  async function writeRow(account: string, region: string, router: string, w: Record<string, unknown>, checkedAt: string) {
+    let before: WorkloadSummary | undefined;
+    let written: WorkloadSummary | null = null;
+    // When its state began, as the router says (0.26.0: the instant of its event), else the check's time; never ahead of
+    // the check or the clock (review I1: a time in the future would pin the summary, refusing every later change).
+    const { stateAt: said, hibernated, ...listed } = w;
+    const timed = timely(said, now());
+    const reported = timed && Date.parse(timed) <= Date.parse(checkedAt) + SKEW_MS ? timed : undefined;
+    await versioned(account, region, w.workloadId as string, (existing) => {
+      before = existing;
+      // A newer check wrote it already; a state change newer than this check is kept, with whether its nap hibernated.
+      if ((existing?.checkedAt ?? '') > checkedAt) return (written = null);
+      const newer = existing?.stateAt && existing.stateAt > checkedAt;
+      const stateAt = newer ? existing.stateAt : [existing?.stateAt, reported].filter((t): t is string => !!t).sort().at(-1);
+      const asleepHibernated = newer ? existing.state === 'ASLEEP' && existing.hibernated === true : hibernated === true;
+      return (written = {
+        ...listed, workloadId: w.workloadId as string, account, region, router, checkedAt,
+        ...(newer ? { state: existing.state } : {}), ...(asleepHibernated ? { hibernated: true } : {}), ...(stateAt ? { stateAt } : {}),
+        historySince: existing?.historySince ?? reported ?? checkedAt,
+      });
+    });
+    if (!written) return;
+    const summary = written as WorkloadSummary;
+    // The failure index follows the summaries (a lost event made good; written on a change only).
+    await syncFailure(before, summary, checkedAt);
+    // The history (R8): its first entry, or a transition whose event was lost (or not in yet: it replaces this one).
+    const base = { account, region, router, workloadId: summary.workloadId, to: summary.state ?? 'UNKNOWN', at: reported ?? checkedAt, inferred: true };
+    if (!before?.historySince) await store.putHistory({ ...base, from: null });
+    else if (before.state && before.state !== summary.state) await store.putHistory({ ...base, from: before.state });
+  }
+
+  // One workload's row after its onboarding (routers 0.37.0, vision refusals design §2): written as a check's row, at the
+  // event's time; the router's summary and its other workloads stay as they are.
+  async function listed(event: RouterEvent) {
+    const { account, region: envelope, detail } = event;
+    const d = detail ?? {};
+    const when = timely(d.at, now());
+    const own = routerOf(d);
+    const w = workloadOf(d.workload);
+    if (!when || !own.name || !w) return refuse(event, !when ? `listing time ${String(d.at).slice(0, 40)}` : !own.name ? 'router name' : 'workload');
+    await writeRow(account, regionOf(d.router?.region) ?? envelope, own.name, w, when);
   }
 
   // A state change, at once; ignored when the workload already shows a newer state (a later change or check).
@@ -193,6 +209,7 @@ export function createIngest({ store, now = Date.now, log }: {
   return async function ingest(event: RouterEvent) {
     if (event['detail-type'] === 'Router checked') return checked(event);
     if (event['detail-type'] === 'Workload state changed') return stateChanged(event);
+    if (event['detail-type'] === 'Workload listed') return listed(event);
   };
 }
 
