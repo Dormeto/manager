@@ -153,7 +153,7 @@ terraform apply dormeto.tfplan
 ```
 
 The other accounts get two roles, from a Terraform module or an AWS CLI script
-([Organization access](https://dormeto.com/organization-access.html)); the manager then installs the routers itself.
+([Access](https://dormeto.com/organization-access.html)); the manager then installs the routers itself.
 The whole guide: [Get started](https://dormeto.com/get-started.html). Every input:
 [Configuration](https://dormeto.com/configuration.html) and
 [the module's README](infra/terraform/modules/manager/README.md).
