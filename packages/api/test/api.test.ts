@@ -542,6 +542,23 @@ describe('Google Cloud routers', () => {
     expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' }]);
   });
 
+  // A router below 0.40.0 can't take them (its refusal would be logged at every write, forever): the poll pushes them once
+  // it has its new version.
+  it('pushes a settings write to no router below 0.40.0, and to a dev router of 0.40.0 (0.40.0-dev.1) and one of unknown version', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const m = manager({
+      routers: [
+        gcp({ version: '0.39.0' }), gcp({ name: 'dmtr-us-central1', region: 'us-central1', controller: OTHER, version: '0.40.0-dev.1' }),
+        gcp({ name: 'dmtr-asia-east1', region: 'asia-east1', controller: 'https://dmtr-asia-east1-controller-abc123-de.a.run.app', version: '' }),
+        gcp({ name: 'dmtr-europe-west1', region: 'europe-west1', controller: 'https://dmtr-europe-west1-controller-abc123-ew.a.run.app', version: '0.39.0-dev.3' }),
+      ],
+      controller: () => answer(200, { etag: 'stored' }),
+    });
+    expect((await m.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }))).statusCode).toBe(200);
+    expect(m.actions().map((a) => a.url).sort()).toEqual(['https://dmtr-asia-east1-controller-abc123-de.a.run.app/v1/actions', `${OTHER}/v1/actions`]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('renames, tags and sets a workload the CLI onboarded (source cli): nothing refuses it as a Terraform one is', async () => {
     const m = manager({
       controller: (_req, payload) => answer(200, payload.action === 'rename' ? { workloadId: 'demo', name: payload.name }

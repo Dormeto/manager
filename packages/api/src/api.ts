@@ -1211,9 +1211,10 @@ export function createApi({
   }
   // The organization's settings pushed to every Google Cloud router that has a controller (Google Cloud manager design
   // §5.5, §6.5): those routers can't read settings.json. 10 at a time within the request's bound; a router that fails
-  // gets them at the manager's next poll, and the write's answer stays as it is.
+  // gets them at the manager's next poll, and the write's answer stays as it is. Not a router below 0.40.0, which can't
+  // take them: the poll pushes them once it has its new version.
   async function pushSettings(settings: Record<string, unknown>, etag: string | void) {
-    const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller);
+    const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? ''));
     if (!targets.length) return;
     const results = await each(targets, (r) => invoke(r, { action: 'manager-settings', settings, etag: etag ?? '' }), callTimeout);
     results.forEach((result, i) => {

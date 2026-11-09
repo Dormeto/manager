@@ -440,6 +440,16 @@ describe('the poll of Google Cloud routers', () => {
     expect(await w.store.getWorkload(PROJECT, 'europe-west2', 'web')).toMatchObject({ state: 'AWAKE' });
   });
 
+  it('pushes settings.json to no router too old to poll: it only reads its version', async () => {
+    const w = world();
+    w.s3.etag = '"e1"';
+    w.s3.text = '{"workloads":{"hibernate":false}}';
+    const r = await w.add('europe-west2', { version: '0.39.0' });
+    r.version = '0.39.0';
+    await w.poll();
+    expect([r.calls, r.settings, w.s3.heads, w.s3.gets, r.healthReads]).toEqual([[], undefined, 0, 0, 1]);
+  });
+
   it('keeps a too-old router\'s registration as it is when its health can\'t be read, says why, and reads it again 10 minutes later', async () => {
     const w = world();
     const r = await w.add('europe-west2', { version: '0.39.0' });
