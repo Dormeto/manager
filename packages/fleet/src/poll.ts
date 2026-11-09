@@ -70,7 +70,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
 
   // What a step could not do, with the command that fixes a refusal, as the API says it.
   const textOf = (err: unknown, router: InstalledRouter, run: Run) => {
-    if (err instanceof RouterCallError && err.refusal === 'manager-access-missing') return accessMissingText(run.connection.project, env);
+    if (err instanceof RouterCallError && err.refusal === 'manager-access-missing') return accessMissingText(run.connection.project, env, err.said);
     if (err instanceof RouterCallError && err.refusal === 'router-too-old') return tooOldText('', router.account, router.region, routerVersion);
     return err instanceof Error ? err.message : String(err);
   };

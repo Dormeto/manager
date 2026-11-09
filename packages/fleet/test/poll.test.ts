@@ -457,7 +457,7 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
     expect(await w.pollOf('europe-west2')).toMatchObject({
-      versionAt: iso(T0), lastError: 'version: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+      versionAt: iso(T0), lastError: 'version: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: <html><title>403 Forbidden</title></html>)',
     });
     w.clock.t += 9 * 60 * S;
     await w.poll();
@@ -471,7 +471,7 @@ describe('the poll of Google Cloud routers', () => {
     const w = world();
     const broken = await w.add('europe-west2');
     const other = await w.add('us-central1');
-    broken.throws = new GoogleError({ status: 404, reason: 'NOT_FOUND', message: 'Requested entity was not found.' });
+    broken.throws = new GoogleError({ host: 'iamcredentials.googleapis.com', status: 404, reason: 'NOT_FOUND', message: 'Requested entity was not found.' });
     other.event('web', 'AWAKE', 'NAPPING', T0 - 60 * S);
     for (let i = 0; i < 3; i += 1) {
       await w.poll();
@@ -479,7 +479,7 @@ describe('the poll of Google Cloud routers', () => {
     }
     expect((await w.registry.list()).map((x) => x.region).sort()).toEqual(['europe-west2', 'us-central1']);
     expect(await w.pollOf('europe-west2')).toMatchObject({
-      misses: 0, lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+      misses: 0, lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: iamcredentials.googleapis.com 404 NOT_FOUND: Requested entity was not found.)',
     });
     expect(await w.store.getWorkload(PROJECT, 'us-central1', 'web')).toMatchObject({ state: 'NAPPING' });
   });
@@ -519,7 +519,7 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect(await w.pollOf('europe-west2')).toEqual({
       newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'manager-access-missing',
-      lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+      lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: <html><title>403 Forbidden</title></html>)',
     });
     r.answer = undefined;
     w.clock.t += 60 * S;

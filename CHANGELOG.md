@@ -11,6 +11,9 @@ The manager reaches Google Cloud routers, installed by the CLI, as it does AWS o
 through a connection `dormeto gcp connect` makes, with no key and no change of a Google IAM policy by the manager. An AWS router,
 row, event or call behaves as before.
 
+- **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 502 and the watchdog's problem for
+`manager-access-missing` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
+controller's, the message cut to 200 characters; never a token or a signature.
 - **One model for both clouds:** an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
 and a region is checked against its account's cloud (`@dormeto/fleet/clouds`). The manager accepts a Google Cloud router's
 rows and events (a backend service instead of a target group, VM names in `hibernated`), names its router

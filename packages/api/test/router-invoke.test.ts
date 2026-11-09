@@ -52,6 +52,13 @@ describe('a Google Cloud router\'s controller, from the manager', () => {
     expect([err instanceof RouterError, err.refusal, err.message]).toEqual([true, 'manager-access-missing', 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project <host> --profile <profile> --env dev']);
   });
 
+  it('says what Google answered in the refusal manager-access-missing: its host, status, reason and message', async () => {
+    const request = async () => ({ status: 403, text: JSON.stringify({ error: { code: 403, message: 'Permission denied', status: 'PERMISSION_DENIED' } }) });
+    const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev', routerVersion: '0.40.0' });
+    const err = await invoke(GCP, { action: 'list' }).catch((e: unknown) => e) as RouterError;
+    expect([err.refusal, err.message]).toEqual(['manager-access-missing', 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc-nw.a.run.app 403 PERMISSION_DENIED: Permission denied)']);
+  });
+
   it('calls a dev router of 0.40.0 (0.40.0-dev.1), and refuses one of 0.39.0 (0.39.0-dev.3) as too old without a call', async () => {
     const sent: unknown[] = [];
     const request = async (...args: unknown[]) => { sent.push(args[4]); return { status: 200, text: '{"workloads":[]}' }; };

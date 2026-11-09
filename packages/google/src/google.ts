@@ -183,7 +183,7 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
         subject_token: await subjectToken(),
       }).toString(),
     });
-    if (!ok(answer)) throw errorOf(answer.status, answer.text);
+    if (!ok(answer)) throw errorOf(answer.status, answer.text, STS_URL);
     const { access_token: value, expires_in: expiresIn } = fieldsOf(answer, STS_URL, { access_token: 'string', expires_in: 'number' }) as { access_token: string; expires_in: number };
     return { value, expiresAt: at + expiresIn * 1000 };
   });
@@ -206,7 +206,7 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
   async function generate(sa: ServiceAccount, method: 'generateAccessToken' | 'generateIdToken', body: object, fields: Record<string, Field>): Promise<Record<string, unknown>> {
     const url = `${IAM_CREDENTIALS}${connection.serviceAccounts[sa]}:${method}`;
     const answer = await authorized('federated', federatedToken, url, 'POST', body);
-    if (!ok(answer)) throw errorOf(answer.status, answer.text);
+    if (!ok(answer)) throw errorOf(answer.status, answer.text, url);
     return fieldsOf(answer, url, fields);
   }
 
@@ -224,7 +224,7 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
   // GoogleError.
   async function call<T = unknown>(sa: ServiceAccount, method: string, url: string, body?: unknown): Promise<T> {
     const answer = await authorized(`access ${sa}`, () => accessToken(sa), url, method, body);
-    if (!ok(answer)) throw errorOf(answer.status, answer.text);
+    if (!ok(answer)) throw errorOf(answer.status, answer.text, url);
     return (answer.text.trim() ? parsed(answer, url) : {}) as T;
   }
 

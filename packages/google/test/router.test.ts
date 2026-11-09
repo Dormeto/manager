@@ -111,6 +111,30 @@ describe('callRouter', () => {
     expect([grant.refusal, grant.status, grant.google, grant.token]).toEqual(['manager-access-missing', 400, false, true]);
   });
 
+  // What Google answered is kept, with its host, status, reason and message (cut to 200 characters), so the refusal's cause
+  // can be seen: the stage (STS, iamcredentials or the controller) and Google's words, never a token or a signature.
+  it('keeps what iamcredentials answered: its host, status, reason and message', async () => {
+    const err = await tokenRefusal(':generateIdToken', json(403, {
+      error: { code: 403, message: 'Permission \'iam.serviceAccounts.getOpenIdToken\' denied on resource.', status: 'PERMISSION_DENIED', details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'IAM_PERMISSION_DENIED' }] },
+    }));
+    expect(err.said).toBe('Google: iamcredentials.googleapis.com 403 IAM_PERMISSION_DENIED: Permission \'iam.serviceAccounts.getOpenIdToken\' denied on resource.');
+    expect(accessMissingText('dormeto-host', 'dev', err.said)).toBe(`${accessMissingText('dormeto-host', 'dev')} (${err.said})`);
+  });
+
+  it('keeps what STS answered: its host, status, reason and message', async () => {
+    const err = await tokenRefusal('https://sts.googleapis.com/v1/token', json(400, { error: 'invalid_grant', error_description: 'The audience in ID Token does not match the expected audience.' }));
+    expect(err.said).toBe('Google: sts.googleapis.com 400 invalid_grant: The audience in ID Token does not match the expected audience.');
+  });
+
+  it('keeps what Google answered in front of the controller: its host, status and page, cut to 200 characters', async () => {
+    const page = await failure(callRouter(fakeGoogle(() => html(403, 'Forbidden')).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+    expect(page.said).toMatch(/^Google: dmtr-europe-west2-controller-abc123-nw\.a\.run\.app 403: <html>/);
+    const long = await failure(callRouter(fakeGoogle(() => json(403, { error: { code: 403, message: 'x'.repeat(500), status: 'PERMISSION_DENIED' } })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+    expect(long.said).toBe(`Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403 PERMISSION_DENIED: ${'x'.repeat(200)}`);
+    const empty = await failure(callRouter(fakeGoogle(() => new Response('', { status: 401 })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+    expect(empty.said).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 401: HTTP 401');
+  });
+
   it('keeps STS\'s 5xx a failure of the call, not the manager\'s access', async () => {
     const err = await tokenRefusal('https://sts.googleapis.com/v1/token', new Response('<html>Service Unavailable</html>', { status: 503 }));
     expect([err.refusal, err.status, err.google, err.token]).toEqual([undefined, 503, false, true]);

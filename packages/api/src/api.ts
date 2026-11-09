@@ -185,7 +185,7 @@ async function googleInvoke(calls: GoogleCalls | undefined, router: Router, payl
     answer = await callRouter(current.google, router, { ...payload, refusals: true }, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS });
   } catch (err) {
     if (!(err instanceof RouterCallError)) throw err;
-    if (err.refusal === 'manager-access-missing') throw new RouterError(accessMissingText(host, env), undefined, err.refusal);
+    if (err.refusal === 'manager-access-missing') throw new RouterError(accessMissingText(host, env, err.said), undefined, err.refusal);
     if (err.refusal === 'router-too-old') throw new RouterError(tooOldText('', project, region, calls?.routerVersion), undefined, err.refusal);
     throw new RouterError(err.message);
   }

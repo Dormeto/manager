@@ -445,19 +445,20 @@ describe('Google Cloud routers', () => {
     const m = manager({ controller: () => new Response('<html><title>403 Forbidden</title></html>', { status: 403, headers: { 'content-type': 'text/html' } }) });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/nap`, 'dmt-operator'));
     expect([res.statusCode, json(res)]).toEqual([502, {
-      error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+      error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: <html><title>403 Forbidden</title></html>)',
     }]);
-    expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
+    expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: <html><title>403 Forbidden</title></html>)');
   });
 
   it('answers a connection broken at the token (STS invalid_target, iamcredentials 404) as manager-access-missing; STS\'s 503 stays a router error', async () => {
-    const access = { error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' };
+    const command = 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev';
+    const access = { error: 'manager-access-missing', message: `${command} (Google: sts.googleapis.com 400 invalid_target: The target service indicated by the "audience" parameters is invalid.)` };
     const gone = manager({ tokens: (req) => (req.url === 'https://sts.googleapis.com/v1/token' ? answer(400, { error: 'invalid_target', error_description: 'The target service indicated by the "audience" parameters is invalid.' }) : undefined) });
     const res = await gone.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
     expect([res.statusCode, json(res)]).toEqual([502, access]);
     const deleted = manager({ tokens: (req) => (req.url.endsWith(':generateIdToken') ? answer(404, { error: { code: 404, message: 'Not found', status: 'NOT_FOUND' } }) : undefined) });
     const listed = json(await deleted.api(event('GET', '/api/workloads', 'dmt-operator')));
-    expect(listed.errors).toEqual([{ router: NAME, message: access.message }]);
+    expect(listed.errors).toEqual([{ router: NAME, message: `${command} (Google: iamcredentials.googleapis.com 404 NOT_FOUND: Not found)` }]);
     expect(deleted.actions()).toEqual([]);
     const down = manager({ tokens: (req) => (req.url === 'https://sts.googleapis.com/v1/token' ? new Response('<html>Service Unavailable</html>', { status: 503 }) : undefined) });
     const failed = await down.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
@@ -552,7 +553,7 @@ describe('Google Cloud routers', () => {
     expect([res.statusCode, json(res).hibernate]).toEqual([200, false]);
     expect(m.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'hibernate off' });
     const logged = warn.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' }]);
+    expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: <html>Forbidden</html>)' }]);
   });
 
   // A router below 0.40.0 can't take them (its refusal would be logged at every write, forever): the poll pushes them once

@@ -6,7 +6,7 @@
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
 // The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
 // health (GET /v1/health, which every router version answers), the same way.
-import { GoogleError } from './errors.js';
+import { errorOf, GoogleError } from './errors.js';
 import type { Google } from './google.js';
 
 // The router version the manager needs (/v1/actions, the journal, the check summary).
@@ -22,7 +22,8 @@ export type Refusal = RouterRefusal | 'router-unknown';
 // them. The operator's AWS profile is theirs to fill in.
 export const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
 export const installCommand = (project: string, region: string, pinned: string | undefined) => `dormeto gcp install --project ${project} --region ${region}${pinned ? ` --version ${pinned}` : ''}`;
-export const accessMissingText = (host: string, env: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}`;
+// said: what Google answered (see `googleSaid`), so the cause can be seen from the poll's error and the API's 502.
+export const accessMissingText = (host: string, env: string, said?: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}${said ? ` (${said})` : ''}`;
 export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
 // version: '' when it is unknown (the router answered that it has no /v1/actions).
 export const tooOldText = (version: string, project: string, region: string, pinned: string | undefined) =>
@@ -35,9 +36,13 @@ export class RouterCallError extends Error {
   readonly google: boolean;
   readonly token: boolean;
   readonly refusal?: RouterRefusal;
+  // Google's own words when Google refused or failed (`Google: <host> <status> <reason>: <message>`), from the token's stage
+  // or the controller URL's; never a token or a signature.
+  readonly said?: string;
 
-  constructor(message: string, { status = 0, google = false, token = false, refusal }: { status?: number; google?: boolean; token?: boolean; refusal?: RouterRefusal } = {}) {
+  constructor(message: string, { status = 0, google = false, token = false, refusal, said }: { status?: number; google?: boolean; token?: boolean; refusal?: RouterRefusal; said?: string } = {}) {
     super(message);
+    if (said) this.said = said;
     this.name = 'RouterCallError';
     this.status = status;
     this.google = google;
@@ -63,11 +68,14 @@ const denied = (status: number) => status === 401 || status === 403;
 // role), iamcredentials refusing the impersonation (the grant revoked) or not knowing the account (deleted).
 const BROKEN_EXCHANGE = new Set(['invalid_grant', 'invalid_target', 'unauthorized_client']);
 const brokenConnection = (err: GoogleError) => denied(err.status) || err.status === 404 || (err.status === 400 && BROKEN_EXCHANGE.has(err.reason));
+// What Google answered, in one line: its host, status, reason (when it gives one) and message cut to 200 characters.
+const googleSaid = (host: string, status: number, reason: string, message: string) =>
+  `Google: ${[host, status, reason].filter((part) => part !== '').join(' ')}: ${message.replace(/\s+/g, ' ').trim().slice(0, 200)}`;
 // Google's JSON error ({error: {code, message, status}}); the controller's own errors hold a string.
 const googleShaped = (body: unknown) => typeof (body as { error?: unknown } | null)?.error === 'object' && (body as { error: unknown }).error !== null;
 
 // What the controller URL answered: its status, its body, and whether the body is the controller's own JSON.
-type Reply = { host: string; status: number; body: unknown; json: boolean };
+type Reply = { host: string; status: number; body: unknown; json: boolean; text: string };
 type Own = { refused?: unknown; error?: unknown; message?: unknown } | null;
 
 async function replyOf(google: Pick<Google, 'request'>, origin: string, method: string, path: string, payload?: Record<string, unknown>): Promise<Reply> {
@@ -80,7 +88,7 @@ async function replyOf(google: Pick<Google, 'request'>, origin: string, method: 
     // request answers whatever the controller URL answers, so a GoogleError with a status is the ID token's (STS or
     // iamcredentials); one without is no answer at all, from either.
     if (err instanceof GoogleError && err.status !== 0) {
-      throw new RouterCallError(err.message, { status: err.status, token: true, ...(brokenConnection(err) ? { refusal: 'manager-access-missing' as const } : {}) });
+      throw new RouterCallError(err.message, { status: err.status, token: true, said: googleSaid(err.host, err.status, err.reason, err.message), ...(brokenConnection(err) ? { refusal: 'manager-access-missing' as const } : {}) });
     }
     if (err instanceof GoogleError) throw new RouterCallError(err.message);
     throw err;
@@ -94,7 +102,7 @@ async function replyOf(google: Pick<Google, 'request'>, origin: string, method: 
   } catch {
     json = false;
   }
-  return { host, status, body, json };
+  return { host, status, body, json, text };
 }
 
 // The controller's own failure, from its JSON message or error.
@@ -103,10 +111,11 @@ const ownFailure = ({ host, status }: Reply, own: Own, unknownAction?: string) =
     : typeof own?.error === 'string' ? own.error : `${host} answered HTTP ${status}`, { status });
 
 // Google's answer in front of the controller: its JSON error's message, or the status of its page.
-function googleFailure({ host, status, body, json }: Reply): RouterCallError {
+function googleFailure({ host, status, body, json, text }: Reply): RouterCallError {
   const message = ok(status) ? `${host} answered something other than JSON`
     : json ? String((body as { error: { message?: unknown } }).error.message ?? `${host} answered HTTP ${status}`) : `${host} answered HTTP ${status}`;
-  return new RouterCallError(message, { status, google: true, ...(denied(status) ? { refusal: 'manager-access-missing' as const } : {}) });
+  const said = errorOf(status, text);
+  return new RouterCallError(message, { status, google: true, said: googleSaid(host, status, said.reason, said.message), ...(denied(status) ? { refusal: 'manager-access-missing' as const } : {}) });
 }
 
 async function answerOf(google: Pick<Google, 'request'>, origin: string, payload: Record<string, unknown>): Promise<unknown> {
