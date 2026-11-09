@@ -1,5 +1,5 @@
-// Google Cloud routers in a discovery run (Google Cloud manager design §6.1): with a connection, the projects the
-// discovery service account sees (Cloud Resource Manager's projects:search), ten at a time, each one's Cloud Run services
+// Google Cloud routers in a discovery run (Google Cloud manager design §6.1): with a connection, the projects of the run's
+// inventory (listed once, at the run's plan: the connection's scopes' projects), ten at a time, each one's Cloud Run services
 // (all locations at once); a service `dmtr-<region>-controller` is the router of <region>, its URL the controller and its
 // DMT_VERSION variable the version (the discovery account never calls a router). The registry follows: a router found is
 // added or has its controller and version updated, a registered one no longer found in a project listed is removed. A
@@ -108,18 +108,11 @@ async function routersOf(port: GooglePort, project: string): Promise<{ found: Fo
   }
 }
 
-export async function discoverGoogleRouters(port: GooglePort, { now, log }: { now: () => number; log: { warn(event: string, data?: object): void } }): Promise<GoogleSummary | null> {
+// `projects`: the run's, as its plan listed them (a listing that failed there kept the last run's).
+export async function discoverGoogleRouters(port: GooglePort, { now, log, projects }: { now: () => number; log: { warn(event: string, data?: object): void }; projects: string[] }): Promise<GoogleSummary | null> {
   const connection = await port.connection();
   if (!connection) return null;
   const summary: GoogleSummary = { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [] };
-  let projects: string[];
-  try {
-    projects = (await listProjects(port, connection)).map((p) => p.id);
-  } catch (err) {
-    summary.errors.push({ project: '*', error: messageOf(err) });
-    log.warn('GoogleProjectsFailed', { error: messageOf(err) });
-    return summary;
-  }
   const found: Found[] = [];
   const listed = new Set<string>();
   const unreachable = new Set<string>(); // <project>#<region>: neither updated nor removed

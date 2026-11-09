@@ -203,6 +203,21 @@ describe('Google Cloud routers in a discovery run', () => {
     ]);
   });
 
+  // The projects at the scopes are listed once a run, at its plan: 2N getAncestry calls, and one 429 failing the second
+  // listing, otherwise.
+  it('lists the projects once a run: the routers\' discovery takes them from the run\'s inventory', async () => {
+    const g = fakeGoogle({
+      projects: [{ id: 'shop-prod', ancestry: [['folder', '111']] }, { id: 'dormeto-dev' }],
+      services: { 'shop-prod': [service('shop-prod', 'europe-west2', '0.40.0')], 'dormeto-dev': [] },
+      record: connection({ scopes: ['projects/dormeto-dev', 'folders/111'] }),
+    });
+    const record = await run(g);
+    expect(g.calls.filter((c) => c.includes('/v3/projects:search'))).toHaveLength(1);
+    expect(g.calls.filter((c) => c.endsWith(':getAncestry'))).toHaveLength(2);
+    expect(record.google).toMatchObject({ projects: 2, routers: 1, added: 1, errors: [] });
+    expect(g.registry.has('shop-prod#europe-west2')).toBe(true);
+  });
+
   it('reads only the projects of the scopes for the routers too', async () => {
     const g = fakeGoogle({ projects: ['dormeto-dev', 'elsewhere'], services: { 'dormeto-dev': [], elsewhere: [service('elsewhere', 'europe-west2', '0.40.0')] }, record: connection({ scopes: ['projects/dormeto-dev'] }) });
     await run(g);

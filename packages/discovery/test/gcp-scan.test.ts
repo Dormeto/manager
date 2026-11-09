@@ -309,19 +309,33 @@ describe('a Google Cloud project\'s scan', () => {
     expect(await scan(w)).toEqual({ rules: [], regions: [{ region: 'global', ok: true }] });
   });
 
-  it('a region Google could not reach: its pair failed, the others scanned', async () => {
+  it('a region Google could not reach where a candidate is stored: its pair failed, the others scanned', async () => {
     const w = devProject();
     w.vm('dmt-demo-internal', 'europe-west2-b', { env: 'dev' });
     w.backendService('dmt-demo-internal-app', [w.group('dmt-demo-internal', 'europe-west2-b', ['dmt-demo-internal'])], { region: 'europe-west2', scheme: 'INTERNAL_MANAGED' });
     alone(w, 'dmt-dev-internal-regional', 'dmt-demo-internal-app', { region: 'europe-west2', scheme: 'INTERNAL_MANAGED' });
     w.unreachable = ['regions/europe-west2', 'zones/europe-west2-b'];
-    const { rules, regions } = await scan(w);
+    const stored = [{ id: `projects/${PROJECT}/regions/europe-west2/backendServices/dmt-demo-internal-app`, region: 'europe-west2', idleHours7d: null, requests7d: null }];
+    const { rules, regions } = await scanProject(w, { project: w.project, managed: ONBOARDED, stored, now: NOW });
     expect(rules.map((r) => r.targetGroup).sort()).toEqual(['dmt-demo-app', 'dmt-demo-mig-app']);
     expect(regions).toEqual([
       { region: 'europe-west1', ok: true },
       { region: 'europe-west2', ok: false, error: 'Compute Engine listed regions/europe-west2 as unreachable' },
       { region: 'global', ok: true },
     ]);
+  });
+
+  // Cloud Run answered five restricted regions unreachable on every call in dormeto-dev (plan 1): Compute Engine may too.
+  it('a region Google could not reach where no candidate is stored and no candidate\'s backend is: no error', async () => {
+    const w = devProject();
+    w.unreachable = ['regions/me-central2', 'zones/me-central2-a'];
+    const stored = [{ id: `projects/${PROJECT}/global/backendServices/dmt-demo-app`, region: 'global', idleHours7d: null, requests7d: null }];
+    const { rules, regions } = await scanProject(w, { project: w.project, managed: ONBOARDED, stored, now: NOW });
+    expect(rules.map((r) => r.targetGroup).sort()).toEqual(['dmt-demo-app', 'dmt-demo-mig-app']);
+    expect(regions).toEqual([{ region: 'europe-west1', ok: true }, { region: 'global', ok: true }]);
+    // A candidate gone since (goneAt) is not stored there any more.
+    const gone = [{ ...stored[0]!, id: `projects/${PROJECT}/regions/me-central2/backendServices/old`, region: 'me-central2', goneAt: '2026-11-01T00:00:00.000Z' }];
+    expect((await scanProject(w, { project: w.project, managed: ONBOARDED, stored: gone, now: NOW })).regions.every((r) => r.ok)).toBe(true);
   });
 
   it('a zone Google could not reach fails the pair of a candidate whose backends are there', async () => {
@@ -394,6 +408,23 @@ describe('a Google Cloud project\'s account step', () => {
       { region: 'europe-west2', ok: false, error: 'Compute Engine listed regions/europe-west2 as unreachable', rules: 0, ms: 0 },
       { region: 'global', ok: true, rules: 1, ms: 0 },
     ]);
+  });
+
+  it('keeps a candidate\'s idle share in the store when Monitoring fails at the next run', async () => {
+    const s = setup({ cfg: config({ regions: ['*'], filters: [filter('dev', [{ accountIds: [PROJECT] }])] }) });
+    await s.ready;
+    const w = devProject();
+    w.series.push({ type: 'loadbalancing.googleapis.com/https/request_count', backend: 'dmt-demo-mig-app', urlMap: 'dmt-dev', hours: { 1: '12', 2: '3' } });
+    s.deps.google = port(w, ONBOARDED);
+    const share = async () => (await s.store.accountCandidates(PROJECT)).find((c) => c.targetGroup === 'dmt-demo-mig-app')!;
+    const first = await planRun(s.deps, { source: 'manual' });
+    await scanAccount(s.deps, { runId: first.runId, account: PROJECT });
+    expect(await share()).toMatchObject({ idleHours7d: 166, requests7d: 15 });
+    w.monitoringError = new GoogleError({ status: 503, reason: 'UNAVAILABLE', host: 'monitoring.googleapis.com', message: 'try later' });
+    s.advance(HOUR);
+    const second = await planRun(s.deps, { source: 'manual' });
+    await scanAccount(s.deps, { runId: second.runId, account: PROJECT });
+    expect(await share()).toMatchObject({ idleHours7d: 166, requests7d: 15 });
   });
 });
 
@@ -471,6 +502,19 @@ describe('a Google Cloud candidate\'s idle share', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]![0]).toBe('GoogleIdleFailed');
     expect(warnings[0]![1]).toMatchObject({ project: 'dormeto-dev', metric: GLOBAL });
+  });
+
+  it('a Monitoring that fails keeps a candidate\'s stored idle share, as AWS keeps it when CloudWatch fails; one never read stays null', async () => {
+    const w = devProject();
+    w.monitoringError = new GoogleError({ status: 503, reason: 'UNAVAILABLE', host: 'monitoring.googleapis.com', message: 'try later' });
+    const stored = [
+      { id: `projects/${PROJECT}/global/backendServices/dmt-demo-mig-app`, region: 'global', idleHours7d: 150, requests7d: 12 },
+      { id: `projects/${PROJECT}/global/backendServices/dmt-demo-app`, region: 'global', idleHours7d: null, requests7d: null },
+    ];
+    const { rules, regions } = await scanProject(w, { project: w.project, managed: ONBOARDED, stored, now: NOW, log: { warn() {} } });
+    expect(share(named(rules, 'dmt-demo-mig-app'))).toEqual([150, 12]);
+    expect(share(named(rules, 'dmt-demo-app'))).toEqual([null, null]);
+    expect(regions.every((r) => r.ok)).toBe(true);
   });
 
   it('a failing query gives nulls for its metric type only', async () => {

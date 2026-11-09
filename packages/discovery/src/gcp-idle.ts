@@ -2,8 +2,8 @@
 // (scan.ts idleHours): Cloud Monitoring's load balancer request counts over the 168 hours ending at the current hour,
 // summed by hour per backend service and URL map. One query per metric type of the kinds present, every page; the metric
 // types and the regional ones' region follow the router's own reads (router gcp/src/monitoring.mjs:16-19). A query that
-// fails (Monitoring turned off, a refusal, a timeout) gives nulls to the candidates of its metric type and is logged once;
-// it never fails the scan.
+// fails (Monitoring turned off, a refusal, a timeout) keeps the stored idle share of the candidates of its metric type
+// (nulls for one never read), as AWS keeps it when CloudWatch fails, and is logged once; it never fails the scan.
 import type { GooglePort } from './google.js';
 import type { ScannedRule } from './types.js';
 
@@ -30,10 +30,11 @@ interface Answer { timeSeries?: Series[]; nextPageToken?: string }
 const NONE: IdleShare = { idleHours7d: null, requests7d: null };
 const keyOf = (backend: string, urlMap: string, region: string) => `${backend}\n${urlMap}\n${region}`;
 
-// `candidates`: those not ineligible. A candidate with no load balancer kind reads nothing.
+// `candidates`: those not ineligible. A candidate with no load balancer kind reads nothing. `stored`: their idle share in
+// the store, by id.
 export async function idleOfProject(
   port: { call: Call },
-  { project, candidates, now, log }: { project: string; candidates: IdleCandidate[]; now: () => number; log?: { warn(event: string, data?: object): void } },
+  { project, candidates, now, log, stored = new Map() }: { project: string; candidates: IdleCandidate[]; now: () => number; log?: { warn(event: string, data?: object): void }; stored?: Map<string, IdleShare> },
 ): Promise<Map<string, IdleShare>> {
   const out = new Map<string, IdleShare>(candidates.map((c) => [c.id, NONE]));
   const end = Math.floor(now() / HOUR_MS) * HOUR_MS;
@@ -86,6 +87,7 @@ export async function idleOfProject(
         });
       }
     } catch (err) {
+      for (const c of members) out.set(c.id, stored.get(c.id) ?? NONE);
       log?.warn('GoogleIdleFailed', { project, metric, error: String((err as Error)?.message ?? err).slice(0, 300) });
     }
   }));

@@ -9,20 +9,24 @@
 // the backend service's path, `targetGroup` its name, `loadBalancer` the URL map's name, `urlMap` its path, `region` the
 // map's region or `global`; the AWS-only fields empty. The router's own resources (`dmtr-*`) are never candidates.
 //
-// What failed is said per region: a scope Compute Engine lists as unreachable fails its region, and a candidate whose
-// backends could not be read fails its own (a failed pair changes none of its candidates). Compute Engine turned off
-// (SERVICE_DISABLED) is a project with nothing to find.
+// What failed is said per region: a scope Compute Engine lists as unreachable fails its region where a stored candidate is
+// (it could not be told gone) or a candidate's backend is (that candidate's own region fails too, as one whose backends
+// could not be read); an unreachable region with neither is no error (some regions answer unreachable on every call). A
+// failed pair changes none of its candidates. Compute Engine turned off (SERVICE_DISABLED) is a project with nothing to
+// find.
 import type { WorkloadSummary } from '@dormeto/fleet';
 import { GoogleError } from '@dormeto/google';
 import { idleOfProject } from './gcp-idle.js';
 import type { GooglePort } from './google.js';
-import type { BackendKind, ScannedRule } from './types.js';
+import type { BackendKind, Candidate, ScannedRule } from './types.js';
 
 type Call = GooglePort['call'];
 type LbKind = NonNullable<ScannedRule['lb']>['kind'];
 
 // The router's row of a workload (WS#<project>#<region>#<id>), as the poll writes it: names, not paths.
 export type ManagedRow = Pick<WorkloadSummary, 'workloadId' | 'region' | 'backendService' | 'wakerBackendService' | 'urlMap' | 'lb'>;
+// A candidate of the project the store holds: where it is, and the idle share it was given last.
+export type StoredCandidate = Pick<Candidate, 'id' | 'region' | 'idleHours7d' | 'requests7d' | 'goneAt'>;
 
 export interface ProjectScan {
   rules: ScannedRule[];
@@ -229,8 +233,11 @@ function limited(call: Call, size: number): Call {
 class RegionFailed extends Error {}
 const errorText = (err: unknown) => (err instanceof RegionFailed ? err.message : `${(err as Error).name ?? 'Error'}: ${(err as Error).message ?? String(err)}`);
 
-// `managed`: the rows of the project's routers. `now`: the clock of the idle share (§7.3).
-export async function scanProject(port: Pick<GooglePort, 'call'>, { project, managed, now, log }: { project: string; managed: ManagedRow[]; now: () => number; log?: { warn(event: string, data?: object): void } }): Promise<ProjectScan> {
+// `managed`: the rows of the project's routers. `stored`: the project's candidates in the store (an unreachable region where
+// one is fails; a Monitoring that fails keeps their idle share). `now`: the clock of the idle share (§7.3).
+export async function scanProject(port: Pick<GooglePort, 'call'>, { project, managed, stored = [], now, log }: {
+  project: string; managed: ManagedRow[]; stored?: StoredCandidate[]; now: () => number; log?: { warn(event: string, data?: object): void };
+}): Promise<ProjectScan> {
   const call = limited(port.call.bind(port), AT_ONCE);
   const seen = new Set<string>(['global']);
   const unlisted = new Map<string, string>(); // region -> why the lists miss part of it
@@ -263,7 +270,9 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
         const scope = /(?:^|\/)(global|(?:regions|zones)\/[a-z0-9-]+)$/.exec(unreachable)?.[1];
         // An unreachable place the scan cannot tell: nothing of the project can be trusted.
         if (!scope) throw new Error(`Compute Engine listed ${unreachable} as unreachable`);
-        unlist(regionOfScope(scope), `Compute Engine listed ${unreachable} as unreachable`);
+        // Failed only where a stored candidate is (below) or a candidate's backend is read (reachable).
+        const region = regionOfScope(scope);
+        if (!unlisted.has(region)) unlisted.set(region, `Compute Engine listed ${unreachable} as unreachable`);
       }
       token = page.nextPageToken || undefined;
     } while (token);
@@ -323,9 +332,12 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     if (!reads.has(key)) reads.set(key, read());
     return reads.get(key)!;
   };
+  // A read in a region the lists miss part of: that region fails, and the reading candidate's with it.
   const reachable = (region: string) => {
     const why = unlisted.get(region);
-    if (why) throw new RegionFailed(why);
+    if (!why) return;
+    fail(region, why);
+    throw new RegionFailed(why);
   };
   async function pagesOf<T>(url: string, body: unknown): Promise<T[]> {
     const out: T[] = [];
@@ -450,6 +462,11 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     return reasons.length ? { ...base, eligibility: 'ineligible', reason: reasons[0] } : base;
   }
 
+  // A stored candidate in a region the lists miss part of: it can't be told gone.
+  for (const c of stored) {
+    const why = unlisted.get(c.region);
+    if (why && !c.goneAt) fail(c.region, why);
+  }
   const rules: ScannedRule[] = [];
   await Promise.all([...candidates].map(async ([id, entry]) => {
     const region = regionOfScope(entry.scope);
@@ -462,10 +479,11 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     }
   }));
   const kept = rules.filter((r) => !failed.has(r.region)).sort((a, b) => a.id.localeCompare(b.id));
-  // The idle share of the candidates not ineligible, a Monitoring that fails leaving it null (§7.3).
+  // The idle share of the candidates not ineligible, a Monitoring that fails keeping the stored one (§7.3).
   const idle = await idleOfProject(port, {
     project, now, log,
     candidates: kept.filter((r) => r.eligibility !== 'ineligible').map((r) => ({ id: r.id, backendService: r.targetGroup ?? '', urlMap: r.loadBalancer, region: r.region, kind: r.lb?.kind })),
+    stored: new Map(stored.map((c) => [c.id, { idleHours7d: c.idleHours7d, requests7d: c.requests7d }])),
   });
   return {
     rules: kept.map((r) => ({ ...r, ...idle.get(r.id) })),

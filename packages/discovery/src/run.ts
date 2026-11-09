@@ -377,11 +377,14 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
 // A Google Cloud project's step (Google Cloud manager design §7.2): no AWS role, one scan of all its regions as the discovery
 // account, the rows of the project's routers saying what is managed. Its pairs: under the perimeter ["*"], `global`, the
 // regions where the scan found something and those of its candidates (a region emptied is decided gone, one Google could
-// not reach is a failed pair); under an explicit perimeter, its Google Cloud regions. A scan that fails fails every pair.
+// not reach where a candidate is stored or a candidate's backend is a failed pair); under an explicit perimeter, its Google
+// Cloud regions. A scan that fails fails every pair.
 async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inventory, state }: {
   runId: string; account: string; at: string; config: DiscoveryConfig; inventory: OrgInventory; state: AccountScan | null;
 }): Promise<{ account: string; ok: boolean; written: number }> {
   const now = deps.now ?? Date.now;
+  // The scan reads them too: an unreachable region where one is fails, and a Monitoring that fails keeps their idle share.
+  const stored = await deps.store.accountCandidates(account);
   const started = now();
   let scan: ProjectScan | undefined;
   let error: string | undefined;
@@ -395,7 +398,7 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
     if (!google || !connected) throw new Error(NO_CONNECTION);
     routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
     const managed = (await Promise.all(routers.map((r) => google.routerWorkloads(account, r.region)))).flat();
-    scan = await scanProject(google, { project: account, managed, now, log: deps.log });
+    scan = await scanProject(google, { project: account, managed, stored, now, log: deps.log });
   } catch (err) {
     error = errorText(err);
     cause = err;
@@ -404,7 +407,6 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
   const ms = now() - started;
   const access = await projectAccess(deps, { account, at, state, connection: connected, routers, scanned: !error, cause });
 
-  const stored = await deps.store.accountCandidates(account);
   const known = [...new Set(['global', ...(scan?.regions ?? []).map((r) => r.region), ...stored.filter((c) => !c.goneAt).map((c) => c.region)])].sort();
   const regions = { ...(state?.regions ?? {}) };
   const results: PairResult[] = [];
@@ -646,8 +648,9 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const status = errors === 0 ? 'ok' : errors === targets.length + emptyPairs ? 'failed' : 'partial';
     const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
     const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory, now());
-    // Google Cloud's routers: a failure here is recorded, never the run's.
-    let google = deps.google ? await discoverGoogleRouters(deps.google, { now, log }).catch((err) => {
+    // Google Cloud's routers, in the projects the plan listed: a failure here is recorded, never the run's.
+    const projects = inventory.accounts.filter((a) => isProject(a.id)).map((a) => a.id);
+    let google = deps.google ? await discoverGoogleRouters(deps.google, { now, log, projects }).catch((err) => {
       log.error('GoogleRoutersFailed', { error: errorText(err) });
       return { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [{ project: '*', error: errorText(err) }] };
     }) : null;
