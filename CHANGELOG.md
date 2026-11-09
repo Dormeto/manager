@@ -43,6 +43,20 @@ every Google Cloud router with a controller as `manager-settings` (the object wr
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
 onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
 
+The manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
+function with `{ task: 'poll' }`, never retried), 10 at once for at most 50 s a run, the least recently polled first, each
+router at 0.40.0 or of an unknown version. Its journal (`events`), read again from 5 minutes before the newest event already
+read, comes in as an AWS router's `Workload state changed` events (an event read twice is one history entry, an older one
+never sets a summary back); when its check is newer than its summary, its rows (`list`) come in as `Router checked` chunks of
+1000; when the organization's settings it holds aren't `settings.json`'s, `settings.json` is pushed whole with its ETag
+(`ManagerSettingsPushed`), read once a run. The identity is the router called, its project and region, never the payload's.
+A router whose controller URL answers Google's own 404 twice in a row is unregistered (`RouterUnregistered`); one whose
+controller has no `/v1/actions` is kept and not called again until its version changes; a broken connection never counts as
+a router gone. Each router's poll (where its journal was read up to, its 404s in a row, its last error with the command that
+fixes it, the ETag it holds) is kept on its `RS#` item, beside the summary. The fleet function reads `settings.json`
+(`s3:GetObject`; `s3:ListBucket` on the lists bucket, so a missing one answers 404) and updates its table's items
+(`dynamodb:UpdateItem`). A Google Cloud row's Cloud SQL backend is kept as `cloudsql-instance`.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
