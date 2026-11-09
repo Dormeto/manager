@@ -36,6 +36,20 @@ describe('discovery store', () => {
     expect((await store.listConnections()).map((c) => c.account)).toEqual(['222222222222']);
   });
 
+  it('locates a Google Cloud candidate by the project and region in its path: global or the URL map\'s region', async () => {
+    const { store } = setup();
+    const global = 'projects/dormeto-dev/global/backendServices/web';
+    const regional = 'projects/dormeto-dev/regions/europe-west2/backendServices/api';
+    await store.putCandidates([
+      candidate(1, { id: global, account: 'dormeto-dev', region: 'global' }),
+      candidate(2, { id: regional, account: 'dormeto-dev', region: 'europe-west2' }),
+    ]);
+    expect((await store.getCandidate(global))!.id).toBe(global);
+    expect((await store.getCandidate(regional))!.region).toBe('europe-west2');
+    expect(await store.getCandidate('projects/dormeto-dev/global/backendServices/nope')).toBeNull();
+    expect((await store.accountCandidates('dormeto-dev')).map((c) => c.id).sort()).toEqual([regional, global].sort());
+  });
+
   it('stores the configuration with who changed it and when', async () => {
     const { store, dynamo } = setup();
     expect(await store.getConfig()).toBeNull();

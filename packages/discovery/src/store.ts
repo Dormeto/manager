@@ -1,5 +1,6 @@
 // Discovery items of the manager table (spec section 6): configuration, runs, inventory and exclusions in partition
 // T#default; candidates in the partition of their account (CAND#<account>), indexed by status on gsi1 (scale design §4).
+import { googlePath } from '@dormeto/fleet/clouds';
 import { BatchGetItemCommand, BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { CANDIDATE_STATUSES, type AccessReport, type AccessSummary, type AccountScan, type Connection, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
@@ -76,8 +77,11 @@ export interface DynamoSender {
 
 const seconds = (ms: number) => Math.floor(ms / 1000);
 
-// Candidate ids are load balancer ARNs (target group or rule): arn:<partition>:elasticloadbalancing:<region>:<account>:...
+// Candidate ids are load balancer ARNs (target group or rule): arn:<partition>:elasticloadbalancing:<region>:<account>:...,
+// or on Google Cloud the backend service's path (the project, then `global` or the region).
 const locate = (id: string) => {
+  const google = googlePath(id);
+  if (google) return { account: google.project, region: google.region };
   const [, , , region, account] = id.split(':');
   return { account: account ?? '', region: region ?? '' };
 };

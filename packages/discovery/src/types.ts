@@ -11,11 +11,11 @@ export interface Criterion {
   ouIds?: string[];
   accountTags?: Record<string, string[]>; // [] = any value
   regions?: string[];
-  loadBalancers?: string[]; // names with * or full ARNs
+  loadBalancers?: string[]; // names with *, full ARNs, or Google Cloud paths (projects/...)
   hosts?: string[]; // with *
   resourceTags?: Record<string, string[]>; // load balancer, rule or target group
   backendKinds?: BackendKind[];
-  targetGroups?: string[]; // names with * or full ARNs (manual exclusions only, not in the configuration)
+  targetGroups?: string[]; // names with *, full ARNs, or Google Cloud paths (manual exclusions only, not in the configuration)
   label?: string; // set by manual exclusions: their reason in decisions and lint, instead of "global exclude N"
 }
 
@@ -25,7 +25,8 @@ export const EXCLUSION_KINDS: readonly ExclusionKind[] = ['target-group', 'load-
 
 export interface Exclusion {
   id: string;
-  target: { kind: ExclusionKind; arn?: string; account: string; region?: string; name: string };
+  // arn: AWS's; path: a Google Cloud backend service's or URL map's; account: the AWS account or the project
+  target: { kind: ExclusionKind; arn?: string; path?: string; account: string; region?: string; name: string };
   reason: string;
   by: string;
   at: string;
@@ -98,6 +99,11 @@ export interface ScannedRule {
   workloadId?: string;
   idleHours7d: number | null;
   requests7d: number | null;
+  // Google Cloud: the id is the backend service's path; targetGroup holds its name, loadBalancer the URL map's, region the
+  // URL map's or `global`, targetGroupArn is null and the AWS-only fields are empty.
+  backendService?: string;
+  urlMap?: string;
+  lb?: { kind: 'global' | 'classic' | 'regional' | 'internal' | 'cross-region-internal' };
 }
 
 export interface Decision {

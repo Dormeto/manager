@@ -1,5 +1,5 @@
 // Perimeter configuration: default and validation (spec section 4.4). Every error is listed at once, with its path.
-import { isAccount, isRegion } from '@dormeto/fleet/clouds';
+import { googlePath, isAccount, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { BACKEND_KINDS, type Criterion, type DiscoveryConfig, type Filter } from './types.js';
 
 // A new installation scans nothing until an administrator adds a filter.
@@ -19,6 +19,10 @@ const MAX_FILTERS = 50;
 const MAX_CRITERIA = 100;
 const MAX_PATTERN = 256;
 const OU_ID = /^(ou-[0-9a-z]{4,32}-[0-9a-z]{8,32}|r-[0-9a-z]{4,32})$/;
+// Google Cloud's folders and organizations: `folders/<number>`, `organizations/<number>`.
+const GOOGLE_OU_ID = /^(folders|organizations)\/\d{1,20}$/;
+// A region of either cloud, or Google Cloud's `global`.
+const isAnyRegion = (s: string) => isRegion('aws', s) || isRegion('gcp', s) || s === 'global';
 const DIMENSIONS = ['accountIds', 'ouIds', 'accountTags', 'regions', 'loadBalancers', 'hosts', 'resourceTags', 'backendKinds'] as const;
 type Dimension = (typeof DIMENSIONS)[number];
 
@@ -66,6 +70,8 @@ function tags(value: unknown, path: string, errors: string[]): Record<string, st
 }
 
 const pattern = (s: string) => (s.length > MAX_PATTERN ? `patterns are at most ${MAX_PATTERN} characters` : null);
+// A load balancer pattern: a path (`projects/...`), an ARN or a name glob.
+const loadBalancerPattern = (s: string) => pattern(s) ?? (s.startsWith('projects/') && !googlePath(s) ? `"${s}" is not a Google Cloud URL map or backend service path` : null);
 
 function criterion(value: unknown, path: string, errors: string[]): Criterion | null {
   if (!isObject(value)) {
@@ -79,11 +85,11 @@ function criterion(value: unknown, path: string, errors: string[]): Criterion | 
     else out.note = value.note;
   }
   const present = (d: Dimension) => value[d] !== undefined;
-  if (present('accountIds')) out.accountIds = strings(value.accountIds, `${path}.accountIds`, errors, (s) => (isAccount(s) ? null : `"${s}" is not a 12-digit account ID`)) ?? undefined;
-  if (present('ouIds')) out.ouIds = strings(value.ouIds, `${path}.ouIds`, errors, (s) => (OU_ID.test(s) ? null : `"${s}" is not an OU or root ID`)) ?? undefined;
+  if (present('accountIds')) out.accountIds = strings(value.accountIds, `${path}.accountIds`, errors, (s) => (isAccount(s) || isProject(s) ? null : `"${s}" is not a 12-digit account ID or a project ID`)) ?? undefined;
+  if (present('ouIds')) out.ouIds = strings(value.ouIds, `${path}.ouIds`, errors, (s) => (OU_ID.test(s) || GOOGLE_OU_ID.test(s) ? null : `"${s}" is not an OU, root, folder or organization ID`)) ?? undefined;
   if (present('accountTags')) out.accountTags = tags(value.accountTags, `${path}.accountTags`, errors) ?? undefined;
-  if (present('regions')) out.regions = strings(value.regions, `${path}.regions`, errors, (s) => (isRegion('aws', s) ? null : `"${s}" is not a region name`)) ?? undefined;
-  if (present('loadBalancers')) out.loadBalancers = strings(value.loadBalancers, `${path}.loadBalancers`, errors, pattern) ?? undefined;
+  if (present('regions')) out.regions = strings(value.regions, `${path}.regions`, errors, (s) => (isAnyRegion(s) ? null : `"${s}" is not a region name`)) ?? undefined;
+  if (present('loadBalancers')) out.loadBalancers = strings(value.loadBalancers, `${path}.loadBalancers`, errors, loadBalancerPattern) ?? undefined;
   if (present('hosts')) out.hosts = strings(value.hosts, `${path}.hosts`, errors, pattern) ?? undefined;
   if (present('resourceTags')) out.resourceTags = tags(value.resourceTags, `${path}.resourceTags`, errors) ?? undefined;
   if (present('backendKinds')) {
@@ -113,7 +119,7 @@ export function validateConfig(input: unknown): { config: DiscoveryConfig | null
   if (input.mode !== 'organization' && input.mode !== 'account') errors.push('mode: must be "organization" or "account"');
   let regions: string[] = [];
   if (Array.isArray(input.regions) && input.regions.length === 1 && input.regions[0] === '*') regions = ['*'];
-  else regions = strings(input.regions, 'regions', errors, (s) => (isRegion('aws', s) ? null : `"${s}" is not a region name`)) ?? [];
+  else regions = strings(input.regions, 'regions', errors, (s) => (isAnyRegion(s) ? null : `"${s}" is not a region name`)) ?? [];
   const refreshHours = input.refreshHours;
   if (typeof refreshHours !== 'number' || !Number.isInteger(refreshHours) || refreshHours < 1 || refreshHours > 168) {
     errors.push('refreshHours: must be an integer from 1 to 168');

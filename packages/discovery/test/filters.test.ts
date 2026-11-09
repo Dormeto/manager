@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decide, matches, scanAccounts, targetPairs } from '../src/filters.js';
+import type { Account } from '../src/types.js';
 import { A, B, C, INVENTORY, OU1, OU5, PROD, ROOT, config, filter, rule } from './fixtures.js';
 
 const m = (c: Parameters<typeof matches>[0], account = A, r = rule()) => matches(c, account, r, INVENTORY);
@@ -154,5 +155,42 @@ describe('scanAccounts and targetPairs', () => {
   it('uses the enabled regions of each account with regions ["*"]', () => {
     const cfg = config({ regions: ['*'], filters: [filter('a', [{ accountIds: [A.id] }])] });
     expect(scanned(targetPairs(cfg, INVENTORY, regions))).toEqual([`${A.id}/eu-west-1`, `${A.id}/us-east-1`]);
+  });
+});
+
+describe('matches a Google Cloud candidate', () => {
+  const G: Account = { id: 'dormeto-dev', name: 'dormeto-dev', ouPath: ['organizations/1', 'folders/12', 'folders/34'], tags: { env: 'dev' } };
+  const GLOBAL_MAP = 'projects/dormeto-dev/global/urlMaps/web-map';
+  const GLOBAL_BS = 'projects/dormeto-dev/global/backendServices/web-bs';
+  const g = rule({
+    id: GLOBAL_BS, account: G.id, region: 'global', loadBalancer: 'web-map', loadBalancerArn: '', listener: '', priority: '', conditions: 'host shop.example.com',
+    targetGroup: 'web-bs', targetGroupArn: null, backendService: GLOBAL_BS, urlMap: GLOBAL_MAP, lb: { kind: 'global' }, backend: { kind: 'asg', id: 'mig-1' }, tags: { env: ['dev'] },
+  });
+  const mg = (c: Parameters<typeof matches>[0]) => matches(c, G, g, INVENTORY);
+
+  it('by project, by a folder or the organization in its path, by global and by its labels', () => {
+    expect([mg({ accountIds: ['dormeto-dev'] }), mg({ accountIds: [A.id] })]).toEqual([true, false]);
+    expect([mg({ ouIds: ['folders/12'] }), mg({ ouIds: ['organizations/1'] }), mg({ ouIds: ['folders/99'] })]).toEqual([true, true, false]);
+    expect([mg({ regions: ['global'] }), mg({ regions: ['europe-west1'] })]).toEqual([true, false]);
+    expect([mg({ resourceTags: { env: ['dev'] } }), mg({ resourceTags: { env: ['prod'] } }), mg({ accountTags: { env: ['dev'] } })]).toEqual([true, false, true]);
+  });
+
+  it('by URL map name glob or path, and by backend service name glob or path, exactly and case-sensitively for paths', () => {
+    expect([mg({ loadBalancers: ['web-*'] }), mg({ loadBalancers: ['api-*'] }), mg({ loadBalancers: [GLOBAL_MAP] }), mg({ loadBalancers: [GLOBAL_MAP.toUpperCase()] })]).toEqual([true, false, true, false]);
+    expect([mg({ targetGroups: ['web-bs'] }), mg({ targetGroups: [GLOBAL_BS] }), mg({ targetGroups: ['projects/dormeto-dev/global/backendServices/other'] }), mg({ loadBalancers: [GLOBAL_BS] })]).toEqual([true, true, false, true]);
+    expect(mg({ targetGroups: ['arn:aws:elasticloadbalancing:eu-west-1:1:targetgroup/web-bs/1'] })).toBe(false);
+  });
+
+  it('by backend kind, hosts and the regional URL map\'s region; a path never matches an AWS candidate', () => {
+    expect([mg({ backendKinds: ['asg'] }), mg({ backendKinds: ['instance'] }), mg({ hosts: ['*.example.com'] })]).toEqual([true, false, true]);
+    expect(matches({ regions: ['europe-west2'] }, G, { ...g, region: 'europe-west2' }, INVENTORY)).toBe(true);
+    expect([m({ loadBalancers: [GLOBAL_MAP] }), m({ targetGroups: [GLOBAL_BS] })]).toEqual([false, false]);
+  });
+
+  it('decides through a folder filter and a global exclude by path', () => {
+    const inv = { ...INVENTORY, accounts: [...INVENTORY.accounts, G] };
+    const cfg = config({ regions: ['*'], filters: [filter('f', [{ ouIds: ['folders/12'] }])], globalExcludes: [{ targetGroups: [GLOBAL_BS], label: 'x' }] });
+    expect(decide(cfg, G, g, inv)).toEqual({ scope: 'excluded', reason: 'excluded: x' });
+    expect(decide({ ...cfg, globalExcludes: [] }, G, g, inv).scope).toBe('in');
   });
 });

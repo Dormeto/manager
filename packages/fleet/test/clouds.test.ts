@@ -1,7 +1,7 @@
 // One model for both clouds (Google Cloud design §3): the account is an AWS account or a Google Cloud project, and the
 // regions are checked per cloud.
 import { describe, expect, it } from 'vitest';
-import { cloudOf, fiveFieldMinutes, isAccount, isCandidateRegion, isProject, isRegion } from '../src/clouds.js';
+import { cloudOf, fiveFieldMinutes, googlePath, isAccount, isCandidateRegion, isProject, isRegion } from '../src/clouds.js';
 
 describe('clouds', () => {
   it('tells the cloud of an account: twelve digits are AWS, a project ID is Google Cloud, anything else is neither', () => {
@@ -21,5 +21,14 @@ describe('clouds', () => {
 
   it('reads the minutes of a five-field schedule every N minutes, and nothing else', () => {
     expect([fiveFieldMinutes('*/5 * * * *'), fiveFieldMinutes('*/10 * * * *'), fiveFieldMinutes('0 * * * *'), fiveFieldMinutes('rate(5 minutes)'), fiveFieldMinutes('*/0 * * * *')]).toEqual([5, 10, null, null, null]);
+  });
+
+  it('reads a Google Cloud path: a backend service or a URL map, global or regional, and nothing else', () => {
+    expect(googlePath('projects/dormeto-dev/global/backendServices/web')).toEqual({ project: 'dormeto-dev', region: 'global', kind: 'backendServices', name: 'web' });
+    expect(googlePath('projects/dormeto-dev/regions/europe-west2/urlMaps/lb-1')).toEqual({ project: 'dormeto-dev', region: 'europe-west2', kind: 'urlMaps', name: 'lb-1' });
+    for (const bad of ['projects/123456789012/global/urlMaps/x', 'projects/dormeto-dev/regions/global/urlMaps/x', 'projects/dormeto-dev/global/forwardingRules/x',
+      'projects/dormeto-dev/global/urlMaps/X', 'projects/dormeto-dev/global/urlMaps/-x', 'projects/dormeto-dev/global/urlMaps/x-', `projects/dormeto-dev/global/urlMaps/a${'b'.repeat(63)}`,
+      'projects/dormeto-dev/global/urlMaps/x/y', 'arn:aws:x', '']) expect(googlePath(bad)).toBeNull();
+    expect(googlePath(5)).toBeNull();
   });
 });

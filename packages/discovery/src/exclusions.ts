@@ -7,8 +7,8 @@ export const activeExclusions = (exclusions: Exclusion[], now: number) => exclus
 export function exclusionCriterion(e: Exclusion): Criterion {
   const label = `manual exclusion by ${e.by}: ${e.reason}`;
   if (e.target.kind === 'account') return { accountIds: [e.target.account], label };
-  if (e.target.kind === 'load-balancer') return { loadBalancers: [e.target.arn!], label };
-  return { targetGroups: [e.target.arn!], label };
+  if (e.target.kind === 'load-balancer') return { loadBalancers: [e.target.path ?? e.target.arn!], label };
+  return { targetGroups: [e.target.path ?? e.target.arn!], label };
 }
 
 export const withExclusions = (config: DiscoveryConfig, exclusions: Exclusion[], now: number): DiscoveryConfig => ({

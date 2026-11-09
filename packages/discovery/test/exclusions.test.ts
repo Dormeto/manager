@@ -31,6 +31,15 @@ describe('exclusion criteria', () => {
     expect(exclusionCriterion(accountExclusion)).toEqual({ accountIds: [C.id], label: 'manual exclusion by ops@example.com: payments, never' });
   });
 
+  it('turns a Google Cloud backend service, URL map or project into a global exclude by its path or project', () => {
+    const bs = 'projects/dormeto-dev/global/backendServices/web';
+    const map = 'projects/dormeto-dev/regions/europe-west2/urlMaps/lb';
+    const label = 'manual exclusion by ops@example.com: migration';
+    expect(exclusionCriterion(exclusion({ kind: 'target-group', path: bs, account: 'dormeto-dev', region: 'global', name: 'web' }))).toEqual({ targetGroups: [bs], label });
+    expect(exclusionCriterion(exclusion({ kind: 'load-balancer', path: map, account: 'dormeto-dev', region: 'europe-west2', name: 'lb' }))).toEqual({ loadBalancers: [map], label });
+    expect(exclusionCriterion(exclusion({ kind: 'account', account: 'dormeto-dev', name: 'dormeto-dev' }))).toEqual({ accountIds: ['dormeto-dev'], label });
+  });
+
   it('leaves expired exclusions out', () => {
     const expired = { ...tgExclusion, expiresAt: iso(T0 - 1) };
     const later = { ...lbExclusion, expiresAt: iso(T0 + DAY) };

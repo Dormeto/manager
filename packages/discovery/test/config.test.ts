@@ -35,11 +35,37 @@ describe('validateConfig', () => {
     expect(errors).toEqual([]);
   });
 
+  it('accepts Google Cloud\'s names: project IDs, folders and organizations, regions, global, and paths in the load balancers', () => {
+    const { errors } = validateConfig({
+      ...valid,
+      regions: ['eu-west-1', 'europe-west1', 'global'],
+      globalExcludes: [{ ouIds: ['folders/12', 'organizations/345'], accountIds: ['dormeto-dev'], regions: ['europe-west1', 'global'] }],
+      filters: [{ name: 'g', include: [{ loadBalancers: ['projects/dormeto-dev/global/urlMaps/web', 'projects/dormeto-dev/regions/europe-west2/backendServices/api', 'web-*'] }] }],
+    });
+    expect(errors).toEqual([]);
+  });
+
+  it('refuses what is neither cloud\'s: a folder that is not a number, a zone, a malformed path or a project in the event refresh', () => {
+    const { errors } = validateConfig({
+      ...valid,
+      regions: ['europe-west1-b'],
+      globalExcludes: [{ ouIds: ['folders/x'] }, { regions: ['europe-west1-b'] }, { loadBalancers: ['projects/123456789012/global/urlMaps/web'] }],
+      eventRefresh: { enabled: true, accounts: ['dormeto-dev'] },
+    });
+    expect(errors).toEqual([
+      'regions: "europe-west1-b" is not a region name',
+      'globalExcludes[0].ouIds: "folders/x" is not an OU, root, folder or organization ID',
+      'globalExcludes[1].regions: "europe-west1-b" is not a region name',
+      'globalExcludes[2].loadBalancers: "projects/123456789012/global/urlMaps/web" is not a Google Cloud URL map or backend service path',
+      'eventRefresh.accounts: "dormeto-dev" is not an account id',
+    ]);
+  });
+
   it('refuses another version, and lists every error at once', () => {
     const { config, errors } = validateConfig({
       version: 2,
       mode: 'everything',
-      regions: ['eu-west1'],
+      regions: ['eu_west1'],
       refreshHours: 0,
       globalExcludes: [{ accountIds: ['1234'], foo: ['x'] }],
       filters: [
@@ -52,11 +78,11 @@ describe('validateConfig', () => {
     expect(errors).toEqual([
       'version: must be 1',
       'mode: must be "organization" or "account"',
-      'regions: "eu-west1" is not a region name',
+      'regions: "eu_west1" is not a region name',
       'refreshHours: must be an integer from 1 to 168',
-      'globalExcludes[0].accountIds: "1234" is not a 12-digit account ID',
+      'globalExcludes[0].accountIds: "1234" is not a 12-digit account ID or a project ID',
       'globalExcludes[0]: unknown dimension "foo"',
-      'filters[0].include[0].ouIds: "ou-bad" is not an OU or root ID',
+      'filters[0].include[0].ouIds: "ou-bad" is not an OU, root, folder or organization ID',
       'filters[0].include[0].hosts: patterns are at most 256 characters',
       'filters[0].include[0].backendKinds: "lambda" is not one of instance, asg, ecs, k8s',
       'filters[1]: duplicate filter name "a"',

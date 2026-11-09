@@ -7,6 +7,7 @@ const DAY = 86_400_000;
 const ACCOUNT = '121014831971';
 const LB = `arn:aws:elasticloadbalancing:eu-west-1:${ACCOUNT}:loadbalancer/app/dmt-dev/50dc6c495c0c9188`;
 const TG = `arn:aws:elasticloadbalancing:eu-west-1:${ACCOUNT}:targetgroup/dmt-dev-asg-app/73e2d6bc24d8a067`;
+const BS = 'projects/dormeto-dev/regions/europe-west2/backendServices/web';
 const TG2 = `arn:aws:elasticloadbalancing:eu-west-1:${ACCOUNT}:targetgroup/dmt-dev-ecs-app/1111111111111111`;
 
 const managed = (id: string, workloadId: string, targetGroupArn: string, over: Partial<Candidate> = {}) => candidate(id, {
@@ -15,7 +16,7 @@ const managed = (id: string, workloadId: string, targetGroupArn: string, over: P
 });
 
 type Answer = (router: string, payload: Record<string, unknown>) => unknown;
-function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(TG2, 'other', TG2), candidate('free', { loadBalancerArn: LB, targetGroupArn: 'arn:free' })], answer?: Answer, workloads: Record<string, unknown>[] = []) {
+function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(TG2, 'other', TG2), candidate('free', { loadBalancerArn: LB, targetGroupArn: 'arn:free' })], answer?: Answer, workloads: Record<string, unknown>[] = [], extraRouters: Record<string, unknown>[] = []) {
   const audit: AuditEntry[] = [];
   const calls: [string, Record<string, unknown>][] = [];
   const store = memoryStore(candidates);
@@ -38,6 +39,7 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
       { name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: ACCOUNT },
       { name: 'dmt-dev2', region: 'eu-west-1', controller: 'dmt-dev2-controller', account: ACCOUNT },
       { name: 'dmt-paris', region: 'eu-west-3', controller: 'dmt-paris-controller', account: ACCOUNT },
+      ...extraRouters as never[],
     ],
     async invoke(router, payload) {
       calls.push([router.name, payload]);
@@ -136,6 +138,48 @@ describe('exclusions', () => {
     await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration', workload: { router: 'dmt-dev', id: 'demo-asg' } }));
     // The workflow finds the routers from the target group's account and region: it names installed routers otherwise.
     expect(created).toEqual([['exclude', { exclusionId: 'x1', hint: { workloadId: 'demo-asg' } }, 'ops@example.com']]);
+  });
+
+  it('excludes a Google Cloud backend service by its path: account and region come from the path, the name is the service\'s', async () => {
+    const { api, store } = setup();
+    const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', path: BS }, reason: 'migration' })));
+    expect(res.exclusion.target).toEqual({ kind: 'target-group', path: BS, account: 'dormeto-dev', region: 'europe-west2', name: 'web' });
+    expect(await store.getExclusion('x1')).toMatchObject({ target: { path: BS, account: 'dormeto-dev', region: 'europe-west2' } });
+  });
+
+  it('excludes a Google Cloud URL map by its path, and a project by its ID; an ARN stays AWS\'s', async () => {
+    const { api } = setup();
+    const map = 'projects/dormeto-dev/global/urlMaps/lb';
+    expect(json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'load-balancer', path: map }, reason: 'a' }))).exclusion.target)
+      .toEqual({ kind: 'load-balancer', path: map, account: 'dormeto-dev', region: 'global', name: 'lb' });
+    expect(json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'account', account: 'dormeto-dev' }, reason: 'b' }))).exclusion.target)
+      .toEqual({ kind: 'account', account: 'dormeto-dev', name: 'dormeto-dev' });
+    expect(json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'c' }))).exclusion.target)
+      .toEqual({ kind: 'target-group', arn: TG, account: ACCOUNT, region: 'eu-west-1', name: 'dmt-dev-asg-app' });
+  });
+
+  it('refuses a path of the wrong kind or whose project is twelve digits, naming both forms', async () => {
+    const { api, store } = setup();
+    for (const target of [
+      { kind: 'target-group', path: 'projects/123456789012/global/backendServices/web' },
+      { kind: 'target-group', path: 'projects/dormeto-dev/global/urlMaps/web' },
+      { kind: 'load-balancer', path: BS },
+      { kind: 'target-group', path: 'projects/dormeto-dev/regions/europe-west2-b/backendServices/web' },
+    ]) {
+      const res = await api(event('POST', '/api/exclusions', 'dmt-operator', { target, reason: 'a' }));
+      expect([res.statusCode, json(res).message ?? json(res).error]).toEqual([400, expect.stringMatching(/ARN.*path|path.*ARN/)]);
+    }
+    expect((await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'account', account: '1234' }, reason: 'a' }))).statusCode).toBe(400);
+    expect(await store.listExclusions()).toEqual([]);
+  });
+
+  it('accepts a workload with a Google Cloud backend service and a router of its project, and refuses another project\'s', async () => {
+    const { api, created } = setup([], undefined, [], [{ name: 'dmt-gcp', region: 'europe-west2', controller: 'c', account: 'dormeto-dev', cloud: 'gcp' }]);
+    const ok = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', path: BS }, reason: 'a', workload: { router: 'dmt-gcp', id: 'web' } }));
+    expect(ok.statusCode).toBe(202);
+    expect(created).toEqual([['exclude', { exclusionId: 'x1', hint: { workloadId: 'web' } }, 'ops@example.com']]);
+    const other = await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', path: BS }, reason: 'a', workload: { router: 'dmt-dev', id: 'web' } }));
+    expect(other.statusCode).toBe(400);
   });
 
   it('refuses a workload whose router is not in the target group\'s account and region', async () => {

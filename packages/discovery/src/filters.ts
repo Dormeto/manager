@@ -33,18 +33,21 @@ export function matchesAccount(c: Criterion, account: Account, _inventory?: OrgI
 
 const matchesRegion = (c: Criterion, region: string) => !c.regions || c.regions.includes(region);
 
+// A Google Cloud path names a URL map or a backend service: compared exactly, case-sensitively, with the candidate's own.
+const pathMatches = (p: string, rule: ScannedRule) => (p.includes('/urlMaps/') ? p === rule.urlMap : p === rule.backendService);
+
 export function matches(c: Criterion, account: Account, rule: ScannedRule, inventory: OrgInventory): boolean {
   if (!matchesAccount(c, account, inventory) || !matchesRegion(c, rule.region)) return false;
-  if (c.loadBalancers && !c.loadBalancers.some((p) => (p.startsWith('arn:') ? p === rule.loadBalancerArn : globMatches(p, rule.loadBalancer)))) return false;
+  if (c.loadBalancers && !c.loadBalancers.some((p) => (p.startsWith('projects/') ? pathMatches(p, rule) : p.startsWith('arn:') ? p === rule.loadBalancerArn : globMatches(p, rule.loadBalancer)))) return false;
   if (c.hosts && !c.hosts.some((p) => rule.hosts.some((h) => globMatches(p, h)))) return false;
   if (c.resourceTags && !resourceTagsMatch(c.resourceTags, rule.tags)) return false;
   if (c.backendKinds && !(rule.backend && c.backendKinds.includes(rule.backend.kind))) return false;
-  if (c.targetGroups && !c.targetGroups.some((p) => (p.startsWith('arn:') ? p === rule.targetGroupArn : rule.targetGroup !== null && globMatches(p, rule.targetGroup)))) return false;
+  if (c.targetGroups && !c.targetGroups.some((p) => (p.startsWith('projects/') ? pathMatches(p, rule) : p.startsWith('arn:') ? p === rule.targetGroupArn : rule.targetGroup !== null && globMatches(p, rule.targetGroup)))) return false;
   return true;
 }
 
 const plural = (one: string, many: string, values: string[]) => `${values.length > 1 ? many : one} ${values.join(', ')}`;
-// Target group name of an ARN (arn:...:targetgroup/<name>/<id>), or the pattern itself.
+// Target group name of an ARN (arn:...:targetgroup/<name>/<id>), or the pattern itself (a path as it is).
 const targetGroupName = (p: string) => (p.startsWith('arn:') ? p.split(':').at(-1)!.split('/')[1] ?? p : p);
 const tagText = (tags: Record<string, string[]>) => Object.entries(tags).map(([k, v]) => (v.length ? `${k}=${v.join('|')}` : k)).join(', ');
 

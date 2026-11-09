@@ -23,3 +23,31 @@ export function fiveFieldMinutes(cron: string | null | undefined): number | null
   const m = /^\*\/(\d+) \* \* \* \*$/.exec(cron ?? '');
   return m && Number(m[1]) > 0 ? Number(m[1]) : null;
 }
+
+// A Google Cloud path of a backend service or a URL map, as the manager names them: `projects/<project>/global/<kind>/<name>`
+// or `projects/<project>/regions/<region>/<kind>/<name>`. One reader for the API, discovery and the operations.
+const GOOGLE_NAME = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
+export interface GooglePath {
+  project: string;
+  region: string; // `global` or the region
+  kind: 'backendServices' | 'urlMaps';
+  name: string;
+}
+export function googlePath(s: unknown): GooglePath | null {
+  if (typeof s !== 'string') return null;
+  const parts = s.split('/');
+  if (parts[0] !== 'projects') return null;
+  const [, project, scope, ...rest] = parts;
+  let region: string;
+  let tail: string[];
+  if (scope === 'global') {
+    region = 'global';
+    tail = rest;
+  } else if (scope === 'regions' && isRegion('gcp', rest[0])) {
+    region = rest[0]!;
+    tail = rest.slice(1);
+  } else return null;
+  const [kind, name] = tail;
+  if (tail.length !== 2 || !isProject(project) || (kind !== 'backendServices' && kind !== 'urlMaps') || !GOOGLE_NAME.test(name!)) return null;
+  return { project, region, kind, name: name! };
+}

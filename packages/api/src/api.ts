@@ -9,7 +9,7 @@ import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operatio
 import type { Google, GoogleConnection } from '@dormeto/google';
 // The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
 import { accessMissingText, callRouter, controllerUnknownText, installCommand, RouterCallError, routerTooOld, tooOldText, type Refusal } from '@dormeto/google/router';
-import { cloudOf, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
+import { cloudOf, googlePath, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
@@ -2362,12 +2362,21 @@ export function createApi({
     if (!target || !EXCLUSION_KINDS.includes(kind)) throw new HttpError(400, 'bad_request', `target.kind must be ${EXCLUSION_KINDS.join(', ')}`);
     if (kind === 'account') {
       const account = String(target.account ?? '');
-      if (!isAccount(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID');
+      if (!isAccount(account) && !isProject(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID or a project ID');
       return { kind, account, name: inventoryName(account) };
+    }
+    // Google Cloud names a backend service (a target group) or a URL map (a load balancer) by its path.
+    if (target.path !== undefined) {
+      const path = String(target.path);
+      const parsed = googlePath(path);
+      if (!parsed || parsed.kind !== (kind === 'target-group' ? 'backendServices' : 'urlMaps')) {
+        throw new HttpError(400, 'bad_request', `target.arn must be the ARN of an application ${KIND_TEXT[kind]}, or target.path the path of a Google Cloud ${kind === 'target-group' ? 'backend service' : 'URL map'}`);
+      }
+      return { kind, path, account: parsed.project, region: parsed.region, name: parsed.name };
     }
     const arn = String(target.arn ?? '');
     const parsed = ARNS[kind].exec(arn);
-    if (!parsed) throw new HttpError(400, 'bad_request', `target.arn must be the ARN of an application ${KIND_TEXT[kind]}`);
+    if (!parsed) throw new HttpError(400, 'bad_request', `target.arn must be the ARN of an application ${KIND_TEXT[kind]}, or target.path the path of a Google Cloud ${kind === 'target-group' ? 'backend service' : 'URL map'}`);
     return { kind, arn, account: parsed[2]!, region: parsed[1]!, name: parsed[3]! };
   }
 
@@ -2435,8 +2444,8 @@ export function createApi({
       if (workload !== undefined) {
         const router = routers.find((r) => r.name === workload?.router);
         if (!router || !ID.test(String(workload?.id ?? '')) || target.kind !== 'target-group'
-          || (router.account ?? managerAccount) !== target.account || router.region !== target.region) {
-          throw new HttpError(400, 'bad_request', 'workload must name a registered router of the target group\'s account and region and a workload id, with a target group exclusion');
+          || (router.account ?? managerAccount) !== target.account || (!target.path && router.region !== target.region)) {
+          throw new HttpError(400, 'bad_request', 'workload must name a registered router of the target group\'s account (project) and region (any region of a Google Cloud project\'s) and a workload id, with a target group exclusion');
         }
         hint = { id: String(workload.id) };
       }
