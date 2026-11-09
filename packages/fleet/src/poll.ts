@@ -103,13 +103,16 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
   async function pollRouter(router: InstalledRouter, known: { checkedAt: string | null; poll: RouterPoll | null } | undefined, run: Run) {
     const was = known?.poll ?? null;
     const poll: RouterPoll = { newestAt: was?.newestAt ?? null, misses: was?.misses ?? 0, polledAt: new Date(now()).toISOString(), ...(was?.etag ? { etag: was.etag } : {}) };
-    // The router's answer, a refusal thrown; any answer of the controller's own says the router is there.
+    // The router's answer, a refusal thrown. Any answer at the controller URL but Google's own 404 (the controller's, or
+    // Google's 403 for a service it has) says the router is there; no answer (none in time, a token refused) says nothing.
+    let gone = false;
     const call = async (payload: Json): Promise<Json> => {
       let answer: Json | null;
       try {
         answer = (await callRouter(run.google, router, { ...payload, refusals: true }, { timeoutMs: CALL_MS })) as Json | null;
       } catch (err) {
-        if (err instanceof RouterCallError && !err.google && !err.token && err.status !== 0) poll.misses = 0;
+        if (err instanceof RouterCallError && err.google && err.status === 404) gone = true;
+        else if (err instanceof RouterCallError && !err.token && err.status !== 0) poll.misses = 0;
         throw err;
       }
       poll.misses = 0;
@@ -150,13 +153,16 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
         }
       }
     } catch (err) {
-      if (err instanceof RouterCallError && err.google && err.status === 404) poll.misses += 1;
+      if (gone) poll.misses += 1;
       if (err instanceof RouterCallError && err.refusal === 'router-too-old') poll.tooOld = router.version;
       poll.lastError = `${step}: ${textOf(err, router, run)}`;
       log?.warn('RouterPollFailed', { router: router.name, account: router.account, region: router.region, step, error: poll.lastError });
     }
-    if (poll.misses >= MISSES_MAX) {
+    // Only at a poll Google answered with its own 404: a count kept from before never removes a router on its own.
+    if (gone && poll.misses >= MISSES_MAX) {
       await registry.delete(router.account, router.region);
+      // Registered again later (installed again), it counts from 0.
+      poll.misses = 0;
       log?.warn('RouterUnregistered', {
         router: router.name, account: router.account, region: router.region, reason: 'its controller URL answered Google\'s own 404 twice in a row: the router is uninstalled',
       });

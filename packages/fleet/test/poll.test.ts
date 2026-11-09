@@ -323,6 +323,54 @@ describe('the poll of Google Cloud routers', () => {
     expect(await w.pollOf('europe-west2')).toMatchObject({ misses: 1 });
   });
 
+  it('counts the 404s again for a router registered again after its removal: a first poll without its controller\'s answer (Google\'s 403 while its grant propagates, a token refused, no answer) keeps it', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const w = world({ now: () => Date.now() });
+    const r = await w.add('europe-west2');
+    r.answer = () => GOOGLE_404;
+    await w.poll();
+    await w.poll();
+    expect(await w.registry.list()).toEqual([]);
+    expect(await w.pollOf('europe-west2')).toMatchObject({ misses: 0 });
+    // Installed again, discovery registers it again.
+    await w.register(r);
+    r.answer = () => ({ status: 403, text: '<html><title>403 Forbidden</title><h1>Error: Forbidden</h1></html>' });
+    await w.poll();
+    r.answer = undefined;
+    r.throws = new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', message: 'Permission \'iam.serviceAccounts.getOpenIdToken\' denied' });
+    await w.poll();
+    r.throws = undefined;
+    r.delayMs = 11 * S;
+    const silent = w.poll();
+    await vi.advanceTimersByTimeAsync(15 * S);
+    await silent;
+    expect(await w.registry.list()).toHaveLength(1);
+    expect(await w.pollOf('europe-west2')).toMatchObject({ misses: 0, lastError: 'events: no answer within 10000 ms' });
+  });
+
+  it('unregisters a router only at a poll Google answered with its own 404, never on a count kept from before', async () => {
+    const w = world();
+    const r = await w.add('europe-west2');
+    await w.store.putPoll(PROJECT, 'europe-west2', { newestAt: null, misses: 2, polledAt: iso(T0 - 60 * S) });
+    r.throws = new GoogleError({ status: 404, reason: 'NOT_FOUND', message: 'Requested entity was not found.' });
+    await w.poll();
+    expect(await w.registry.list()).toHaveLength(1);
+    expect(w.logs.map(([event]) => event)).not.toContain('RouterUnregistered');
+  });
+
+  it('counts Google\'s other answers at the controller URL (a 403: the service is there) as no 404 in a row', async () => {
+    const w = world();
+    const r = await w.add('europe-west2');
+    r.answer = () => GOOGLE_404;
+    await w.poll();
+    r.answer = () => ({ status: 403, text: '<html><title>403 Forbidden</title></html>' });
+    await w.poll();
+    expect(await w.pollOf('europe-west2')).toMatchObject({ misses: 0, lastError: expect.stringMatching(/^events: /) });
+    r.answer = () => GOOGLE_404;
+    await w.poll();
+    expect(await w.registry.list()).toHaveLength(1);
+  });
+
   it('keeps a router whose controller answers its own JSON 404 (older than 0.40.0), and calls it again only once its version changes', async () => {
     const w = world();
     const r = await w.add('europe-west2', { version: '' });
