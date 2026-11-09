@@ -199,7 +199,13 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
     return (answer.text.trim() ? JSON.parse(answer.text) : {}) as T;
   }
 
-  return { accessToken, idToken, call };
+  // A Cloud Run service's answer as it comes (its status and text, whatever they are), as the service account with an
+  // ID token for the audience; Google's 401 asks a new token once, as `call` does. The caller reads the answer: the
+  // service's own JSON, or Google's refusal in front of it.
+  const request = (sa: ServiceAccount, audience: string, method: string, url: string, body?: unknown): Promise<Answer> =>
+    authorized(`id ${sa} ${audience}`, () => idToken(sa, audience), url, method, body);
+
+  return { accessToken, idToken, call, request };
 }
 
 export type Google = ReturnType<typeof createGoogle>;

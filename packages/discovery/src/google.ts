@@ -7,7 +7,7 @@
 // without routers. AWS registrations are never read or written. The manager never changes a Google IAM policy.
 import { isProject, isRegion } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
-import { GoogleError, type Google, type GoogleConnection } from '@dormeto/google';
+import { GoogleError, type GoogleConnection } from '@dormeto/google';
 
 export interface GooglePort {
   // The connection's record (`DISC#GOOGLE`), null while there is none.
@@ -133,26 +133,4 @@ export async function discoverGoogleRouters(port: GooglePort, { now, log }: { no
     summary.removed += 1;
   }
   return summary;
-}
-
-// One Google instance per execution environment, so the tokens are kept from one invocation to the next: built when the
-// record is first read, built again only when the record changes.
-export function createGoogleSource({ read, create }: { read(): Promise<GoogleConnection | null>; create(connection: GoogleConnection): Pick<Google, 'call'> }) {
-  let kept: { record: string; google: Pick<Google, 'call'> } | undefined;
-  return {
-    async connection(): Promise<GoogleConnection | null> {
-      const record = await read();
-      if (!record) {
-        kept = undefined;
-        return null;
-      }
-      const text = JSON.stringify(record);
-      if (kept?.record !== text) kept = { record: text, google: create(record) };
-      return record;
-    },
-    async call<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
-      if (!kept) throw new Error('no Google Cloud connection');
-      return kept.google.call<T>('discovery', method, url, body);
-    },
-  };
 }

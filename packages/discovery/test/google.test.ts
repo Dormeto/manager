@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GoogleError } from '@dormeto/google';
 import type { GoogleConnection } from '@dormeto/google';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
-import { createGoogleSource, type GooglePort } from '../src/google.js';
+import type { GooglePort } from '../src/google.js';
 import { runDiscovery } from '../src/run.js';
 import { A, B, config, filter } from './fixtures.js';
 import { setup } from './run-fakes.js';
@@ -162,29 +162,5 @@ describe('Google Cloud routers in a discovery run', () => {
     const s = setup({ cfg: config({ filters: [filter('b', [{ accountIds: [B.id] }])] }) });
     await s.ready;
     expect((await runDiscovery(s.deps, { source: 'manual' })).google).toBeUndefined();
-  });
-});
-
-describe('the Google source', () => {
-  it('keeps one Google instance while the record is the same and builds another when it changes', async () => {
-    let record: GoogleConnection | null = connection();
-    const built: GoogleConnection[] = [];
-    const source = createGoogleSource({ read: async () => record, create: (c) => { built.push(c); return { call: async () => ({}) } as never; } });
-    await source.connection();
-    await source.connection();
-    expect(built).toHaveLength(1);
-    record = connection({ scopes: ['projects/dormeto-host', 'projects/other'] });
-    await source.connection();
-    expect(built).toHaveLength(2);
-    record = null;
-    expect(await source.connection()).toBeNull();
-  });
-
-  it('calls as the discovery account', async () => {
-    const seen: unknown[][] = [];
-    const source = createGoogleSource({ read: async () => connection(), create: () => ({ call: async (...args: unknown[]) => { seen.push(args); return { ok: 1 }; } }) as never });
-    await source.connection();
-    expect(await source.call('GET', 'https://x')).toEqual({ ok: 1 });
-    expect(seen).toEqual([['discovery', 'GET', 'https://x', undefined]]);
   });
 });

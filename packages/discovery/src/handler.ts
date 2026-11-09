@@ -11,8 +11,7 @@ import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSum
 import { scanRegion } from './scan.js';
 import { createRecords } from '../../operations/src/records.js';
 import { createFleetStore } from '../../fleet/src/store.js';
-import { createGoogle, type GoogleConnection } from '@dormeto/google';
-import { createGoogleSource } from './google.js';
+import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestMinutes } from './requests.js';
 import { routeOf } from './route.js';
@@ -97,7 +96,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
-    google: { connection: googleSource.connection, call: googleSource.call, registry: { list: () => records.listRouters(), put: (r) => records.putRouter(r), delete: (a, r) => records.deleteRouter(a, r) } },
+    google: { connection: googleSource.connection, call: (method, url, body) => googleSource.call('discovery', method, url, body), registry: { list: () => records.listRouters(), put: (r) => records.putRouter(r), delete: (a, r) => records.deleteRouter(a, r) } },
     log,
   };
   if (event.step === 'plan') {

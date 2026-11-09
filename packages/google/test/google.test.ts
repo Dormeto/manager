@@ -208,6 +208,16 @@ describe('createGoogle', () => {
     });
   });
 
+  it('sends a request to a Cloud Run service with an ID token for its audience, and answers its status and text as they come', async () => {
+    const service = 'https://dmtr-europe-west2-controller-abc.a.run.app';
+    const g = fakeGoogle((req) => (req.url === `${service}/v1/actions` ? new Response('<html>Forbidden</html>', { status: 403 }) : undefined));
+    expect(await g.google.request('command', service, 'POST', `${service}/v1/actions`, { action: 'list' })).toEqual({ status: 403, text: '<html>Forbidden</html>' });
+    const [sent] = g.to(`${service}/v1/actions`);
+    expect(sent).toMatchObject({ method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"action":"list"}' });
+    expect(sent!.headers['authorization']).toBe(`Bearer ${await g.google.idToken('command', service)}`);
+    expect(g.to(`${IAM}${COMMAND}:generateIdToken`)).toHaveLength(1);
+  });
+
   it('forgets an access token Google answers 401 to and sends the call once more with a new one', async () => {
     const g = fakeGoogle((req) => (req.url === 'https://run.googleapis.com/v2/x' && req.headers['authorization'] === 'Bearer access-2'
       ? json(401, { error: { code: 401, message: 'Request had invalid authentication credentials.', status: 'UNAUTHENTICATED' } })
