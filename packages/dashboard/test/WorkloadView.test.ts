@@ -8,6 +8,7 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import IdleWindowCard from '../src/components/IdleWindowCard.vue';
+import RequestHeatmap from '../src/components/RequestHeatmap.vue';
 import WorkloadSettingsDialog from '../src/components/WorkloadSettingsDialog.vue';
 import DescriptionCard from '../src/components/DescriptionCard.vue';
 import ScheduleDialog from '../src/components/ScheduleDialog.vue';
@@ -947,6 +948,18 @@ describe('a Google Cloud workload', () => {
     expect(wrapper.find('[data-test="fallbacks"]').text()).toContain('On fallback machine types');
     expect(wrapper.find('[data-test="hibernate"]').text()).toContain('Off: the workload has fallback machine types');
     expect(wrapper.text()).not.toMatch(/instance types/);
+    wrapper.unmount();
+  });
+
+  // The manager reads Google Cloud's request counts with savings (plan 3): until then, no advice to read, so no error.
+  it('reads no idle window advice: its card and the requests heatmap say they come with Google Cloud\'s request counts', async () => {
+    current = google;
+    vi.mocked(api).mockClear();
+    const wrapper = await mountView('operator');
+    expect(wrapper.findComponent(IdleWindowCard).exists()).toBe(false);
+    expect(wrapper.findComponent(RequestHeatmap).exists()).toBe(false);
+    expect(vi.mocked(api).mock.calls.map(([path]) => String(path)).filter((path) => path.endsWith('/idle-window'))).toEqual([]);
+    expect(wrapper.find('[data-test="gcp-requests"]').text()).toContain('come with Google Cloud\'s request counts');
     wrapper.unmount();
   });
 

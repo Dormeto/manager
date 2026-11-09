@@ -533,9 +533,14 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
       </v-card>
       <HistoryCard :router="router" :id="id" :now="now" />
-      <RequestHeatmap :router="router" :id="id" />
+      <!-- A Google Cloud workload's requests are read with Google Cloud's request counts (the manager's savings, later): no
+           advice to read until then, rather than its error. -->
+      <RequestHeatmap v-if="!gcp" :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
-      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
+      <IdleWindowCard v-if="!gcp" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
+      <v-card v-else data-test="gcp-requests" title="Requests and idle window">
+        <v-card-text class="text-body-medium text-medium-emphasis">Its requests per hour and the idle window advice come with Google Cloud's request counts, in a later manager version.</v-card-text>
+      </v-card>
     </div>
 
     <div class="dm-stack">
