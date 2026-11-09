@@ -4,7 +4,11 @@ import { lint, lintCounters, sumCounters } from '../src/lint.js';
 import { restatus } from '../src/lifecycle.js';
 import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount } from '../src/run.js';
 import { A, B, C, INVENTORY, config, filter, rule } from './fixtures.js';
+import { GoogleError } from '@dormeto/google';
+import type { WorkloadSummary } from '@dormeto/fleet';
+import type { InstalledRouter } from '@dormeto/fleet/registry';
 import type { GooglePort } from '../src/google.js';
+import { devProject, workloadRow, type ComputeWorld } from './gcp-fakes.js';
 import { HOUR, setup } from './run-fakes.js';
 
 const AB = config({ filters: [filter('ab', [{ accountIds: [A.id, B.id] }])] });
@@ -168,11 +172,37 @@ describe('lint from the accounts of a run', () => {
 
   describe('Google Cloud projects', () => {
     const connection = { project: 'host-project', projectNumber: '1', pool: 'p', provider: 'aws', scopes: ['projects/dev-project'], serviceAccounts: { discovery: 'd@x', command: 'c@x' }, routers: [], googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'ops', cli: '0.14.0' };
-    const google = (search: () => unknown): GooglePort => ({
+    // compute: the project's Compute Engine; routers: the registry; rows: the routers' workloads; fail: Compute Engine's refusal.
+    const google = (search: () => unknown, { compute, routers = [], rows = [], reads = [], fail }: { compute?: ComputeWorld; routers?: InstalledRouter[]; rows?: WorkloadSummary[]; reads?: string[]; fail?: () => Error | null } = {}): GooglePort => ({
       connection: async () => connection,
-      call: (async (_m: string, url: string) => (url.includes(':getAncestry') ? { ancestor: [] } : url.includes('projects:search') ? search() : { services: [] })) as GooglePort['call'],
-      registry: { list: async () => [], put: async () => {}, delete: async () => {} },
+      call: (async (method: string, url: string, body?: unknown) => {
+        if (url.startsWith('https://compute.googleapis.com/')) {
+          const refused = fail?.();
+          if (refused) throw refused;
+          return compute!.call(method, url, body);
+        }
+        return url.includes(':getAncestry') ? { ancestor: [] } : url.includes('projects:search') ? search() : { services: [] };
+      }) as GooglePort['call'],
+      registry: { list: async () => routers, put: async () => {}, delete: async () => {} },
+      routerWorkloads: async (account, region) => {
+        reads.push(`${account}#${region}`);
+        return rows.filter((r) => r.account === account && r.region === region);
+      },
     });
+    const gcpRouter = (account: string, region: string): InstalledRouter => ({
+      name: `dmtr-${region}`, account, region, controller: `https://dmtr-${region}-controller-abc-nw.a.run.app`, onboarder: '', version: '0.40.0', build: '', installedBy: 'cli', cloud: 'gcp', installedAt: '2026-11-09T10:00:00.000Z',
+    });
+    // dev-project: dormeto-dev's demo, an internal load balancer of europe-west2 besides; dmt-demo-app onboarded on the router of europe-west2.
+    const devWithInternal = () => {
+      const w = devProject('dev-project');
+      w.vm('dmt-demo-internal', 'europe-west2-b', { env: 'dev' });
+      w.backendService('dmt-demo-internal-app', [w.group('dmt-demo-internal', 'europe-west2-b', ['dmt-demo-internal'])], { region: 'europe-west2', scheme: 'INTERNAL_MANAGED' });
+      w.urlMap('dmt-dev-internal-regional', { defaultService: w.service('dmt-demo-internal-app', 'europe-west2') }, { region: 'europe-west2' });
+      w.front('dmt-dev-internal-regional', { region: 'europe-west2', scheme: 'INTERNAL_MANAGED', proxy: 'http' });
+      return w;
+    };
+    const onboarded = [workloadRow('dmt-demo-app', { account: 'dev-project' })];
+    const statuses = async (store: ReturnType<typeof setup>['store']) => Object.fromEntries((await store.accountCandidates('dev-project')).map((c) => [c.id, c.status]));
     const both = config({ regions: ['eu-west-1', 'global'], filters: [filter('all', [{ accountIds: [A.id, 'dev-project'] }])] });
 
     it('plans the AWS accounts and the previous projects again when projects.search fails, and records the error', async () => {
@@ -213,14 +243,57 @@ describe('lint from the accounts of a run', () => {
       expect(record.connections!.connect.map((x) => x.account)).not.toContain('dev-project');
     });
 
-    it('ends the account step of a project at once, without AWS, its candidates unchanged', async () => {
+    it('a project\'s account step scans it as the discovery account, without any AWS role, and writes its candidates and its scan', async () => {
+      const s = setup({ cfg: config({ regions: ['*'], filters: [filter('all', [{ accountIds: [A.id, 'dev-project'] }])] }) });
+      await s.ready;
+      const reads: string[] = [];
+      // Its router's rows only: not an AWS router's, nor another project's.
+      const routers = [gcpRouter('dev-project', 'europe-west2'), gcpRouter('other-project', 'europe-west1'), { ...gcpRouter(A.id, 'eu-west-1'), cloud: undefined }];
+      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers, rows: onboarded, reads });
+      const plan = await planRun(s.deps, { source: 'manual' });
+      expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toEqual({ account: 'dev-project', ok: true, written: 3 });
+      expect([s.assumed, reads]).toEqual([[], ['dev-project#europe-west2']]);
+      expect(await statuses(s.store)).toEqual({
+        'projects/dev-project/global/backendServices/dmt-demo-app': 'managed',
+        'projects/dev-project/global/backendServices/dmt-demo-mig-app': 'pending-onboarding',
+        'projects/dev-project/regions/europe-west2/backendServices/dmt-demo-internal-app': 'pending-onboarding',
+      });
+      const scan = (await s.store.getAccountScan('dev-project'))!;
+      // Keyed by the regions the scan saw: the VMs of europe-west1, the internal load balancer of europe-west2, the global one.
+      expect(Object.keys(scan.regions).sort()).toEqual(['europe-west1', 'europe-west2', 'global']);
+      expect(scan.result).toEqual({
+        pairs: [{ region: 'europe-west1', ok: true, rules: 0, ms: 0 }, { region: 'europe-west2', ok: true, rules: 1, ms: 0 }, { region: 'global', ok: true, rules: 2, ms: 0 }],
+        skipped: [], lint: expect.any(Object), written: 3,
+      });
+      expect(scan.runId).toBe(plan.runId);
+    });
+
+    it('a project\'s account step keeps to an explicit perimeter: its Google Cloud regions and global', async () => {
       const s = setup({ cfg: both });
       await s.ready;
-      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project' }] }));
+      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
       const plan = await planRun(s.deps, { source: 'manual' });
-      expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toEqual({ account: 'dev-project', ok: true, written: 0 });
-      expect(s.assumed).toEqual([]);
-      expect((await s.store.getAccountScan('dev-project'))!.result).toMatchObject({ written: 0, skipped: [{ reason: "Google Cloud projects are scanned from plan 2's M13" }] });
+      expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toEqual({ account: 'dev-project', ok: true, written: 2 });
+      expect(Object.keys(await statuses(s.store)).sort()).toEqual(['projects/dev-project/global/backendServices/dmt-demo-app', 'projects/dev-project/global/backendServices/dmt-demo-mig-app']);
+      expect((await s.store.getAccountScan('dev-project'))!.result!.pairs.map((p) => p.region)).toEqual(['global']);
+    });
+
+    it('a project whose scan fails changes none of its candidates and records why, each of their regions failed', async () => {
+      const s = setup({ cfg: config({ regions: ['*'], filters: [filter('all', [{ accountIds: ['dev-project'] }])] }) });
+      await s.ready;
+      let refused: Error | null = null;
+      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded, fail: () => refused });
+      const plan = await planRun(s.deps, { source: 'manual' });
+      await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' });
+      const before = (await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort();
+      refused = new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', message: "Required 'compute.urlMaps.list' permission for 'projects/dev-project'", host: 'compute.googleapis.com' });
+      s.advance(HOUR);
+      expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toEqual({ account: 'dev-project', ok: false, written: 0 });
+      expect((await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort()).toEqual(before);
+      const error = "GoogleError: Required 'compute.urlMaps.list' permission for 'projects/dev-project'";
+      expect((await s.store.getAccountScan('dev-project'))!.result).toMatchObject({
+        error, pairs: [{ region: 'europe-west2', ok: false, error }, { region: 'global', ok: false, error }],
+      });
     });
   });
 });

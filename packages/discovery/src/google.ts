@@ -5,6 +5,7 @@
 // added or has its controller and version updated, a registered one no longer found in a project listed is removed. A
 // project whose listing failed is recorded and its routers kept; Cloud Run turned off (SERVICE_DISABLED) is a project
 // without routers. AWS registrations are never read or written. The manager never changes a Google IAM policy.
+import type { WorkloadSummary } from '@dormeto/fleet';
 import { isProject, isRegion } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
 import { GoogleError, type GoogleConnection } from '@dormeto/google';
@@ -15,6 +16,8 @@ export interface GooglePort {
   // A Google API call as the discovery service account.
   call<T = unknown>(method: string, url: string, body?: unknown): Promise<T>;
   registry: { list(): Promise<InstalledRouter[]>; put(router: InstalledRouter): Promise<void>; delete(account: string, region: string): Promise<void> };
+  // A router's workload rows (WS#<project>#<region>#<id>), as its poll writes them: what a project's scan finds managed.
+  routerWorkloads(account: string, region: string): Promise<WorkloadSummary[]>;
 }
 
 // What a run records of its Google Cloud part.

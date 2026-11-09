@@ -1,0 +1,207 @@
+// A project's Compute Engine as Google answers it (Compute Engine v1 reference shapes: aggregated lists by scope,
+// instanceGroups.listInstances, networkEndpointGroups.get and listNetworkEndpoints), modelled on dormeto-dev's demo (router
+// terraform/gcp-dev): the global URL map dmt-dev, its host gcp.dev.dormeto.com to dmt-demo-app (the unmanaged group dmt-demo
+// of the VM dmt-demo) and mig.gcp.dev.dormeto.com to dmt-demo-mig-app (the zonal managed group dmt-demo-mig), in
+// europe-west1-b; dmt-demo-app onboarded on the router of europe-west2, whose waker backend service
+// dmtr-europe-west2-dmt-demo-app (on the router's serverless NEG dmtr-europe-west2-waker) the map's /_dormeto/* route names.
+import { GoogleError } from '@dormeto/google';
+import type { WorkloadSummary } from '@dormeto/fleet';
+
+export const PROJECT = 'dormeto-dev';
+// The URLs Google writes in its answers (selfLink, references); the scan calls compute.googleapis.com.
+const V1 = 'https://www.googleapis.com/compute/v1';
+const API = 'https://compute.googleapis.com/compute/v1';
+const RESOURCES = ['urlMaps', 'backendServices', 'targetHttpProxies', 'targetHttpsProxies', 'forwardingRules', 'instanceGroupManagers', 'instances'] as const;
+type Resource = (typeof RESOURCES)[number];
+type Item = Record<string, unknown>;
+// Scopes Google lists without anything in them: a warning, no items.
+const EMPTY_SCOPES = ['regions/us-east1', 'zones/us-east1-b'];
+const CREATED = '2026-10-29T08:12:41.123-07:00';
+
+export function compute(project = PROJECT) {
+  const link = (path: string) => `${V1}/projects/${project}/${path}`;
+  const lists = Object.fromEntries(RESOURCES.map((r) => [r, {} as Record<string, Item[]>])) as Record<Resource, Record<string, Item[]>>;
+  const groups: Record<string, string[]> = {}; // instance group path -> its VMs' URLs
+  const negs: Record<string, { neg: Item; endpoints: Item[] }> = {}; // zonal NEG path
+  let ids = 4_100_000_000_000_000;
+  const add = (resource: Resource, scope: string, item: Item) => {
+    (lists[resource][scope] ??= []).push({ id: String(ids++), creationTimestamp: CREATED, ...item });
+    return item;
+  };
+  const scopeOf = (region?: string) => (region ? `regions/${region}` : 'global');
+  const located = (region?: string) => (region ? { region: link(`regions/${region}`) } : {});
+  const calls: string[] = [];
+  let inFlight = 0;
+
+  const world = {
+    project,
+    link,
+    lists,
+    calls,
+    // Scopes Google could not reach: left out of every aggregated list and named in its unreachables.
+    unreachable: [] as string[],
+    // Scopes per page of an aggregated list (absent: one page).
+    pageScopes: {} as Partial<Record<Resource, number>>,
+    // Compute Engine's API turned off in the project.
+    disabled: false,
+    delayMs: 0,
+    maxInFlight: 0,
+    service: (name: string, region?: string) => link(`${scopeOf(region)}/backendServices/${name}`),
+    vm(name: string, zone: string, labels: Record<string, string> = {}) {
+      add('instances', `zones/${zone}`, {
+        kind: 'compute#instance', name, zone: link(`zones/${zone}`), machineType: link(`zones/${zone}/machineTypes/e2-small`), status: 'RUNNING',
+        labels, labelFingerprint: '42WmSpB8rSM=', selfLink: link(`zones/${zone}/instances/${name}`),
+      });
+      return link(`zones/${zone}/instances/${name}`);
+    },
+    // An unmanaged instance group, or a managed group's (its manager added by mig). location: a zone, or a region with regional.
+    group(name: string, location: string, vms: string[], { regional = false } = {}) {
+      const scope = regional ? `regions/${location}` : `zones/${location}`;
+      groups[`projects/${project}/${scope}/instanceGroups/${name}`] = vms.map((vm) => link(`zones/${regional ? `${location}-b` : location}/instances/${vm}`));
+      return link(`${scope}/instanceGroups/${name}`);
+    },
+    mig(name: string, location: string, vms: string[], { regional = false } = {}) {
+      const scope = regional ? `regions/${location}` : `zones/${location}`;
+      add('instanceGroupManagers', scope, {
+        kind: 'compute#instanceGroupManager', name, ...(regional ? { region: link(scope) } : { zone: link(scope) }),
+        instanceTemplate: link(`global/instanceTemplates/${name}-20261029`), instanceGroup: link(`${scope}/instanceGroups/${name}`),
+        baseInstanceName: name, targetSize: vms.length, status: { isStable: true }, selfLink: link(`${scope}/instanceGroupManagers/${name}`),
+      });
+      return world.group(name, location, vms, { regional });
+    },
+    // A zonal network endpoint group, its endpoints the VMs named.
+    neg(name: string, zone: string, { type = 'GCE_VM_IP_PORT', description, annotations, vms = [] }: { type?: string; description?: string; annotations?: Record<string, string>; vms?: string[] } = {}) {
+      negs[`projects/${project}/zones/${zone}/networkEndpointGroups/${name}`] = {
+        neg: {
+          kind: 'compute#networkEndpointGroup', id: String(ids++), creationTimestamp: CREATED, name, networkEndpointType: type, size: vms.length, zone: link(`zones/${zone}`),
+          network: link('global/networks/dmt-dev'), defaultPort: 80, selfLink: link(`zones/${zone}/networkEndpointGroups/${name}`),
+          ...(description ? { description } : {}), ...(annotations ? { annotations } : {}),
+        },
+        endpoints: vms.map((vm, i) => ({ networkEndpoint: { instance: vm, ipAddress: `10.10.0.${10 + i}`, port: 80 } })),
+      };
+      return link(`zones/${zone}/networkEndpointGroups/${name}`);
+    },
+    backendService(name: string, backends: string[], { region, scheme = 'EXTERNAL_MANAGED' }: { region?: string; scheme?: string } = {}) {
+      add('backendServices', scopeOf(region), {
+        kind: 'compute#backendService', name, ...located(region), backends: backends.map((group) => ({ group, balancingMode: 'UTILIZATION', capacityScaler: 1 })),
+        healthChecks: [link(`${scopeOf(region)}/healthChecks/dmt-demo`)], timeoutSec: 30, port: 80, protocol: 'HTTP', portName: 'app',
+        loadBalancingScheme: scheme, connectionDraining: { drainingTimeoutSec: 30 }, fingerprint: 'Xh7yVq0aLoM=', selfLink: link(`${scopeOf(region)}/backendServices/${name}`),
+      });
+      return link(`${scopeOf(region)}/backendServices/${name}`);
+    },
+    urlMap(name: string, body: Item, { region }: { region?: string } = {}) {
+      add('urlMaps', scopeOf(region), { kind: 'compute#urlMap', name, ...located(region), ...body, fingerprint: 'oN7cdqb7Y9s=', selfLink: link(`${scopeOf(region)}/urlMaps/${name}`) });
+      return link(`${scopeOf(region)}/urlMaps/${name}`);
+    },
+    // A map's load balancer: its target proxy and a forwarding rule to it, of the scheme given.
+    front(map: string, { region, scheme = 'EXTERNAL_MANAGED', proxy = 'https', name = map, description }: { region?: string; scheme?: string; proxy?: 'http' | 'https'; name?: string; description?: string } = {}) {
+      const resource = proxy === 'https' ? 'targetHttpsProxies' : 'targetHttpProxies';
+      const self = link(`${scopeOf(region)}/${resource}/${name}`);
+      add(resource, scopeOf(region), {
+        kind: proxy === 'https' ? 'compute#targetHttpsProxy' : 'compute#targetHttpProxy', name, ...located(region), urlMap: link(`${scopeOf(region)}/urlMaps/${map}`),
+        ...(proxy === 'https' ? { sslCertificates: [link(`global/sslCertificates/${name}`)], quicOverride: 'NONE' } : {}), fingerprint: 'G7Ka0d2yb5w=', selfLink: self,
+        ...(description ? { description } : {}),
+      });
+      add('forwardingRules', scopeOf(region), {
+        kind: 'compute#forwardingRule', name, ...located(region), IPAddress: '34.111.20.30', IPProtocol: 'TCP', portRange: proxy === 'https' ? '443-443' : '80-80',
+        target: self, loadBalancingScheme: scheme, networkTier: 'PREMIUM', fingerprint: 'u5mWGh4zjL8=', selfLink: link(`${scopeOf(region)}/forwardingRules/${name}`),
+        ...(description ? { description } : {}),
+      });
+    },
+
+    // The discovery account's Google port: Compute Engine's answers, at most `delayMs` late, and how many were in flight at once.
+    async call<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
+      calls.push(`${method} ${url}`);
+      inFlight += 1;
+      world.maxInFlight = Math.max(world.maxInFlight, inFlight);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, world.delayMs));
+        return answer(method, url, body) as T;
+      } finally {
+        inFlight -= 1;
+      }
+    },
+  };
+
+  const notFound = (url: string) => new GoogleError({ status: 404, reason: 'notFound', message: `The resource '${url.slice(url.indexOf('projects/'))}' was not found`, host: 'compute.googleapis.com' });
+  function answer(method: string, url: string, body: unknown): unknown {
+    if (world.disabled) {
+      throw new GoogleError({
+        status: 403, reason: 'SERVICE_DISABLED', host: 'compute.googleapis.com',
+        message: `Compute Engine API has not been used in project ${project} before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/compute.googleapis.com/overview?project=${project} then retry.`,
+      });
+    }
+    const u = new URL(url);
+    const base = `/compute/v1/projects/${project}/`;
+    if (!url.startsWith(API) || !u.pathname.startsWith(base)) throw new Error(`unexpected call ${method} ${url}`);
+    const path = u.pathname.slice(base.length);
+    const aggregated = /^aggregated\/(\w+)$/.exec(path);
+    if (aggregated && method === 'GET') {
+      const resource = aggregated[1] as Resource;
+      if (u.searchParams.get('returnPartialSuccess') !== 'true') throw new Error(`${url}: returnPartialSuccess=true expected`);
+      const scopes = [...new Set([...Object.keys(lists[resource]), ...EMPTY_SCOPES])].filter((s) => !world.unreachable.includes(s)).sort();
+      const size = world.pageScopes[resource] ?? scopes.length;
+      const at = Number(u.searchParams.get('pageToken') ?? 0);
+      const page = scopes.slice(at, at + size);
+      const items = Object.fromEntries(page.map((scope) => [scope, lists[resource][scope]?.length
+        ? { [resource]: lists[resource][scope] }
+        : { warning: { code: 'NO_RESULTS_ON_PAGE', message: `There are no results for scope '${scope}' on this page.`, data: [{ key: 'scope', value: scope }] } }]));
+      return {
+        kind: `compute#${resource}AggregatedList`, id: `projects/${project}/aggregated/${resource}`, items, selfLink: `${V1}/projects/${project}/aggregated/${resource}`,
+        ...(at + size < scopes.length ? { nextPageToken: String(at + size) } : {}),
+        ...(at === 0 && world.unreachable.length ? { unreachables: world.unreachable } : {}),
+      };
+    }
+    const members = /^(zones|regions)\/[^/]+\/instanceGroups\/[^/]+(?=\/listInstances$)/.exec(path);
+    if (members && method === 'POST') {
+      if ((body as { instanceState?: string } | undefined)?.instanceState !== 'ALL') throw new Error(`${url}: instanceState ALL expected`);
+      const vms = groups[`projects/${project}/${members[0]}`];
+      if (!vms) throw notFound(url);
+      return { kind: 'compute#instanceGroupsListInstances', id: `projects/${project}/${members[0]}`, items: vms.map((instance) => ({ instance, status: 'RUNNING' })), selfLink: url };
+    }
+    const neg = /^zones\/[^/]+\/networkEndpointGroups\/[^/]+/.exec(path);
+    const found = neg ? negs[`projects/${project}/${neg[0]}`] : undefined;
+    if (neg && path === neg[0] && method === 'GET') {
+      if (!found) throw notFound(url);
+      return found.neg;
+    }
+    if (neg && path === `${neg[0]}/listNetworkEndpoints` && method === 'POST') {
+      if (!found) throw notFound(url);
+      return { kind: 'compute#networkEndpointGroupsListNetworkEndpoints', items: found.endpoints };
+    }
+    throw new Error(`unexpected call ${method} ${url}`);
+  }
+  return world;
+}
+
+export type ComputeWorld = ReturnType<typeof compute>;
+
+// dormeto-dev's demo (above); dmt-demo-app onboarded on the router of europe-west2.
+export function devProject(project = PROJECT) {
+  const w = compute(project);
+  w.vm('dmt-demo', 'europe-west1-b', { env: 'dev', app: 'demo' });
+  const demo = w.group('dmt-demo', 'europe-west1-b', ['dmt-demo']);
+  w.vm('dmt-demo-mig-0k3d', 'europe-west1-b', { env: 'dev', app: 'demo-mig' });
+  w.vm('dmt-demo-mig-7vqx', 'europe-west1-b', { env: 'dev', app: 'demo-mig' });
+  const mig = w.mig('dmt-demo-mig', 'europe-west1-b', ['dmt-demo-mig-0k3d', 'dmt-demo-mig-7vqx']);
+  const app = w.backendService('dmt-demo-app', [demo]);
+  w.backendService('dmt-demo-standin', [demo]);
+  const migApp = w.backendService('dmt-demo-mig-app', [mig]);
+  const waker = w.backendService('dmtr-europe-west2-dmt-demo-app', [w.link('regions/europe-west2/networkEndpointGroups/dmtr-europe-west2-waker')]);
+  w.urlMap('dmt-dev', {
+    defaultService: app,
+    hostRules: [{ hosts: ['gcp.dev.dormeto.com'], pathMatcher: 'app' }, { hosts: ['mig.gcp.dev.dormeto.com'], pathMatcher: 'mig' }],
+    pathMatchers: [
+      { name: 'app', defaultService: app, pathRules: [{ paths: ['/_dormeto/*'], service: waker }] },
+      { name: 'mig', defaultService: migApp },
+    ],
+  });
+  w.front('dmt-dev');
+  return w;
+}
+
+// The router's row of a workload (WS#<project>#<region>#<id>), as the poll writes it.
+export const workloadRow = (workloadId: string, over: Partial<WorkloadSummary> = {}): WorkloadSummary => ({
+  account: PROJECT, region: 'europe-west2', router: 'dmtr-europe-west2', workloadId, name: workloadId, state: 'AWAKE', source: 'manager',
+  backendService: workloadId, wakerBackendService: `dmtr-europe-west2-${workloadId}`, urlMap: 'dmt-dev', ...over,
+});

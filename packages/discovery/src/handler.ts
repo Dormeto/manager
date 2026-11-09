@@ -43,7 +43,7 @@ const records = createRecords({ dynamo, table: process.env.TABLE ?? '' });
 const fleet = createFleetStore({ dynamo, table: process.env.TABLE ?? '' });
 const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof createProxyPrefixes>[0]['terraform'];
 const proxyPrefix = createProxyPrefixes({ terraform: terraformRouters, records, fleet, log });
-// The Google Cloud connection (`DISC#GOOGLE`, written by `dormeto gcp connect`), read at each finalize; one Google instance
+// The Google Cloud connection (`DISC#GOOGLE`, written by `dormeto gcp connect`), read at each plan, project step and finalize; one Google instance
 // per execution environment keeps its tokens between invocations.
 const googleSource = createGoogleSource({
   async read() {
@@ -96,7 +96,12 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
-    google: { connection: googleSource.connection, call: (method, url, body) => googleSource.call('discovery', method, url, body), registry: { list: () => records.listRouters(), put: (r) => records.putRouter(r), delete: (a, r) => records.deleteRouter(a, r) } },
+    google: {
+      connection: googleSource.connection,
+      call: (method, url, body) => googleSource.call('discovery', method, url, body),
+      registry: { list: () => records.listRouters(), put: (r) => records.putRouter(r), delete: (a, r) => records.deleteRouter(a, r) },
+      routerWorkloads: (account, region) => fleet.routerWorkloads(account, region),
+    },
     log,
   };
   if (event.step === 'plan') {

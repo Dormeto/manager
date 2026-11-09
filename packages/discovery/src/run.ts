@@ -5,6 +5,7 @@
 import { defaultConfig } from './config.js';
 import { withExclusions } from './exclusions.js';
 import { isProject } from '@dormeto/fleet/clouds';
+import { scanProject, type ProjectScan } from './gcp-scan.js';
 import { discoverGoogleRouters, listProjects, type GooglePort, type GoogleSummary } from './google.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
@@ -19,7 +20,7 @@ const HOUR_MS = 3_600_000;
 const EMPTY_RUNS = 3;
 const SKIP_RUNS = 6;
 const EMPTY_REASON = 'no load balancer in 3 runs: scanned every 7th run';
-const PROJECT_NOT_SCANNED = "Google Cloud projects are scanned from plan 2's M13";
+const NO_CONNECTION = 'no Google Cloud connection: dormeto gcp connect makes one';
 const UNFINISHED = 'the account step did not finish (timed out or failed)';
 // A run still running after the state machine's time limit (and its lock's) never finishes: it is recorded as failed.
 const RUN_LIMIT_MS = 3 * HOUR_MS;
@@ -232,12 +233,7 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   const state = await deps.store.getAccountScan(account);
   const allRegions = config.regions.includes('*');
   const synthetic = isSynthetic(account);
-  // A Google Cloud project is no AWS account: its candidates stay as they are until its load balancers are scanned (plan 2's M13).
-  if (isProject(account)) {
-    const result: AccountResult = { pairs: [], skipped: [{ reason: PROJECT_NOT_SCANNED, pairs: 0 }], lint: lintCounters(config, inventory, []), written: 0 };
-    await deps.store.putAccountScan({ account, scannedAt: at, regions: state?.regions ?? {}, runId, result });
-    return { account, ok: true, written: 0 };
-  }
+  if (isProject(account)) return scanProjectStep(deps, { runId, account, at, config, inventory, state });
 
   let credentials: unknown = null;
   let discoveryAccess: AccessState = { ok: true };
@@ -372,6 +368,70 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   };
   if (only && state) await deps.store.putAccountScan({ ...state, regions });
   else await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}), ...(access ? { access } : {}) });
+  return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+}
+
+// A Google Cloud project's step (Google Cloud manager design §7.2): no AWS role, one scan of all its regions as the discovery
+// account, the rows of the project's routers saying what is managed. Its pairs: under the perimeter ["*"], `global`, the
+// regions where the scan found something and those of its candidates (a region emptied is decided gone, one Google could
+// not reach is a failed pair); under an explicit perimeter, its Google Cloud regions. A scan that fails fails every pair.
+async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inventory, state }: {
+  runId: string; account: string; at: string; config: DiscoveryConfig; inventory: OrgInventory; state: AccountScan | null;
+}): Promise<{ account: string; ok: boolean; written: number }> {
+  const now = deps.now ?? Date.now;
+  const started = now();
+  let scan: ProjectScan | undefined;
+  let error: string | undefined;
+  try {
+    const google = deps.google;
+    // Read first: the step may be its execution environment's first use of the connection.
+    if (!google || !(await google.connection())) throw new Error(NO_CONNECTION);
+    const routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
+    const managed = (await Promise.all(routers.map((r) => google.routerWorkloads(account, r.region)))).flat();
+    scan = await scanProject(google, { project: account, managed, now });
+  } catch (err) {
+    error = errorText(err);
+    (deps.log ?? silent).warn('DiscoveryProjectFailed', { account, error });
+  }
+  const ms = now() - started;
+
+  const stored = await deps.store.accountCandidates(account);
+  const known = [...new Set(['global', ...(scan?.regions ?? []).map((r) => r.region), ...stored.filter((c) => !c.goneAt).map((c) => c.region)])].sort();
+  const regions = { ...(state?.regions ?? {}) };
+  const results: PairResult[] = [];
+  const skipped: { reason: string; pairs: number }[] = [];
+  const own = { accounts: inventory.accounts.filter((a) => a.id === account), ous: inventory.ous };
+  for (const p of targetPairs(config, own, { [account]: known })) {
+    if (!p.scan) {
+      const entry = skipped.find((x) => x.reason === p.reason);
+      if (entry) entry.pairs += 1;
+      else skipped.push({ reason: p.reason, pairs: 1 });
+      continue;
+    }
+    const pair = scan?.regions.find((r) => r.region === p.region);
+    if (!scan || (pair && !pair.ok)) {
+      results.push({ account, region: p.region, ok: false, error: error ?? pair?.error ?? 'failed', rules: [], ms });
+      continue;
+    }
+    const rules = scan.rules.filter((r) => r.region === p.region);
+    results.push({ account, region: p.region, ok: true, rules, ms });
+    regions[p.region] = { scannedAt: at, emptyRuns: rules.length ? 0 : (regions[p.region]?.emptyRuns ?? 0) + 1, skippedRuns: 0 };
+  }
+
+  const previous = new Map(stored.map((c) => [c.id, c]));
+  const changed = nextCandidates({ previous, results, inventory, config, now: now() }).filter((c) => {
+    const before = previous.get(c.id);
+    return !before || canonical(before) !== canonical(c);
+  });
+  await deps.store.putCandidates(changed);
+  const result: AccountResult = {
+    pairs: results.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms })),
+    skipped,
+    ...(error ? { error } : {}),
+    lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
+    written: changed.length,
+  };
+  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result });
   return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
 }
 

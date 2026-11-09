@@ -48,6 +48,7 @@ function fakeGoogle({ projects, services, record }: { projects: Project[]; servi
       put: async (r) => { registry.set(`${r.account}#${r.region}`, r); },
       delete: async (account, region) => { registry.delete(`${account}#${region}`); },
     },
+    routerWorkloads: async () => [],
   };
   return { port, calls, registry };
 }
