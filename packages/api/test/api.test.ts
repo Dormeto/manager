@@ -195,7 +195,7 @@ describe('the Google Cloud connection', () => {
   const aws = { name: 'dmt-dev', account: '121014831971', region: 'eu-west-1', controller: 'arn:aws:lambda:eu-west-1:121014831971:function:c', onboarder: 'o', version: '0.39.0', build: 'b', installedBy: 'a@example.com', installedAt: '2026-10-01T00:00:00.000Z' };
 
   const viaIam = (method: string, path: string, body?: unknown): ApiEvent => ({
-    rawPath: path, requestContext: { http: { method }, authorizer: { iam: { userArn: 'arn:aws:iam::121014831971:user/cli', userId: 'AIDAX' } } },
+    rawPath: path, requestContext: { http: { method }, authorizer: { iam: { accountId: '121014831971', userArn: 'arn:aws:iam::121014831971:user/cli', userId: 'AIDAX' } } },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
@@ -286,7 +286,7 @@ describe('the Google Cloud connection', () => {
     const controller = 'routers[].controller must be an https://….run.app URL or empty';
     for (const [bad, message] of [
       [{ pool: 'workload-pool' }, 'pool must be dmt-<env>'], [{ pool: 'dmt-' }, 'pool must be dmt-<env>'], [{ pool: 'dmt-Dev' }, 'pool must be dmt-<env>'],
-      [{ provider: 'oidc' }, 'provider must be aws-121014831971'], [{ provider: 'aws-121014831971' }, 'provider must be aws-121014831971'],
+      [{ provider: 'oidc' }, 'provider must be aws-121014831971'], [{ provider: 'aws' }, 'provider must be aws-121014831971'],
       [{ provider: 'aws-999999999999' }, 'provider must be aws-121014831971'], [{ provider: 'AWS-121014831971' }, 'provider must be aws-121014831971'],
       [{ scopes: ['projects/dormeto-dev', 'billingAccounts/01ABCD'] }, scopes], [{ scopes: ['organizations/acme'] }, scopes], [{ scopes: ['folders/'] }, scopes],
       [{ scopes: ['projects/123456789012'] }, scopes],
