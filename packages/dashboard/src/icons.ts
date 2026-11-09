@@ -1,3 +1,4 @@
+import { mdiDatabaseOutline, mdiKubernetes, mdiLayersTripleOutline, mdiServerOutline } from '@mdi/js';
 // Official AWS Architecture Icons (service icons, 64 px set) for the backends of a workload.
 import aurora from './assets/aws/aurora.svg';
 import ec2 from './assets/aws/ec2.svg';
@@ -9,3 +10,8 @@ import rds from './assets/aws/rds.svg';
 const ICONS: Record<string, string> = { instance: ec2, asg: ec2AutoScaling, ecs, k8s: eks, 'rds-instance': rds, 'rds-cluster': aurora };
 
 export const backendIcon = (kind: string): string | null => ICONS[kind] ?? null;
+
+// Google Cloud's backend kinds: Material Design icons (Google's product icons are not bundled). The same kinds as AWS's
+// where they mean the same (a VM, a group, a Kubernetes workload), and Cloud SQL's own.
+const MDI_ICONS: Record<string, string> = { instance: mdiServerOutline, asg: mdiLayersTripleOutline, k8s: mdiKubernetes, 'cloudsql-instance': mdiDatabaseOutline };
+export const backendMdi = (kind: string): string | null => MDI_ICONS[kind] ?? null;

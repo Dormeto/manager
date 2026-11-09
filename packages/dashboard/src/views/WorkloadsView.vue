@@ -6,7 +6,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { mdiCalendarClock, mdiMagnify, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { checkHealth, relative, usd } from '../format';
+import { checkHealth, relative, rowCloud, usd } from '../format';
+import CloudMark from '../components/CloudMark.vue';
 import BackendKinds from '../components/BackendKinds.vue';
 import StateBar from '../components/StateBar.vue';
 import { barSavings } from '../costs';
@@ -104,7 +105,7 @@ function allWorkloads() {
 }
 
 const headers = [
-  { title: 'AWS account', key: 'account', sortable: false },
+  { title: 'Account or project', key: 'account', sortable: false },
   { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId, sortable: false },
   { title: 'Backend', key: 'backends', sortable: false },
   { title: 'Router', key: 'router', sortable: false },
@@ -201,7 +202,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
           <span class="text-medium-emphasis">{{ filtered ? 'No workload matches these filters.' : 'No workload yet: onboard one from Discovery.' }}</span>
         </div>
       </template>
-      <template #[`item.account`]="{ item }"><span class="mono dm-account">{{ item.account }}</span></template>
+      <template #[`item.account`]="{ item }"><span class="mono dm-account"><CloudMark :cloud="rowCloud(item)" class="mr-1" />{{ item.account }}</span></template>
       <template #[`item.name`]="{ item }">
         <div class="dm-wl">
           <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link>
@@ -210,7 +211,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
           <div v-if="item.name" class="dm-wl__id mono">{{ item.workloadId }}</div>
         </div>
       </template>
-      <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" /></template>
+      <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" :cloud="rowCloud(item)" /></template>
       <template #[`item.router`]="{ item }">
         <span v-if="session.isMember" class="dm-link dm-router">{{ item.router }}</span>
         <router-link v-else :to="`/routers/${encodeURIComponent(item.router)}`" class="dm-link dm-router">{{ item.router }}</router-link>

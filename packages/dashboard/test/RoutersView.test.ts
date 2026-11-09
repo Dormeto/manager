@@ -18,6 +18,7 @@ let defaultsEnded: number | null = null;
 let defaultsError: string | null = null;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
+let withGoogle = false;
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
@@ -55,6 +56,7 @@ vi.mock('../src/api', () => ({
           health: { status: 'warning', problems: [{ level: 'warning', text: DRIFT }] },
           pauses: [{ scope: 'router', reason: 'load test', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z' }] },
         { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, health: { status: 'ok', problems: [] } },
+        ...(withGoogle ? [{ name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', version: '0.40.0', build: 'b1c2d3e4f5a6', workloads: 2, workloadStates: { ASLEEP: 2 }, health: { status: 'ok', problems: [] } }] : []),
       ],
     };
   }),
@@ -91,7 +93,24 @@ describe('Routers view', () => {
     calls.length = 0;
     server.running = null;
     server.ended = { status: 'succeeded' };
+    withGoogle = false;
     document.body.innerHTML = '';
+  });
+
+  it('marks each router with its cloud, and a Google Cloud router with its project and its region\'s location', async () => {
+    withGoogle = true;
+    const wrapper = await mountView();
+    const aws = rowOf(wrapper, 'dmt-dev');
+    const gcp = rowOf(wrapper, 'dmtr-dormeto-dev-europe-west2');
+    expect(aws.find('[data-test="cloud-mark"]').attributes('aria-label')).toBe('AWS account');
+    expect(gcp.find('[data-test="cloud-mark"]').attributes('aria-label')).toBe('Google Cloud project');
+    expect(gcp.find('.dm-router__where').text()).toContain('dormeto-dev');
+    expect(gcp.find('.region-label').attributes('aria-label')).toBe('europe-west2, London');
+    expect(aws.find('.region-label').attributes('aria-label')).toBe('eu-west-1, Europe (Ireland)');
+    // Installed by the CLI: no upgrade and no uninstallation from the dashboard.
+    expect(gcp.find('button[aria-label^="Upgrade"]').exists()).toBe(false);
+    expect(gcp.find('button[aria-label^="Uninstall"]').exists()).toBe(false);
+    wrapper.unmount();
   });
 
   it('shows the description\'s first line, muted, under the name of a router that has one', async () => {

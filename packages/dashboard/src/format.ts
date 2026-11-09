@@ -1,4 +1,6 @@
 // Display helpers: relative times, durations, state colors and labels.
+import { mdiAws, mdiGoogleCloud } from '@mdi/js';
+import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
 import { partitionOf } from './regions';
 
 export function relative(iso: string | null | undefined, now = Date.now()): string {
@@ -29,10 +31,22 @@ export function duration(seconds: number | null | undefined): string {
 const STATE_COLORS: Record<string, string> = { AWAKE: 'success', ASLEEP: 'info', WAKING: 'warning', NAPPING: 'napping', FAILED: 'error' };
 export const stateColor = (state: string): string => STATE_COLORS[state] ?? 'grey';
 
+// The cloud mark of a router or a workload: Material Design Icons' AWS and Google Cloud marks, with the cloud's name.
+const MARKS: Record<Cloud, { icon: string; label: string }> = { aws: { icon: mdiAws, label: 'AWS' }, gcp: { icon: mdiGoogleCloud, label: 'Google Cloud' } };
+export const cloudMark = (cloud: Cloud): { icon: string; label: string } => MARKS[cloud];
+// The cloud of a row: the API's `cloud`, else read from its account (an older API names none: AWS).
+export const rowCloud = (row: { cloud?: Cloud; account?: string }): Cloud => row.cloud ?? (row.account ? cloudOf(row.account) : null) ?? 'aws';
+// What `account` is called in each cloud.
+export const ownerLabel = (cloud: Cloud): string => (cloud === 'gcp' ? 'Project' : 'Account');
+
 const BACKEND_LABELS: Record<string, string> = {
   instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', k8s: 'Kubernetes workload', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster',
 };
-export const backendLabel = (kind: string): string => BACKEND_LABELS[kind] ?? kind;
+// The same keys on Google Cloud; the kinds it does not have fall back to AWS's name.
+const GOOGLE_BACKEND_LABELS: Record<string, string> = {
+  instance: 'Compute Engine VM', asg: 'Managed instance group', k8s: 'Kubernetes workload', 'cloudsql-instance': 'Cloud SQL instance',
+};
+export const backendLabel = (kind: string, cloud: Cloud = 'aws'): string => (cloud === 'gcp' ? GOOGLE_BACKEND_LABELS[kind] : undefined) ?? BACKEND_LABELS[kind] ?? kind;
 const BACKEND_HELP: Record<string, string> = {
   instance: 'started and stopped by Dormeto',
   asg: 'its instances are started and stopped through the group',
@@ -41,8 +55,15 @@ const BACKEND_HELP: Record<string, string> = {
   'rds-instance': 'a companion database, stopped after the application and started before it',
   'rds-cluster': 'a companion database, stopped after the application and started before it',
 };
+const GOOGLE_BACKEND_HELP: Record<string, string> = {
+  k8s: 'a Deployment or StatefulSet on Google Kubernetes Engine, scaled to zero replicas when it naps, back to its replicas when it wakes',
+  'cloudsql-instance': 'a companion database, stopped after the application and started before it',
+};
 // What Dormeto does with a kind of backend, for its tooltip.
-export const backendHelp = (kind: string): string => `${backendLabel(kind)}${BACKEND_HELP[kind] ? `: ${BACKEND_HELP[kind]}` : ''}`;
+export const backendHelp = (kind: string, cloud: Cloud = 'aws'): string => {
+  const help = (cloud === 'gcp' ? GOOGLE_BACKEND_HELP[kind] : undefined) ?? BACKEND_HELP[kind];
+  return `${backendLabel(kind, cloud)}${help ? `: ${help}` : ''}`;
+};
 // The kinds of a workload's backends once each, its companion databases last: the router's order in the workloads' list.
 export const backendKinds = (backends: { kind: string; companion?: boolean }[]): string[] =>
   [...new Set([...backends.filter((b) => !b.companion), ...backends.filter((b) => b.companion)].map((b) => b.kind))];

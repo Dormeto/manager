@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { attentionMore, backendArn, backendHelp, backendKinds, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor, usd } from '../src/format';
+import { mdiAws, mdiGoogleCloud } from '@mdi/js';
+import { attentionMore, cloudMark, ownerLabel, rowCloud, backendArn, backendHelp, backendKinds, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor, usd } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -27,6 +28,27 @@ describe('format', () => {
   it('describes rule conditions like the router admin page', () => {
     expect(ruleText({ headers: [{ name: 'x-dormeto-e2e', value: 'no-wake' }] })).toBe('header x-dormeto-e2e = no-wake');
     expect(ruleText({ pathPrefixes: ['/api/'], sourceIps: ['198.51.100.0/24'] })).toBe('source 198.51.100.0/24, path /api/*');
+  });
+});
+
+describe('the cloud mark', () => {
+  it('is Material Design Icons\' AWS mark or Google Cloud mark, with the name of the cloud', () => {
+    expect(cloudMark('aws')).toEqual({ icon: mdiAws, label: 'AWS' });
+    expect(cloudMark('gcp')).toEqual({ icon: mdiGoogleCloud, label: 'Google Cloud' });
+  });
+  it('reads the cloud of a row from its cloud, else from its account (an older API has no cloud: AWS)', () => {
+    expect(rowCloud({ cloud: 'gcp', account: 'dormeto-dev' })).toBe('gcp');
+    expect(rowCloud({ account: 'dormeto-dev' })).toBe('gcp');
+    expect(rowCloud({ account: '111122223333' })).toBe('aws');
+    expect(rowCloud({})).toBe('aws');
+  });
+  it('calls the owner an account on AWS and a project on Google Cloud', () => {
+    expect([ownerLabel('aws'), ownerLabel('gcp')]).toEqual(['Account', 'Project']);
+  });
+  it('labels the kinds of backends in each cloud', () => {
+    expect([backendLabel('instance'), backendLabel('instance', 'aws')]).toEqual(['EC2 instance', 'EC2 instance']);
+    expect(['instance', 'asg', 'k8s', 'cloudsql-instance'].map((k) => backendLabel(k, 'gcp'))).toEqual(['Compute Engine VM', 'Managed instance group', 'Kubernetes workload', 'Cloud SQL instance']);
+    expect(backendHelp('asg', 'gcp')).toBe('Managed instance group: its instances are started and stopped through the group');
   });
 });
 

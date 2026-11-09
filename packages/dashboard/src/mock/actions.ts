@@ -142,7 +142,7 @@ const commandRole = (account: string) => {
 };
 const newRouterName = (account: string, region: string) => `dmtr-${accountName(account)}-${region}`;
 const newRouter = (account: string, region: string, at: number): DemoRouter => ({
-  name: newRouterName(account, region), account, region, source: 'manager', ...AVAILABLE, installedAt: at, metrics: false,
+  name: newRouterName(account, region), cloud: 'aws', account, region, source: 'manager', ...AVAILABLE, installedAt: at, metrics: false,
   concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, description: null, page: null,
 });
 

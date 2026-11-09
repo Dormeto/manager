@@ -63,6 +63,36 @@ const select = async (wrapper: View) => {
 const running = (wrapper: View) => wrapper.find('a[aria-label="Onboarding of ligoj-ui-prod running: follow it in Operations"]');
 const toast = () => document.querySelector('.v-snackbar');
 
+describe('Discovery view, both clouds', () => {
+  it('filters by an AWS account or a Google Cloud project, and by a region of that cloud only', async () => {
+    document.body.innerHTML = '';
+    calls.length = 0;
+    const wrapper = await mountView();
+    const field = (label: string) => wrapper.findAll('.dm-filter').find((f) => f.text().includes(label))!;
+    expect(field('Account or project').exists()).toBe(true);
+    const listed = () => new URLSearchParams(calls.filter((c) => c.path.startsWith('/discovery/candidates?')).at(-1)!.path.split('?')[1]);
+    const type = async (label: string, value: string) => {
+      const input = field(label).find('input');
+      await input.setValue(value);
+      await sleep(450);
+      await flushPromises();
+    };
+    await type('Account or project', 'dormeto-dev');
+    expect(listed().get('account')).toBe('dormeto-dev');
+    // A Google Cloud region within a project, an AWS one within an account; the other cloud's is not sent.
+    await type('Region', 'europe-west2');
+    expect(listed().get('region')).toBe('europe-west2');
+    await type('Region', 'eu-west-1');
+    expect(listed().get('region')).toBeNull();
+    await type('Account or project', '111122223333');
+    await type('Region', 'eu-west-1');
+    expect([listed().get('account'), listed().get('region')]).toEqual(['111122223333', 'eu-west-1']);
+    await type('Region', 'europe-west2');
+    expect(listed().get('region')).toBeNull();
+    wrapper.unmount();
+  });
+});
+
 describe('Discovery view', () => {
   beforeEach(() => {
     calls.length = 0;

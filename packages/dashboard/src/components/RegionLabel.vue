@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// A region as its country's flag; its AWS location, country and code in a tooltip.
+// A region as its country's flag; its location (AWS's or Google Cloud's), country and code in a tooltip.
 import { computed } from 'vue';
 import { mdiEarth } from '@mdi/js';
-import { regionInfo } from '../regions';
+import { regionInfo, regionKind } from '../regions';
 
 const props = defineProps<{ region: string }>();
 const info = computed(() => regionInfo(props.region));
+const kind = computed(() => (info.value.location ? regionKind(props.region) : null));
 </script>
 
 <template>
@@ -16,6 +17,7 @@ const info = computed(() => regionInfo(props.region));
         <v-icon v-else :icon="mdiEarth" size="1.2em" />
       </span>
     </template>
+    <div v-if="kind" class="text-caption text-medium-emphasis">{{ kind }}</div>
     <div v-if="info.location" class="font-weight-bold">{{ info.location }}</div>
     <div>{{ info.country ? `${info.country} · ${region}` : `${region}: a region Dormeto does not know yet` }}</div>
   </v-tooltip>

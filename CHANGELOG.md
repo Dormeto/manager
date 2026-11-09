@@ -62,6 +62,11 @@ fixes it, the ETag it holds) is kept on its `RS#` item, beside the summary. The 
 (`s3:GetObject`; `s3:ListBucket` on the lists bucket, so a missing one answers 404) and updates its table's items
 (`dynamodb:UpdateItem`). A Google Cloud row's Cloud SQL backend is kept as `cloudsql-instance`.
 
+The dashboard's lists show both clouds: a cloud mark (Material Design Icons' AWS and Google Cloud marks) before the account or project of a router
+and a workload, "Account or project" columns, the Google Cloud regions (every region Google lists, with the location Google names) in the region labels, which say
+"AWS location" or "Google Cloud location", the Google Cloud backend kinds (Compute Engine VM, managed instance group, Kubernetes workload, Cloud SQL instance) as
+Material Design icons, and Discovery's filter taking a project ID. `npm run dev:mock` gains a Google Cloud router `dmtr-dormeto-dev-europe-west2` (0.40.0) and two workloads.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

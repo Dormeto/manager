@@ -54,7 +54,7 @@ export function routerRow(d: Demo, r: DemoRouter, now: number): RouterInfo {
     && op.target.region === r.region && operationStatus(op, now) === 'running');
   const health = healthOf(d, r);
   return {
-    name: r.name, region: r.region, account: r.account, source: r.source, ...(r.clusters.length ? { clusters: r.clusters } : {}),
+    name: r.name, cloud: r.cloud, region: r.region, account: r.account, source: r.source, ...(r.clusters.length ? { clusters: r.clusters } : {}),
     version: r.version, build: r.build, workloads: list.length, checkSchedule: CHECK_SCHEDULE, lastScheduledCheckAt: iso(lastCheck(now)),
     health: { status: health.status, problems: health.problems }, pauses: r.pauses, workloadStates: byState(list), paused: pausedCount(r, list),
     lastActivityAt: lastActivity(list), reporting: true, ...(r.description ? { summary: summaryOf(r.description.text) } : {}), checkedAt: iso(lastCheck(now) + 4 * SECOND),
@@ -68,9 +68,10 @@ const fetchedAt = (refreshHours: number, now: number) => iso(Math.floor((now - 1
 export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetails {
   const list = own(d, r);
   const health = healthOf(d, r);
-  const source = r.source;
+  // A Google Cloud router's own view is not drawn from Terraform: its settings are the CLI's (the router views come with the next task).
+  const source = r.source === 'cli' ? 'terraform' : r.source;
   return {
-    name: r.name, region: r.region, account: r.account, ...(r.clusters.length ? { clusters: r.clusters } : {}),
+    name: r.name, cloud: r.cloud, region: r.region, account: r.account, ...(r.clusters.length ? { clusters: r.clusters } : {}),
     router: { name: r.name, version: r.version, build: r.build },
     configuration: {
       checkSchedule: { value: CHECK_SCHEDULE, source },
@@ -191,15 +192,15 @@ function kinds(w: DemoWorkload): string[] {
   return [...new Set([...all.filter((k) => k !== 'rds-instance'), ...all.filter((k) => k === 'rds-instance')])];
 }
 
-export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = false, states = false } = {}): WorkloadSummary & { region: string; targetGroupArn: string } {
+export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = false, states = false } = {}): WorkloadSummary & { region: string; targetGroupArn?: string } {
   const total = countsOf(w, now - 7 * DAY, now);
   const costs = states ? costsOf(d, w, now) : null;
   return {
-    router: w.router, workloadId: w.workloadId, account: w.account, region: w.region, name: w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(w.schedule ? { scheduled: true } : {}), ...(w.state === 'ASLEEP' && hibernationOf(d, w, now)?.instances?.some((i) => i.hibernated) ? { hibernated: true as const } : {}), state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode, ...(w.description ? { summary: summaryOf(w.description.text) } : {}),
+    router: w.router, workloadId: w.workloadId, cloud: w.cloud, account: w.account, region: w.region, name: w.name === w.workloadId ? undefined : w.name, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(w.schedule ? { scheduled: true } : {}), ...(w.state === 'ASLEEP' && hibernationOf(d, w, now)?.instances?.some((i) => i.hibernated) ? { hibernated: true as const } : {}), state: w.state, url: `https://${w.hosts[0]}/`, wakeMode: w.wakeMode, ...(w.description ? { summary: summaryOf(w.description.text) } : {}),
     wakeCount: w.wakeCount, awakeSince: w.awakeSince === null ? null : iso(w.awakeSince), wakeStartedAt: w.wakeStartedAt === null ? null : iso(w.wakeStartedAt),
     failedAt: w.failedAt === null ? null : iso(w.failedAt), failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: w.nextAttemptAt === null ? null : iso(w.nextAttemptAt), fallbacks: [], updatedAt: w.updatedAt === null ? null : iso(w.updatedAt),
-    pendingWake: w.pendingWake, backends: kinds(w), pauses: pausesOf(d, w), settings: w.settings, targetGroupArn: w.targetGroupArn,
+    pendingWake: w.pendingWake, backends: kinds(w), pauses: pausesOf(d, w), settings: w.settings, ...(w.google ? {} : { targetGroupArn: w.targetGroupArn }),
     stats7d: { ignored: sum(total.ignored), deferred: sum(total.deferred), wakes: sum(total.wakes) },
     ...(idle && w.idleHours7d !== null ? { idleHours7d: w.idleHours7d, requests7d: w.requests7d } : {}),
     ...(costs ? { states7d: states7d(w, now), costs, energy: energyOf(w, costs) } : {}),
@@ -230,7 +231,7 @@ function backendsOf(w: DemoWorkload): { backends: Backend[]; targets: { id: stri
       const up = w.state === 'AWAKE' || w.state === 'NAPPING';
       backends.push({ kind: 'asg', id, status, min: up ? b.count : 0, desired: up || w.state === 'WAKING' ? b.count : 0, max: b.count, warmPool: b.warmPool ? { state: 'Stopped', size: b.count, reuseOnScaleIn: true } : null });
       if (running) for (let i = 0; i < b.count; i += 1) targets.push({ id: `i-0${hex(`asg:${w.name}:${i}`, 16)}`, state: targetState(w.state) });
-      if (!b.warmPool) recommendations.push({ backend: id, message: WARM_POOL });
+      if (!b.warmPool && !w.google) recommendations.push({ backend: id, message: WARM_POOL });
     } else if (b.kind === 'ecs') {
       backends.push({ kind: 'ecs', id: `arn:aws:ecs:${w.region}:${w.account}:service/${ecsCluster(w.account, w.region)}/${w.name}`, status });
       if (running) for (let i = 0; i < b.count; i += 1) targets.push({ id: ip(w, i), state: targetState(w.state) });
@@ -257,7 +258,7 @@ export function workloadStatus(d: Demo, w: DemoWorkload, now: number): WorkloadS
     workloadId: w.workloadId, name: w.name, description: w.description, tags: { ...w.tags }, can: { wake: true, nap: true }, ...(hibernationOf(d, w, now) ? { hibernation: hibernationOf(d, w, now)! } : {}), ...(row.hibernated ? { hibernated: true as const } : {}), url: row.url, router: { version: router.version, build: router.build }, state: w.state, updatedAt: row.updatedAt,
     awakeSince: row.awakeSince, wakeStartedAt: row.wakeStartedAt, failedAt: row.failedAt, failure: w.failure, consecutiveFailures: w.consecutiveFailures,
     nextAttemptAt: row.nextAttemptAt ?? null, fallbacks: [], wakeCount: w.wakeCount, holders: w.state === 'WAKING' ? 1 : 0, pendingWake: w.pendingWake, pauses,
-    targetGroupArn: w.targetGroupArn, source: w.source, account: w.account, region: w.region, states7d: row.states7d, costs: row.costs, energy: row.energy,
+    ...(w.google ? w.google : { targetGroupArn: w.targetGroupArn }), source: w.source, cloud: w.cloud, account: w.account, region: w.region, states7d: row.states7d, costs: row.costs, energy: row.energy,
     ...(w.idleHours7d !== null ? { idleHours7d: w.idleHours7d, requests7d: w.requests7d } : {}), drift: w.drift,
     lastRequestAt: lastRequestAt === null ? null : iso(lastRequestAt),
     nap: w.state === 'AWAKE' && !pauses.length && eligibleAt !== null

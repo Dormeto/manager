@@ -33,7 +33,8 @@ vi.mock('../src/api', () => ({
     }
     return {
       workloads: [], total: 0, byState: { ASLEEP: 2 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 },
-      routers: [{ name: 'dmt-dev', region: 'eu-west-1', version: '0.24.0', workloads: 2, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: late, health: { status: 'error', problems: [] } }],
+      routers: [{ name: 'dmt-dev', region: 'eu-west-1', version: '0.24.0', workloads: 2, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: late, health: { status: 'error', problems: [] } },
+        { name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', version: '0.40.0', workloads: 2, source: 'cli', health: { status: 'ok', problems: [] } }],
     };
   }),
 }));
@@ -88,6 +89,17 @@ describe('Overview', () => {
     const links = wrapper.findAll('a.v-list-item').filter((a) => a.text().startsWith('dmt-dev')).map((a) => a.attributes('href'));
     expect(links.length).toBeGreaterThanOrEqual(2);
     expect(new Set(links)).toEqual(new Set(['/routers/dmt-dev']));
+    wrapper.unmount();
+  });
+
+  it('marks each router of the list with its cloud', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
+    const wrapper = mount(OverviewView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+    await flushPromises();
+    const items = wrapper.findAll('[data-test="routers-card"] .v-list-item');
+    expect(items.map((i) => i.find('[data-test="cloud-mark"]').attributes('data-cloud'))).toEqual(['aws', 'gcp']);
     wrapper.unmount();
   });
 

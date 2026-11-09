@@ -5,7 +5,8 @@ import { mdiAlertCircleOutline, mdiArrowRight, mdiFilterRemoveOutline, mdiPowerS
 import { api } from '../api';
 import { useSession } from '../stores/session';
 import { usePoll } from '../poll';
-import { attentionMore, relative } from '../format';
+import { attentionMore, relative, rowCloud } from '../format';
+import CloudMark from '../components/CloudMark.vue';
 import { routerStatus } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
@@ -170,6 +171,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
         <v-list lines="two" class="bg-transparent">
           <v-list-item v-for="r in routers" :key="r.name" :title="r.name" :to="`/routers/${encodeURIComponent(r.name)}`"
             :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${routerStatus(r, now).detail}`">
+            <template #prepend><CloudMark :cloud="rowCloud(r)" class="mr-2" /></template>
             <template #append>
               <span class="d-inline-flex align-center ga-1"><PauseChip :pauses="r.pauses" /><v-chip :color="routerStatus(r, now).color" variant="tonal" label>{{ routerStatus(r, now).text }}</v-chip></span>
             </template>

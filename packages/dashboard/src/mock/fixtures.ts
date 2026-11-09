@@ -13,7 +13,7 @@ export const PREVIOUS = { version: '0.31.0', build: 'b81e04d6a5c2' };
 export interface AccountSpec { id: string; name: string; ou: string; command: boolean }
 
 // Hours from UTC of the people using each region's workloads (October: summer time).
-export const TIME_ZONES: Record<string, number> = { 'eu-west-1': 1, 'eu-west-3': 2, 'eu-central-1': 2, 'us-east-1': -4, 'us-west-2': -7 };
+export const TIME_ZONES: Record<string, number> = { 'eu-west-1': 1, 'europe-west2': 0, 'eu-west-3': 2, 'eu-central-1': 2, 'us-east-1': -4, 'us-west-2': -7 };
 
 // AWS list prices an hour (Linux, on demand). A scenario's regions are among these.
 export const EC2_PRICES: Record<string, Record<string, number>> = {

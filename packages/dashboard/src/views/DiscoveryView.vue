@@ -6,7 +6,9 @@ import { useDisplay } from 'vuetify';
 import { mdiAlertCircleOutline, mdiCancel, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
   mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
+import { cloudOf, isRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
+import CloudMark from '../components/CloudMark.vue';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import OnboardDialog from '../components/OnboardDialog.vue';
 import type { ClusterCheck, RouterInfo } from '../types';
@@ -20,7 +22,7 @@ import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
 import { cursorPages, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
-import { relative } from '../format';
+import { relative, rowCloud } from '../format';
 import { useCountUp } from '../count-up';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -100,7 +102,9 @@ function follow() {
   }, 10_000);
 }
 const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
-const filtered = computed(() => /^\d{12}$/.test(account.value));
+// The filter takes an AWS account or a Google Cloud project; the region within it is that cloud's.
+const accountCloud = computed(() => cloudOf(account.value));
+const filtered = computed(() => accountCloud.value !== null);
 
 // One page of the shown status, within the account (and region) when given; a refresh keeps what is selected.
 async function loadPage({ keep = false } = {}) {
@@ -108,7 +112,7 @@ async function loadPage({ keep = false } = {}) {
   const query = new URLSearchParams({ status: status.value, limit: String(PAGE) });
   if (filtered.value) {
     query.set('account', account.value);
-    if (/^[a-z]{2}(-[a-z]+)+-\d$/.test(region.value)) query.set('region', region.value);
+    if (accountCloud.value && isRegion(accountCloud.value, region.value)) query.set('region', region.value);
   }
   const at = page.value;
   const cursor = pages.cursor(at);
@@ -294,7 +298,7 @@ const runColor = (status: RunRecord['status']) => ({ running: 'info', ok: 'succe
 const headers = [
   { title: 'Status', key: 'status', sortable: false },
   { title: 'Rule', key: 'conditions', sortable: false },
-  { title: 'Account', key: 'account', sortable: false },
+  { title: 'Account or project', key: 'account', sortable: false },
   { title: 'Region', key: 'region', sortable: false },
   { title: 'Backend', key: 'backend', sortable: false },
   { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end' as const, sortable: false },
@@ -394,7 +398,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
     </div>
     <v-divider v-if="status" />
     <div class="dm-candidates__tools">
-      <v-text-field v-model="account" label="Account" placeholder="12 digits" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
+      <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
       <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
       <v-spacer />
       <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
@@ -439,7 +443,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       </template>
       <template #[`item.account`]="{ item }">
         <div class="nowrap">{{ item.accountName }}</div>
-        <div class="text-body-small text-medium-emphasis mono">{{ item.account }}</div>
+        <div class="text-body-small text-medium-emphasis mono"><CloudMark :cloud="rowCloud(item)" class="mr-1" />{{ item.account }}</div>
       </template>
       <template #[`item.region`]="{ item }"><RegionLabel :region="item.region" /></template>
       <template #[`item.backend`]="{ item }">

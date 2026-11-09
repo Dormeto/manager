@@ -26,8 +26,39 @@ const FLEET = {
   states7d: { from: '2026-10-02T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', totals: { ASLEEP: 1_000_000, AWAKE: 209_600 } },
   costs: { baseline: { kind: 'always' }, saved: { usd: 41.5, hours: 1200, unpricedHours: 0 }, hourly: 0.12, monthly: 70.08, priced: 2 },
 };
-vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [SHOP], total: 1, errors: [] }; }) }));
+// A Google Cloud workload: its router is named dmtr-<project>-<region>, its account is the project.
+const DEMO_VM = {
+  ...SHOP, router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'b5eed0c6a470b3a8', name: 'Demo VM', summary: undefined, cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', backends: ['instance', 'cloudsql-instance'],
+};
+let rows: unknown[] = [SHOP];
+vi.mock('../src/api', () => ({ api: vi.fn(async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: rows, total: rows.length, errors: [] }; }) }));
 const listPath = () => paths.find((p) => p.startsWith('/workloads?'))!;
+
+describe('Workloads view, both clouds', () => {
+  it('marks each workload with its cloud, and names its owner an account (AWS) or a project (Google Cloud)', async () => {
+    rows = [SHOP, DEMO_VM];
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers/:name', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
+    await flushPromises();
+    rows = [SHOP];
+    paths.length = 0;
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    const [aws, gcp] = wrapper.findAll('tbody tr').map((tr) => tr.findAll('td')[0]!);
+    expect(aws!.find('[data-test="cloud-mark"]').attributes('aria-label')).toBe('AWS account');
+    expect(gcp!.find('[data-test="cloud-mark"]').attributes('aria-label')).toBe('Google Cloud project');
+    expect(gcp!.find('[data-test="cloud-mark"]').attributes('data-cloud')).toBe('gcp');
+    expect([aws!.text(), gcp!.text()]).toEqual(['111122223333', 'dormeto-dev']);
+    // The Google Cloud kinds are Material Design icons with the Google Cloud names; AWS's keep their product icons.
+    const backend = wrapper.findAll('tbody tr')[1]!.findAll('td')[headers.indexOf('Backend')]!;
+    expect(backend.findAll('[aria-label]').map((e) => e.attributes('aria-label'))).toEqual(['Compute Engine VM', 'Cloud SQL instance']);
+    expect(backend.findAll('img')).toHaveLength(0);
+    expect(wrapper.findAll('tbody tr')[1]!.find('a')?.text()).toBe('Demo VM');
+    wrapper.unmount();
+  });
+});
 
 describe('Workloads view', () => {
   it('lists the workloads of one router in one state when the address names them, and shows the filter', async () => {
@@ -78,7 +109,7 @@ describe('Workloads view', () => {
     await router.push('/workloads');
     const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
     await flushPromises();
-    expect(wrapper.findAll('thead th')[0]!.text()).toBe('AWS account');
+    expect(wrapper.findAll('thead th')[0]!.text()).toBe('Account or project');
     expect(wrapper.findAll('tbody tr')[0]!.findAll('td')[0]!.text()).toBe('111122223333');
     wrapper.unmount();
   });

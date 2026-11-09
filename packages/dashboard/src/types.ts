@@ -1,3 +1,4 @@
+import type { Cloud } from '@dormeto/fleet/clouds';
 import type { Defaults } from './defaults';
 // Shapes returned by the manager API (router controller actions).
 export interface Settings {
@@ -52,7 +53,8 @@ export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | n
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
-  account?: string; // the router's account (from its summary)
+  account?: string; // the router's account (from its summary), or its Google Cloud project
+  cloud?: Cloud; // manager 0.24.0: the account's cloud (absent before: AWS)
   name?: string; // routers 0.20.0 and later: for people, the id otherwise
   // R11: Dormeto's own tags (absent for routers before 0.30.0) and what the caller's grants allow.
   tags?: Record<string, string>;
@@ -186,9 +188,15 @@ export interface WorkloadStatus {
   holders: number;
   pendingWake: boolean;
   pauses?: Pause[];
-  targetGroupArn?: string;
-  source?: 'terraform' | 'manager'; // routers 0.18.2 and later
-  account?: string; // the manager's: where the workload is (the ARNs of its backends and targets)
+  targetGroupArn?: string; // AWS
+  // Google Cloud (routers 0.40.0): its backend services and URL map as resource paths, and its load balancer, instead of a target group.
+  backendService?: string;
+  wakerBackendService?: string;
+  urlMap?: string;
+  lb?: { kind: string; region?: string };
+  source?: 'terraform' | 'manager' | 'cli'; // routers 0.18.2 and later; cli: a Google Cloud workload
+  cloud?: Cloud;
+  account?: string; // the manager's: where the workload is (the ARNs of its backends and targets), or its Google Cloud project
   region?: string;
   states7d?: StatesWeek; // the manager's: as on its Workloads row
   costs?: Costs;
@@ -259,11 +267,12 @@ export interface AlertsInfo {
 export interface RouterInfo {
   name: string;
   region: string;
-  account?: string;
+  account?: string; // the AWS account or the Google Cloud project
+  cloud?: Cloud; // manager 0.24.0 (absent before: AWS)
   clusters?: ClusterCheck[];
   reporting?: boolean; // its state comes from its events (router 0.21.0 and later with the manager's bus)
   checkedAt?: string;
-  source?: 'terraform' | 'manager';
+  source?: 'terraform' | 'manager' | 'cli'; // cli: a Google Cloud router
   version?: string | null;
   build?: string | null;
   workloads?: number;
@@ -293,6 +302,7 @@ export interface ClusterCheck { name: string; reachable: boolean; allowed: boole
 export interface RouterDetails {
   name: string;
   region: string;
+  cloud?: Cloud;
   account?: string;
   clusters?: ClusterCheck[];
   router: { name: string; version: string; build: string };

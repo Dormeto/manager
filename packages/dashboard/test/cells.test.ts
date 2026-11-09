@@ -42,6 +42,18 @@ describe('discovery cells', () => {
     expect(tip).toContain('Ireland · eu-west-1');
   });
 
+  it('says a Google Cloud region\'s location is Google Cloud\'s, and an AWS region\'s is AWS\'s', async () => {
+    const gcp = render(RegionLabel, { region: 'europe-west2' });
+    expect(gcp.find('.region-label').attributes('aria-label')).toBe('europe-west2, London');
+    const tip = await tooltipOf(gcp, '.region-label');
+    expect(tip).toContain('Google Cloud location');
+    expect(tip).toContain('London');
+    expect(tip).toContain('United Kingdom · europe-west2');
+    expect(tip).not.toContain('AWS location');
+    wrapper?.unmount();
+    expect(await tooltipOf(render(RegionLabel, { region: 'eu-west-1' }), '.region-label')).toContain('AWS location');
+  });
+
   it('shows an unknown region as a globe, its code in the tooltip', async () => {
     const w = render(RegionLabel, { region: 'xx-moon-1' });
     expect(w.find('img').exists()).toBe(false);

@@ -5,7 +5,8 @@ import { useDisplay } from 'vuetify';
 import { mdiAlertOctagonOutline, mdiAlertOutline, mdiBellRingOutline, mdiCheckCircleOutline, mdiLanDisconnect, mdiPlusCircleOutline, mdiRouterNetwork } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { relative, stateColor } from '../format';
+import { relative, rowCloud, stateColor } from '../format';
+import CloudMark from '../components/CloudMark.vue';
 import { healthColor } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
@@ -101,7 +102,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
           <div class="dm-router__id">
             <router-link :to="`/routers/${encodeURIComponent(item.name)}`" class="dm-router__name">{{ item.name }}</router-link>
             <div v-if="item.summary" class="dm-list-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
-            <div class="dm-router__where"><span v-if="item.account" class="mono">{{ item.account }}</span><span v-if="item.account" aria-hidden="true">·</span><RegionLabel :region="item.region" /></div>
+            <div class="dm-router__where"><CloudMark :cloud="rowCloud(item)" /><span v-if="item.account" class="mono">{{ item.account }}</span><span v-if="item.account" aria-hidden="true">·</span><RegionLabel :region="item.region" /></div>
           </div>
         </div>
       </template>

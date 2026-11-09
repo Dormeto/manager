@@ -78,7 +78,7 @@ describe('demo scenario', () => {
       return answer;
     };
     const { workloads } = await call<{ workloads: { router: string }[] }>('/workloads?limit=1000');
-    expect(workloads).toHaveLength(40);
+    expect(workloads).toHaveLength(40 + 2); // and the demo's two Google Cloud workloads
     const { routers } = await call<{ routers: unknown[] }>('/routers');
     expect(routers.length).toBeGreaterThanOrEqual(4);
     const audit = await call<{ entries: { who: string }[] }>('/audit');

@@ -514,7 +514,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <HistoryCard :router="router" :id="id" :now="now" />
       <RequestHeatmap :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
-      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
+      <IdleWindowCard :router="router" :id="id" :source="status.source === 'cli' ? undefined : status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
     </div>
 
     <div class="dm-stack">

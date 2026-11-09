@@ -30,9 +30,10 @@ export interface StoredWaitingPage { page: StoredPage; by: string | null; at: nu
 
 export interface DemoRouter {
   name: string;
+  cloud: 'aws' | 'gcp'; // account holds the AWS account or the Google Cloud project
   account: string;
   region: string;
-  source: 'terraform' | 'manager';
+  source: 'terraform' | 'manager' | 'cli'; // cli: a Google Cloud router, installed by the CLI
   version: string;
   build: string;
   installedAt: number;
@@ -54,15 +55,20 @@ export interface DemoRouter {
   page: StoredWaitingPage | null; // its waiting page (router 0.35.0)
 }
 
+// What a Google Cloud workload's row holds instead of an AWS target group: its backend services, URL map and load balancer.
+export interface GoogleWorkload { backendService: string; wakerBackendService: string; urlMap: string; lb: { kind: 'global' | 'classic' | 'regional'; region?: string } }
+
 export interface DemoWorkload {
   workloadId: string;
   name: string;
   router: string;
+  cloud: 'aws' | 'gcp';
+  google?: GoogleWorkload; // a Google Cloud workload (its target group, load balancer and rule ARNs are empty)
   account: string;
   region: string;
   hosts: string[];
   wakeMode: 'any' | 'browser';
-  source: 'terraform' | 'manager';
+  source: 'terraform' | 'manager' | 'cli';
   tags: Record<string, string>; // R11: Dormeto's own tags
   schedule: Schedule | null; // R12
   hibernate: boolean | null; // its own value (null: inherit)
@@ -246,7 +252,7 @@ export function state(): Demo {
 
 function makeRouter(spec: RouterSpec, now: number): DemoRouter {
   return {
-    name: spec.name, account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
+    name: spec.name, cloud: 'aws', account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
     clusters: (spec.clusters ?? []).map((name, i) => ({ name, reachable: true, allowed: true, missing: [], ...(i === 0 ? { via: 'direct' as const } : { via: 'proxy' as const, proxy: { name: `${spec.name}-kube-${name}`, version: spec.version } }), checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
     ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, description: null, page: null,
@@ -365,7 +371,7 @@ function baseWorkload(fields: { name: string; router: DemoRouter; backends: Back
   const time = timings(backends);
   const seed = hash(name);
   return {
-    workloadId: hex(`workload:${name}`, 16), name, router: router.name, account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
+    workloadId: hex(`workload:${name}`, 16), name, router: router.name, cloud: 'aws', account, region, hosts: fields.hosts, wakeMode: fields.wakeMode, source: fields.source,
     tags: { team: TEAMS[seed % TEAMS.length]!, env: seed % 3 === 0 ? 'staging' : 'dev' },
     schedule: null, hibernate: null, description: null, page: null, favicon: null, fallbackTypes: [],
     settings: settingsOf(backends, fields.idleMinutes), backends, items: backends.map((b) => itemOf(b, region)), itemsKnown: true,
@@ -673,7 +679,42 @@ function build(now: number): Demo {
   }
   seedOperations(d, now);
   seedAudit(d, now);
+  addGoogleCloud(d, now);
   return d;
+}
+
+// The demo's Google Cloud router (installed by the CLI in the project dormeto-dev) and its two workloads, a VM and a managed
+// instance group. They are apart from the generated organization (they change none of its counts), have no discovery
+// candidate (discovery of Google Cloud projects comes later), and are not priced (savings at Google's prices come later).
+const GOOGLE_PROJECT = 'dormeto-dev';
+const GOOGLE_REGION = 'europe-west2';
+function addGoogleCloud(d: Demo, now: number): void {
+  const router: DemoRouter = {
+    ...makeRouter({
+      name: `dmtr-${GOOGLE_PROJECT}-${GOOGLE_REGION}`, account: GOOGLE_PROJECT, region: GOOGLE_REGION, source: 'manager', version: '0.40.0', build: 'b1c2d3e4f5a6', installedDays: 12, metrics: null,
+      concurrency: { limit: 0, needed: 0, worstCase: 0 }, peak: 1,
+    }, now),
+    cloud: 'gcp', source: 'cli', readsManager: false,
+  };
+  const google = (name: string): GoogleWorkload => ({
+    backendService: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/backendServices/${name}`,
+    wakerBackendService: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/backendServices/${name}-waker`,
+    urlMap: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/urlMaps/${GOOGLE_PROJECT}-lb`,
+    lb: { kind: 'regional', region: GOOGLE_REGION },
+  });
+  const specs: { id: string; name: string; spec: WorkloadSpec; tags?: Record<string, string> }[] = [
+    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-medium' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
+    { id: 'mig-demo', name: 'mig-demo', spec: { name: 'mig-demo', router: router.name, state: 'AWAKE', profile: 'busy', backends: [{ kind: 'asg', type: 'e2-standard-2', count: 2 }], idleMinutes: 30, wakeMode: 'any', source: 'manager', awakeFor: 70 } },
+  ];
+  for (const { id, name, spec, tags } of specs) {
+    const w = buildWorkload({ ...spec, source: 'terraform' }, router, now);
+    Object.assign(w, {
+      workloadId: id, name, cloud: 'gcp', source: 'cli', google: google(id), targetGroupArn: '', loadBalancerArn: '', ruleArns: [], items: [], itemsKnown: false, schedule: null, hibernate: null, fallbackTypes: [],
+      ...(tags ? { tags } : {}),
+    });
+    d.workloads.push(w);
+  }
+  d.routers.push(router);
 }
 
 function specCandidate(c: CandidateSpec, now: number, lastRun: number): Candidate {
