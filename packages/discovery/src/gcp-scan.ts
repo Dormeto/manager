@@ -314,9 +314,11 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     }
   }
 
-  // A group's or a NEG's read, once each.
-  const reads = new Map<string, Promise<BackendRead>>();
-  const once = (key: string, read: () => Promise<BackendRead>) => {
+  // What a group's or a NEG's read finds, once each, whichever backend services name it: their reasons are worded per service.
+  // `otherType`: a zonal NEG's type when it is not one of VMs.
+  interface Found { kind?: BackendKind; id?: string; gke?: true; otherType?: string; vms: string[] }
+  const reads = new Map<string, Promise<Found>>();
+  const once = (key: string, read: () => Promise<Found>) => {
     if (!reads.has(key)) reads.set(key, read());
     return reads.get(key)!;
   };
@@ -336,34 +338,37 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
   }
   // onboarding.mjs backendOf and negOf, the reasons a read can decide; the VMs whose labels are the candidate's tags.
   interface BackendRead { reasons: string[]; kind?: BackendKind; id?: string; gke?: true; vms: string[] }
-  function backendOf(url: string, service: string): Promise<BackendRead> {
+  async function backendOf(url: string, service: string): Promise<BackendRead> {
     const group = INSTANCE_GROUP.exec(url);
     if (group) {
       const [scope, location, name] = [group[1]!, group[2]!, group[3]!];
-      return once(pathOf(url), async () => {
+      const found = await once(pathOf(url), async () => {
         reachable(scope === 'zones' ? regionOfZone(location) : location);
         const manager = managerOf.get(`projects/${project}/${scope}/${location}/instanceGroups/${name}`);
         const members = await pagesOf<{ instance?: string }>(`${COMPUTE}/projects/${project}/${scope}/${location}/instanceGroups/${name}/listInstances`, { instanceState: 'ALL' });
         const vms = members.flatMap((m) => (m.instance ? [pathOf(m.instance)] : []));
         for (const vm of vms) reachable(regionOfZone(/\/zones\/([^/]+)\//.exec(vm)?.[1] ?? ''));
-        return manager ? { reasons: [], kind: 'asg', id: manager.name, vms } : { reasons: [], kind: 'instance', id: name, vms };
+        return manager ? { kind: 'asg', id: manager.name, vms } : { kind: 'instance', id: name, vms };
       });
+      return { reasons: [], ...found };
     }
     const [, scope, zone, name] = NEG_URL.exec(url) ?? [];
     if (scope === 'zones' && zone && name) {
-      return once(pathOf(url), async () => {
+      const found = await once(pathOf(url), async () => {
         reachable(regionOfZone(zone));
         const negUrl = `${COMPUTE}/projects/${project}/zones/${zone}/networkEndpointGroups/${name}`;
         const neg = await call<Neg>('GET', negUrl);
-        if (neg.networkEndpointType !== NEG_OF_VMS) return { reasons: [`network endpoint group ${name} of backend service ${service} has the type ${neg.networkEndpointType}: only ${NEG_OF_VMS} is supported, take it out of the backend service`], vms: [] };
-        if (isGkeNeg({ ...neg, name })) return { reasons: [], kind: 'k8s', id: name, gke: true, vms: [] };
+        if (neg.networkEndpointType !== NEG_OF_VMS) return { otherType: String(neg.networkEndpointType), vms: [] };
+        if (isGkeNeg({ ...neg, name })) return { kind: 'k8s', id: name, gke: true, vms: [] };
         const endpoints = await pagesOf<{ networkEndpoint?: { instance?: string } }>(`${negUrl}/listNetworkEndpoints`, {});
         const vms = endpoints.flatMap((e) => (e.networkEndpoint?.instance ? [`projects/${project}/zones/${zone}/instances/${nameOf(e.networkEndpoint.instance)}`] : []));
-        return { reasons: [], kind: 'instance', id: name, vms };
+        return { kind: 'instance', id: name, vms };
       });
+      if (found.otherType !== undefined) return { reasons: [`network endpoint group ${name} of backend service ${service} has the type ${found.otherType}: only ${NEG_OF_VMS} is supported, take it out of the backend service`], vms: [] };
+      return { reasons: [], ...found };
     }
     const where = scope === 'regions' ? 'regional network endpoint group (serverless, private service connect)' : scope === 'global' ? 'global network endpoint group (internet)' : 'network endpoint group';
-    return Promise.resolve({ reasons: [`backend ${nameOf(url)} of backend service ${service} is a ${where}: only zonal network endpoint groups of VMs and instance groups are supported`], vms: [] });
+    return { reasons: [`backend ${nameOf(url)} of backend service ${service} is a ${where}: only zonal network endpoint groups of VMs and instance groups are supported`], vms: [] };
   }
 
   // onboarding.mjs:335-361 (loadBalancerOf): one target proxy, forwarding rules whose scheme tells the kind; the reasons when it cannot be told.

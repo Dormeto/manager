@@ -123,6 +123,19 @@ describe('a Google Cloud project\'s scan', () => {
     });
   });
 
+  it('one NEG of another type behind two backend services: each one\'s reason names its own service, the NEG read once', async () => {
+    const w = devProject();
+    const neg = w.neg('dmt-demo-hybrid', 'europe-west1-b', { type: 'NON_GCP_PRIVATE_IP_PORT' });
+    for (const name of ['dmt-demo-hybrid-a', 'dmt-demo-hybrid-b']) {
+      w.backendService(name, [neg]);
+      alone(w, `dmt-dev-${name.slice(9)}`, name);
+    }
+    const { rules } = await scan(w);
+    const why = (service: string) => `network endpoint group dmt-demo-hybrid of backend service ${service} has the type NON_GCP_PRIVATE_IP_PORT: only GCE_VM_IP_PORT is supported, take it out of the backend service`;
+    expect([named(rules, 'dmt-demo-hybrid-a')!.reason, named(rules, 'dmt-demo-hybrid-b')!.reason]).toEqual([why('dmt-demo-hybrid-a'), why('dmt-demo-hybrid-b')]);
+    expect(w.calls.filter((c) => c.endsWith('/networkEndpointGroups/dmt-demo-hybrid'))).toHaveLength(1);
+  });
+
   it('a URL map\'s own error response policy where it names the service: the router\'s reason', async () => {
     const w = devProject();
     const policy = { errorResponseRules: [{ matchResponseCodes: ['5xx'], path: '/oops.html', overrideResponseCode: 503 }], errorService: w.link('global/backendBuckets/dmt-dev-errors') };
@@ -232,6 +245,19 @@ describe('a Google Cloud project\'s scan', () => {
     w.front('dmtr-europe-west2-test');
     const { rules } = await scan(w);
     expect(rules.map((r) => r.targetGroup).sort()).toEqual(['dmt-demo-app', 'dmt-demo-mig-app']);
+    expect(w.calls.some((c) => c.includes('dmtr-europe-west2-waker'))).toBe(false);
+  });
+
+  it('a waker backend service no row names (a router not polled yet, an offboarding\'s leftover) is never a candidate', async () => {
+    const w = devProject();
+    const { rules } = await scan(w, []);
+    expect(rules.map((r) => r.targetGroup).sort()).toEqual(['dmt-demo-app', 'dmt-demo-mig-app']);
+    expect(rules.some((r) => r.targetGroup?.startsWith('dmtr-'))).toBe(false);
+    // Without its row, the waker's route in dmt-demo-app's matcher is no route of Dormeto's: the router's words for it.
+    expect(named(rules, 'dmt-demo-app')).toMatchObject({
+      eligibility: 'ineligible', conditions: 'hosts gcp.dev.dormeto.com, *; paths /*',
+      reason: 'the URL map has its own /_dormeto/ route at pathMatchers[0].pathRules[0]: change that, then onboard again',
+    });
     expect(w.calls.some((c) => c.includes('dmtr-europe-west2-waker'))).toBe(false);
   });
 
