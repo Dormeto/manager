@@ -74,7 +74,7 @@ export async function unbindTag(google: Calls, target: TagTarget, value: string)
     } while (token);
   } catch (err) {
     if (err instanceof GoogleError && err.status === 404) return 0;
-    if (err instanceof GoogleError && err.status === 403) throw new Error(`the tag bindings of ${target.parent} can't be read: ${err.message}`);
+    if (err instanceof GoogleError && err.status === 403) throw new GoogleError({ status: 403, reason: err.reason, host: err.host, message: `the tag bindings of ${target.parent} can't be read: ${err.message}` });
     throw err;
   }
   let removed = 0;

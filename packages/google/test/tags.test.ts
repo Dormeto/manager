@@ -159,7 +159,9 @@ describe('unbindTag', () => {
   });
 
   it('names the parent when the list is refused (403)', async () => {
-    const err = await unbindTag(fake(() => gerr(403, 'PERMISSION_DENIED', 'denied')).google, vm, VALUE).catch((e: unknown) => e as Error) as Error;
-    expect(err.message).toContain(vm.parent);
+    const err = await unbindTag(fake(() => gerr(403, 'PERMISSION_DENIED', 'denied')).google, vm, VALUE).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GoogleError);
+    expect([(err as GoogleError).status, (err as GoogleError).reason]).toEqual([403, 'PERMISSION_DENIED']);
+    expect((err as GoogleError).message).toContain(vm.parent);
   });
 });
