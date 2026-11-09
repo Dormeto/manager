@@ -153,6 +153,14 @@ describe('callRouter', () => {
     }
   });
 
+  it('redacts the credentials a failure\'s own message echoes: the controller\'s 503 JSON, a token stage\'s 5xx', async () => {
+    const echo = 'bad eyJhbGciOi.eyJhdWQiOiJ4In0.c2ln and signature=ab%2Fc here';
+    const own = await failure(callRouter(fakeGoogle(() => json(503, { error: 'unavailable', message: echo })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+    expect(own.message).toBe('bad [redacted] and [redacted] here');
+    const token = await tokenRefusal(':generateIdToken', json(503, { error: { code: 503, message: echo, status: 'UNAVAILABLE' } }));
+    expect([token.message, token.said]).toEqual(['bad [redacted] and [redacted] here', 'Google: iamcredentials.googleapis.com 503 UNAVAILABLE: bad [redacted] and [redacted] here']);
+  });
+
   it('keeps STS\'s 5xx a failure of the call, not the manager\'s access', async () => {
     const err = await tokenRefusal('https://sts.googleapis.com/v1/token', new Response('<html>Service Unavailable</html>', { status: 503 }));
     expect([err.refusal, err.status, err.google, err.token]).toEqual([undefined, 503, false, true]);

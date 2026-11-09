@@ -48,7 +48,7 @@ export function errorOf(status: number, text: string, url?: string): GoogleError
 
 // Google's words as one plain line, cut to `max` characters: an HTML page as its title (else its text, without style, script
 // or tags), a credential its answer echoes replaced by `[redacted]`.
-const SECRETS = [/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, /ya29\.[\w.-]+/g, /Bearer\s+\S+/gi, /x-amz-[\w-]+\s*[=:]\s*\S*/gi, /Signature=[\w%/+=]+/g, /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g];
+const SECRETS = [/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, /ya29\.[\w.-]+/g, /Bearer\s+\S+/gi, /x-amz-[\w-]+\s*[=:]\s*\S*/gi, /Signature=[\w%/+=]+/gi, /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g];
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#x27': "'" };
 export function plainWords(text: string, max = 200): string {
   let words = text;

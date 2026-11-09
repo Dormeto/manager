@@ -41,7 +41,7 @@ export class RouterCallError extends Error {
   readonly said?: string;
 
   constructor(message: string, { status = 0, google = false, token = false, refusal, said }: { status?: number; google?: boolean; token?: boolean; refusal?: RouterRefusal; said?: string } = {}) {
-    super(message);
+    super(redacted(message, Infinity)); // whatever Google echoed never carries a credential
     if (said) this.said = said;
     this.name = 'RouterCallError';
     this.status = status;
