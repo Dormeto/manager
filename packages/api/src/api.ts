@@ -1314,7 +1314,10 @@ export function createApi({
         workloadStates: info.workloads.byState, paused: info.workloads.paused, lastActivityAt: info.workloads.lastActivityAt,
       };
     } catch (err) {
-      if (!unknownAction(err, 'router')) return { ...where(router), error: (err as Error).message };
+      // A Google Cloud router the manager can't use: the refusal (the Routers view gives its command) and the version the
+      // registry knows (a router too old is listed with it).
+      const refused = err instanceof RouterError && err.refusal ? { refusal: err.refusal, ...(router.installed?.version ? { version: router.installed.version } : {}) } : {};
+      if (!unknownAction(err, 'router')) return { ...where(router), ...refused, error: (err as Error).message };
     }
     try {
       const listed = await invoke(router, { action: 'list' }) as Listed;

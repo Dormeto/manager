@@ -481,6 +481,18 @@ describe('Google Cloud routers', () => {
     expect(m.actions()).toHaveLength(1);
   });
 
+  // The Routers view gives the install command with the pinned version for a router too old, its version known or not.
+  it('lists a router too old with its refusal and its registered version, one of unknown version with its refusal', async () => {
+    const known = manager({ routers: [gcp({ version: '0.39.0' })] });
+    expect(json(await known.api(event('GET', '/api/routers', 'dmt-viewer'))).routers.find((r: { name: string }) => r.name === NAME)).toEqual({
+      name: NAME, region: 'europe-west2', account: 'dormeto-dev', cloud: 'gcp', source: 'cli', version: '0.39.0', refusal: 'router-too-old', reporting: false,
+      error: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    });
+    const unknown = manager({ routers: [gcp({ version: '' })], controller: () => answer(404, { error: 'no route for POST /v1/actions', reason: 'not-found' }) });
+    const row = json(await unknown.api(event('GET', '/api/routers', 'dmt-viewer'))).routers.find((r: { name: string }) => r.name === NAME);
+    expect([row.refusal, row.version, row.error]).toEqual(['router-too-old', undefined, 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0']);
+  });
+
   it('answers router-unknown for a router whose controller discovery hasn\'t found yet, without a call', async () => {
     const m = manager({ routers: [gcp({ controller: '' })] });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));

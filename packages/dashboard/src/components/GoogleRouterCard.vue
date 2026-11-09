@@ -8,10 +8,11 @@ import { controllerConsoleUrl, installCommand, uninstallCommand } from '../googl
 import { atLeast } from '../format';
 import type { RouterInfo } from '../types';
 
-// pinned: the router version this manager pins; the install command carries it while the router is behind.
+// pinned: the router version this manager pins; the install command carries it while the router is behind: its version below
+// the pinned one, or too old to report whatever its version (the API's refusal router-too-old, its version perhaps unknown).
 const props = defineProps<{ router: RouterInfo; pinned: string | null }>();
 const project = computed(() => props.router.account ?? '');
-const behind = computed(() => Boolean(props.router.version && props.pinned && !atLeast(props.router.version, props.pinned)));
+const behind = computed(() => Boolean(props.pinned && (props.router.refusal === 'router-too-old' || (props.router.version && !atLeast(props.router.version, props.pinned)))));
 const install = computed(() => installCommand(project.value, props.router.region, behind.value ? props.pinned : null));
 </script>
 

@@ -1,5 +1,6 @@
-// EC2 hibernation as the dashboard words it (router 0.32.0 and later): where a workload's value comes from, which of its
-// instances can hibernate, and what a router that inherits its value reads.
+// EC2 hibernation as the dashboard words it (router 0.32.0 and later), and Google Cloud's suspension, the same setting: where a
+// workload's value comes from, which of its instances can hibernate, and what a router that inherits its value reads.
+import type { Cloud } from '@dormeto/fleet/clouds';
 import { relative } from './format';
 import type { Hibernation, ManagerSettings } from './types';
 
@@ -10,15 +11,16 @@ const FROM: Record<Hibernation['from'], string> = {
   manager: "from the manager's default",
   default: 'built-in default',
 };
-export const fromText = (from: Hibernation['from']): string => FROM[from];
+// Google Cloud's VMs have machine types.
+export const fromText = (from: Hibernation['from'], cloud: Cloud = 'aws'): string => (cloud === 'gcp' && from === 'fallback-types' ? 'off: the workload has fallback machine types' : FROM[from]);
 
 const onOff = (value: boolean) => (value ? 'On' : 'Off');
 
 // "On, from the router"; the fallback types' text already says "off:" and reads as one sentence (capitalised). A router that
 // has not read the manager's settings yet (or whose reads all failed) stops the instances plainly until it has.
-export function hibernationLine(h: Pick<Hibernation, 'hibernate' | 'from' | 'unknown'>): string {
+export function hibernationLine(h: Pick<Hibernation, 'hibernate' | 'from' | 'unknown'>, cloud: Cloud = 'aws'): string {
   if (h.unknown) return "Off for now: the router has not read the manager's settings yet (naps stop)";
-  const text = fromText(h.from);
+  const text = fromText(h.from, cloud);
   return h.from === 'fallback-types' ? `${text[0]!.toUpperCase()}${text.slice(1)}` : `${onOff(h.hibernate)}, ${text}`;
 }
 

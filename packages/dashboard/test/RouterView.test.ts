@@ -35,6 +35,8 @@ const GOOGLE_ROUTER = {
   health: { status: 'error', problems: [{ level: 'error', code: 'too-old', text: `router 0.25.1 can't report to the manager: ${GCP_COMMAND}` }] }, pauses: [], lastScheduledCheckAt: new Date().toISOString(),
 };
 const calls: { path: string; init?: RequestInit }[] = [];
+// The Google Cloud router GET /routers lists (a test may replace it).
+let googleRouter: Record<string, unknown> = GOOGLE_ROUTER;
 let withHibernation = true;
 let failSave: boolean | string = false;
 // The description the manager answers with (undefined: none readable, the key absent) and the refusal of its PUT.
@@ -59,7 +61,7 @@ vi.mock('../src/api', () => ({
       if (failSave) throw new Error(typeof failSave === 'string' ? failSave : 'upgrade the router to 0.32.0');
       return {};
     }
-    if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }, GOOGLE_ROUTER] };
+    if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }, googleRouter] };
     if (path === `/routers/${GCP}`) return { ...DETAILS, cloud: 'gcp', configuration: { ...DETAILS.configuration, checkSchedule: { value: '*/5 * * * *', source: 'cli' }, metrics: { value: null, source: 'cli' }, ipLists: { value: [], source: 'cli' }, noWakeRules: { value: [], source: 'cli' } } };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
     if (unreachable && path.startsWith('/routers/')) throw new Error('router dmtr-dev-eu-west-3: Task timed out after 30.00 seconds');
@@ -485,6 +487,22 @@ describe('a Google Cloud router', () => {
     expect(text).not.toMatch(/Terraform/);
     expect(text).not.toContain('Upgrade to 0.16');
     wrapper.unmount();
+  });
+
+  // The API lists a router it can't call with its refusal: too old, its version known (registered) or not.
+  it('gives the install command with the pinned version for a router too old whose version is unknown', async () => {
+    googleRouter = {
+      name: GCP, cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', reporting: false, refusal: 'router-too-old',
+      error: `router older than 0.40.0 can't report to the manager: ${GCP_COMMAND}`,
+    };
+    try {
+      const wrapper = await mountView(GCP);
+      expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_COMMAND);
+      expect(wrapper.find('[data-test="gcp-router"]').text()).toContain('Upgrade to 0.26.0');
+      wrapper.unmount();
+    } finally {
+      googleRouter = GOOGLE_ROUTER;
+    }
   });
 
   it('links its controller in the Google Cloud console, with the project', async () => {

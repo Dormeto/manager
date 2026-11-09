@@ -24,6 +24,13 @@ describe('hibernation texts', () => {
     expect(hibernationLine({ ...base, hibernate: true, from: 'default' })).toBe('On, built-in default');
   });
 
+  it('says machine types for a Google Cloud workload\'s fallbacks, and the rest as AWS\'s', () => {
+    expect(hibernationLine({ ...base, hibernate: false, from: 'fallback-types' }, 'gcp')).toBe('Off: the workload has fallback machine types');
+    expect(fromText('fallback-types', 'gcp')).toBe('off: the workload has fallback machine types');
+    expect(hibernationLine({ ...base, hibernate: true, from: 'router' }, 'gcp')).toBe('On, from the router');
+    expect(hibernationLine({ ...base, hibernate: false, from: 'fallback-types' }, 'aws')).toBe('Off: the workload has fallback instance types');
+  });
+
   it("says Off for now while the router has not read the manager's settings (router 0.32.0's unknown)", () => {
     expect(hibernationLine({ ...base, hibernate: false, from: 'manager', unknown: true })).toBe("Off for now: the router has not read the manager's settings yet (naps stop)");
   });

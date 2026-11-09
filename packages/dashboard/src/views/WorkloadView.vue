@@ -461,7 +461,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     <div class="text-body-medium">{{ status.failure.message }}</div>
     <div class="text-body-small text-medium-emphasis mt-1">{{ failureDetail }}</div>
   </v-alert>
-  <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" title="On fallback instance types">
+  <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" :title="gcp ? 'On fallback machine types' : 'On fallback instance types'">
     {{ fallbackText }}: {{ gcp ? 'Google Cloud' : 'AWS' }} had no capacity for their own types at the last wake; the next nap gives them back.
   </v-alert>
   <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
@@ -651,7 +651,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </v-card-text>
         <v-card-text v-else-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
           <div class="d-flex flex-wrap align-center ga-2">
-            <span>{{ gcp ? 'Suspend instead of stop' : 'Hibernate' }} <strong>{{ hibernationLine(status.hibernation) }}</strong></span>
+            <span>{{ gcp ? 'Suspend instead of stop' : 'Hibernate' }} <strong>{{ hibernationLine(status.hibernation, gcp ? 'gcp' : 'aws') }}</strong></span>
             <v-spacer />
             <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set {{ gcp ? 'it' : 'hibernate' }} in its workload module</span>
             <v-btn v-else-if="session.canOperate && managed" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="hibernateOpen = true">Edit</v-btn>

@@ -938,6 +938,18 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
+  it('says machine types, not instance types, for its VMs on fallbacks and the suspension they turn off', async () => {
+    current = {
+      ...google, state: 'AWAKE', fallbacks: [{ instance: 'vm-demo', from: 'n2-standard-2', to: 'n2d-standard-2' }],
+      hibernation: { hibernate: false, from: 'fallback-types', workload: null, router: null, manager: null, instances: null, freshBoot: false },
+    };
+    const wrapper = await mountView('operator');
+    expect(wrapper.find('[data-test="fallbacks"]').text()).toContain('On fallback machine types');
+    expect(wrapper.find('[data-test="hibernate"]').text()).toContain('Off: the workload has fallback machine types');
+    expect(wrapper.text()).not.toMatch(/instance types/);
+    wrapper.unmount();
+  });
+
   it('links the load balancers\' list for a regional URL map, whose own page this dashboard cannot confirm', async () => {
     current = { ...google, urlMap: `${PROJECT}/regions/europe-west2/urlMaps/dormeto-lb`, lb: { kind: 'regional', region: 'europe-west2' } };
     const wrapper = await mountView('operator');
