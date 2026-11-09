@@ -732,7 +732,7 @@ function addGoogleCloud(d: Demo, now: number): void {
   };
   const google = (name: string): GoogleWorkload => ({ backendService: name, wakerBackendService: `${name}-waker`, urlMap: GOOGLE_MAP, lb: { kind: 'regional', region: GOOGLE_REGION } });
   const specs: { id: string; name: string; spec: WorkloadSpec; tags?: Record<string, string> }[] = [
-    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-medium' }], idleMinutes: 15, wakeMode: 'browser', source: 'terraform', awakeFor: 0 } },
+    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-medium' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
     { id: 'mig-demo', name: 'mig-demo', spec: { name: 'mig-demo', router: router.name, state: 'AWAKE', profile: 'busy', backends: [{ kind: 'asg', type: 'e2-standard-2', count: 2 }], idleMinutes: 30, wakeMode: 'any', source: 'manager', awakeFor: 70 } },
   ];
   for (const { id, name, spec, tags } of specs) {

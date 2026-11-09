@@ -123,7 +123,7 @@ export const BACKEND_KINDS: BackendKind[] = [...DISCOVERY_BACKEND_KINDS];
 
 export const DIMENSIONS: { key: DimensionKey; label: string; kind: 'list' | 'tags'; hint: string }[] = [
   { key: 'accountIds', label: 'Accounts or projects', kind: 'list', hint: '12-digit AWS account IDs, Google Cloud project IDs' },
-  { key: 'ouIds', label: 'OUs', kind: 'list', hint: 'AWS: ou-… or the root r-…, sub-OUs included' },
+  { key: 'ouIds', label: 'OUs or folders', kind: 'list', hint: 'AWS: ou-… or the root r-…; Google Cloud: folders/<n> or organizations/<n>; sub-OUs and subfolders included' },
   { key: 'accountTags', label: 'Account tags', kind: 'tags', hint: 'key=value, key= for any value' },
   { key: 'regions', label: 'Regions', kind: 'list', hint: 'eu-west-1 on AWS, europe-west2 or global on Google Cloud' },
   { key: 'loadBalancers', label: 'Load balancers', kind: 'list', hint: 'names with *, AWS ARNs, or Google Cloud paths (projects/…/urlMaps/… or …/backendServices/…)' },

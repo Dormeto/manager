@@ -107,6 +107,9 @@ describe('Discovery status filters', () => {
 
   it('words the criteria\'s hints for both clouds', () => {
     const hint = (key: string) => DIMENSIONS.find((d) => d.key === key)!.hint;
+    expect(DIMENSIONS.find((d) => d.key === 'ouIds')!.label).toBe('OUs or folders');
+    expect(hint('ouIds')).toContain('folders/<n>');
+    expect(hint('ouIds')).toContain('organizations/<n>');
     expect(hint('accountIds')).toContain('project');
     expect(hint('regions')).toContain('europe-west2');
     expect(hint('regions')).toContain('global');
