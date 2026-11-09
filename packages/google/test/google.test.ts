@@ -2,7 +2,11 @@
 // Google's STS for a federated token, which asks iamcredentials for the service accounts' access and ID tokens; tokens
 // kept until 5 minutes before they expire; every call bounded.
 import { createHash, createHmac } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import type * as https from 'node:https';
+import { Readable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { httpsTransport, send } from '../src/fetch.js';
 import { createGoogle, GoogleError, serviceAccountEmails, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
@@ -260,5 +264,85 @@ describe('createGoogle', () => {
     const quiet = google.call('discovery', 'GET', 'https://run.googleapis.com/v2/slow').catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(28_000);
     expect(await quiet).toMatchObject({ name: 'GoogleError', status: 0, message: 'no answer from run.googleapis.com in 10 s' });
+  });
+});
+
+// node:https's request as the tests drive it: the request, its socket, its TLS handshake and its answer, each when the
+// test says.
+function fakeHttps() {
+  const made: { req: EventEmitter & { reusedSocket: boolean; destroyed: boolean }; url: string; options: https.RequestOptions; sent?: string }[] = [];
+  const request = ((url: string, options: https.RequestOptions) => {
+    const req = Object.assign(new EventEmitter(), {
+      reusedSocket: false,
+      destroyed: false,
+      end(body?: string) { entry.sent = body ?? ''; return req; },
+      destroy() { req.destroyed = true; return req; },
+    });
+    const entry: (typeof made)[number] = { req, url, options };
+    made.push(entry);
+    return req;
+  }) as unknown as typeof https.request;
+  const answer = (status: number, ...chunks: string[]) => Object.assign(Readable.from(chunks.map((c) => Buffer.from(c))), { statusCode: status });
+  return { request, made, answer };
+}
+
+describe('send over node:https', () => {
+  const url = 'https://sts.googleapis.com/v1/token';
+  const init = { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'a=1' };
+
+  it('gives up on a connection that isn\'t made in 3 s, not 10 s', async () => {
+    vi.useFakeTimers();
+    const h = fakeHttps();
+    const sent = send(httpsTransport(h.request), url, init).catch((e: unknown) => e);
+    const [{ req }] = h.made as [(typeof h.made)[number]];
+    req.emit('socket', new EventEmitter());
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(req.destroyed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await sent).toMatchObject({ name: 'GoogleError', status: 0, reason: '', message: 'could not reach sts.googleapis.com: no connection in 3 s' });
+    expect(req.destroyed).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('goes on with a connection made at 2.9 s, its 10 s of silence counted from then, and clears every timer', async () => {
+    vi.useFakeTimers();
+    const h = fakeHttps();
+    const sent = send(httpsTransport(h.request), url, init);
+    const [made] = h.made as [(typeof h.made)[number]];
+    expect(made).toMatchObject({ url, options: { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': '3' } }, sent: 'a=1' });
+    const socket = new EventEmitter();
+    made.req.emit('socket', socket);
+    await vi.advanceTimersByTimeAsync(2_900);
+    socket.emit('secureConnect');
+    await vi.advanceTimersByTimeAsync(9_000);
+    made.req.emit('response', h.answer(200, '{"access_token":', '"t"}'));
+    expect(await sent).toEqual({ status: 200, text: '{"access_token":"t"}' });
+    expect(made.req.destroyed).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('counts a reused keep-alive socket as connected, and gives up 10 s after the connection when nothing comes', async () => {
+    vi.useFakeTimers();
+    const h = fakeHttps();
+    const reused = send(httpsTransport(h.request), url, init);
+    const [first] = h.made as [(typeof h.made)[number]];
+    first.req.reusedSocket = true;
+    first.req.emit('socket', new EventEmitter());
+    await vi.advanceTimersByTimeAsync(5_000);
+    first.req.emit('response', h.answer(204));
+    expect(await reused).toEqual({ status: 204, text: '' });
+
+    const silent = send(httpsTransport(h.request), url, init).catch((e: unknown) => e);
+    const second = h.made[1]!;
+    const socket = new EventEmitter();
+    second.req.emit('socket', socket);
+    await vi.advanceTimersByTimeAsync(1_000);
+    socket.emit('secureConnect');
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(second.req.destroyed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await silent).toMatchObject({ name: 'GoogleError', status: 0, message: 'no answer from sts.googleapis.com in 10 s' });
+    expect(second.req.destroyed).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -1,25 +1,57 @@
-// A request to Google bounded as the manager's AWS clients are: it gives up after 10 s of silence, waiting for the answer
-// or between two pieces of it. fetch doesn't show its connection, so the connection is within those 10 s (undici's own
-// connect timeout is 10 s too).
+// A request to Google bounded as the manager's AWS clients are: 3 s to connect (the TLS handshake done), then at most
+// 10 s of silence, waiting for the answer or between two pieces of it. The transport is node:https; the tests give a
+// fetch instead, whose connection can't be seen.
+import * as https from 'node:https';
+import { Readable } from 'node:stream';
 import { GoogleError } from './errors.js';
 
+export const CONNECT_MS = 3_000;
 export const SILENCE_MS = 10_000;
 
 export type Fetch = typeof globalThis.fetch;
+export type Request = { method: string; headers: Record<string, string>; body?: string };
 export type Answer = { status: number; text: string };
+// What a transport gives back: the status and the body as it comes (a fetch Response is one).
+export type Reply = { status: number; body: ReadableStream<Uint8Array> | null };
+// A transport sends the request, calls `connected` once its connection is made, and stops on the signal.
+export type Transport = (url: string, init: Request & { signal: AbortSignal }, connected: () => void) => Promise<Reply>;
 
-export async function send(fetch: Fetch, url: string, init: RequestInit): Promise<Answer> {
+// node:https on its keep-alive agent: a reused socket is connected already, a new one once its TLS handshake is done.
+export function httpsTransport(request: typeof https.request = https.request): Transport {
+  return (url, { method, headers, body, signal }, connected) => new Promise<Reply>((resolve, reject) => {
+    const req = request(url, { method, headers: body === undefined ? headers : { ...headers, 'content-length': String(Buffer.byteLength(body)) } });
+    signal.addEventListener('abort', () => { req.destroy(); reject(signal.reason); }, { once: true });
+    req.once('socket', (socket) => {
+      if (req.reusedSocket) connected();
+      else socket.once('secureConnect', connected);
+    });
+    req.once('response', (res) => resolve({ status: res.statusCode ?? 0, body: Readable.toWeb(res) as ReadableStream<Uint8Array> }));
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+// A fetch as the transport: its connection counts as made at once, so its 10 s of silence start with the request.
+export const fetchTransport = (fetch: Fetch): Transport => (url, init, connected) => {
+  connected();
+  return fetch(url, init);
+};
+
+export async function send(transport: Transport, url: string, init: Request): Promise<Answer> {
   const { host } = new URL(url);
   const controller = new AbortController();
   const { signal } = controller;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const giveUp = (message: string) => () => controller.abort(new GoogleError({ status: 0, reason: '', message }));
+  let done = false;
+  let timer = setTimeout(giveUp(`could not reach ${host}: no connection in ${CONNECT_MS / 1000} s`), CONNECT_MS);
+  // Connected, or a piece of the answer came: the 10 s of silence start again.
   const arm = () => {
+    if (done) return;
     clearTimeout(timer);
-    timer = setTimeout(() => controller.abort(new GoogleError({ status: 0, reason: '', message: `no answer from ${host} in ${SILENCE_MS / 1000} s` })), SILENCE_MS);
+    timer = setTimeout(giveUp(`no answer from ${host} in ${SILENCE_MS / 1000} s`), SILENCE_MS);
   };
-  arm();
   try {
-    const res = await fetch(url, { ...init, signal });
+    const res = await transport(url, { ...init, signal }, arm);
     arm();
     const chunks: Uint8Array[] = [];
     const reader = res.body?.getReader();
@@ -27,8 +59,8 @@ export async function send(fetch: Fetch, url: string, init: RequestInit): Promis
       // A body that doesn't follow the signal is cancelled on it.
       signal.addEventListener('abort', () => { reader.cancel(signal.reason).catch(() => {}); }, { once: true });
       for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done: end, value } = await reader.read();
+        if (end) break;
         arm();
         chunks.push(value);
       }
@@ -37,9 +69,10 @@ export async function send(fetch: Fetch, url: string, init: RequestInit): Promis
     return { status: res.status, text: Buffer.concat(chunks).toString('utf8') };
   } catch (err) {
     if (signal.aborted) throw signal.reason;
-    const cause = (err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message;
-    throw new GoogleError({ status: 0, reason: '', message: `could not reach ${host}: ${cause}` });
+    const e = err as { cause?: { code?: string }; code?: string; message?: string };
+    throw new GoogleError({ status: 0, reason: '', message: `could not reach ${host}: ${e.cause?.code ?? e.code ?? e.message}` });
   } finally {
+    done = true;
     clearTimeout(timer);
   }
 }

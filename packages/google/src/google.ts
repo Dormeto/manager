@@ -1,5 +1,5 @@
 // The manager's Google identity (Google Cloud manager design §4.1): workload identity federation from its Lambda roles
-// to the two service accounts of the host project, then REST over fetch (no Google client library). The Lambda's AWS
+// to the two service accounts of the host project, then REST over node:https (no Google client library). The Lambda's AWS
 // credentials sign a GetCallerIdentity request (the subject token), Google's STS exchanges it for a federated token, and
 // that token asks iamcredentials for a service account's access token (scope cloud-platform) or ID token (a Cloud Run
 // controller's audience). No key, no secret, nothing stored: an instance keeps its tokens in memory until 5 minutes
@@ -8,7 +8,7 @@
 import { createHash, createHmac, type Hash, type Hmac } from 'node:crypto';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { errorOf } from './errors.js';
-import { send, type Answer, type Fetch } from './fetch.js';
+import { fetchTransport, httpsTransport, send, type Answer, type Fetch } from './fetch.js';
 
 // The connection's record (`DISC#GOOGLE`, `T#default`), written by `dormeto gcp connect`.
 export interface GoogleConnection {
@@ -105,15 +105,17 @@ function expiryOf(jwt: string): number {
 
 const ok = (a: Answer) => a.status >= 200 && a.status <= 299;
 
-export function createGoogle({ connection, credentials = lambdaCredentials, fetch = globalThis.fetch, now = Date.now }: {
+export function createGoogle({ connection, credentials = lambdaCredentials, fetch, now = Date.now }: {
   connection: GoogleConnection;
   credentials?: AwsCredentials | AwsCredentialsProvider;
+  // A fetch in place of node:https (the tests'): bounded by its 10 s of silence only.
   fetch?: Fetch;
   now?: () => number;
 }) {
   const provider = `//iam.googleapis.com/projects/${connection.projectNumber}/locations/global/workloadIdentityPools/${connection.pool}/providers/${connection.provider}`;
   const signer = new SignatureV4({ service: 'sts', region: 'us-east-1', credentials, sha256: Sha256, applyChecksum: false });
   const kept = keeper(now);
+  const transport = fetch ? fetchTransport(fetch) : httpsTransport();
 
   // Google's documented subject token for AWS: the signed request as URL-encoded JSON, its target resource signed.
   async function subjectToken(): Promise<string> {
@@ -141,7 +143,7 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
 
   const federatedToken = () => kept.get('federated', async () => {
     const at = now();
-    const answer = await send(fetch, STS_URL, {
+    const answer = await send(transport, STS_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -161,7 +163,7 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
   // A request with a kept token; Google's 401 (the token revoked before its time) forgets it and sends once more with
   // a new one.
   async function authorized(key: string, token: () => Promise<string>, url: string, method: string, body?: unknown): Promise<Answer> {
-    const request = async () => send(fetch, url, {
+    const request = async () => send(transport, url, {
       method,
       headers: { authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),

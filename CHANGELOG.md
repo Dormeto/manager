@@ -15,7 +15,7 @@ rows and events (a backend service instead of a target group, VM names in `hiber
 The manager's Google identity (`@dormeto/google`): its Lambda roles act as the two service accounts of a Google Cloud host
 project through workload identity federation (a signed `GetCallerIdentity` exchanged at Google's STS, then
 `iamcredentials`), with no key and nothing stored; tokens are kept in memory until 5 minutes before they expire, and every
-call gives up after 10 s of silence.
+call gives up after 3 s without a connection or 10 s of silence.
 
 ## 0.22.0 — 2026-11-05
 
