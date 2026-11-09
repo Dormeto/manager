@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./description": "./src/description.ts",
     "./energy": "./src/energy.ts",
-    "./clouds": "./src/clouds.ts"
+    "./clouds": "./src/clouds.ts",
+    "./registry": "./src/registry.ts"
   },
   "scripts": {
     "test": "vitest run",

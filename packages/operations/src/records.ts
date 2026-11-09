@@ -1,7 +1,9 @@
 // Operations items of the manager table (partition T#default): operation records, the claim of a target by one operation,
 // locks with an expiry, slots per account and region, and the registry of the routers the manager installed.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
-import type { ProxyRecord } from './kube-proxies.js';
+import { routerItem, routerKey, routerOf, ROUTER_PREFIX, type InstalledRouter } from '@dormeto/fleet/registry';
+
+export type { InstalledRouter };
 
 const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
@@ -33,24 +35,6 @@ export interface Operation {
   finishedAt?: string;
   executionArn?: string;
   error?: string;
-}
-
-export interface InstalledRouter {
-  name: string;
-  account: string;
-  region: string;
-  controller: string; // function ARNs
-  onboarder: string;
-  version: string;
-  build: string;
-  installedBy: string;
-  cloud?: 'gcp'; // a Google Cloud router (Google Cloud design §3): `account` is its project, `controller` its URL, `onboarder` empty
-  installedAt: string;
-  uninstalling?: boolean; // an uninstall runs: no new onboarding
-  // The EKS clusters of its account and region, as its last check found them (R10.5: the router's view).
-  clusters?: { name: string; reachable: boolean; allowed: boolean; missing: string[]; reason?: string; via?: 'direct' | 'proxy'; proxy?: { name: string; version: string | null }; checkedAt: string }[];
-  // The Kubernetes proxies the manager made for its clusters whose endpoint is private (R10.6): what their removals delete.
-  proxies?: ProxyRecord[];
 }
 
 // Any DynamoDB client: only send() is used.
@@ -169,16 +153,16 @@ export function createRecords({ dynamo, table, now = Date.now }: { dynamo: Dynam
     },
 
     async putRouter(router: InstalledRouter) {
-      await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...key(`ROUTER#${router.account}#${router.region}`), data: { S: JSON.stringify(router) } } }));
+      await dynamo.send(new PutItemCommand({ TableName: table, Item: routerItem(router) }));
     },
     async getRouter(account: string, region: string) {
-      return data<InstalledRouter>(await get(`ROUTER#${account}#${region}`));
+      return routerOf(await get(routerKey(account, region).sk.S));
     },
     async listRouters() {
-      return (await query('ROUTER#')).map((i) => data<InstalledRouter>(i)!);
+      return (await query(ROUTER_PREFIX)).map((i) => routerOf(i)!);
     },
     async deleteRouter(account: string, region: string) {
-      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: key(`ROUTER#${account}#${region}`) }));
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: routerKey(account, region) }));
     },
   };
 }

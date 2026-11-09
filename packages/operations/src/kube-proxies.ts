@@ -12,6 +12,7 @@
 // (up to an hour from the function's deletion, recorded with the proxy), then revokes the rule and deletes the group, the
 // role and the log group, each group looked up first (a group gone has no tag, and the command role's policy allows these
 // calls on tagged groups only).
+import type { ProxyRecord } from '@dormeto/fleet/registry';
 import type { Policy } from './blueprint.js';
 import { reachOf, UNREACHABLE, type EksPort } from './cluster-access.js';
 import { RetryLater, TRANSIENT, deleteRole, find, putRole, same, tagList } from './installer.js';
@@ -37,16 +38,7 @@ export interface KubeProxy {
 
 // A proxy the manager made, as the router's record keeps it (securityGroupId null until its group exists; deletedAt once a
 // removal deleted its function: the hour of waiting for its network interfaces counts from it).
-export interface ProxyRecord {
-  cluster: string;
-  function: string;
-  role: string;
-  logGroup: string;
-  securityGroupId: string | null;
-  clusterSecurityGroupId: string;
-  vpcId: string;
-  deletedAt?: string;
-}
+export type { ProxyRecord };
 
 // pending: the step comes back after `seconds` (the function not Active yet, network interfaces not released yet);
 // failed: this cluster's proxy could not be set up or removed (detail: why), the other clusters' went on (ruling 24);
