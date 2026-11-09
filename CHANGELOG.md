@@ -19,8 +19,9 @@ call gives up after 3 s without a connection or 10 s of silence.
 
 The Google Cloud connection: `GET`, `PUT` and `DELETE /iam/discovery/google` (administrators; reads also under `/api`) keep the
 record `dormeto gcp connect` writes (`DISC#GOOGLE`), with its projects and regions checked. A `PUT` registers each of its routers
-as `ROUTER#<project>#<region>` (`cloud: 'gcp'`, `dmtr-<region>`, no controller URL or version until discovery or the poll
-learns them) and unregisters the Google Cloud routers a later record drops; a `DELETE` removes the record and every Google Cloud
+as `ROUTER#<project>#<region>` under its own name `dmtr-<region>` (shown in the manager as `dmtr-<project>-<region>`; `cloud: 'gcp'`),
+with the controller URL and version the record carries (a router's entry may leave them empty: discovery or the poll then learns them,
+and a later record keeps what they learnt when it leaves them empty) and unregisters the Google Cloud routers a later record drops; a `DELETE` removes the record and every Google Cloud
 registration. AWS registrations are never touched. Audited as `google-connection`.
 
 ## 0.22.0 — 2026-11-05

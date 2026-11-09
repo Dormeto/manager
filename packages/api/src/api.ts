@@ -377,7 +377,11 @@ function googleRecord(body: Record<string, unknown>): GoogleConnection {
   const routers = (body.routers as Record<string, unknown>[]).map((r) => {
     if (!isProject(r?.project)) return bad('routers[].project must be a Google Cloud project ID');
     if (!isRegion('gcp', r.region)) return bad('routers[].region must be a Google Cloud region');
-    return { project: r.project, region: r.region };
+    const controller = r.controller ?? '';
+    if (typeof controller !== 'string' || (controller !== '' && !/^https:\/\/[a-z0-9.-]+\.run\.app$/.test(controller))) return bad('routers[].controller must be an https://….run.app URL or empty');
+    const version = r.version ?? '';
+    if (typeof version !== 'string' || (version !== '' && !/^\d+\.\d+\.\d+$/.test(version))) return bad('routers[].version must be a version like 0.40.0 or empty');
+    return { project: r.project, region: r.region, ...(controller ? { controller } : {}), ...(version ? { version } : {}) };
   });
   if (new Set(routers.map((r) => `${r.project}/${r.region}`)).size !== routers.length) bad('routers must not repeat a project and region');
   return {
@@ -2135,11 +2139,13 @@ export function createApi({
           if (!connection.routers.some((k) => k.project === r.project && k.region === r.region)) await g.routers.delete(r.project, r.region);
         }
         for (const r of connection.routers) {
-          // A router discovery or the poll already knows keeps what they learnt (its controller, its version).
-          if (registered.some((i) => i.cloud === 'gcp' && i.account === r.project && i.region === r.region)) continue;
+          // What the record gives (the controller and version connect read) is registered; what it leaves empty keeps
+          // what discovery or the poll learnt.
+          const known = registered.find((i) => i.cloud === 'gcp' && i.account === r.project && i.region === r.region);
           await g.routers.put({
             name: `dmtr-${r.region}`, account: r.project, region: r.region, controller: '', onboarder: '', version: '', build: '',
             installedBy: 'cli', cloud: 'gcp', installedAt: connection.connectedAt,
+            ...known, ...(r.controller ? { controller: r.controller } : {}), ...(r.version ? { version: r.version } : {}),
           });
         }
         return { result: `${plural(connection.routers.length, 'router')}, ${plural(connection.scopes.length, 'scope')}`, response: reply(200, { connection }) };

@@ -18,7 +18,8 @@ export interface GoogleConnection {
   provider: string;
   scopes: string[];
   serviceAccounts: { discovery: string; command: string };
-  routers: { project: string; region: string }[];
+  // controller: the router's Cloud Run URL and version: its DMT_VERSION, each empty when unknown.
+  routers: { project: string; region: string; controller?: string; version?: string }[];
   googleAdded: string[];
   connectedAt: string;
   connectedBy: string;

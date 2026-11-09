@@ -239,6 +239,25 @@ describe('the Google Cloud connection', () => {
     expect(store.get('dormeto-dev#europe-west1').version).toBe('0.40.0');
   });
 
+  it('registers a router with the controller and version the record carries, and updates them on a later PUT', async () => {
+    const { api, store } = connected();
+    const withUrl = (controller: string, version: string) => ({ ...record, routers: [{ ...record.routers[0], controller, version }] });
+    expect((await api(event('PUT', '/api/discovery/google', 'dmt-admin', withUrl('https://dmtr-europe-west1-controller-abc-ew.a.run.app', '0.40.0')))).statusCode).toBe(200);
+    expect(store.get('dormeto-dev#europe-west1')).toMatchObject({ controller: 'https://dmtr-europe-west1-controller-abc-ew.a.run.app', version: '0.40.0' });
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', withUrl('https://dmtr-europe-west1-controller-abc-ew.a.run.app', '0.41.0')));
+    expect(store.get('dormeto-dev#europe-west1').version).toBe('0.41.0');
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', withUrl('', '')));
+    expect(store.get('dormeto-dev#europe-west1')).toMatchObject({ controller: 'https://dmtr-europe-west1-controller-abc-ew.a.run.app', version: '0.41.0' });
+  });
+
+  it('refuses a controller that is not an https run.app URL and a version that is not semver', async () => {
+    const { api } = connected();
+    for (const bad of [{ controller: 'http://x.a.run.app' }, { controller: 'https://example.com' }, { version: 'latest' }, { version: 4 }]) {
+      const res = await api(event('PUT', '/api/discovery/google', 'dmt-admin', { ...record, routers: [{ ...record.routers[0], ...bad }] }));
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
   it('unregisters the routers a later PUT drops, and never an AWS one', async () => {
     const { api, store } = connected();
     await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
