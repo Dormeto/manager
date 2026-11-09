@@ -37,7 +37,7 @@ carries the cloud its alarms share and none when they mix.
 `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, 10 s per call (a cold Cloud Run
 start; an AWS router keeps its 5 s), 10 at once and 20 s per request as before, refusals read as the AWS controller answers them.
 A Google Cloud router the manager can't use answers 502 with the command that fixes it: `manager-access-missing` when Google
-refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked), with `the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`),
+refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked), with `the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`,
 `router-too-old` for a router below 0.40.0, without calling it, or one whose controller has no `/v1/actions`
 (`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router-unknown`
 while discovery hasn't found its controller. `install-router` for a project, and `upgrade-router` and `uninstall-router` for a Google
@@ -46,7 +46,7 @@ Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PU
 every Google Cloud router with a controller as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
 onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
-- **The poll:** The manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
+- **The poll:** the manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
 function with `{ task: 'poll' }`, never retried), 10 at once for at most 50 s a run, the least recently polled first, each
 router at 0.40.0 or of an unknown version. Its journal (`events`), read again from 5 minutes before the newest event already
 read, comes in as an AWS router's `Workload state changed` events (an event read twice is one history entry, an older one

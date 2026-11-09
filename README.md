@@ -53,9 +53,10 @@ flowchart TB
    your application.
 
 **On Google Cloud** the same three steps run in a Cloud Run router, behind a Google Cloud Application Load Balancer, for
-Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs the router and onboards its workloads
-(`dormeto gcp install`, `dormeto gcp workloads onboard`), because those change Google IAM policies and load balancers,
-which the manager never does. The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
+Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs, upgrades and uninstalls the routers and sets
+`--request-logs` and GKE access (`dormeto gcp install`, `dormeto gcp workloads access grant`), because those change IAM
+policies, backend services or clusters, which the manager never does. Onboarding is the CLI's today
+(`dormeto gcp workloads onboard`); onboarding through the manager comes with the discovery of Google Cloud candidates. The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
 identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
 ([Organization access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
 reads the router's journal of state changes and its check summary, which feed the same history, health and alerts
@@ -64,7 +65,7 @@ A router older than 0.40.0 is listed with the `dormeto gcp install` command that
 
 ```mermaid
 flowchart LR
-    manager[Manager<br>in AWS] -->|workload identity federation,<br>one call a minute| gcp[Router<br>Cloud Run, one per project and region]
+    manager[Manager<br>in AWS] -->|workload identity federation,<br>polls every minute| gcp[Router<br>Cloud Run, one per project and region]
     gcp -->|journal and check summary| manager
 ```
 
