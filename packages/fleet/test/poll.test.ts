@@ -43,7 +43,7 @@ const row = (workloadId: string, state: string, over: Payload = {}) => ({
 
 // A Google Cloud router as its /v1/actions answers: its journal, its last check, its rows and the ETag of the organization's
 // settings it holds; `answer` in place of any of them, `throws` before the call (Google's token refused), `delayMs` before
-// it answers.
+// it answers. Its GET /v1/health answers the version it runs (`version`), each read counted apart (`healthReads`).
 function fakeRouter(project: string, region: string, order: string[]) {
   const r = {
     region,
@@ -57,9 +57,17 @@ function fakeRouter(project: string, region: string, order: string[]) {
     answer: undefined as ((payload: Payload) => Answer | undefined) | undefined,
     throws: undefined as Error | undefined,
     delayMs: 0,
+    version: '0.40.0',
+    healthReads: 0,
+    healthAnswer: undefined as Answer | undefined,
     // A transition as the journal holds it: its id, then AWS's Workload state changed detail.
     event(workloadId: string, from: string, to: string, ms: number, over: Payload = {}) {
       r.journal.push({ id: `${String(ms).padStart(13, '0')}-${workloadId}-${to}`, at: iso(ms), workloadId, from, to, router: `dmtr-${region}`, region, project, cause: 'idle', tags: {}, ...over });
+    },
+    async health(): Promise<Answer> {
+      r.healthReads += 1;
+      if (r.throws) throw r.throws;
+      return r.healthAnswer ?? json(200, { version: r.version, project, region });
     },
     async respond(payload: Payload): Promise<Answer> {
       order.push(r.controller);
@@ -102,7 +110,10 @@ function world({ now }: { now?: () => number } = {}) {
   const routers = new Map<string, FakeRouter>();
   const order: string[] = [];
   let connected = true;
-  const request = async (_sa: string, _audience: string, _method: string, url: string, body?: unknown) => routers.get(new URL(url).origin)!.respond(body as Payload);
+  const request = async (_sa: string, _audience: string, method: string, url: string, body?: unknown) => {
+    const r = routers.get(new URL(url).origin)!;
+    return method === 'GET' && new URL(url).pathname === '/v1/health' ? r.health() : r.respond(body as Payload);
+  };
   const s3 = { etag: null as string | null, text: '', heads: 0, gets: 0 };
   const logs: [string, Payload][] = [];
   const poll = createPoll({
@@ -375,14 +386,20 @@ describe('the poll of Google Cloud routers', () => {
     const w = world();
     const r = await w.add('europe-west2', { version: '' });
     r.answer = () => OWN_404;
+    r.version = '0.39.0';
     await w.poll();
-    w.clock.t += 60 * S;
-    await w.poll();
-    expect(r.calls).toHaveLength(1);
-    expect(await w.registry.list()).toHaveLength(1);
     expect(await w.pollOf('europe-west2')).toEqual({
       newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '',
       lastError: 'events: router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    });
+    // Not called again: its version is read from its health instead, and kept in the registry.
+    w.clock.t += 60 * S;
+    await w.poll();
+    expect([r.calls.length, r.healthReads]).toEqual([1, 1]);
+    expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
+    expect(await w.pollOf('europe-west2')).toEqual({
+      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', versionAt: iso(T0 + 60 * S),
+      lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Upgraded: discovery reads its new version.
     r.answer = undefined;
@@ -390,6 +407,54 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect(r.calls).toHaveLength(2);
     expect(await w.pollOf('europe-west2')).toEqual({ newestAt: null, misses: 0, polledAt: iso(T0 + 60 * S) });
+  });
+
+  // The advised `dormeto gcp install` clears too-old within 10 minutes: the registry learnt versions only from discovery
+  // (every 24 hours) and connect.
+  it('reads a too-old router\'s version from its health at most every 10 minutes, keeps it in the registry, and polls it at the next run once it is 0.40.0 or later', async () => {
+    const w = world();
+    const r = await w.add('europe-west2', { version: '0.39.0' });
+    r.version = '0.39.0';
+    await w.poll();
+    expect([r.healthReads, r.calls.length]).toEqual([1, 0]);
+    expect(await w.pollOf('europe-west2')).toMatchObject({ versionAt: iso(T0), lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0' });
+    // The advised install: the router runs 0.40.0, the registry still says 0.39.0.
+    r.version = '0.40.0';
+    for (let minute = 1; minute < 10; minute += 1) {
+      w.clock.t = T0 + minute * 60 * S;
+      await w.poll();
+    }
+    expect([r.healthReads, r.calls.length]).toEqual([1, 0]);
+    w.clock.t = T0 + 10 * 60 * S;
+    await w.poll();
+    expect([r.healthReads, r.calls.length]).toEqual([2, 0]);
+    expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.40.0']);
+    expect(w.logs).toContainEqual(['RouterVersionRead', { router: 'dmtr-europe-west2', account: PROJECT, region: 'europe-west2', from: '0.39.0', version: '0.40.0' }]);
+    w.clock.t += 60 * S;
+    r.check = check(w.clock.t - 30 * S);
+    r.workloads = [row('web', 'AWAKE')];
+    await w.poll();
+    expect(r.calls.map((c) => c.action)).toEqual(['events', 'list']);
+    expect(r.healthReads).toBe(2);
+    expect(await w.pollOf('europe-west2')).toEqual({ newestAt: null, misses: 0, polledAt: iso(w.clock.t) });
+    expect(await w.store.getWorkload(PROJECT, 'europe-west2', 'web')).toMatchObject({ state: 'AWAKE' });
+  });
+
+  it('keeps a too-old router\'s registration as it is when its health can\'t be read, says why, and reads it again 10 minutes later', async () => {
+    const w = world();
+    const r = await w.add('europe-west2', { version: '0.39.0' });
+    r.healthAnswer = { status: 403, text: '<html><title>403 Forbidden</title></html>' };
+    await w.poll();
+    expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
+    expect(await w.pollOf('europe-west2')).toMatchObject({
+      versionAt: iso(T0), lastError: 'version: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+    });
+    w.clock.t += 9 * 60 * S;
+    await w.poll();
+    expect(r.healthReads).toBe(1);
+    w.clock.t += 60 * S;
+    await w.poll();
+    expect(r.healthReads).toBe(2);
   });
 
   it('never counts a broken connection (a token refused at STS or iamcredentials, even with a 404) as a router gone, and polls the other routers', async () => {

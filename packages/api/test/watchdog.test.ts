@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { RouterSummary } from '@dormeto/fleet';
+import { createFleetStore, createIngest, type RouterSummary } from '@dormeto/fleet';
+import { createRegistry } from '@dormeto/fleet/registry';
 import type { InstalledRouter } from '@dormeto/operations';
+import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
+import { createPoll } from '../../fleet/src/poll.js';
 import { createWatchdog, listObservations, problemCode, snsInput, workloadObservations, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0);
@@ -114,6 +117,53 @@ describe('watchdog: Google Cloud routers', () => {
     const s = setup({ terraform: [], registry: Array.from({ length: 12 }, (_, i) => gcp(10 * HOUR, { region: `europe-west${i + 1}`, version: '0.39.0' })) });
     await s.watchdog.run();
     expect(s.sent.at(-1)!.attributes).toMatchObject({ kind: 'digest', cloud: 'gcp' });
+  });
+});
+
+// The fleet's poll and the watchdog over one table: the advised `dormeto gcp install` clears too-old within 10 minutes.
+describe('watchdog and the poll: a too-old Google Cloud router upgraded', () => {
+  it('resolves the router\'s too-old alarm once the poll read 0.40.0 from its health and polled it at the next run', async () => {
+    let t = NOW;
+    const table = 'dmt-dev-manager';
+    const dynamo = fakeDynamo();
+    const store = createFleetStore({ dynamo, table, now: () => t });
+    const registry = createRegistry({ dynamo, table });
+    const controller = 'https://dmtr-europe-west1-controller-abc-ew.a.run.app';
+    await registry.put(gcp(10 * HOUR, { name: 'dmtr-europe-west1', controller, version: '0.39.0' }));
+    // The router as its controller answers: its health, its journal with its last check, its rows.
+    const running = { version: '0.39.0' };
+    const answer = (body: unknown) => ({ status: 200, text: JSON.stringify(body) });
+    const request = async (_sa: string, _audience: string, method: string, _url: string, body?: unknown) => {
+      if (method === 'GET') return answer({ version: running.version, project: PROJECT, region: 'europe-west1' });
+      const { action } = body as { action: string };
+      if (action === 'events') return answer({ events: [], next: null, check: { checkedAt: iso(t - 30_000), durationMs: 800, checkSchedule: '*/5 * * * *', health: { status: 'ok', problems: [] }, pauses: [], counts: {} }, managerSettings: { etag: null } });
+      if (action === 'list') return answer({ router: { name: 'dmtr-europe-west1', version: running.version, build: 'b', checkSchedule: '*/5 * * * *', pauses: [] }, workloads: [] });
+      return { status: 400, text: JSON.stringify({ error: 'unknown-action' }) };
+    };
+    const poll = createPoll({
+      store, ingest: createIngest({ store, now: () => t }), registry, env: 'dev', routerVersion: '0.40.0', now: () => t,
+      google: { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }) },
+      settings: { etag: async () => null, read: async () => null },
+    });
+    const sent: Notification[] = [];
+    const watchdog = createWatchdog({
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [], routerVersion: '0.40.0',
+      fleet: { listRouters: () => store.listRouters(), routerPolls: () => store.routerPolls() }, registry: { listRouters: () => registry.list() },
+      alarms: memoryAlarms(), notify: { publish: async (n) => { sent.push(n); } }, now: () => t, log: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+    await poll();
+    await watchdog.run();
+    expect(sent.map((n) => n.attributes.level)).toEqual(['error']);
+    expect(sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    // The advised install.
+    running.version = '0.40.0';
+    t += 10 * MIN;
+    await poll();
+    t += MIN;
+    await poll();
+    await watchdog.run();
+    expect(sent.map((n) => n.attributes.level)).toEqual(['error', 'resolved']);
+    expect(sent[1]!.attributes).toMatchObject({ kind: 'router', cloud: 'gcp', account: PROJECT, region: 'europe-west1' });
   });
 });
 

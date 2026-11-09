@@ -5,10 +5,12 @@
 // changed`; when its check is newer than its summary, its rows (`list`) as `Router checked` chunks; when the organization's
 // settings it holds are not settings.json's, settings.json pushed (`manager-settings`). The router called is the identity
 // (its project and region), never the payload. A router whose controller URL answers Google's own 404 twice in a row is
-// uninstalled: unregistered. One that answers it has no /v1/actions (older than 0.40.0) is kept and not called again until
-// its version changes. What a poll did not do, and where the journal was read up to, is its RS# item's poll.
+// uninstalled: unregistered. One too old to poll (below 0.40.0, or one that answered it has no /v1/actions) is kept and not
+// polled until its version changes: its version is read from its health (GET /v1/health) at most every 10 minutes and kept
+// in the registry, so that the advised `dormeto gcp install` clears too-old within 10 minutes. What a poll did not do, and
+// where the journal was read up to, is its RS# item's poll.
 import type { Google, GoogleConnection } from '@dormeto/google';
-import { accessMissingText, callRouter, RouterCallError, routerTooOld, tooOldText } from '@dormeto/google/router';
+import { accessMissingText, callRouter, RouterCallError, routerHealth, routerTooOld, tooOldText } from '@dormeto/google/router';
 import { CHUNK_WORKLOADS_MAX, timely } from './clean.js';
 import { eachAtOnce, type RouterEvent } from './ingest.js';
 import type { InstalledRouter, Registry } from './registry.js';
@@ -24,6 +26,8 @@ const EVENTS_LIMIT = 500;
 const CALL_MS = 10_000;
 // Google's own 404s in a row that unregister a router.
 const MISSES_MAX = 2;
+// How often a router too old to poll has its version read from its health.
+export const VERSION_READ_MS = 10 * 60_000;
 // Workloads whose events are ingested at once (each workload's in order).
 const WORKLOADS_AT_ONCE = 10;
 
@@ -46,7 +50,7 @@ class Refused extends Error {}
 export interface PollDeps {
   store: Pick<FleetStore, 'routerPolls' | 'putPoll'>;
   ingest: (event: RouterEvent) => Promise<unknown>;
-  registry: Pick<Registry, 'list' | 'delete'>;
+  registry: Pick<Registry, 'list' | 'put' | 'delete'>;
   // The connection's record and its Google instance (one per execution environment), null while there is none.
   google: { current(): Promise<{ connection: GoogleConnection; google: Pick<Google, 'request'> } | null> };
   // The lists bucket's settings.json: its ETag as S3 gives it (quotes included), and its text; null while it doesn't exist.
@@ -170,9 +174,32 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     await store.putPoll(router.account, router.region, poll);
   }
 
+  // A router too old to poll: its version from its health, which every router answers, kept in the registry when it changed,
+  // so that it is polled at the next run once it is 0.40.0 or later. Its poll otherwise stays as it was.
+  async function readVersion(router: InstalledRouter, known: { poll: RouterPoll | null } | undefined, run: Run) {
+    const was = known?.poll ?? null;
+    const at = new Date(now()).toISOString();
+    const poll: RouterPoll = {
+      newestAt: was?.newestAt ?? null, misses: was?.misses ?? 0, polledAt: was?.polledAt ?? at, ...(was?.etag ? { etag: was.etag } : {}),
+      ...(was?.tooOld !== undefined ? { tooOld: was.tooOld } : {}), versionAt: at,
+    };
+    try {
+      const { version } = await routerHealth(run.google, router, { timeoutMs: CALL_MS });
+      if (version !== router.version) {
+        await registry.put({ ...router, version });
+        log?.info('RouterVersionRead', { router: router.name, account: router.account, region: router.region, from: router.version, version });
+      }
+      if (routerTooOld(version) || poll.tooOld === version) poll.lastError = `version: ${tooOldText(version, router.account, router.region, routerVersion)}`;
+    } catch (err) {
+      poll.lastError = `version: ${textOf(err, router, run)}`;
+      log?.warn('RouterVersionNotRead', { router: router.name, account: router.account, region: router.region, error: poll.lastError });
+    }
+    await store.putPoll(router.account, router.region, poll);
+  }
+
   return async function poll(): Promise<{ routers: number; polled: number; left: number }> {
     const started = now();
-    const routers = (await registry.list()).filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.version));
+    const routers = (await registry.list()).filter((r) => r.cloud === 'gcp' && r.controller);
     if (!routers.length) return { routers: 0, polled: 0, left: 0 };
     const current = await google.current();
     if (!current) {
@@ -180,9 +207,18 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
       return { routers: routers.length, polled: 0, left: routers.length };
     }
     const known = new Map((await store.routerPolls()).map((p) => [keyOf(p), p]));
-    const polledAt = (r: InstalledRouter) => known.get(keyOf(r))?.poll?.polledAt ?? '';
-    // Not one that said it is too old, until its version changes; the least recently polled first.
-    const due = routers.filter((r) => known.get(keyOf(r))?.poll?.tooOld !== r.version).sort((a, b) => (polledAt(a) < polledAt(b) ? -1 : polledAt(a) > polledAt(b) ? 1 : 0));
+    const pollOf = (r: InstalledRouter) => known.get(keyOf(r))?.poll ?? null;
+    // Too old to poll: a known version below 0.40.0, or the one it had when it answered it has no /v1/actions.
+    const tooOld = (r: InstalledRouter) => routerTooOld(r.version) || pollOf(r)?.tooOld === r.version;
+    const versionDue = (r: InstalledRouter) => {
+      const at = pollOf(r)?.versionAt;
+      return !at || now() - Date.parse(at) >= VERSION_READ_MS;
+    };
+    // The routers to poll, and those too old whose version is to read again; the least recently done first.
+    const due = [
+      ...routers.filter((r) => !tooOld(r)).map((router) => ({ router, at: pollOf(router)?.polledAt ?? '', work: pollRouter })),
+      ...routers.filter((r) => tooOld(r) && versionDue(r)).map((router) => ({ router, at: pollOf(router)?.versionAt ?? '', work: readVersion })),
+    ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     const run: Run = {
       ...current, deadline: started + POLL_BUDGET_MS,
       etag: once(() => settings.etag()),
@@ -201,9 +237,9 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     let polled = 0;
     await Promise.all(Array.from({ length: Math.min(POLL_AT_ONCE, due.length) }, async () => {
       while (next < due.length && now() < run.deadline) {
-        const router = due[next++]!;
+        const { router, work } = due[next++]!;
         try {
-          await pollRouter(router, known.get(keyOf(router)), run);
+          await work(router, known.get(keyOf(router)), run);
         } catch (err) {
           log?.warn('RouterPollNotSaved', { router: router.name, account: router.account, region: router.region, error: (err as Error).message });
         }

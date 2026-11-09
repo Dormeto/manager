@@ -2,7 +2,7 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // bounded; Google's refusal of the token is the refusal manager-access-missing, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accessMissingText, callRouter, createGoogle, RouterCallError, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
+import { accessMissingText, callRouter, createGoogle, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
 const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
@@ -173,6 +173,37 @@ describe('callRouter', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(await call).toMatchObject({ message: 'no answer within 8000 ms', status: 0 });
     await vi.advanceTimersByTimeAsync(5_000);
+  });
+});
+
+// A router too old to poll has no /v1/actions, but every router answers its health: the poll reads its version there.
+describe('routerHealth', () => {
+  const HEALTH = `${CONTROLLER}/v1/health`;
+
+  it('GETs the controller\'s /v1/health with the command account\'s ID token for the controller\'s origin, and answers its version', async () => {
+    const g = fakeGoogle((req) => (req.url === HEALTH ? json(200, { version: '0.40.0-dev.1', project: 'dormeto-dev', region: 'europe-west2' }) : json(404, { error: 'no route' })));
+    expect(await routerHealth(g.google, { controller: `${CONTROLLER}/` }, { timeoutMs: 10_000 })).toEqual({ version: '0.40.0-dev.1', project: 'dormeto-dev', region: 'europe-west2' });
+    const [call, ...more] = g.to(HEALTH);
+    expect(more).toEqual([]);
+    expect([call!.method, call!.body, call!.headers['content-type']]).toEqual(['GET', '', undefined]);
+    const token = call!.headers['authorization']!.replace(/^Bearer /, '');
+    expect(JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())).toMatchObject({ aud: CONTROLLER });
+  });
+
+  it('reads Google\'s answers as callRouter does: its 403 manager-access-missing, its own 404 Google\'s, a token refused the token\'s', async () => {
+    const denied = await failure(routerHealth(fakeGoogle(() => html(403, 'Forbidden')).google, ROUTER, { timeoutMs: 10_000 }));
+    expect([denied.refusal, denied.status, denied.google]).toEqual(['manager-access-missing', 403, true]);
+    const gone = await failure(routerHealth(fakeGoogle(() => html(404, 'Page not found')).google, ROUTER, { timeoutMs: 10_000 }));
+    expect([gone.refusal, gone.status, gone.google, gone.message]).toEqual([undefined, 404, true, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
+    const token = await failure(routerHealth(fakeGoogle(() => json(200, {}), (req) => (req.url.endsWith(':generateIdToken') ? json(403, { error: { code: 403, message: 'denied', status: 'PERMISSION_DENIED' } }) : undefined)).google, ROUTER, { timeoutMs: 10_000 }));
+    expect([token.refusal, token.token]).toEqual(['manager-access-missing', true]);
+  });
+
+  it('answers a health without a version, or not JSON, as a failure that says so', async () => {
+    const none = await failure(routerHealth(fakeGoogle(() => json(200, { status: 'ok' })).google, ROUTER, { timeoutMs: 10_000 }));
+    expect([none.refusal, none.status, none.message]).toEqual([undefined, 200, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered its health without a version']);
+    const page = await failure(routerHealth(fakeGoogle(() => new Response('<html>sign in</html>', { status: 200 })).google, ROUTER, { timeoutMs: 10_000 }));
+    expect([page.status, page.message]).toEqual([200, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered something other than JSON']);
   });
 });
 

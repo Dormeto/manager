@@ -45,6 +45,7 @@ export interface RouterPoll {
   lastError?: string; // what its last poll could not do, and why
   etag?: string; // the ETag of the settings.json the router holds, as it last answered (or as pushed); none: it holds none
   tooOld?: string; // its version when it answered it has no /v1/actions: not polled again until its version changes
+  versionAt?: string; // when its version was last read from its health (a router too old to poll: every 10 minutes)
 }
 
 export interface WorkloadSummary {

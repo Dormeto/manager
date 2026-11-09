@@ -1,9 +1,9 @@
 // The registry of the routers the manager knows by installation (a router installed by the manager, or registered for
 // a Google Cloud project): one item per router in the manager table, `ROUTER#<account>#<region>` under T#default, the
 // router as JSON in `data`. Operations writes and reads it, the API registers a Google Cloud connection's routers, and
-// discovery keeps the Google Cloud ones up to date, and the fleet's poll removes an uninstalled Google Cloud router: they share
-// this format.
-import { DeleteItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+// discovery keeps the Google Cloud ones up to date, and the fleet's poll removes an uninstalled Google Cloud router and keeps
+// the version of one too old to poll: they share this format.
+import { DeleteItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 
 export const REGISTRY_PK = 'T#default';
 export const ROUTER_PREFIX = 'ROUTER#';
@@ -58,6 +58,9 @@ export function createRegistry({ dynamo, table }: { dynamo: { send(command: obje
         start = page.LastEvaluatedKey;
       } while (start);
       return routers;
+    },
+    async put(router: InstalledRouter): Promise<void> {
+      await dynamo.send(new PutItemCommand({ TableName: table, Item: routerItem(router) }));
     },
     async delete(account: string, region: string): Promise<void> {
       await dynamo.send(new DeleteItemCommand({ TableName: table, Key: routerKey(account, region) }));

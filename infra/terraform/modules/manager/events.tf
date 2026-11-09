@@ -85,8 +85,9 @@ resource "aws_iam_role" "fleet" {
 
 data "aws_iam_policy_document" "fleet" {
   statement {
-    # Summaries and their history; a Google Cloud router's poll beside its summary (UpdateItem), its registration read and
-    # removed once uninstalled, the Google Cloud connection read.
+    # Summaries and their history; a Google Cloud router's poll beside its summary (UpdateItem), its registration read, its
+    # version kept when one too old to poll is read again (PutItem) and removed once uninstalled, the Google Cloud
+    # connection read.
     sid       = "Summaries"
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query"]
     resources = [aws_dynamodb_table.manager.arn]
