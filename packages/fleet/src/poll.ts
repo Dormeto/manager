@@ -50,7 +50,7 @@ class Refused extends Error {}
 export interface PollDeps {
   store: Pick<FleetStore, 'routerPolls' | 'putPoll'>;
   ingest: (event: RouterEvent) => Promise<unknown>;
-  registry: Pick<Registry, 'list' | 'put' | 'delete'>;
+  registry: Pick<Registry, 'list' | 'update' | 'deleteIf'>;
   // The connection's record and its Google instance (one per execution environment), null while there is none.
   google: { current(): Promise<{ connection: GoogleConnection; google: Pick<Google, 'request'> } | null> };
   // The lists bucket's settings.json: its ETag as S3 gives it (quotes included), and its text; null while it doesn't exist.
