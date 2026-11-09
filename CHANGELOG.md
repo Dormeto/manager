@@ -67,6 +67,15 @@ and a workload, "Account or project" columns, the Google Cloud regions (every re
 "AWS location" or "Google Cloud location", the Google Cloud backend kinds (Compute Engine VM, managed instance group, Kubernetes workload, Cloud SQL instance) as
 Material Design icons, and Discovery's filter taking a project ID. `npm run dev:mock` gains a Google Cloud router `dmtr-dormeto-dev-europe-west2` (0.40.0) and two workloads.
 
+The dashboard's Google Cloud router and workload views: a router installed by the CLI (`source: 'cli'`) shows its version, health (a `too-old`
+router with the `dormeto gcp install ... --version <pinned>` command), pauses, settings, waiting page and description, and no install, upgrade,
+uninstall or Terraform control: the `dormeto gcp install` and `uninstall` commands and its controller's page in the Google Cloud console instead;
+the Routers install form stays AWS's with one line naming `dormeto gcp install`. A Google Cloud workload shows its backend service, waker backend
+service and URL map with the console link (a regional URL map links the project's list of load balancers), its VM, group and Cloud SQL
+instance with theirs, "suspended" where AWS says "hibernated", Google Cloud list prices, and no target group, targets or ARN; the workload the CLI
+onboarded is renamed, tagged, set and offboarded from the dashboard. Discovery settings shows the Google Cloud connection read-only
+(`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

@@ -113,6 +113,17 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
+  it('keeps the install form AWS\'s, with one line saying a Google Cloud router is installed by dormeto gcp install', async () => {
+    const wrapper = await mountView();
+    const install = wrapper.findAll('button').find((b) => b.text() === 'Install a router')!;
+    await install.trigger('click');
+    await flushPromises();
+    const dialog = document.body.querySelector('.v-dialog')!;
+    expect(dialog.textContent).toContain('Account ID');
+    expect(dialog.querySelector('[data-test="gcp-install-line"]')?.textContent).toMatch(/Google Cloud router.*dormeto gcp install/);
+    wrapper.unmount();
+  });
+
   it('shows the description\'s first line, muted, under the name of a router that has one', async () => {
     const wrapper = await mountView();
     const line = rowOf(wrapper, 'dmtr-dev-eu-west-3').find('[data-test="summary"]');

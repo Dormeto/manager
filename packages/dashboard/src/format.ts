@@ -84,8 +84,11 @@ export function backendArn(backend: { kind: string; id: string; arn?: string }, 
 const BACKEND_SERVICES: Record<string, string> = {
   instance: 'Amazon EC2', asg: 'Amazon EC2 Auto Scaling', ecs: 'Amazon ECS', k8s: 'Amazon EKS', 'rds-instance': 'Amazon RDS', 'rds-cluster': 'Amazon Aurora',
 };
+const GOOGLE_BACKEND_SERVICES: Record<string, string> = { instance: 'Compute Engine', asg: 'Compute Engine managed instance group', k8s: 'Google Kubernetes Engine', 'cloudsql-instance': 'Cloud SQL' };
 // The AWS service of a kind of backend, for its tooltip.
 export const backendService = (kind: string): string => BACKEND_SERVICES[kind] ?? kind;
+// The same on Google Cloud.
+export const googleBackendService = (kind: string): string => GOOGLE_BACKEND_SERVICES[kind] ?? BACKEND_SERVICES[kind] ?? kind;
 
 // A Kubernetes workload's owner from its id (<cluster>/<namespace>/<kind>/<name>): "Deployment demo/web".
 export function kubernetesOwner(id: string): string {

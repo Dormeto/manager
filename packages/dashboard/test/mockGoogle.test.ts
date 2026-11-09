@@ -37,4 +37,20 @@ describe('the demo\'s Google Cloud router', () => {
     const { candidates } = await mockApi('/discovery/candidates?status=managed&limit=500') as { candidates: { account: string; cloud?: string }[] };
     expect(candidates.some((c) => c.account === 'dormeto-dev')).toBe(false);
   });
+
+  it('has the router\'s own view with the CLI as the source of its settings, and resource paths for the VM\'s backend', async () => {
+    const details = await mockApi(`/routers/${ROUTER}`) as { configuration: { checkSchedule: { source: string } } };
+    expect(details.configuration.checkSchedule.source).toBe('cli');
+    const status = await mockApi(`/workloads/${ROUTER}/vm-demo`) as { backends: { id: string }[]; targets: unknown[]; source: string };
+    expect(status.source).toBe('cli');
+    expect(status.targets).toEqual([]);
+    expect(status.backends[0]!.id).toBe('projects/dormeto-dev/zones/europe-west2-a/instances/vm-demo');
+  });
+
+  it('answers the connection of its host project at GET /discovery/google', async () => {
+    const connection = await mockApi('/discovery/google') as { project: string; routers: { region: string }[]; serviceAccounts: { discovery: string } };
+    expect(connection.project).toBe('dormeto-dev');
+    expect(connection.routers.map((r) => r.region)).toEqual(['europe-west2']);
+    expect(connection.serviceAccounts.discovery).toMatch(/^dmt-.*-discovery@dormeto-dev\.iam\.gserviceaccount\.com$/);
+  });
 });

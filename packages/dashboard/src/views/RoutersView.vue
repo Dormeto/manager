@@ -167,6 +167,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
       <v-card-text>
         <p class="mb-5 text-medium-emphasis">Dormeto creates the router in the account and region by API calls, through its DmtCommandRole there. Onboarding a
           workload installs it on its own when needed.</p>
+        <p data-test="gcp-install-line" class="mb-5 text-body-small text-medium-emphasis">A Google Cloud router is installed with the CLI instead: <code>dormeto gcp install</code>.</p>
         <v-text-field v-model="install.account" label="Account ID" maxlength="12" class="dm-mono-field" inputmode="numeric" autocomplete="off" />
         <v-text-field v-model="install.region" label="Region" placeholder="eu-west-3" class="dm-mono-field" autocomplete="off" />
       </v-card-text>

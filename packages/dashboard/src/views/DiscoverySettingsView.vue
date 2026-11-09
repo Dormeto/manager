@@ -13,6 +13,8 @@ import { relative } from '../format';
 import { useNow } from '../now';
 import { procedureLink, type AccessReport } from '../access';
 import PageTitle from '../components/PageTitle.vue';
+import GoogleConnectionCard from '../components/GoogleConnectionCard.vue';
+import type { GoogleConnection } from '../types';
 
 type Answer = { config: DiscoveryConfig; lint: LintFinding[]; updatedAt?: string | null; updatedBy?: string | null };
 
@@ -68,6 +70,18 @@ async function load() {
   }
 }
 
+// The Google Cloud connection (read-only): none is a 404, any other failure is said.
+const connection = ref<GoogleConnection | null>(null);
+const connectionError = ref('');
+async function loadConnection() {
+  try {
+    connection.value = await api<GoogleConnection>('/discovery/google');
+  } catch (err) {
+    connection.value = null;
+    if (!(err instanceof ApiError && err.status === 404)) connectionError.value = (err as Error).message;
+  }
+}
+
 async function save() {
   if (!config.value) return;
   if (!allRegions.value) config.value.regions = parseList(regionsText.value);
@@ -94,7 +108,7 @@ const removeAt = <T,>(list: T[], index: number) => list.splice(index, 1);
 const setAt = (list: Criterion[], index: number, value: Criterion) => { list[index] = value; };
 const globalLint = computed(() => lint.value.filter((f) => f.code !== 'include-matches-nothing'));
 
-onMounted(load);
+onMounted(() => { void load(); void loadConnection(); });
 </script>
 
 <template>
@@ -226,6 +240,7 @@ onMounted(load);
       <v-btn :prepend-icon="mdiPlus" variant="tonal" class="mb-6" @click="addFilter">Filter</v-btn>
     </template>
     <v-card v-else-if="loading"><DmLoader label="Reading the perimeter…" /></v-card>
+    <GoogleConnectionCard :connection="connection" :error="connectionError" class="mt-6" />
 
     <!-- On a phone, Save stays at hand: a glass bar held at the bottom of the screen. -->
     <div class="dm-savebar">

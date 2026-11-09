@@ -891,3 +891,83 @@ describe('a workload\'s settings at scale (routers 0.37.0)', () => {
     current = status;
   });
 });
+
+describe('a Google Cloud workload', () => {
+  const openActions = async (wrapper: Awaited<ReturnType<typeof mountView>>) => {
+    await wrapper.find('[data-test="actions"]').trigger('click');
+    await flushPromises();
+    return [...document.querySelectorAll('[data-test="action"]')].map((i) => i.textContent?.trim());
+  };
+  const PROJECT = 'projects/dormeto-dev';
+  const google = {
+    ...status, name: 'Demo VM', source: 'cli', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', state: 'ASLEEP', hibernated: true, tags: { team: 'payments' },
+    backendService: `${PROJECT}/global/backendServices/vm-demo`, wakerBackendService: `${PROJECT}/global/backendServices/vm-demo-waker`,
+    urlMap: `${PROJECT}/global/urlMaps/dormeto-lb`, lb: { kind: 'global' },
+    backends: [{ kind: 'instance', id: `${PROJECT}/zones/europe-west2-a/instances/vm-demo`, status: 'stopped' }, { kind: 'cloudsql-instance', id: `${PROJECT}/instances/db-demo`, status: 'stopped', companion: true }],
+    costs: { baseline: { kind: 'always' }, from: '2026-09-09T12:00:00.000Z', to: '2026-10-09T12:00:00.000Z', napAt: '2026-10-09T04:51:00.000Z', savedShare: 0.9, items: [], saved: { usd: 0, hours: 600, unpricedHours: 0 } },
+  } as Record<string, unknown>;
+  delete google.targetGroupArn;
+
+  it('links its backend services through their URL map, and its backends, in the Google Cloud console with the project', async () => {
+    current = google;
+    const wrapper = await mountView('operator');
+    const card = wrapper.find('[data-test="load-balancing"]');
+    expect(card.text()).toContain('vm-demo');
+    expect(card.text()).toContain('vm-demo-waker');
+    const lb = 'https://console.cloud.google.com/net-services/loadbalancing/details/http/dormeto-lb?project=dormeto-dev';
+    expect(card.findAll('a').map((a) => a.attributes('href'))).toEqual([lb, lb, lb]);
+    const links = wrapper.findAll('[data-test="backend"] a').map((a) => a.attributes('href'));
+    expect(links).toEqual([
+      'https://console.cloud.google.com/compute/instancesDetail/zones/europe-west2-a/instances/vm-demo?project=dormeto-dev',
+      'https://console.cloud.google.com/sql/instances/db-demo/overview?project=dormeto-dev',
+    ]);
+    wrapper.unmount();
+  });
+
+  it('links the load balancers\' list for a regional URL map, whose own page this dashboard cannot confirm', async () => {
+    current = { ...google, urlMap: `${PROJECT}/regions/europe-west2/urlMaps/dormeto-lb`, lb: { kind: 'regional', region: 'europe-west2' } };
+    const wrapper = await mountView('operator');
+    expect(wrapper.find('[data-test="load-balancing"] a').attributes('href')).toBe('https://console.cloud.google.com/net-services/loadbalancing/list/loadBalancers?project=dormeto-dev');
+    wrapper.unmount();
+  });
+
+  it('has no target group, no targets, no ARN and no Terraform text, and says suspended, not hibernated', async () => {
+    current = google;
+    const wrapper = await mountView('operator');
+    const text = wrapper.text();
+    expect(wrapper.find('[data-test="hibernated"]').text()).toBe('suspended');
+    expect(text).not.toMatch(/hibernat/i);
+    expect(wrapper.find('[data-test="target"]').exists()).toBe(false);
+    expect(text).not.toContain('Targets');
+    expect(text).not.toMatch(/target group/i);
+    expect(text).not.toMatch(/Terraform/);
+    expect(wrapper.find('[data-test="hibernate"]').exists()).toBe(false);
+    expect(text).toContain('Google Cloud list prices');
+    expect(text).not.toContain('AWS list prices');
+    wrapper.unmount();
+  });
+
+  it('lets an operator rename, tag, set and offboard it: the CLI onboarded it, unlike a Terraform workload', async () => {
+    current = google;
+    const admin = await mountView('admin');
+    expect(admin.find('[data-test="edit-tags"]').exists()).toBe(true);
+    expect(admin.find('[data-test="tags-terraform"]').exists()).toBe(false);
+    expect(await openActions(admin)).toEqual(['Wake', 'Nap', 'Pause', 'Rename', 'Offboard']);
+    admin.unmount();
+    current = { ...google, settingsFrom: { idleMinutes: 'workload' } };
+    const operator = await mountView('operator');
+    expect(operator.find('[data-test="edit-settings"]').exists()).toBe(true);
+    operator.unmount();
+  });
+
+  it('says what offboarding removes in Google Cloud words', async () => {
+    current = google;
+    const wrapper = await mountView('operator');
+    await openActions(wrapper);
+    ([...document.querySelectorAll<HTMLElement>('[data-test="action"]')].find((i) => i.textContent?.trim() === 'Offboard'))!.click();
+    await flushPromises();
+    expect(document.body.textContent).toContain('waker backend service');
+    expect(document.body.textContent).not.toContain('waker target group');
+    wrapper.unmount();
+  });
+});

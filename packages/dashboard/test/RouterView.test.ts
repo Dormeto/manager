@@ -27,6 +27,13 @@ const HIBERNATION: { settings: { hibernate: boolean | null; joinMinutes?: number
   settings: { hibernate: null, by: null, at: null },
   managerSettings: { url: 's3://b/settings.json', hibernate: true, readAt: minutesAgo(3), error: null },
 };
+// A Google Cloud router, installed by the CLI, behind the pinned version: its health says so with the command.
+const GCP = 'dmtr-dormeto-dev-europe-west2';
+const GCP_COMMAND = 'dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.26.0';
+const GOOGLE_ROUTER = {
+  name: GCP, cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', version: '0.25.1', build: 'g1', workloads: 1, workloadStates: { AWAKE: 1 },
+  health: { status: 'error', problems: [{ level: 'error', code: 'too-old', text: `router 0.25.1 can't report to the manager: ${GCP_COMMAND}` }] }, pauses: [], lastScheduledCheckAt: new Date().toISOString(),
+};
 const calls: { path: string; init?: RequestInit }[] = [];
 let withHibernation = true;
 let failSave: boolean | string = false;
@@ -52,7 +59,8 @@ vi.mock('../src/api', () => ({
       if (failSave) throw new Error(typeof failSave === 'string' ? failSave : 'upgrade the router to 0.32.0');
       return {};
     }
-    if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }] };
+    if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }, GOOGLE_ROUTER] };
+    if (path === `/routers/${GCP}`) return { ...DETAILS, cloud: 'gcp', configuration: { ...DETAILS.configuration, checkSchedule: { value: '*/5 * * * *', source: 'cli' }, metrics: { value: null, source: 'cli' }, ipLists: { value: [], source: 'cli' }, noWakeRules: { value: [], source: 'cli' } } };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
     if (unreachable && path.startsWith('/routers/')) throw new Error('router dmtr-dev-eu-west-3: Task timed out after 30.00 seconds');
     if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), ...(described === undefined ? {} : { description: described }), clusters: [
@@ -460,6 +468,42 @@ describe('Router view', () => {
 
 
 // Settings at scale (vision design §9): a router's defaults, what each inherits, edited by administrators (routers 0.37.0).
+describe('a Google Cloud router', () => {
+  it('shows its project, version and health, with the command that installs the pinned version, and no upgrade, uninstall or Terraform control', async () => {
+    const wrapper = await mountView(GCP);
+    const text = wrapper.text();
+    expect(text).toContain('dormeto-dev');
+    expect(text).toContain('0.25.1');
+    expect(wrapper.find('[data-cloud="gcp"]').exists()).toBe(true);
+    // The too-old problem names the command, and so does the card of commands.
+    expect(wrapper.find('.dm-problem').text()).toContain(GCP_COMMAND);
+    expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_COMMAND);
+    expect(wrapper.find('[data-test="gcp-uninstall"]').text()).toBe('dormeto gcp uninstall --project dormeto-dev --region europe-west2');
+    expect(wrapper.find('[aria-label^="Upgrade "]').exists()).toBe(false);
+    expect(wrapper.find(`[aria-label="Uninstall ${GCP}"]`).exists()).toBe(false);
+    expect(chips(wrapper)).not.toContain('Terraform');
+    expect(text).not.toMatch(/Terraform/);
+    expect(text).not.toContain('Upgrade to 0.16');
+    wrapper.unmount();
+  });
+
+  it('links its controller in the Google Cloud console, with the project', async () => {
+    const wrapper = await mountView(GCP);
+    const href = wrapper.find('[data-test="gcp-controller"]').attributes('href');
+    expect(href).toBe('https://console.cloud.google.com/run/detail/europe-west2/dmtr-europe-west2-controller/metrics?project=dormeto-dev');
+    wrapper.unmount();
+  });
+
+  it('says its configuration is the CLI\'s, and still offers a pause, its description and its waiting page', async () => {
+    const wrapper = await mountView(GCP, 'admin');
+    expect(wrapper.text()).toMatch(/Set when the CLI installs the router/);
+    expect(wrapper.text()).toContain('Pause');
+    expect(wrapper.findComponent(DescriptionCard).exists()).toBe(true);
+    expect(wrapper.text()).toContain('Waiting page');
+    wrapper.unmount();
+  });
+});
+
 describe('a router\'s defaults', () => {
   it('says what the router sets, edits it as an administrator, and says to upgrade an older router', async () => {
     withHibernation = true;

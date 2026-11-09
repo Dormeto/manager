@@ -5,13 +5,15 @@ import { computed, onMounted, ref } from 'vue';
 import { mdiAlertOctagonOutline, mdiAlertOutline, mdiArrowRight, mdiBellRingOutline, mdiCheckCircleOutline, mdiHeartPulse, mdiLanDisconnect, mdiPauseCircleOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { relative, stateColor } from '../format';
+import { relative, rowCloud, stateColor } from '../format';
 import { healthColor, pauseLine } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
 import { terraformHelp, workloadsHelp } from '../router-actions';
 import { useRouterOperations } from '../router-operations';
 import type { Notice } from '../components/NoticeAlert.vue';
+import CloudMark from '../components/CloudMark.vue';
+import GoogleRouterCard from '../components/GoogleRouterCard.vue';
 import DescriptionCard from '../components/DescriptionCard.vue';
 import WaitingPageCard from '../components/WaitingPageCard.vue';
 import DmLoader from '../components/DmLoader.vue';
@@ -36,6 +38,7 @@ const alarms = ref<AlarmInfo[]>([]);
 const loaded = ref(false);
 const notice = ref<Notice | null>(null);
 const router = computed(() => routers.value.find((r) => r.name === props.name) ?? null);
+const cloud = computed(() => (router.value ? rowCloud(router.value) : 'aws'));
 const alarm = computed(() => alarms.value.find((a) => a.kind === 'router' && a.name === props.name) ?? null);
 
 const { error, loading, nextAt, run } = usePoll(async () => {
@@ -121,7 +124,7 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
           <div class="dm-hero__top">
             <div class="dm-hero__where">
               <span class="dm-eyebrow">Router</span>
-              <span v-if="router.account" class="mono">{{ router.account }}</span><span v-if="router.account" aria-hidden="true">·</span>
+              <CloudMark :cloud="cloud" /><span v-if="router.account" class="mono">{{ router.account }}</span><span v-if="router.account" aria-hidden="true">·</span>
               <RegionLabel :region="router.region" /><span class="mono">{{ router.region }}</span>
             </div>
             <RouterActions :router="router" @uninstall="operation({ type: 'uninstall-router', router: router.name }, `Uninstallation of ${router.name}`, router)"
@@ -131,7 +134,7 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
           <div class="dm-hero__chips">
             <v-chip v-if="router.error" color="error" variant="tonal" label :prepend-icon="mdiLanDisconnect">unreachable</v-chip>
             <v-chip v-else-if="router.health" :color="healthColor(router.health.status)" variant="tonal" label :prepend-icon="HEALTH_ICONS[router.health.status]">{{ router.health.status }}</v-chip>
-            <TerraformChip v-if="router.source !== 'manager'" :text="terraformHelp(router.name)" />
+            <TerraformChip v-if="router.source !== 'manager' && router.source !== 'cli'" :text="terraformHelp(router.name)" />
             <PauseChip :pauses="router.pauses" />
           </div>
           <div class="dm-hero__facts">
@@ -169,13 +172,14 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
       </v-card-text>
     </v-card>
 
+    <GoogleRouterCard v-if="cloud === 'gcp'" class="mb-4" :router="router" :pinned="available" />
     <DescriptionCard class="mb-4" :description="description" :can-edit="session.isAdmin" :subject="router.name" :saving="savingDescription" :error="descriptionError"
       @save="saveDescription" @clear="clearDescription" />
     <WaitingPageCard class="mb-4" level="router" :path="`/routers/${encodeURIComponent(router.name)}/waiting-page`" :subject="router.name" @notice="notice = $event" />
 
     <!-- The health, short, heads the first of RouterDetails' two columns (the figures beside it): no empty space under it. -->
     <div class="dm-sections">
-      <RouterDetails :name="router.name" :source="router.source === 'cli' ? undefined : router.source" :version="router.version ?? undefined">
+      <RouterDetails :name="router.name" :source="router.source" :version="router.version ?? undefined">
         <v-card class="dm-health">
           <v-card-item class="dm-health__head">
             <template #prepend><v-avatar :color="healthTone" variant="tonal" rounded="lg" size="34"><v-icon :icon="mdiHeartPulse" size="19" /></v-avatar></template>

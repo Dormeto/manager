@@ -6,13 +6,13 @@ import { addEnergy, savedEnergy } from '@dormeto/fleet/energy';
 import type { AccessReport } from '../access';
 import type {
   AlertsInfo, Backend, Costs, Counts, Discounts, Exclusion, FleetStates, IdleWindowAdvice, IpListsInfo, Operation, Problem, RouterDetails, RouterInfo,
-  SavingsSummary, StoppedItem, WorkloadHistory, WorkloadStatus, WorkloadSummary,
+  GoogleConnection, SavingsSummary, StoppedItem, WorkloadHistory, WorkloadStatus, WorkloadSummary,
 } from '../types';
 import { ROUTER_RULES } from './fixtures';
 import { ACCOUNTS, ORG } from './org';
 import { historyView, replayWindows, timeIn, type Burst } from './history';
 import {
-  activeExclusions, ecsCluster, hasHibernation, hibernationOf, lastRequest, managerReadAt, operationStatus, pausesOf, routerIn, type Demo, type DemoOperation, type DemoRouter, type DemoWorkload,
+  activeExclusions, ecsCluster, fail, hasHibernation, hibernationOf, lastRequest, managerReadAt, operationStatus, pausesOf, routerIn, type Demo, type DemoOperation, type DemoRouter, type DemoWorkload,
   knowsRecurrences, routerSettingsView,
 } from './state';
 import { DAY, HOUR, MINUTE, SECOND, day, hash, hex, iso, lastCheck, round } from './util';
@@ -62,14 +62,26 @@ export function routerRow(d: Demo, r: DemoRouter, now: number): RouterInfo {
   };
 }
 
+// The Google Cloud connection of the demo: its host project (dormeto-dev), two service accounts, and the routers installed there.
+export function googleConnection(d: Demo, now: number): GoogleConnection {
+  const routers = d.routers.filter((r) => r.cloud === 'gcp');
+  if (!routers.length) return fail(404, 'not_found', 'no Google Cloud connection');
+  const project = routers[0]!.account;
+  return {
+    project, projectNumber: '1034397096264', pool: 'dmt-demo', provider: 'aws', scopes: [`projects/${project}`],
+    serviceAccounts: { discovery: `dmt-demo-discovery@${project}.iam.gserviceaccount.com`, command: `dmt-demo-command@${project}.iam.gserviceaccount.com` },
+    routers: routers.map((r) => ({ project: r.account, region: r.region, controller: `https://dmtr-${r.region}-controller-demo-nw.a.run.app`, version: r.version })),
+    googleAdded: [], connectedAt: iso(now - 9 * DAY), connectedBy: ORG.me, cli: '0.14.0',
+  };
+}
+
 // When each list was last downloaded: its refresh period, a few minutes past.
 const fetchedAt = (refreshHours: number, now: number) => iso(Math.floor((now - 12 * MINUTE) / (refreshHours * HOUR)) * refreshHours * HOUR + 12 * MINUTE);
 
 export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetails {
   const list = own(d, r);
   const health = healthOf(d, r);
-  // A Google Cloud router's own view is not drawn from Terraform: its settings are the CLI's (the router views come with the next task).
-  const source = r.source === 'cli' ? 'terraform' : r.source;
+  const source = r.source;
   return {
     name: r.name, cloud: r.cloud, region: r.region, account: r.account, ...(r.clusters.length ? { clusters: r.clusters } : {}),
     router: { name: r.name, version: r.version, build: r.build },
@@ -223,7 +235,12 @@ function backendsOf(w: DemoWorkload): { backends: Backend[]; targets: { id: stri
   const targets: { id: string; state: string }[] = [];
   const recommendations: { backend: string; message: string }[] = [];
   for (const b of w.backends) {
-    if (b.kind === 'instance') {
+    // Google Cloud: resource paths, and no target of a target group.
+    if (w.google && b.kind === 'instance') {
+      backends.push({ kind: 'instance', id: `projects/${w.account}/zones/${w.region}-a/instances/${w.workloadId}`, status });
+    } else if (w.google && b.kind === 'asg') {
+      backends.push({ kind: 'asg', id: `projects/${w.account}/regions/${w.region}/instanceGroupManagers/${w.workloadId}`, status, min: running ? b.count : 0, desired: running ? b.count : 0, max: b.count, warmPool: null });
+    } else if (b.kind === 'instance') {
       backends.push({ kind: 'instance', id: w.instanceId, status });
       targets.push({ id: w.instanceId, state: targetState(w.state) });
     } else if (b.kind === 'asg') {

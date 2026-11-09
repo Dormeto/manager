@@ -12,7 +12,7 @@ import type { IdleWindowAdvice, IdleWindowRow } from '../types';
 
 // source and canApply (settings at scale design §8): the recommendation one click away for an operator on a manager workload.
 // levels: its router takes a workload's settings from the manager (0.37.0 and later).
-const props = defineProps<{ router: string; id: string; source?: 'terraform' | 'manager'; canApply?: boolean; levels?: boolean }>();
+const props = defineProps<{ router: string; id: string; source?: 'terraform' | 'manager' | 'cli'; canApply?: boolean; levels?: boolean }>();
 const emit = defineEmits<{ apply: [minutes: number] }>();
 const advice = ref<IdleWindowAdvice | null>(null);
 const error = ref('');
@@ -88,7 +88,7 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
             </tbody>
           </v-table>
         </div>
-        <div v-if="canApply && source === 'manager' && advice.recommended !== advice.current" class="d-flex mt-3">
+        <div v-if="canApply && (source === 'manager' || source === 'cli') && advice.recommended !== advice.current" class="d-flex mt-3">
           <v-btn data-test="use-window" color="primary" variant="tonal" size="small" @click="emit('apply', advice.recommended)">Use {{ advice.recommended }} minutes</v-btn>
         </div>
         <div class="dm-idle__notes text-body-small text-medium-emphasis mt-3">

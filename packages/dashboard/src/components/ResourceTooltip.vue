@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// An AWS resource's id, ARN and service in a tooltip (user request: the workload's backends and targets), with more rows
+// An AWS or Google Cloud resource's id (its resource path on Google Cloud, which has no ARN), ARN and service in a tooltip (user request: the workload's backends and targets), with more rows
 // (a backend's costs) and a note. Its activator is the default slot, given the tooltip's props as `tip`.
-defineProps<{ id: string; arn: string | null; service: string; rows?: { label: string; value: string }[]; note?: string | null }>();
+defineProps<{ id: string; arn: string | null; service: string; rows?: { label: string; value: string }[]; note?: string | null; cloud?: 'aws' | 'gcp' }>();
 </script>
 
 <template>
@@ -9,7 +9,7 @@ defineProps<{ id: string; arn: string | null; service: string; rows?: { label: s
     <template #activator="{ props: tip }"><slot :tip="tip" /></template>
     <table class="resource"><tbody>
       <tr><th>Id</th><td class="mono">{{ id }}</td></tr>
-      <tr><th>ARN</th><td class="mono">{{ arn ?? '—' }}</td></tr>
+      <tr v-if="cloud !== 'gcp'"><th>ARN</th><td class="mono">{{ arn ?? '—' }}</td></tr>
       <tr><th>Service</th><td>{{ service }}</td></tr>
       <tr v-for="r in rows ?? []" :key="r.label"><th>{{ r.label }}</th><td>{{ r.value }}</td></tr>
     </tbody></table>

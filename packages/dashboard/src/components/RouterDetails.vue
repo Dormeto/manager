@@ -22,7 +22,7 @@ import { SETTING_KEYS } from '../settings';
 
 // source: who installed the router, so where its configuration is changed.
 // version: the router's, which says whether it takes defaults of its own (settings at scale, routers 0.37.0).
-const props = defineProps<{ name: string; source?: 'terraform' | 'manager'; version?: string }>();
+const props = defineProps<{ name: string; source?: 'terraform' | 'manager' | 'cli'; version?: string }>();
 const now = useNow();
 const session = useSession();
 const details = ref<RouterDetails | null>(null);
@@ -203,6 +203,8 @@ const columns = computed<Section[][]>(() => {
       <p v-if="source === 'manager'" class="dm-detail__note text-body-small text-medium-emphasis">Set by the manager when it installs or upgrades the router, and
         not editable from the dashboard yet: an idle check every 5 minutes, the built-in no-wake rules, no metrics, and the manager's IP lists
         (<code>ip_lists</code> in the manager's Terraform).</p>
+      <p v-else-if="source === 'cli'" class="dm-detail__note text-body-small text-medium-emphasis">Set when the CLI installs the router
+        (<code>dormeto gcp install</code>): run it again to change them.</p>
       <p v-else-if="source === 'terraform'" class="dm-detail__note text-body-small text-medium-emphasis">Set in this router's Terraform (the router module's
         <code>check_schedule</code>, <code>no_wake_rules</code>, <code>ip_lists</code> and <code>metrics_enabled</code>): change them there and apply.</p>
       <v-table density="compact" class="dm-facts dm-facts--config">

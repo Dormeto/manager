@@ -18,7 +18,7 @@ import { ME } from './org';
 import { updateChanges, updateRequest, updateState } from './update';
 import { MockError, advance, fail, lintOf, pausesOf, routerOf, state, workloadOf, type Demo } from './state';
 import {
-  accessReport, alerts, candidateView, exclusionView, fleetStates, idleAdvice, ipLists, operationView, routerDetails, routerRow, savingsSummary, workloadHistory,
+  accessReport, alerts, candidateView, exclusionView, fleetStates, idleAdvice, ipLists, operationView, googleConnection, routerDetails, routerRow, savingsSummary, workloadHistory,
   workloadRow, workloadStatus,
 } from './views';
 
@@ -211,6 +211,8 @@ function discovery(d: Demo, method: string, sub: string | undefined, q: URLSearc
     const page = matching.slice(start, start + Math.min(limit, 200));
     return { candidates: page.map((c) => candidateView(d, c, now)), cursor: start + page.length < matching.length ? btoa(String(start + page.length)) : null };
   }
+  // The Google Cloud connection `dormeto gcp connect` recorded, for the demo's Google Cloud router.
+  if (method === 'GET' && sub === 'google') return googleConnection(d, now);
   if (method === 'POST' && sub === 'run') return runDiscovery(d, now);
   if (sub === 'config') {
     if (method === 'GET') return { config: d.config.config, updatedAt: d.config.updatedAt, updatedBy: d.config.updatedBy, lint: lintOf(d.config.config) };

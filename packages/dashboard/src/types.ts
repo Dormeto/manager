@@ -292,7 +292,7 @@ export type RouterOperationType = 'install-router' | 'upgrade-router' | 'uninsta
 
 export interface Configured<T> {
   value: T;
-  source: 'terraform' | 'manager';
+  source: 'terraform' | 'manager' | 'cli'; // cli: a Google Cloud router's, set by `dormeto gcp install`
 }
 
 // GET /api/routers/{name}: the router action.
@@ -440,4 +440,19 @@ export interface IdleWindowAdvice {
   wakerTargetGroup: boolean;
   // The replayed requests per UTC hour from `from` (managers before 0.20.0, or an answer kept from before: absent).
   hours?: { from: string; counts: number[] };
+}
+
+// GET /api/discovery/google: the Google Cloud connection `dormeto gcp connect` recorded (manager 0.24.0); 404 when there is none.
+export interface GoogleConnection {
+  project: string;
+  projectNumber: string;
+  pool: string;
+  provider: string;
+  scopes: string[]; // organizations/<n>, folders/<n>, projects/<id>
+  serviceAccounts: { discovery: string; command: string };
+  routers: { project: string; region: string; controller: string; version: string | null }[];
+  googleAdded: string[];
+  connectedAt: string;
+  connectedBy: string;
+  cli?: string;
 }
