@@ -31,6 +31,7 @@
     "@aws-sdk/client-ec2": "^3.1146.0",
     "@dormeto/discovery": "*",
     "@dormeto/fleet": "*",
+    "@dormeto/google": "*",
     "@dormeto/operations": "*"
   }
 }

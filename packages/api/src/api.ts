@@ -6,7 +6,8 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import { cloudOf, isAccount, isCandidateRegion, isRegion } from '@dormeto/fleet/clouds';
+import type { GoogleConnection } from '@dormeto/google';
+import { cloudOf, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
@@ -26,6 +27,15 @@ export interface OperationsApi {
   list(): Promise<Operation[]>;
   get(id: string): Promise<Operation | null>;
   installedRouters(): Promise<InstalledRouter[]>;
+}
+
+// The Google Cloud connection (Google Cloud manager design §4.3, §6.1): `DISC#GOOGLE` and the registry of the routers the
+// manager knows, which the record fills and empties.
+export interface GoogleApi {
+  get(): Promise<GoogleConnection | null>;
+  put(connection: GoogleConnection): Promise<void>;
+  delete(): Promise<void>;
+  routers: { list(): Promise<InstalledRouter[]>; put(router: InstalledRouter): Promise<void>; delete(account: string, region: string): Promise<void> };
 }
 
 export interface ApiEvent {
@@ -214,6 +224,7 @@ export interface ApiOptions {
   update?: UpdateService; // the manager's self-update: only when installed with the Dormeto CLI
   preferences?: PreferencesStore;
   discovery?: DiscoveryApi;
+  google?: GoogleApi;
   operations?: OperationsApi;
   managerAccount?: string;
   discoveryMode?: string; // the mode of the perimeter's default configuration (DISCOVERY_MODE: organization or account)
@@ -349,6 +360,32 @@ const KIND_TEXT: Record<ExclusionKind, string> = { 'target-group': 'target group
 const GROUPS_MAX = 100;
 const GROUP_DESCRIPTION_MAX = 200;
 const ROLES = new Set<Role>(['member', 'viewer', 'operator', 'admin']);
+
+// The record `dormeto gcp connect` writes (Google Cloud manager design §4.3): every field checked, the projects and regions
+// as Google Cloud names them.
+function googleRecord(body: Record<string, unknown>): GoogleConnection {
+  const bad = (message: string): never => { throw new HttpError(400, 'bad_request', message); };
+  const text = (name: string): string => (typeof body[name] === 'string' && body[name] ? (body[name] as string) : bad(`${name} must be a non-empty string`));
+  const strings = (name: string, value: unknown): string[] => (Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : bad(`${name} must be a list of strings`));
+  const project = text('project');
+  if (!isProject(project)) bad('project must be a Google Cloud project ID');
+  const projectNumber = text('projectNumber');
+  if (!/^\d+$/.test(projectNumber)) bad('projectNumber must be digits');
+  const accounts = body.serviceAccounts as Record<string, unknown> | undefined;
+  if (typeof accounts?.discovery !== 'string' || typeof accounts.command !== 'string' || !accounts.discovery || !accounts.command) bad('serviceAccounts must hold discovery and command');
+  if (!Array.isArray(body.routers)) bad('routers must be a list');
+  const routers = (body.routers as Record<string, unknown>[]).map((r) => {
+    if (!isProject(r?.project)) return bad('routers[].project must be a Google Cloud project ID');
+    if (!isRegion('gcp', r.region)) return bad('routers[].region must be a Google Cloud region');
+    return { project: r.project, region: r.region };
+  });
+  if (new Set(routers.map((r) => `${r.project}/${r.region}`)).size !== routers.length) bad('routers must not repeat a project and region');
+  return {
+    project, projectNumber, pool: text('pool'), provider: text('provider'), scopes: strings('scopes', body.scopes),
+    serviceAccounts: { discovery: accounts!.discovery as string, command: accounts!.command as string }, routers,
+    googleAdded: strings('googleAdded', body.googleAdded), connectedAt: text('connectedAt'), connectedBy: text('connectedBy'), cli: text('cli'),
+  };
+}
 
 function bodyOf(event: ApiEvent): Record<string, unknown> {
   try {
@@ -513,7 +550,7 @@ const settingsText = ({ hibernate, joinMinutes, endedWindowDays, defaults }: { h
   ...(defaults === undefined ? [] : [defaultsText(defaults, unset, defaultsBefore)]),
 ].join(', ');
 export function createApi({
-  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
+  routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, google, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
   fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
@@ -1853,6 +1890,11 @@ export function createApi({
       if (response) return response;
     }
 
+    if (resource === 'discovery' && a === 'google' && google && !b) {
+      const response = await googleRoute(method, identity, event, google);
+      if (response) return response;
+    }
+
     if (resource === 'discovery' && discovery && !b) {
       const response = await discoveryRoute(method, a, identity, event, discovery);
       if (response) return response;
@@ -2074,6 +2116,42 @@ export function createApi({
     const summary = fleet ? await fleet.getWorkload(c.account, c.region, c.workloadId).catch(() => null) : null;
     if (!router && !summary) return c;
     return { ...c, workload: { router: router?.name ?? summary!.router, workloadId: c.workloadId, name: (summary?.name as string | undefined) ?? c.workloadId } };
+  }
+
+  // --- The Google Cloud connection: the CLI's record (dormeto gcp connect), whose routers are registered at once ---------
+
+  async function googleRoute(method: string, identity: Identity, event: ApiEvent, g: GoogleApi): Promise<ApiResponse | null> {
+    if (method === 'GET') return reply(200, { connection: await g.get() });
+    if (method !== 'PUT' && method !== 'DELETE') return null;
+    need(identity, 'admin');
+    const before = await g.get();
+    const registered = await g.routers.list();
+    if (method === 'PUT') {
+      const connection = googleRecord(bodyOf(event));
+      return audited(identity, 'google-connection', connection.project, async () => {
+        await g.put(connection);
+        // The record is the connection's truth: the routers it no longer names are unregistered (the AWS ones are never touched).
+        for (const r of before?.routers ?? []) {
+          if (!connection.routers.some((k) => k.project === r.project && k.region === r.region)) await g.routers.delete(r.project, r.region);
+        }
+        for (const r of connection.routers) {
+          // A router discovery or the poll already knows keeps what they learnt (its controller, its version).
+          if (registered.some((i) => i.cloud === 'gcp' && i.account === r.project && i.region === r.region)) continue;
+          await g.routers.put({
+            name: `dmtr-${r.region}`, account: r.project, region: r.region, controller: '', onboarder: '', version: '', build: '',
+            installedBy: 'cli', cloud: 'gcp', installedAt: connection.connectedAt,
+          });
+        }
+        return { result: `${plural(connection.routers.length, 'router')}, ${plural(connection.scopes.length, 'scope')}`, response: reply(200, { connection }) };
+      });
+    }
+    return audited(identity, 'google-connection', before?.project ?? 'google', async () => {
+      // Every Google Cloud registration, those discovery added too; the AWS ones stay.
+      const gone = registered.filter((i) => i.cloud === 'gcp');
+      for (const i of gone) await g.routers.delete(i.account, i.region);
+      await g.delete();
+      return { result: `disconnected, ${plural(gone.length, 'router')} unregistered`, response: reply(200, { connection: null }) };
+    });
   }
 
   async function discoveryRoute(method: string, sub: string | undefined, identity: Identity, event: ApiEvent, d: DiscoveryApi): Promise<ApiResponse | null> {

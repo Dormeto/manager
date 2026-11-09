@@ -181,3 +181,94 @@ describe('audit', () => {
     expect((await api(event('GET', '/api/nothing'))).statusCode).toBe(404);
   });
 });
+
+describe('the Google Cloud connection', () => {
+  const record = {
+    project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-dev'],
+    serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com' },
+    routers: [{ project: 'dormeto-dev', region: 'europe-west1' }, { project: 'dormeto-dev', region: 'us-central1' }],
+    googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'cli', cli: '0.14.0',
+  };
+  const aws = { name: 'dmt-dev', account: '121014831971', region: 'eu-west-1', controller: 'arn:aws:lambda:eu-west-1:121014831971:function:c', onboarder: 'o', version: '0.39.0', build: 'b', installedBy: 'a@example.com', installedAt: '2026-10-01T00:00:00.000Z' };
+
+  const viaIam = (method: string, path: string, body?: unknown): ApiEvent => ({
+    rawPath: path, requestContext: { http: { method }, authorizer: { iam: { userArn: 'arn:aws:iam::121014831971:user/cli', userId: 'AIDAX' } } },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  function connected() {
+    const store = new Map<string, any>([[`${aws.account}#${aws.region}`, aws]]);
+    let stored: typeof record | null = null;
+    const audit: AuditEntry[] = [];
+    const api = createApi({
+      routers: ROUTERS, invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
+      now: () => NOW, newId: () => 'id-1', version: '0.1.0',
+      google: {
+        get: async () => stored, put: async (r) => { stored = r as typeof record; }, delete: async () => { stored = null; },
+        routers: { list: async () => [...store.values()], put: async (r) => { store.set(`${r.account}#${r.region}`, r); }, delete: async (account, region) => { store.delete(`${account}#${region}`); } },
+      },
+    });
+    return { api, audit, store, stored: () => stored };
+  }
+
+  it('refuses a viewer\'s PUT', async () => {
+    const { api, stored } = connected();
+    expect((await api(event('PUT', '/api/discovery/google', 'dmt-viewer', record))).statusCode).toBe(403);
+    expect(stored()).toBeNull();
+  });
+
+  it('stores an administrator\'s record, registers its routers and audits it', async () => {
+    const { api, store, audit } = connected();
+    const res = await api(viaIam('PUT', '/iam/discovery/google', record));
+    expect(res.statusCode).toBe(200);
+    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-viewer')))).toEqual({ connection: record });
+    expect(store.get('dormeto-dev#europe-west1')).toEqual({
+      name: 'dmtr-europe-west1', account: 'dormeto-dev', region: 'europe-west1', controller: '', onboarder: '', version: '', build: '', installedBy: 'cli',
+      cloud: 'gcp', installedAt: record.connectedAt,
+    });
+    expect(store.has('dormeto-dev#us-central1')).toBe(true);
+    expect(audit.map((e) => [e.action, e.target, e.result.startsWith('error')])).toEqual([['google-connection', 'dormeto-host', false]]);
+  });
+
+  it('keeps what discovery learnt of a router the record names again', async () => {
+    const { api, store } = connected();
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    store.set('dormeto-dev#europe-west1', { ...store.get('dormeto-dev#europe-west1'), controller: 'https://c.run.app', version: '0.40.0' });
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    expect(store.get('dormeto-dev#europe-west1').controller).toBe('https://c.run.app');
+    expect(store.get('dormeto-dev#europe-west1').version).toBe('0.40.0');
+  });
+
+  it('unregisters the routers a later PUT drops, and never an AWS one', async () => {
+    const { api, store } = connected();
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', { ...record, routers: [record.routers[0]] }));
+    expect([...store.keys()].sort()).toEqual(['121014831971#eu-west-1', 'dormeto-dev#europe-west1']);
+  });
+
+  it('refuses a 12-digit project, a bad region and a missing field', async () => {
+    const { api, store } = connected();
+    for (const bad of [
+      { ...record, project: '123456789012' },
+      { ...record, routers: [{ project: '123456789012', region: 'europe-west1' }] },
+      { ...record, routers: [{ project: 'dormeto-dev', region: 'eu-west-1' }] },
+      { ...record, pool: undefined },
+    ]) expect((await api(event('PUT', '/api/discovery/google', 'dmt-admin', bad))).statusCode).toBe(400);
+    expect([...store.keys()]).toEqual(['121014831971#eu-west-1']);
+  });
+
+  it('answers a GET with no connection as null', async () => {
+    const { api } = connected();
+    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-admin')))).toEqual({ connection: null });
+  });
+
+  it('deletes the record and the Google Cloud routers, keeping the AWS ones', async () => {
+    const { api, store, stored, audit } = connected();
+    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    expect((await api(event('DELETE', '/api/discovery/google', 'dmt-operator'))).statusCode).toBe(403);
+    expect((await api(viaIam('DELETE', '/iam/discovery/google'))).statusCode).toBe(200);
+    expect(stored()).toBeNull();
+    expect([...store.keys()]).toEqual(['121014831971#eu-west-1']);
+    expect(audit.at(-1)?.action).toBe('google-connection');
+  });
+});

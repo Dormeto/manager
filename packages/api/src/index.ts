@@ -4,7 +4,7 @@ import {
   AdminAddUserToGroupCommand, AdminCreateUserCommand, AdminDisableUserCommand, AdminEnableUserCommand, AdminGetUserCommand, AdminListGroupsForUserCommand, AdminRemoveUserFromGroupCommand,
   AdminSetUserMFAPreferenceCommand, CognitoIdentityProviderClient, CreateGroupCommand, DeleteGroupCommand, ListGroupsCommand, ListUsersCommand, UpdateGroupCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
-import { DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
+import { DeleteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand, QueryCommand } from '@aws-sdk/client-dynamodb';
 import { CreateEmailIdentityCommand, GetAccountCommand, GetEmailIdentityCommand, SESv2Client } from '@aws-sdk/client-sesv2';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
@@ -18,7 +18,8 @@ import { createStore } from '@dormeto/discovery';
 import { createFleetStore, createPriceBook } from '@dormeto/fleet';
 import { createSpotPort } from './spot.js';
 import { baselineOf } from './baseline.js';
-import { createEngine, createRecords } from '@dormeto/operations';
+import { createEngine, createRecords, type InstalledRouter } from '@dormeto/operations';
+import type { GoogleConnection } from '@dormeto/google';
 import { createApi, routerInvoker, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
@@ -135,6 +136,21 @@ const engine = createEngine({
   start: async (op) => (await sfn.send(new StartExecutionCommand({ stateMachineArn: process.env.OPERATIONS, name: op.id, input: JSON.stringify({ operationId: op.id }) }))).executionArn ?? '',
   log: { info: (event, data = {}) => console.log(JSON.stringify({ level: 'info', event, ...data })), warn: (event, data = {}) => console.log(JSON.stringify({ level: 'warn', event, ...data })), error: (event, data = {}) => console.log(JSON.stringify({ level: 'error', event, ...data })) },
 });
+// The Google Cloud connection (`DISC#GOOGLE`) and the registry its routers go to.
+const googleKey = { pk: { S: 'T#default' }, sk: { S: 'DISC#GOOGLE' } };
+const google = {
+  async get() {
+    const item = (await dynamo.send(new GetItemCommand({ TableName: table, Key: googleKey, ConsistentRead: true }))).Item;
+    return item?.data?.S ? (JSON.parse(item.data.S) as GoogleConnection) : null;
+  },
+  async put(connection: GoogleConnection) {
+    await dynamo.send(new PutItemCommand({ TableName: table, Item: { ...googleKey, data: { S: JSON.stringify(connection) }, updatedAt: { S: new Date().toISOString() } } }));
+  },
+  async delete() {
+    await dynamo.send(new DeleteItemCommand({ TableName: table, Key: googleKey }));
+  },
+  routers: { list: () => records.listRouters(), put: (r: InstalledRouter) => records.putRouter(r), delete: (account: string, region: string) => records.deleteRouter(account, region) },
+};
 const operations = {
   create: engine.create,
   list: () => records.listOperations(),
@@ -262,6 +278,7 @@ export const handler = createApi({
   mfa: { mode: mfaMode satisfies MfaMode, passkeys: process.env.PASSKEYS === 'true', enabled: (username) => users.mfaEnabled(username, { activate: mfaMode === 'required' }) },
   preferences,
   discovery,
+  google,
   operations: process.env.OPERATIONS ? operations : undefined,
   managerAccount: process.env.MANAGER_ACCOUNT,
   historyDays: Number(process.env.HISTORY_DAYS) || 400,
