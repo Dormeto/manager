@@ -7,7 +7,7 @@
 // invocation. Nothing here logs a token or a signature.
 import { createHash, createHmac, type Hash, type Hmac } from 'node:crypto';
 import { SignatureV4 } from '@smithy/signature-v4';
-import { errorOf } from './errors.js';
+import { errorOf, GoogleError } from './errors.js';
 import { fetchTransport, httpsTransport, send, type Answer, type Fetch } from './fetch.js';
 
 // The connection's record (`DISC#GOOGLE`, `T#default`), written by `dormeto gcp connect`.
@@ -106,6 +106,33 @@ function expiryOf(jwt: string): number {
 
 const ok = (a: Answer) => a.status >= 200 && a.status <= 299;
 
+// A 2xx answer's JSON, or a GoogleError that says what came instead (never a SyntaxError).
+const notJson = (answer: Answer, url: string) => new GoogleError({ status: answer.status, reason: '', message: `${new URL(url).host} answered HTTP ${answer.status} with something other than JSON` });
+function parsed(answer: Answer, url: string): unknown {
+  try {
+    return JSON.parse(answer.text);
+  } catch {
+    throw notJson(answer, url);
+  }
+}
+function jsonOf(answer: Answer, url: string): Record<string, unknown> {
+  const body = parsed(answer, url);
+  if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
+  throw notJson(answer, url);
+}
+
+// The fields a token's answer must hold, each a non-empty string, a number, or a string that is a date; a GoogleError naming
+// those missing (never a NaN expiry, nor a request sent with "Bearer undefined").
+type Field = 'string' | 'number' | 'date';
+const holds = (value: unknown, field: Field) => (field === 'number' ? typeof value === 'number' && Number.isFinite(value)
+  : typeof value === 'string' && value !== '' && (field === 'string' || Number.isFinite(Date.parse(value))));
+function fieldsOf(answer: Answer, url: string, fields: Record<string, Field>): Record<string, unknown> {
+  const body = jsonOf(answer, url);
+  const lacking = Object.entries(fields).filter(([name, field]) => !holds(body[name], field)).map(([name]) => name);
+  if (lacking.length) throw new GoogleError({ status: answer.status, reason: '', message: `${new URL(url).host} answered HTTP ${answer.status} without ${lacking.join(' or ')}` });
+  return body;
+}
+
 export function createGoogle({ connection, credentials = lambdaCredentials, fetch, now = Date.now }: {
   connection: GoogleConnection;
   credentials?: AwsCredentials | AwsCredentialsProvider;
@@ -157,7 +184,7 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
       }).toString(),
     });
     if (!ok(answer)) throw errorOf(answer.status, answer.text);
-    const { access_token: value, expires_in: expiresIn } = JSON.parse(answer.text) as { access_token: string; expires_in: number };
+    const { access_token: value, expires_in: expiresIn } = fieldsOf(answer, STS_URL, { access_token: 'string', expires_in: 'number' }) as { access_token: string; expires_in: number };
     return { value, expiresAt: at + expiresIn * 1000 };
   });
 
@@ -175,28 +202,30 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
     return request();
   }
 
-  // iamcredentials' answer for the service account, as the federated principal.
-  async function generate(sa: ServiceAccount, method: 'generateAccessToken' | 'generateIdToken', body: object): Promise<unknown> {
-    const answer = await authorized('federated', federatedToken, `${IAM_CREDENTIALS}${connection.serviceAccounts[sa]}:${method}`, 'POST', body);
+  // iamcredentials' answer for the service account, as the federated principal, holding the fields asked.
+  async function generate(sa: ServiceAccount, method: 'generateAccessToken' | 'generateIdToken', body: object, fields: Record<string, Field>): Promise<Record<string, unknown>> {
+    const url = `${IAM_CREDENTIALS}${connection.serviceAccounts[sa]}:${method}`;
+    const answer = await authorized('federated', federatedToken, url, 'POST', body);
     if (!ok(answer)) throw errorOf(answer.status, answer.text);
-    return JSON.parse(answer.text);
+    return fieldsOf(answer, url, fields);
   }
 
   const accessToken = (sa: ServiceAccount): Promise<string> => kept.get(`access ${sa}`, async () => {
-    const { accessToken: value, expireTime } = await generate(sa, 'generateAccessToken', { scope: [CLOUD_PLATFORM] }) as { accessToken: string; expireTime: string };
+    const { accessToken: value, expireTime } = await generate(sa, 'generateAccessToken', { scope: [CLOUD_PLATFORM] }, { accessToken: 'string', expireTime: 'date' }) as { accessToken: string; expireTime: string };
     return { value, expiresAt: Date.parse(expireTime) };
   });
 
   const idToken = (sa: ServiceAccount, audience: string): Promise<string> => kept.get(`id ${sa} ${audience}`, async () => {
-    const { token } = await generate(sa, 'generateIdToken', { audience, includeEmail: true }) as { token: string };
+    const { token } = await generate(sa, 'generateIdToken', { audience, includeEmail: true }, { token: 'string' }) as { token: string };
     return { value: token, expiresAt: expiryOf(token) };
   });
 
-  // A Google API's JSON answer ({} when empty), as the service account; a refusal is a GoogleError.
+  // A Google API's JSON answer ({} when empty), as the service account; a refusal, or an answer that isn't JSON, is a
+  // GoogleError.
   async function call<T = unknown>(sa: ServiceAccount, method: string, url: string, body?: unknown): Promise<T> {
     const answer = await authorized(`access ${sa}`, () => accessToken(sa), url, method, body);
     if (!ok(answer)) throw errorOf(answer.status, answer.text);
-    return (answer.text.trim() ? JSON.parse(answer.text) : {}) as T;
+    return (answer.text.trim() ? parsed(answer, url) : {}) as T;
   }
 
   // A Cloud Run service's answer as it comes (its status and text, whatever they are), as the service account with an

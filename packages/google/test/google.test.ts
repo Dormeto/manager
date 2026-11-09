@@ -192,6 +192,38 @@ describe('createGoogle', () => {
     });
   });
 
+  // What Google answers that the manager can't use is a GoogleError that says so: never a SyntaxError, a NaN expiry or a
+  // request sent with "Bearer undefined".
+  it('answers a 2xx that isn\'t JSON as a GoogleError naming the host and the status', async () => {
+    const sts = fakeGoogle((req) => (req.url === STS ? new Response('<html>signed in</html>', { status: 200 }) : undefined));
+    await expect(sts.google.accessToken('discovery')).rejects.toMatchObject({ name: 'GoogleError', status: 200, message: 'sts.googleapis.com answered HTTP 200 with something other than JSON' });
+    const iam = fakeGoogle((req) => (req.url.endsWith(':generateIdToken') ? new Response('', { status: 200 }) : undefined));
+    await expect(iam.google.idToken('command', 'https://a.run.app')).rejects.toMatchObject({ name: 'GoogleError', status: 200, message: 'iamcredentials.googleapis.com answered HTTP 200 with something other than JSON' });
+    const api = fakeGoogle((req) => (req.url === 'https://run.googleapis.com/v2/x' ? new Response('<html>', { status: 200 }) : undefined));
+    await expect(api.google.call('discovery', 'GET', 'https://run.googleapis.com/v2/x')).rejects.toMatchObject({ name: 'GoogleError', status: 200, message: 'run.googleapis.com answered HTTP 200 with something other than JSON' });
+  });
+
+  it('answers a token without its value or its expiry as a GoogleError naming what is missing, and sends nothing with it', async () => {
+    for (const [body, lacking] of [[{ access_token: 'federated-x' }, 'expires_in'], [{ expires_in: 3600 }, 'access_token'], [{}, 'access_token or expires_in']] as const) {
+      const g = fakeGoogle((req) => (req.url === STS ? json(200, body) : undefined));
+      await expect(g.google.call('discovery', 'GET', 'https://run.googleapis.com/v2/x')).rejects.toMatchObject({ name: 'GoogleError', status: 200, message: `sts.googleapis.com answered HTTP 200 without ${lacking}` });
+      expect(g.seen.filter((s) => s.url !== STS)).toEqual([]);
+    }
+    const access = fakeGoogle((req) => (req.url.endsWith(':generateAccessToken') ? json(200, { accessToken: 'access-x', expireTime: 'soon' }) : undefined));
+    await expect(access.google.call('discovery', 'GET', 'https://run.googleapis.com/v2/x')).rejects.toMatchObject({ name: 'GoogleError', message: 'iamcredentials.googleapis.com answered HTTP 200 without expireTime' });
+    expect(access.to('https://run.googleapis.com/v2/x')).toEqual([]);
+    const id = fakeGoogle((req) => (req.url.endsWith(':generateIdToken') ? json(200, { token: '' }) : undefined));
+    await expect(id.google.request('command', 'https://a.run.app', 'GET', 'https://a.run.app/v1/health')).rejects.toMatchObject({ name: 'GoogleError', message: 'iamcredentials.googleapis.com answered HTTP 200 without token' });
+    expect(id.to('https://a.run.app/v1/health')).toEqual([]);
+  });
+
+  it('says HTTP and the status for a JSON error without a message', async () => {
+    const g = fakeGoogle((req) => (req.url === 'https://run.googleapis.com/v2/x' ? json(503, { error: { code: 503, status: 'UNAVAILABLE' } }) : undefined));
+    await expect(g.google.call('discovery', 'GET', 'https://run.googleapis.com/v2/x')).rejects.toMatchObject({ name: 'GoogleError', status: 503, reason: 'UNAVAILABLE', message: 'HTTP 503' });
+    const sts = fakeGoogle((req) => (req.url === STS ? json(400, { error: 'invalid_request', error_description: '' }) : undefined));
+    await expect(sts.google.accessToken('discovery')).rejects.toMatchObject({ status: 400, reason: 'invalid_request', message: 'invalid_request' });
+  });
+
   it('calls an API with the account\'s access token: JSON in and out, a refusal as a GoogleError', async () => {
     const g = fakeGoogle((req) => {
       if (req.url === 'https://run.googleapis.com/v2/projects/dormeto-dev/locations/-/services') return json(200, { services: [{ name: 'dmtr-europe-west2-controller' }] });

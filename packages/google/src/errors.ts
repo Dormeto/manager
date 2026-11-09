@@ -26,17 +26,18 @@ type GoogleBody = {
 };
 
 // A non-2xx answer's error: Google's JSON (an API's `{error: {...}}`, STS's `{error, error_description}`), or the start
-// of an answer that isn't JSON (a load balancer's page).
+// of an answer that isn't JSON (a load balancer's page); `HTTP <status>` when it says nothing.
+const said = (text: unknown): text is string => typeof text === 'string' && text.trim() !== '';
 export function errorOf(status: number, text: string): GoogleError {
   let body: GoogleBody | undefined;
   try {
     body = JSON.parse(text) as GoogleBody;
   } catch { /* not JSON */ }
   const e = body?.error;
-  if (typeof e === 'string') return new GoogleError({ status, reason: e, message: body?.error_description ?? e });
+  if (typeof e === 'string') return new GoogleError({ status, reason: e, message: said(body?.error_description) ? body.error_description : said(e) ? e : `HTTP ${status}` });
   if (e && typeof e === 'object') {
     const info = e.details?.find((d) => d['@type']?.endsWith('google.rpc.ErrorInfo'));
-    return new GoogleError({ status, reason: info?.reason ?? e.errors?.[0]?.reason ?? e.status ?? '', message: e.message ?? '' });
+    return new GoogleError({ status, reason: info?.reason ?? e.errors?.[0]?.reason ?? e.status ?? '', message: said(e.message) ? e.message : `HTTP ${status}` });
   }
   return new GoogleError({ status, reason: '', message: text.trim().slice(0, 300) || `HTTP ${status}` });
 }
