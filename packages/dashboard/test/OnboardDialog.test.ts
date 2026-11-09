@@ -296,5 +296,27 @@ describe('OnboardDialog', () => {
       expect((wrapper.emitted('submit')![0]![0] as { router?: string }).router).toBe('dmtr-dev-us-east1');
       wrapper.unmount();
     });
+
+    // The API refuses a global candidate's onboarding without a router when its project has several: no quick submit
+    // before the list is in.
+    it('waits for the router list before Onboard, then sends no router when there is no choice', async () => {
+      const wrapper = await gcp({ routers: null });
+      expect(onboardButton().disabled).toBe(true);
+      await wrapper.setProps({ routers: [{ name: 'dmtr-dev-europe-west2', region: 'europe-west2' }] });
+      await flushPromises();
+      expect(onboardButton().disabled).toBe(false);
+      onboardButton().click();
+      expect(wrapper.emitted('submit')![0]![0]).not.toHaveProperty('router');
+      wrapper.unmount();
+    });
+
+    it('names the only router offered when the API needs one (the project\'s others below 0.40.0)', async () => {
+      const wrapper = await gcp({ routers: [{ name: 'dmtr-dev-us-east1', region: 'us-east1' }], chooseRouter: true });
+      expect(document.querySelector('.v-dialog')!.textContent).toContain('Router');
+      expect(onboardButton().disabled).toBe(false);
+      onboardButton().click();
+      expect((wrapper.emitted('submit')![0]![0] as { router?: string }).router).toBe('dmtr-dev-us-east1');
+      wrapper.unmount();
+    });
   });
 });

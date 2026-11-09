@@ -12,11 +12,18 @@ import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type Ku
 import { terraformSnippet } from '../terraform';
 
 // On Google Cloud (`cloud`): the candidate's labels come in `awsTags` (the candidate's `tags`), and `routers` are the project's routers
-// a `global` candidate may go through (asked when there are several).
-const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] }>();
+// of 0.40.0 and later a `global` candidate may go through, null while they are read (Onboard waits). One is asked for when
+// several are offered or the API needs one named (`chooseRouter`: the project has several, whatever their versions), the only
+// one offered then chosen already.
+const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean }>();
 const gcp = computed(() => props.cloud === 'gcp');
-const several = computed(() => gcp.value && (props.routers?.length ?? 0) > 1);
+const waiting = computed(() => gcp.value && props.routers === null);
+const several = computed(() => gcp.value && (Boolean(props.chooseRouter) || (props.routers?.length ?? 0) > 1));
 const router = ref<string | null>(null);
+const preselect = () => {
+  if (several.value && !router.value && props.routers?.length === 1) router.value = props.routers[0]!.name;
+};
+watch(() => props.routers, preselect);
 const access = computed(() => (props.kubernetes ? accessText(props.kubernetes.cluster, props.access) : null));
 const snippet = computed(() => (props.kubernetes ? gitopsSnippet(props.kubernetes) : null));
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; router?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Tags }] }>();
@@ -58,6 +65,7 @@ watch(() => props.modelValue, (open) => {
   fallbacks.value = '';
   hibernate.value = 'inherit';
   router.value = null;
+  preselect();
   tagRows.value = [];
   copyNote.value = '';
 });
@@ -148,7 +156,7 @@ function submit() {
           </v-col>
         </v-row>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
-          hint="The project has several routers: this one serves the workload (a global load balancer has no region of its own)" />
+          :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : 'No router of the project is 0.40.0 or later: upgrade one with dormeto gcp install'" />
         <v-text-field v-if="gcp" v-model="databases" label="Companion Cloud SQL instances (optional)" hint="Cloud SQL instance names, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-else v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-if="gcp" v-model="fallbacks" label="Fallback machine types (optional)" :rules="[fallbackRule]" class="mt-4"
@@ -173,7 +181,7 @@ function submit() {
       <v-card-actions class="dm-dialog__actions">
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" :disabled="nameRule(name) !== true || fallbackRule() !== true || Boolean(tagsError) || (several && !router)" @click="submit">Onboard</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="nameRule(name) !== true || fallbackRule() !== true || Boolean(tagsError) || waiting || (several && !router)" @click="submit">Onboard</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

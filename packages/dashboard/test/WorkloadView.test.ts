@@ -1109,6 +1109,18 @@ describe('a Google Cloud workload', () => {
     operator.unmount();
   });
 
+  it('gives a workload whose onboarding turned request logs on the CLI\'s command, not Offboard (the operation\'s locate refuses it)', async () => {
+    current = { ...google, requestLogs: { before: { enable: false, sampleRate: 0 } } };
+    document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());
+    const operator = await mountView('operator');
+    expect(await openActions(operator)).not.toContain('Offboard');
+    const card = operator.find('[data-test="gcp-offboard"]');
+    expect(card.text()).toContain('request logs');
+    expect(card.text()).not.toContain('GKE');
+    expect(card.text()).toContain('dormeto gcp workloads offboard 5cdfbf844b925bf8 --project dormeto-dev --region europe-west2');
+    operator.unmount();
+  });
+
   it('gives a GKE workload the CLI\'s command, not Offboard (the API refuses it)', async () => {
     current = { ...google, backends: [{ kind: 'k8s', id: 'gke/demo/Deployment/web', status: 'stopped', cluster: 'gke', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, replicas: 1, keda: false, switch: 'ingress' }] };
     document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());

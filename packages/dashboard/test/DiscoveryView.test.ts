@@ -12,7 +12,7 @@ import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
 // The server's side: the onboarding running on the candidate (named by the candidates while it runs) and how it ended.
-const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; tags?: Record<string, string[]>; row?: Record<string, unknown> } = { running: null, ended: { status: 'succeeded' } };
+const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; routersLater?: Promise<void>; tags?: Record<string, string[]>; row?: Record<string, unknown> } = { running: null, ended: { status: 'succeeded' } };
 const CHECK = { name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-11T10:00:00.000Z' };
 const candidate = () => ({
   id: 'c-1', status: 'pending-onboarding', statusReason: 'eligible', account: '111122223333', accountName: 'example', region: 'eu-west-3',
@@ -33,6 +33,7 @@ vi.mock('../src/api', () => ({
     if (path === '/exclusions' && init?.method === 'POST') return { candidates: 1, operation: { id: 'op-x' } };
     if (path === '/discovery') return { lastRun: null, counts: { 'pending-onboarding': 1 } };
     if (path === '/exclusions') return { exclusions: [] };
+    if (path === '/routers' && server.routersLater) await server.routersLater;
     if (path === '/routers' && server.routers) return { routers: server.routers };
     if (path === '/routers') return { routers: [{ name: 'dmtr-dev-eu-west-3', account: '111122223333', region: 'eu-west-3', clusters: [CHECK] }] };
     if (path.startsWith('/discovery/candidates?')) return { candidates: [candidate()], cursor: null };
@@ -213,6 +214,7 @@ describe('Discovery view, onboarding a Google Cloud candidate', () => {
   afterEach(() => {
     delete server.row;
     delete server.routers;
+    delete server.routersLater;
   });
   const open = async () => {
     const wrapper = await mountView();
@@ -233,6 +235,31 @@ describe('Discovery view, onboarding a Google Cloud candidate', () => {
     await flushPromises();
     const sent = calls.find((c) => c.path === '/operations')!;
     expect(JSON.parse(sent.init!.body as string)).toEqual({ type: 'onboard', candidateId: GCP_BS, router: 'dmtr-dormeto-dev-us-east1', settings: {}, databases: [{ kind: 'cloudsql-instance', id: 'db-demo' }] });
+    wrapper.unmount();
+  });
+
+  it('offers no router below 0.40.0, and asks for one when the project has several whatever their versions (the API needs it named)', async () => {
+    server.routers = [
+      { name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', version: '0.39.0' },
+      { name: 'dmtr-dormeto-dev-us-east1', cloud: 'gcp', account: 'dormeto-dev', region: 'us-east1', version: '0.40.0-dev.1' },
+      { name: 'dmtr-dormeto-dev-us-west1', cloud: 'gcp', account: 'dormeto-dev', region: 'us-west1', version: null, refusal: 'router-too-old' },
+    ];
+    const wrapper = await open();
+    const dialog = wrapper.findComponent(OnboardDialog);
+    expect(dialog.props('routers')).toEqual([{ name: 'dmtr-dormeto-dev-us-east1', region: 'us-east1' }]);
+    expect(dialog.props('chooseRouter')).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('gives the dialog no router list while it is read, for a global candidate', async () => {
+    let release!: () => void;
+    server.routersLater = new Promise<void>((resolve) => { release = resolve; });
+    server.routers = ROUTERS;
+    const wrapper = await open();
+    expect(wrapper.findComponent(OnboardDialog).props('routers')).toBeNull();
+    release();
+    await flushPromises();
+    expect(wrapper.findComponent(OnboardDialog).props('routers')).toHaveLength(2);
     wrapper.unmount();
   });
 

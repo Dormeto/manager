@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessHelp, accessLine, accessStatus, countsLine, forwardersLine, onboardRefusal, PROCEDURE_URL, procedureLink, type AccessReport } from '../src/access';
+import { accessHelp, accessLine, accessStatus, chipLabel, countsLine, forwardersLine, onboardRefusal, PROCEDURE_URL, procedureLink, type AccessReport } from '../src/access';
 
 const DENIED = 'access denied: the role is missing or does not trust the manager';
 const row = (discovery: boolean, command: boolean) => ({
@@ -88,7 +88,23 @@ describe('organization access of a Google Cloud project', () => {
   it('shows the verdict\'s reason as the API gives it, which names the connect command, without an AWS role\'s words', () => {
     expect(accessLine(project(false, true))).toBe(`the discovery service account cannot read shop-prod: ${COMMAND}`);
     expect(accessLine(project(true, false))).toBe(`the command service account cannot act in shop-prod: ${COMMAND}`);
-    expect(accessLine(project(false, false))).toBe(`the discovery service account cannot read shop-prod: ${COMMAND} the command service account cannot act in shop-prod: ${COMMAND}`);
+    expect(accessLine(project(false, false))).toBe(`the discovery service account cannot read shop-prod: ${COMMAND}; the command service account cannot act in shop-prod: ${COMMAND}`);
+  });
+
+  it('names the service accounts, not roles, in its chips and in the counts of a report that lists projects', () => {
+    expect([chipLabel(project(false, true), 'discovery'), chipLabel(project(false, true), 'command')]).toEqual(['Discovery account: missing access', 'Command account: has access']);
+    expect([chipLabel(row(false, true), 'discovery'), chipLabel(row(false, true), 'command')]).toEqual(['Discovery role: missing', 'Command role: assumed']);
+    const counts = { ready: 1, discoveryMissing: 1, commandMissing: 2, unchecked: 0 };
+    expect(countsLine(counts, ['gcp'])).toBe('1 ready, 1 without the discovery account, 2 without the command account.');
+    expect(countsLine(counts, ['aws', 'gcp'])).toBe('1 ready, 1 without the discovery role or account, 2 without the command role or account.');
+    expect(countsLine(counts, ['aws'])).toBe(countsLine(counts));
+    const report: AccessReport = { counts, accounts: [project(false, false)], cursor: null, delegation: 'ok', checkedAt: null };
+    expect(accessHelp(report)[0]).toContain('1 without the discovery account, 2 without the command account.');
+  });
+
+  it('links to the Google Cloud page\'s connection for a project', () => {
+    expect(procedureLink('gcp')).toBe('https://dormeto.com/google-cloud-manager.html#connection');
+    expect(procedureLink('aws')).toBe(PROCEDURE_URL);
   });
 
   it('says why onboarding is not possible in a project before trying', () => {

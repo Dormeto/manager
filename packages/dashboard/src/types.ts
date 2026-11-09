@@ -195,6 +195,9 @@ export interface WorkloadStatus {
   wakerBackendService?: string;
   urlMap?: string;
   lb?: { kind: string; region?: string };
+  // What its backend service's request logs were before the CLI's onboarding turned them on (dormeto gcp workloads onboard
+  // --request-logs): only the CLI sets them back, so only the CLI offboards it.
+  requestLogs?: { before?: { enable: boolean; sampleRate: number } };
   source?: 'terraform' | 'manager' | 'cli'; // routers 0.18.2 and later; cli: a Google Cloud workload
   cloud?: Cloud;
   account?: string; // the manager's: where the workload is (the ARNs of its backends and targets), or its Google Cloud project

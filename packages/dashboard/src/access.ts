@@ -1,7 +1,8 @@
-import { cloudOf } from '@dormeto/fleet/clouds';
+import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
 
 // Organization access (packaging design §3): what an account misses, why, and the procedure that fixes it. A Google Cloud
-// project is a row too: its reasons name what is missing and the `dormeto gcp connect` command that fixes it.
+// project is a row too: its reasons name what is missing and the `dormeto gcp connect` command that fixes it, and its words
+// are the manager's two service accounts (the discovery account, the command account), not AWS roles.
 export type AccessState = { ok: true } | { ok: false; reason: string; discoveryOnly?: true };
 
 export interface AccessRow {
@@ -42,6 +43,9 @@ export function forwardersLine(f: Forwarders | undefined): string | null {
 
 // The website's page, with the roles' Terraform modules and AWS CLI commands.
 export const PROCEDURE_URL = 'https://dormeto.com/organization-access.html';
+// The Google Cloud connection on the website: the two service accounts, their scopes and grants, dormeto gcp connect.
+export const GOOGLE_PROCEDURE_URL = 'https://dormeto.com/google-cloud-manager.html#connection';
+const isGoogle = (account: string) => cloudOf(account) === 'gcp';
 
 // Why onboarding is refused in an account (the API refuses it too): said before trying. Null: let through.
 export function onboardRefusal(report: AccessReport | null, account: string | undefined): string | null {
@@ -52,10 +56,21 @@ export function onboardRefusal(report: AccessReport | null, account: string | un
   return cloudOf(account) === 'gcp' ? `Its project cannot be acted in: ${row.command.reason}. See Organization access.` : `Its account has no command role: ${row.command.reason}. See Organization access.`;
 }
 
-export function countsLine(c: AccessReport['counts']): string {
-  const parts = [`${c.ready} ready`, ...(c.discoveryMissing ? [`${c.discoveryMissing} without the discovery role`] : []), ...(c.commandMissing ? [`${c.commandMissing} without the command role`] : []),
+// `clouds`: those of the rows listed (AWS when none is). What a count misses is an AWS account's role, a project's service
+// account, or either when both are listed.
+export function countsLine(c: AccessReport['counts'], clouds: Iterable<Cloud> = []): string {
+  const listed = new Set(clouds);
+  const missing = (kind: string) => (!listed.has('gcp') ? `the ${kind} role` : listed.has('aws') ? `the ${kind} role or account` : `the ${kind} account`);
+  const parts = [`${c.ready} ready`, ...(c.discoveryMissing ? [`${c.discoveryMissing} without ${missing('discovery')}`] : []), ...(c.commandMissing ? [`${c.commandMissing} without ${missing('command')}`] : []),
     ...(c.discoveryOnly ? [`${c.discoveryOnly} for discovery only`] : []), ...(c.unchecked ? [`${c.unchecked} not checked yet`] : [])];
   return `${parts.join(', ')}.`;
+}
+
+// A row's chip, read aloud: an AWS account's role assumed or missing, a project's service account with or without access.
+export function chipLabel(row: AccessRow, kind: 'discovery' | 'command'): string {
+  const { ok } = row[kind];
+  const name = `${kind[0]!.toUpperCase()}${kind.slice(1)}`;
+  return isGoogle(row.account) ? `${name} account: ${ok ? 'has access' : 'missing access'}` : `${name} role: ${ok ? 'assumed' : 'missing'}`;
 }
 
 // The panel's status: ok when every account is ready and no forwarder is impossible or failed; an error without the
@@ -71,7 +86,7 @@ export function accessStatus(report: AccessReport): 'ok' | 'warning' | 'error' {
 export function accessHelp(report: AccessReport): [string, string] {
   const refresh = forwardersLine(report.forwarders);
   return [
-    `${countsLine(report.counts)} An account is ready when the manager assumed both roles there at the last discovery run: the discovery `
+    `${countsLine(report.counts, report.accounts.map((a) => (isGoogle(a.account) ? 'gcp' : 'aws')))} An account is ready when the manager assumed both roles there at the last discovery run: the discovery `
       + 'role to read it, the command role to install its router and onboard its workloads; each discovery run checks them again. A Google Cloud project is ready '
       + 'when the manager\'s service accounts can read it and act in it (dormeto gcp connect gives them that).',
     refresh
@@ -83,14 +98,15 @@ export function accessHelp(report: AccessReport): [string, string] {
 
 export function accessLine(row: AccessRow): string {
   // A project: the reasons as the API gives them (they say what is missing and the connect command), each once.
-  if (cloudOf(row.account) === 'gcp') return [...new Set([!row.discovery.ok && row.discovery.reason, !row.command.ok && row.command.reason].filter(Boolean))].join(' ');
+  if (isGoogle(row.account)) return [...new Set([!row.discovery.ok && row.discovery.reason, !row.command.ok && row.command.reason].filter(Boolean))].join('; ');
   const missing = [!row.discovery.ok && 'no discovery role', !row.command.ok && 'no command role'].filter(Boolean).join(', ');
   const reason = (!row.discovery.ok && row.discovery.reason) || (!row.command.ok && row.command.reason) || '';
   const stops = [!row.discovery.ok && 'the account is not scanned', !row.command.ok && 'onboarding and router installs are refused'].filter(Boolean).join(', ');
   return `${missing} (${reason}): ${stops}`;
 }
 
-// The procedure: a static page (the website runs no script); the panel lists the accounts to set up.
-export function procedureLink(): string {
-  return PROCEDURE_URL;
+// The procedure: a static page (the website runs no script); the panel lists the accounts to set up. A project's is the
+// Google Cloud connection's.
+export function procedureLink(cloud: Cloud = 'aws'): string {
+  return cloud === 'gcp' ? GOOGLE_PROCEDURE_URL : PROCEDURE_URL;
 }

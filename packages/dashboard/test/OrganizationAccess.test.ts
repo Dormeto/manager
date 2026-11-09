@@ -52,4 +52,21 @@ describe('Organization access panel', () => {
     expect(row.find('[data-cloud="gcp"]').exists()).toBe(true);
     wrapper.unmount();
   });
+
+  it('names a project\'s service accounts in its chips, and links to the Google Cloud connection instead of the roles\' procedure', () => {
+    const project = { account: 'shop-prod', name: 'shop-prod', discovery: { ok: true as const }, command: { ok: false as const, reason: 'the command service account cannot act in shop-prod' } };
+    const wrapper = mountPanel({ ...ready, counts: { ready: 1, discoveryMissing: 0, commandMissing: 1, unchecked: 0 }, accounts: [project] });
+    expect(wrapper.find('[aria-label="Discovery account: has access"]').exists()).toBe(true);
+    expect(wrapper.find('[aria-label="Command account: missing access"]').exists()).toBe(true);
+    expect(wrapper.find('[aria-label^="Command role"]').exists()).toBe(false);
+    const links = wrapper.findAll('.v-card-actions a').map((a) => [a.text(), a.attributes('href')]);
+    expect(links).toEqual([['How to connect Google Cloud', 'https://dormeto.com/google-cloud-manager.html#connection']]);
+    wrapper.unmount();
+    // A project and an AWS account: both procedures.
+    const both = mountPanel({ ...ready, counts: { ready: 0, discoveryMissing: 0, commandMissing: 2, unchecked: 0 },
+      accounts: [{ account: '222222222222', name: 'shop', discovery: { ok: true }, command: { ok: false, reason: 'AccessDenied' } }, project] });
+    expect(both.findAll('.v-card-actions a').map((a) => a.text())).toEqual(['How to set up the roles', 'How to connect Google Cloud']);
+    expect(both.find('[aria-label="Command role: missing"]').exists()).toBe(true);
+    both.unmount();
+  });
 });

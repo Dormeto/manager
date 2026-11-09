@@ -23,7 +23,7 @@ import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
 import { cursorPages, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative, rowCloud } from '../format';
-import { lbText, urlMapConsoleUrl } from '../google';
+import { googleRouterTooOld, lbText, urlMapConsoleUrl } from '../google';
 import { useCountUp } from '../count-up';
 import BackendKinds from '../components/BackendKinds.vue';
 import BackendLabel from '../components/BackendLabel.vue';
@@ -78,18 +78,24 @@ const singleKubernetes = computed(() => {
 });
 const singleBackendKind = computed(() => (single.value?.backend as { kind?: string } | null | undefined)?.kind);
 const clusterAccess = ref<ClusterCheck | null>(null);
-// A Google Cloud candidate's routers: its region's, or for a `global` one every router of the project (the dialog asks which
-// when there are several).
-const projectRouters = ref<{ name: string; region: string }[]>([]);
+// A Google Cloud candidate's routers of 0.40.0 and later (an older one can't be acted through): its region's, or for a
+// `global` one every router of the project, the dialog asking which; null while a `global` one's are read (the dialog waits).
+const projectRouters = ref<{ name: string; region: string }[] | null>([]);
+// The API needs a `global` candidate's router named when its project has several, whatever their versions.
+const chooseRouter = ref(false);
 watchValue(onboardOpen, async (open) => {
   clusterAccess.value = null;
   projectRouters.value = [];
+  chooseRouter.value = false;
   const c = single.value;
   const kubernetes = singleKubernetes.value;
   if (!open || !c || (!kubernetes && !isGoogle(c))) return;
+  if (!kubernetes && c.region === 'global') projectRouters.value = null;
   const routers = (await api<{ routers: RouterInfo[] }>('/routers').catch(() => ({ routers: [] as RouterInfo[] }))).routers;
   if (!kubernetes) {
-    projectRouters.value = routers.filter((r) => r.cloud === 'gcp' && r.account === c.account && (c.region === 'global' || r.region === c.region)).map((r) => ({ name: r.name, region: r.region }));
+    const ofProject = routers.filter((r) => r.cloud === 'gcp' && r.account === c.account);
+    chooseRouter.value = c.region === 'global' && ofProject.length > 1;
+    projectRouters.value = ofProject.filter((r) => (c.region === 'global' || r.region === c.region) && !googleRouterTooOld(r)).map((r) => ({ name: r.name, region: r.region }));
     return;
   }
   clusterAccess.value = routers.find((r) => r.account === c.account && r.region === c.region)?.clusters?.find((x) => x.name === kubernetes.cluster) ?? null;
@@ -538,7 +544,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" :cloud="single && isGoogle(single) ? 'gcp' : 'aws'" :routers="projectRouters" :backend-kind="(single?.backend as { kind?: string } | null | undefined)?.kind ?? null" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" :cloud="single && isGoogle(single) ? 'gcp' : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="(single?.backend as { kind?: string } | null | undefined)?.kind ?? null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">

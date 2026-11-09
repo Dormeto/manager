@@ -3,6 +3,17 @@
 // the manager never does itself.
 const CONSOLE = 'https://console.cloud.google.com';
 const part = encodeURIComponent;
+
+// A Google Cloud router the manager can't act through (no /v1/actions before 0.40.0): a known version below it, by
+// major.minor.patch (a dev router's 0.40.0-dev.1 meets it), or one the API found too old; an unknown version is let through.
+export function googleRouterTooOld(router: { version?: string | null; refusal?: string }): boolean {
+  if (router.refusal === 'router-too-old') return true;
+  const v = /^(\d+)\.(\d+)\.(\d+)/.exec(router.version ?? '')?.slice(1).map(Number);
+  if (!v) return false;
+  const floor = [0, 40, 0];
+  for (let i = 0; i < 3; i += 1) if (v[i] !== floor[i]) return v[i]! < floor[i]!;
+  return false;
+}
 const withProject = (project: string) => `?project=${part(project)}`;
 
 // The last segment of a resource path: the name Google Cloud shows.

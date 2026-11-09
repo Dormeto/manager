@@ -1,17 +1,24 @@
 <script setup lang="ts">
 // Organization access (packaging design §3): the roles the manager assumes, the accounts ready, those not ready with the
-// reason and the procedure. Run now checks again.
+// reason and the procedure (a project's: the Google Cloud connection). Run now checks again.
 import { computed, ref } from 'vue';
 import { mdiAlertCircle, mdiCheck, mdiCheckCircle, mdiChevronDown, mdiClose, mdiCloseCircle, mdiFlashOffOutline, mdiOpenInNew, mdiShieldAlertOutline } from '@mdi/js';
 import CloudMark from './CloudMark.vue';
 import { rowCloud } from '../format';
-import { accessHelp, accessLine, accessStatus, procedureLink, type AccessReport } from '../access';
+import { accessHelp, accessLine, accessStatus, chipLabel, procedureLink, type AccessReport } from '../access';
 
 const props = defineProps<{ report: AccessReport; roles?: { discoveryRole: string; commandRole: string } | null }>();
 const all = ref(false);
 const shown = computed(() => (all.value ? props.report.accounts : props.report.accounts.slice(0, 5)));
 const notReady = computed(() => props.report.counts.discoveryMissing + props.report.counts.commandMissing > 0 || props.report.delegation === 'missing');
-const link = procedureLink();
+// The procedures of the clouds listed: the roles' for an AWS account (or the delegation policy), the connection's for a project.
+const links = computed(() => {
+  const clouds = new Set(props.report.accounts.map((a) => rowCloud(a)));
+  return [
+    ...(props.report.delegation === 'missing' || clouds.has('aws') || !clouds.size ? [{ href: procedureLink('aws'), text: 'How to set up the roles' }] : []),
+    ...(clouds.has('gcp') ? [{ href: procedureLink('gcp'), text: 'How to connect Google Cloud' }] : []),
+  ];
+});
 // The status icon: the counts and event-driven refresh are in its tooltip; the panel lists only what needs attention.
 const status = computed(() => accessStatus(props.report));
 const STATUS = {
@@ -55,9 +62,9 @@ const impossible = computed(() => (allImpossible.value ? notConnected.value : no
           </div>
           <div class="dm-access__roles">
             <v-chip :color="a.discovery.ok ? 'success' : 'error'" variant="tonal" label size="small" :prepend-icon="a.discovery.ok ? mdiCheck : mdiClose"
-              :aria-label="`Discovery role: ${a.discovery.ok ? 'assumed' : 'missing'}`">discovery</v-chip>
+              :aria-label="chipLabel(a, 'discovery')">discovery</v-chip>
             <v-chip :color="a.command.ok ? 'success' : 'error'" variant="tonal" label size="small" :prepend-icon="a.command.ok ? mdiCheck : mdiClose"
-              :aria-label="`Command role: ${a.command.ok ? 'assumed' : 'missing'}`">command</v-chip>
+              :aria-label="chipLabel(a, 'command')">command</v-chip>
           </div>
         </li>
       </ul>
@@ -74,8 +81,8 @@ const impossible = computed(() => (allImpossible.value ? notConnected.value : no
           {{ notConnected.length - impossible.length }} more</v-btn>
       </template>
     </v-card-text>
-    <v-card-actions v-if="notReady" class="px-4 pb-4">
-      <v-btn :href="link" target="_blank" rel="noopener" variant="tonal" :append-icon="mdiOpenInNew">How to set up the roles</v-btn>
+    <v-card-actions v-if="notReady" class="px-4 pb-4 flex-wrap ga-2">
+      <v-btn v-for="l in links" :key="l.href" :href="l.href" target="_blank" rel="noopener" variant="tonal" :append-icon="mdiOpenInNew">{{ l.text }}</v-btn>
     </v-card-actions>
   </v-card>
 </template>
