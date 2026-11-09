@@ -70,7 +70,7 @@ export function googleConnection(d: Demo, now: number): GoogleConnectionAnswer {
   const project = routers[0]!.account;
   return {
     connection: {
-      project, projectNumber: '1034397096264', pool: 'dmt-demo', provider: 'aws', scopes: [`projects/${project}`],
+      project, projectNumber: '1034397096264', pool: 'dmt-demo', provider: 'aws-121014831971', scopes: [`projects/${project}`],
       serviceAccounts: { discovery: `dmt-demo-discovery@${project}.iam.gserviceaccount.com`, command: `dmt-demo-command@${project}.iam.gserviceaccount.com` },
       routers: routers.map((r) => ({ project: r.account, region: r.region, controller: `https://dmtr-${r.region}-controller-demo-nw.a.run.app`, version: r.version })),
       googleAdded: [], connectedAt: iso(now - 9 * DAY), connectedBy: ORG.me, cli: '0.14.0',

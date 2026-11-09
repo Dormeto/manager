@@ -187,7 +187,7 @@ describe('audit', () => {
 
 describe('the Google Cloud connection', () => {
   const record = {
-    project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-dev'],
+    project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws-121014831971', scopes: ['projects/dormeto-dev'],
     serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com' },
     routers: [{ project: 'dormeto-dev', region: 'europe-west1' }, { project: 'dormeto-dev', region: 'us-central1' }],
     googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'cli', cli: '0.14.0',
@@ -205,7 +205,7 @@ describe('the Google Cloud connection', () => {
     const audit: AuditEntry[] = [];
     const api = createApi({
       routers: ROUTERS, invoke: async () => ({}), audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
-      now: () => NOW, newId: () => 'id-1', version: '0.1.0',
+      now: () => NOW, newId: () => 'id-1', version: '0.1.0', managerAccount: '121014831971',
       google: {
         get: async () => stored, put: async (r) => { stored = r as typeof record; }, delete: async () => { stored = null; },
         routers: { list: async () => [...store.values()], put: async (r) => { store.set(`${r.account}#${r.region}`, r); }, delete: async (account, region) => { store.delete(`${account}#${region}`); } },
@@ -286,7 +286,8 @@ describe('the Google Cloud connection', () => {
     const controller = 'routers[].controller must be an https://….run.app URL or empty';
     for (const [bad, message] of [
       [{ pool: 'workload-pool' }, 'pool must be dmt-<env>'], [{ pool: 'dmt-' }, 'pool must be dmt-<env>'], [{ pool: 'dmt-Dev' }, 'pool must be dmt-<env>'],
-      [{ provider: 'oidc' }, 'provider must be aws'],
+      [{ provider: 'oidc' }, 'provider must be aws-121014831971'], [{ provider: 'aws-121014831971' }, 'provider must be aws-121014831971'],
+      [{ provider: 'aws-999999999999' }, 'provider must be aws-121014831971'], [{ provider: 'AWS-121014831971' }, 'provider must be aws-121014831971'],
       [{ scopes: ['projects/dormeto-dev', 'billingAccounts/01ABCD'] }, scopes], [{ scopes: ['organizations/acme'] }, scopes], [{ scopes: ['folders/'] }, scopes],
       [{ scopes: ['projects/123456789012'] }, scopes],
       [{ serviceAccounts: { ...accounts, discovery: 'dmt-dev-discovery@another-project.iam.gserviceaccount.com' } }, named],
@@ -359,7 +360,7 @@ describe('Google Cloud routers', () => {
   const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
   const NAME = 'dmtr-dormeto-dev-europe-west2';
   const record: GoogleConnection = {
-    project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-host'],
+    project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws-121014831971', scopes: ['projects/dormeto-host'],
     serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: COMMAND },
     routers: [{ project: 'dormeto-dev', region: 'europe-west2' }], googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'cli', cli: '0.14.0',
   };

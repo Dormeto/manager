@@ -22,7 +22,7 @@ call gives up after 3 s without a connection or 10 s of silence.
 - **The Google Cloud connection:** `PUT` and `DELETE /iam/discovery/google`, for IAM callers only (`dormeto gcp connect` and
 `disconnect`; a dashboard session's write is refused with 403), and `GET` for viewers under `/iam` and `/api`, keep the record
 `dormeto gcp connect` writes (`DISC#GOOGLE`), each field checked against what connect writes: the projects and regions, the pool
-`dmt-<env>` and its provider `aws`, scopes `organizations/<n>`, `folders/<n>` or `projects/<id>`, that env's two service accounts in
+`dmt-<env>` and its provider `aws-<account>` (the manager's AWS account), scopes `organizations/<n>`, `folders/<n>` or `projects/<id>`, that env's two service accounts in
 the host project, a controller URL ending in `run.app`, a version `x.y.z` with an optional prerelease (a dev router's
 `0.40.0-dev.1`). `GET` answers `{ connection }`, `null` when there is none. A `PUT` registers each of its routers
 as `ROUTER#<project>#<region>` under its own name `dmtr-<region>` (shown in the manager as `dmtr-<project>-<region>`; `cloud: 'gcp'`),

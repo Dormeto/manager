@@ -412,7 +412,7 @@ const GROUP_DESCRIPTION_MAX = 200;
 const ROLES = new Set<Role>(['member', 'viewer', 'operator', 'admin']);
 
 // The record `dormeto gcp connect` writes (Google Cloud manager design §4.3, §4.1): every field checked, the projects and
-// regions as Google Cloud names them, the pool `dmt-<env>` (an env as the manager module takes it) and its provider `aws`,
+// regions as Google Cloud names them, the pool `dmt-<env>` (an env as the manager module takes it) and its provider `aws-<the manager's account>`,
 // the scopes, and the two service accounts of that env in the host project.
 const POOL = /^dmt-([a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?)$/;
 const SCOPE = /^(organizations|folders)\/\d+$/;
@@ -420,7 +420,7 @@ const SCOPE = /^(organizations|folders)\/\d+$/;
 const RUN_APP = /^https:\/\/([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+run\.app$/;
 // x.y.z, and a prerelease as a dev router reports it (0.40.0-dev.1).
 const ROUTER_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
-function googleRecord(body: Record<string, unknown>): GoogleConnection {
+function googleRecord(body: Record<string, unknown>, managerAccount: string | undefined): GoogleConnection {
   const bad = (message: string): never => { throw new HttpError(400, 'bad_request', message); };
   const text = (name: string): string => (typeof body[name] === 'string' && body[name] ? (body[name] as string) : bad(`${name} must be a non-empty string`));
   const strings = (name: string, value: unknown): string[] => (Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : bad(`${name} must be a list of strings`));
@@ -430,7 +430,8 @@ function googleRecord(body: Record<string, unknown>): GoogleConnection {
   if (!/^\d+$/.test(projectNumber)) bad('projectNumber must be digits');
   const pool = text('pool');
   const env = POOL.exec(pool)?.[1] ?? bad('pool must be dmt-<env>');
-  if (text('provider') !== 'aws') bad('provider must be aws');
+  const provider = `aws-${managerAccount ?? ''}`;
+  if (text('provider') !== provider) bad(`provider must be ${provider}`);
   const scopes = strings('scopes', body.scopes);
   if (!scopes.every((s) => SCOPE.test(s) || (s.startsWith('projects/') && isProject(s.slice('projects/'.length))))) bad('scopes must each be organizations/<number>, folders/<number> or projects/<project ID>');
   // The names connect gives them (serviceAccountEmails of @dormeto/google).
@@ -449,7 +450,7 @@ function googleRecord(body: Record<string, unknown>): GoogleConnection {
   });
   if (new Set(routers.map((r) => `${r.project}/${r.region}`)).size !== routers.length) bad('routers must not repeat a project and region');
   return {
-    project, projectNumber, pool, provider: 'aws', scopes, serviceAccounts: named, routers,
+    project, projectNumber, pool, provider, scopes, serviceAccounts: named, routers,
     googleAdded: strings('googleAdded', body.googleAdded), connectedAt: text('connectedAt'), connectedBy: text('connectedBy'), cli: text('cli'),
   };
 }
@@ -2215,7 +2216,7 @@ export function createApi({
     const before = await g.get();
     const registered = await g.routers.list();
     if (method === 'PUT') {
-      const connection = googleRecord(bodyOf(event));
+      const connection = googleRecord(bodyOf(event), managerAccount);
       return audited(identity, 'google-connection', connection.project, async () => {
         await g.put(connection);
         // The record is the connection's truth: the routers it no longer names are unregistered (the AWS ones are never touched).

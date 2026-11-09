@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createGoogleSource, type Google, type GoogleConnection } from '../src/index.js';
 
 const connection = (over: Partial<GoogleConnection> = {}): GoogleConnection => ({
-  project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-host'],
+  project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws-121014831971', scopes: ['projects/dormeto-host'],
   serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com' },
   routers: [], googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'cli', cli: '0.14.0', ...over,
 });

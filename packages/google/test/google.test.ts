@@ -14,13 +14,13 @@ const STS = 'https://sts.googleapis.com/v1/token';
 const IAM = 'https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/';
 const DISCOVERY = 'dmt-dev-discovery@dormeto-dev.iam.gserviceaccount.com';
 const COMMAND = 'dmt-dev-command@dormeto-dev.iam.gserviceaccount.com';
-const PROVIDER = '//iam.googleapis.com/projects/1034397096264/locations/global/workloadIdentityPools/dmt-dev/providers/aws';
+const PROVIDER = '//iam.googleapis.com/projects/1034397096264/locations/global/workloadIdentityPools/dmt-dev/providers/aws-121014831971';
 
 const connection: GoogleConnection = {
   project: 'dormeto-dev',
   projectNumber: '1034397096264',
   pool: 'dmt-dev',
-  provider: 'aws',
+  provider: 'aws-121014831971',
   scopes: ['projects/dormeto-dev'],
   serviceAccounts: { discovery: DISCOVERY, command: COMMAND },
   routers: [{ project: 'dormeto-dev', region: 'europe-west2' }],

@@ -39,7 +39,7 @@ project** through workload identity federation, and every change that makes this
 the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud` or console command is needed.
 
 - **The host project** holds the federation for one manager environment `<env>`: the workload identity pool `dmt-<env>`
-  with its AWS provider `aws` (the manager's account), and two service accounts, the Google twins of the AWS roles.
+  with its AWS provider `aws-<account>` (`<account>` is the manager's AWS account; a provider's ID is 4 to 32 characters, so `aws` alone is refused), and two service accounts, the Google twins of the AWS roles.
   The provider maps `google.subject=assertion.arn` and `attribute.aws_role=assertion.arn.extract('assumed-role/{role}/')`,
   and admits only the manager's roles, with the condition
   `assertion.arn.startsWith('arn:aws:sts::<account>:assumed-role/dmt-<env>-manager-')`.

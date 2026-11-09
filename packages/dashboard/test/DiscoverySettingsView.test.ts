@@ -13,7 +13,7 @@ import { GOOGLE_ANSWER, NO_GOOGLE_ANSWER } from '../../api/test/google-connectio
 
 const CONFIG = { mode: 'account', regions: ['*'], refreshHours: 24, excludes: [], filters: [], eventRefresh: { enabled: false } };
 const CONNECTION = {
-  project: 'dormeto-dev', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-dev', 'folders/42'],
+  project: 'dormeto-dev', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws-121014831971', scopes: ['projects/dormeto-dev', 'folders/42'],
   serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-dev.iam.gserviceaccount.com', command: 'dmt-dev-command@dormeto-dev.iam.gserviceaccount.com' },
   routers: [{ project: 'dormeto-dev', region: 'europe-west2', controller: 'https://dmtr-europe-west2-controller-abc-nw.a.run.app', version: '0.40.0' }],
   googleAdded: ['monitoring.googleapis.com'], connectedAt: new Date(Date.now() - 3_600_000).toISOString(), connectedBy: 'fab@example.com', cli: '0.14.0',

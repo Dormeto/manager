@@ -3,7 +3,7 @@
 // these, and the dashboard's test reads these same answers, so the two never drift apart. Plain data: the dashboard's test
 // imports it too.
 export const GOOGLE_RECORD = {
-  project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-dev', 'folders/42'],
+  project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws-121014831971', scopes: ['projects/dormeto-dev', 'folders/42'],
   serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com' },
   // A router connect read (its controller and version), and one it left for discovery to learn.
   routers: [
