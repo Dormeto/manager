@@ -194,3 +194,23 @@ describe('matches a Google Cloud candidate', () => {
     expect(decide({ ...cfg, globalExcludes: [] }, G, g, inv).scope).toBe('in');
   });
 });
+
+describe('a perimeter of both clouds\' regions', () => {
+  const G: Account = { id: 'dormeto-dev', name: 'dormeto-dev', ouPath: ['folders/12'], tags: {} };
+  const inv = { ...INVENTORY, accounts: [A, G] };
+  const mixed = config({ regions: ['eu-west-1', 'europe-west2', 'global'], filters: [filter('all', [{}])] });
+
+  it('plans each account in its own cloud\'s regions only: AWS eu-west-1, the project europe-west2 and global', () => {
+    const pairs = targetPairs(mixed, inv, {}).filter((p) => p.scan).map((p) => `${p.account}/${p.region}`);
+    expect(pairs).toEqual(['111111111111/eu-west-1', 'dormeto-dev/europe-west2', 'dormeto-dev/global']);
+  });
+
+  it('leaves an AWS account with no region when the perimeter has Google Cloud regions alone', () => {
+    const gcpOnly = config({ regions: ['europe-west2', 'global'], filters: [filter('all', [{}])] });
+    expect(scanAccounts(gcpOnly, inv)).toEqual([
+      { account: A.id, scan: false, reason: 'no region of the perimeter left to scan' },
+      { account: G.id, scan: true, reason: 'included by filter "all"' },
+    ]);
+    expect(targetPairs(gcpOnly, inv, {}).filter((p) => p.account === A.id)).toEqual([]);
+  });
+});

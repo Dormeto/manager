@@ -1,5 +1,6 @@
 // Perimeter evaluation (spec section 4): criteria, global excludes first, then filters (one including filter is enough,
 // a filter's excludes only apply to that filter), and the account-region pairs worth scanning.
+import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import type { Account, AccountPlan, Criterion, Decision, DiscoveryConfig, OrgInventory, PairPlan, ScannedRule } from './types.js';
 
 const ACCOUNT_DIMENSIONS = ['accountIds', 'ouIds', 'accountTags'] as const;
@@ -87,6 +88,10 @@ const excludesAccount = (c: Criterion) => !setsAny(c, ['regions', ...RESOURCE_DI
 // A global exclude without resource dimension removes the account-region pair before any call.
 const excludesPair = (c: Criterion) => !setsAny(c, RESOURCE_DIMENSIONS);
 
+// The perimeter's regions that belong to the account's cloud (`global` only for a project): a mixed perimeter never sends
+// an AWS account to a Google Cloud region, nor the other way round.
+const regionsOf = (config: DiscoveryConfig, account: Account) => config.regions.filter((r) => isCandidateRegion(cloudOf(account.id) ?? 'aws', r));
+
 const includes = (config: DiscoveryConfig) => config.filters.flatMap((f) => f.include);
 
 // Index of the global exclude that removes the whole account before any call, or -1.
@@ -108,7 +113,7 @@ export function scanAccounts(config: DiscoveryConfig, inventory: OrgInventory): 
     const matching = includes(config).filter((c) => matchesAccount(c, account, inventory));
     const reachable = config.regions.includes('*')
       ? (matching.every((c) => c.regions) ? [...new Set(matching.flatMap((c) => c.regions!))] : null)
-      : config.regions.filter((r) => matching.some((c) => matchesRegion(c, r)));
+      : regionsOf(config, account).filter((r) => matching.some((c) => matchesRegion(c, r)));
     if (reachable && reachable.every((r) => globalPairExclude(config, account, r, inventory) >= 0)) {
       return { account: account.id, scan: false, reason: 'no region of the perimeter left to scan' };
     }
@@ -122,11 +127,11 @@ export function targetPairs(config: DiscoveryConfig, inventory: OrgInventory, en
   for (const plan of scanAccounts(config, inventory)) {
     const all = config.regions.includes('*');
     if (!plan.scan) {
-      for (const region of all ? ['*'] : config.regions) pairs.push({ account: plan.account, region, scan: false, reason: plan.reason });
+      for (const region of all ? ['*'] : regionsOf(config, accounts.get(plan.account)!)) pairs.push({ account: plan.account, region, scan: false, reason: plan.reason });
       continue;
     }
     const account = accounts.get(plan.account)!;
-    for (const region of all ? enabledRegions[plan.account] ?? [] : config.regions) {
+    for (const region of all ? enabledRegions[plan.account] ?? [] : regionsOf(config, account)) {
       const global = globalPairExclude(config, account, region, inventory);
       if (global >= 0) {
         pairs.push({ account: plan.account, region, scan: false, reason: globalReason(global, config.globalExcludes[global]!) });
