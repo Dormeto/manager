@@ -2211,8 +2211,31 @@ export function createApi({
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
   // A managed candidate's workload, by its name (the id is not for people), with the router the dashboard links to.
-  async function withWorkload(c: Candidate) {
+  // A Google Cloud candidate has no region to find its router by (a `global` load balancer): its workload is the row, among the
+  // fleet's, of its project whose backend service is the candidate's by name and scope (the scope discovery gives a row: the load
+  // balancer's region for a regional or internal one, else the row's; global otherwise), on whichever router it is.
+  type FleetRows = () => Promise<WorkloadSummary[]>;
+  const rowsOf = (): FleetRows => {
+    let rows: Promise<WorkloadSummary[]> | undefined;
+    return () => (rows ??= fleet ? fleet.listWorkloads().catch(() => []) : Promise.resolve([]));
+  };
+  const serviceScope = (row: WorkloadSummary) => (row.lb?.kind === 'regional' || row.lb?.kind === 'internal' ? `regions/${row.lb.region ?? row.region}` : 'global');
+  const googleKey = (c: Candidate) => {
+    const m = /^projects\/[^/]+\/(global|regions\/[^/]+)\/backendServices\/([^/]+)$/.exec(c.backendService ?? c.id);
+    return m ? `${m[1]}#${m[2]}` : null;
+  };
+  async function googleRow(c: Candidate, rows: FleetRows): Promise<WorkloadSummary | null> {
+    const key = googleKey(c);
+    if (!key) return null;
+    return (await rows()).find((w) => w.account === c.account && typeof w.backendService === 'string' && `${serviceScope(w)}#${w.backendService.split('/').at(-1)}` === key) ?? null;
+  }
+  async function withWorkload(c: Candidate, rows: FleetRows = rowsOf()) {
     if (!c.workloadId) return c;
+    if (cloudOf(c.account) === 'gcp') {
+      const row = await googleRow(c, rows);
+      if (!row) return c;
+      return { ...c, workload: { router: routers.find((r) => r.name === row.router)?.name ?? row.router, workloadId: c.workloadId, name: (row.name as string | undefined) ?? c.workloadId } };
+    }
     const router = routers.find((r) => accountOfRouter(r) === c.account && r.region === c.region);
     const summary = fleet ? await fleet.getWorkload(c.account, c.region, c.workloadId).catch(() => null) : null;
     if (!router && !summary) return c;
@@ -2309,11 +2332,18 @@ export function createApi({
       // The onboarding or offboarding running on a candidate (the dashboard shows it in progress).
       const running = shown.length ? ((await operations?.list()) ?? []).filter((op) => op.status === 'running' && (op.type === 'onboard' || op.type === 'offboard')) : [];
       const operationOf = (c: Candidate) => {
+        // A Google Cloud onboarding names the backend service's path (its router's region is not the candidate's).
+        if (cloudOf(c.account) === 'gcp') {
+          const op = running.find((o) => o.target.account === c.account
+            && (o.type === 'onboard' ? o.target.backendService === (c.backendService ?? c.id) : Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
+          return op ? { operation: { id: op.id, type: op.type } } : {};
+        }
         const op = running.find((o) => o.target.account === c.account && o.target.region === c.region
           && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
         return op ? { operation: { id: op.id, type: op.type } } : {};
       };
-      return reply(200, { candidates: await Promise.all(shown.map(async (c) => ({ ...(await withWorkload(c)), ...cloudField(c.account), ...operationOf(c) }))), cursor: page.cursor });
+      const rows = rowsOf();
+      return reply(200, { candidates: await Promise.all(shown.map(async (c) => ({ ...(await withWorkload(c, rows)), ...cloudField(c.account), ...operationOf(c) }))), cursor: page.cursor });
     }
     if (method === 'POST' && sub === 'run') {
       need(identity, 'operator');

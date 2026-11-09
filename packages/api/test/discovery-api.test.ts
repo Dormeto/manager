@@ -8,8 +8,8 @@ const RUN: RunRecord = { startedAt: '2026-10-04T11:00:00.000Z', finishedAt: '202
 const NOW_ISO = new Date(NOW).toISOString();
 const R2 = candidate('r2', { region: 'eu-west-3', status: 'ineligible', statusReason: 'fixed response', eligibility: 'ineligible', backend: null });
 
-function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], operations, defaultMode }: {
-  visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; workloads?: Record<string, unknown>[]; operations?: OperationsApi; defaultMode?: string;
+function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], operations, defaultMode, listAll = false }: {
+  listAll?: boolean; visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; workloads?: Record<string, unknown>[]; operations?: OperationsApi; defaultMode?: string;
 } = {}) {
   const audit: AuditEntry[] = [];
   const runs: string[] = [];
@@ -21,7 +21,7 @@ function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], op
     now: () => NOW, newId: () => 'id-1', version: '0.1.0',
     discovery: { store, run: async (by) => { runs.push(by); } },
     fleet: {
-      listRouters: async () => [], listWorkloads: async () => { throw new Error('the Discovery view never lists every workload'); },
+      listRouters: async () => [], listWorkloads: async () => { if (!listAll) throw new Error('the Discovery view never lists every workload of an AWS candidate'); return workloads as never; },
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
     ...(visible ? { visible } : {}), ...(operations ? { operations } : {}), ...(defaultMode ? { discoveryMode: defaultMode } : {}),
@@ -109,6 +109,69 @@ describe('discovery routes', () => {
     expect(listed.map((c: { id: string; operation?: unknown }) => [c.id, c.operation ?? null])).toEqual([
       ['a', { id: 'op-on', type: 'onboard' }], ['b', null], ['c', { id: 'op-off', type: 'offboard' }],
     ]);
+  });
+
+  describe('a Google Cloud candidate', () => {
+    const P = 'projects/dormeto-dev';
+    const gcp = (name: string, region: string, over: Partial<Candidate> = {}) => candidate(`${P}/${region === 'global' ? 'global' : `regions/${region}`}/backendServices/${name}`, {
+      account: 'dormeto-dev', region, targetGroup: name, targetGroupArn: null, ...over,
+    } as never);
+    const row = (over: Record<string, unknown>) => ({ account: 'dormeto-dev', cloud: 'gcp', region: 'europe-west2', router: 'dmtr-dormeto-dev-europe-west2', ...over });
+    const op = (id: string, type: string, target: Record<string, string>) => ({
+      id, type, status: 'running', target: { account: 'dormeto-dev', region: 'europe-west2', ...target }, input: {}, steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: '',
+      context: {}, by: 'ops@example.com', createdAt: NOW_ISO, updatedAt: NOW_ISO,
+    });
+    const ask = async (api: ReturnType<typeof setup>['api'], status = 'managed') => json(await api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, { status }))).candidates as (Candidate & { workload?: unknown; operation?: unknown })[];
+
+    it('finds the workload of a global candidate on its project\'s router of any region, by the backend service\'s name and scope', async () => {
+      const shop = gcp('shop-bs', 'global', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'shop-bs' });
+      const { api } = setup([shop], {
+        listAll: true,
+        workloads: [
+          row({ workloadId: 'other', name: 'Regional twin', backendService: 'shop-bs', lb: { kind: 'regional', region: 'europe-west2' } }),
+          row({ workloadId: 'shop-bs', name: 'Shop', region: 'us-east1', router: 'dmtr-dormeto-dev-us-east1', backendService: 'shop-bs', urlMap: 'shop-lb' }),
+        ],
+      });
+      expect((await ask(api))[0]!.workload).toEqual({ router: 'dmtr-dormeto-dev-us-east1', workloadId: 'shop-bs', name: 'Shop' });
+    });
+
+    it('matches a regional candidate on the row\'s load balancer region, else the row\'s region, and a classic or cross-region one as global', async () => {
+      const regional = gcp('app-bs', 'europe-west2', { status: 'managed', eligibility: 'managed', workloadId: 'app' });
+      const classic = gcp('old-bs', 'global', { status: 'managed', eligibility: 'managed', workloadId: 'old' });
+      const { api } = setup([regional, classic], {
+        listAll: true,
+        workloads: [
+          row({ workloadId: 'app', name: 'App', region: 'europe-west2', backendService: 'app-bs', lb: { kind: 'regional' } }),
+          row({ workloadId: 'old', name: 'Old', region: 'europe-west2', backendService: 'old-bs', lb: { kind: 'classic' } }),
+          row({ workloadId: 'wrong', name: 'Wrong scope', region: 'europe-west2', router: 'dmtr-x', backendService: 'old-bs', lb: { kind: 'regional', region: 'us-east1' } }),
+        ],
+      });
+      const byId = Object.fromEntries((await ask(api)).map((c) => [c.targetGroup, c.workload]));
+      expect(byId).toEqual({ 'app-bs': { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'app', name: 'App' }, 'old-bs': { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'old', name: 'Old' } });
+    });
+
+    it('gives a candidate without a workload row none, and an AWS candidate never lists the fleet', async () => {
+      const lonely = gcp('lonely-bs', 'global', { status: 'managed', eligibility: 'managed', workloadId: 'lonely' });
+      const { api } = setup([lonely], { listAll: true, workloads: [row({ workloadId: 'lonely', name: 'Elsewhere', account: 'other-project', backendService: 'lonely-bs' })] });
+      expect((await ask(api))[0]!.workload).toBeUndefined();
+      const aws = setup([candidate('m1', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'a4dffc5bf369a297' })], { workloads: [{ account: '121014831971', region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' }] });
+      expect((await ask(aws.api))[0]!.workload).toEqual({ router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' });
+    });
+
+    it('names the onboarding running on a global candidate by its backend service\'s path, and the offboarding by its workload, not another project\'s', async () => {
+      const list = [
+        op('op-on', 'onboard', { router: 'dmtr-dormeto-dev-us-east1', region: 'us-east1', backendService: `${P}/global/backendServices/shop-bs` }),
+        op('op-off', 'offboard', { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'old' }),
+        op('op-other', 'onboard', { backendService: `${P}/global/backendServices/else-bs` }),
+        { ...op('op-foreign', 'offboard', { router: 'dmtr-x', workloadId: 'foreign' }), target: { account: 'other-project', region: 'europe-west2', router: 'dmtr-x', workloadId: 'foreign' } },
+      ];
+      const operations: OperationsApi = { create: async () => { throw new Error('unused'); }, list: async () => list as never, get: async () => null, installedRouters: async () => [] };
+      const { api } = setup([gcp('shop-bs', 'global'), gcp('else-bs', 'global'), gcp('quiet-bs', 'global'), gcp('old-bs', 'global', { workloadId: 'old' }), gcp('foreign-bs', 'global', { workloadId: 'foreign' })], { operations, listAll: true });
+      const listed = await ask(api, 'pending-onboarding');
+      expect(listed.map((c) => [c.targetGroup, c.operation ?? null])).toEqual([
+        ['else-bs', { id: 'op-other', type: 'onboard' }], ['foreign-bs', null], ['old-bs', { id: 'op-off', type: 'offboard' }], ['quiet-bs', null], ['shop-bs', { id: 'op-on', type: 'onboard' }],
+      ]);
+    });
   });
 
   it('dismissing and restoring move the counts per status', async () => {
