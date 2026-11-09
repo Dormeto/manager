@@ -951,6 +951,29 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
+  // The sweep of AWS's words on a Google Cloud workload's page (the final review's).
+  it('says its wake, its failure, its tags and its settings in Google Cloud\'s words: no target, AWS tag or Lambda', async () => {
+    current = { ...google, failure: { kind: 'unhealthy', step: 'wake', message: 'no backend of vm-demo healthy when the wake timed out', at: minutesAgo(3) }, settingsFrom: { waitSeconds: 'fixed', idleMinutes: 'organization' } };
+    const wrapper = await mountView('admin');
+    expect(wrapper.find('[data-test="failure"]').text()).toContain('Last wake failed: no healthy backend');
+    expect(wrapper.html()).not.toMatch(/Lambda|healthy target|a target/);
+    expect(wrapper.findAll('[data-test="setting-source"]').map((c) => c.text())).toContain('fixed on Google Cloud');
+    await openActions(wrapper);
+    ([...document.querySelectorAll<HTMLElement>('.v-overlay--active [data-test="action"]')].find((i) => i.textContent?.trim() === 'Wake'))!.click();
+    await flushPromises();
+    const wake = [...document.querySelectorAll('.v-dialog')].at(-1)!.textContent!;
+    expect(wake).toContain('once its backend service\'s health check passes');
+    expect(wake).not.toContain('target');
+    wrapper.unmount();
+    const tagged = await mountView('admin');
+    await tagged.find('[data-test="edit-tags"]').trigger('click');
+    await flushPromises();
+    const tags = [...document.querySelectorAll('.v-dialog')].at(-1)!.textContent!;
+    expect(tags).toContain('not Google Cloud labels');
+    expect(tags).not.toContain('AWS');
+    tagged.unmount();
+  });
+
   // The manager reads Google Cloud's request counts with savings (plan 3): until then, no advice to read, so no error.
   it('reads no idle window advice: its card and the requests heatmap say they come with Google Cloud\'s request counts', async () => {
     current = google;

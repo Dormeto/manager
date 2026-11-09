@@ -11,7 +11,8 @@ export interface Settings {
 }
 
 // Settings at scale (routers 0.37.0): the level each setting comes from, and the workload's type.
-export type Level = 'workload' | 'type' | 'router' | 'organization' | 'default';
+// fixed: a value Google Cloud imposes whatever the levels say (a Google Cloud router's, routers 0.40.0).
+export type Level = 'workload' | 'type' | 'router' | 'organization' | 'default' | 'fixed';
 export type SettingsFrom = Partial<Record<keyof Settings | 'wakeMode', Level>>;
 export interface WorkloadType { name: string | null; from: 'workload' | 'tags' | 'backends' | null; missing?: string }
 

@@ -78,6 +78,14 @@ describe('StateBar', () => {
     discounted.unmount();
   });
 
+  it('says Google Cloud list prices and Spot VMs for a Google Cloud workload, never AWS\'s', async () => {
+    const wrapper = render({ states: STATES, cloud: 'gcp', savings: { saved: { usd: 3.2, hours: 600, unpricedHours: 0 }, hourly: 0.02, monthly: 13, discounts: null } });
+    const text = await hover(wrapper);
+    expect(text).toContain('Estimates: Google Cloud list prices of what the naps stopped, Spot VMs at Spot prices');
+    expect(text).not.toContain('AWS');
+    wrapper.unmount();
+  });
+
   it('takes a title and a note: the bar of all workloads (user request)', async () => {
     const wrapper = render({ states: STATES, title: 'All 12 workloads, last 7 days', note: 'Computed 12 min ago; each workload\'s figures are kept 60 minutes.' });
     expect(wrapper.find('[data-test="state-bar"]').attributes('aria-label')).toMatch(/^All 12 workloads, last 7 days: awake/);

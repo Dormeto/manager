@@ -1,4 +1,5 @@
 // Workload settings as shown on the workload view: value, what it changes, and the range it must stay in.
+import type { Cloud } from '@dormeto/fleet/clouds';
 import { duration } from './format';
 import type { Rule, Settings, SettingsFrom, WorkloadStatus, WorkloadType } from './types';
 
@@ -50,6 +51,19 @@ const DESCRIPTIONS: Record<keyof Settings, { label: string; format: (v: number) 
   },
 };
 
+// On Google Cloud (G5's levels): what Google fixes at 0, said so, and the wake timeout of its router, whose waker is a Cloud Run
+// service; the others as AWS's.
+const FIXED = 'Fixed at 0 on Google Cloud.';
+const GOOGLE: Partial<Record<keyof Settings, { help: string; range: string }>> = {
+  waitSeconds: { help: 'The waker holds no request on Google Cloud: it answers the waiting page at once, and the page waits for the wake.', range: FIXED },
+  drainSeconds: { help: 'A nap\'s switch on Google Cloud is a URL map change, and the backend service\'s own connection draining applies.', range: FIXED },
+  maxHolders: { help: 'No request is held on Google Cloud: visitors get the waiting page at once.', range: FIXED },
+  wakeTimeoutSeconds: {
+    help: 'Longest a wake may take before the workload is marked FAILED; the next request then retries the wake. Wakes continue across the router\'s Cloud Tasks, so long starts such as Cloud SQL databases are supported.',
+    range: 'Longer than the slowest start of the backends (VMs, managed instance groups, a Cloud SQL database), at most 1,700 s.',
+  },
+};
+
 const ORDER: (keyof Settings)[] = ['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders', 'failedRetrySeconds'];
 export const SETTING_KEYS = ORDER;
 // A setting's name and a value of it, as the cards say them.
@@ -57,10 +71,12 @@ export const settingLabel = (key: keyof Settings): string => DESCRIPTIONS[key].l
 export const settingText = (key: keyof Settings, value: number): string => DESCRIPTIONS[key].format(value);
 export const settingHelp = (key: keyof Settings): string => `${DESCRIPTIONS[key].help} ${DESCRIPTIONS[key].range}`;
 
-// Each setting the router gives (an older one gives no retry), with the level it comes from when it says so.
-export const settingRows = (settings: Settings, from?: SettingsFrom): SettingRow[] => ORDER.filter((key) => typeof settings[key] === 'number').map((key) => {
+// Each setting the router gives (an older one gives no retry), with the level it comes from when it says so, explained in its
+// cloud's words.
+export const settingRows = (settings: Settings, from?: SettingsFrom, cloud: Cloud = 'aws'): SettingRow[] => ORDER.filter((key) => typeof settings[key] === 'number').map((key) => {
   const d = DESCRIPTIONS[key];
-  return { key, label: d.label, value: d.format(settings[key] as number), help: d.help, range: d.range, ...(from?.[key] ? { from: from[key] } : {}) };
+  const { help, range } = (cloud === 'gcp' ? GOOGLE[key] : undefined) ?? d;
+  return { key, label: d.label, value: d.format(settings[key] as number), help, range, ...(from?.[key] ? { from: from[key] } : {}) };
 });
 
 // Where a setting comes from, in a few words (settings at scale design §9); nothing from an older router.
@@ -71,6 +87,7 @@ export function sourceText(from: string | undefined, type?: Partial<WorkloadType
     case 'router': return 'router';
     case 'organization': return 'organization';
     case 'default': return 'built-in';
+    case 'fixed': return 'fixed on Google Cloud';
     default: return '';
   }
 }

@@ -518,6 +518,28 @@ describe('a Google Cloud router', () => {
     }
   });
 
+  // What a Google Cloud router answers: no Lambda figure, no failure queue, no concurrency; suspension for hibernation.
+  it('shows no AWS figure and says its hibernate setting as suspension, its dialog in Google Cloud words', async () => {
+    googleDetails = {
+      health: { checkSchedule: '*/5 * * * *', lastScheduledCheckAt: minutesAgo(2), lambda: {}, queues: {}, concurrency: null, ipLists: [] },
+      settings: { hibernate: null, by: null, at: null }, managerSettings: { url: null, hibernate: true, readAt: minutesAgo(3), error: null },
+    };
+    try {
+      const wrapper = await mountView(GCP);
+      const text = wrapper.text();
+      expect(text).not.toMatch(/Lambda|Failure queues|check-failures/);
+      expect(wrapper.find('[data-test="hibernate"] th').text()).toBe('Suspend instead of stop');
+      await wrapper.find('[data-test="edit-hibernate"]').trigger('click');
+      await flushPromises();
+      const dialog = [...document.querySelectorAll('.v-dialog')].at(-1)!.textContent!;
+      expect(dialog).toContain('suspended instead of stopped');
+      expect(dialog).not.toMatch(/EC2|hibernat/);
+      wrapper.unmount();
+    } finally {
+      googleDetails = {};
+    }
+  });
+
   it('links its controller in the Google Cloud console, with the project', async () => {
     const wrapper = await mountView(GCP);
     const href = wrapper.find('[data-test="gcp-controller"]').attributes('href');

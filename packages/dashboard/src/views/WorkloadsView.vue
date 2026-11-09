@@ -221,9 +221,9 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
           <v-chip v-for="t in tagsList(item.tags)" :key="t.key" data-test="tag" size="small" label variant="tonal" link :title="`Show only ${t.text}`" @click="!tagFilter.includes(t.text) && filterByTags([...tagFilter, t.text])">{{ t.text }}</v-chip>
         </span>
       </template>
-      <template #[`item.state`]="{ item }"><span class="dm-state"><StateChip :state="item.state" :failure="item.failure" /><PauseChip :pauses="item.pauses" /></span></template>
+      <template #[`item.state`]="{ item }"><span class="dm-state"><StateChip :state="item.state" :failure="item.failure" :cloud="rowCloud(item)" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.states7d`]="{ item }">
-        <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :savings="barSavings(item.costs)" />
+        <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :savings="barSavings(item.costs)" :cloud="rowCloud(item)" />
       </template>
       <template #[`item.since`]="{ item }"><span class="nowrap dm-num text-medium-emphasis">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">

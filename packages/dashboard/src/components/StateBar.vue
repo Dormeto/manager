@@ -10,6 +10,7 @@ import { MONTH_HOURS, discountText, type BarSavings } from '../costs';
 import { longDuration, stateColor, usd } from '../format';
 import { stateLabel } from '../history';
 import { stateBrief } from '../state';
+import type { Cloud } from '@dormeto/fleet/clouds';
 
 const props = withDefaults(defineProps<{
   states?: { from: string; to: string; totals: Record<string, number> } | null;
@@ -22,7 +23,8 @@ const props = withDefaults(defineProps<{
   block?: boolean;
   legend?: boolean;
   height?: number;
-}>(), { states: null, idleHours7d: null, requests7d: null, savings: null, title: 'Last 7 days', note: null, width: 100, block: false, legend: false, height: 8 });
+  cloud?: Cloud; // the workload's: whose list prices
+}>(), { states: null, idleHours7d: null, requests7d: null, savings: null, title: 'Last 7 days', note: null, width: 100, block: false, legend: false, height: 8, cloud: 'aws' });
 
 // The narrowest a state is drawn, in percent of the bar: a few minutes of waking in a week stay visible.
 const MIN_WIDTH = 1;
@@ -74,7 +76,7 @@ const monthly = computed(() => {
   return typeof m === 'number' ? `Estimated saving: about ${usd(m)} a month at that rate` : null;
 });
 // R9.5: Spot at Spot prices, the discounts when set.
-const estimates = computed(() => `Estimates: AWS list prices of what the naps stopped, Spot at Spot prices${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, for the time asleep the baseline would have run.`);
+const estimates = computed(() => `Estimates: ${props.cloud === 'gcp' ? 'Google Cloud list prices of what the naps stopped, Spot VMs at Spot prices' : 'AWS list prices of what the naps stopped, Spot at Spot prices'}${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, for the time asleep the baseline would have run.`);
 const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }).detail}` : null));
 </script>
 

@@ -401,7 +401,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
         <div class="dm-hero__info">
         <div class="dm-hero__chips">
-          <StateChip v-if="status" :state="status.state" :failure="status.failure" />
+          <StateChip v-if="status" :state="status.state" :failure="status.failure" :cloud="gcp ? 'gcp' : 'aws'" />
           <v-chip v-if="hibernated" data-test="hibernated" size="small" variant="tonal" label>{{ gcp ? 'suspended' : 'hibernated' }}</v-chip>
           <PauseChip :pauses="pauses" />
           <span v-if="since" class="dm-hero__since">{{ since.label }} <strong>{{ since.when }}</strong></span>
@@ -415,7 +415,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="status.source === 'terraform'" data-test="tags-terraform" class="text-body-small text-medium-emphasis">set in Terraform</span>
           <v-btn v-else-if="session.isAdmin && managed && status.tags" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
         </div>
-        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" />
+        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" :cloud="gcp ? 'gcp' : 'aws'" />
         </div>
       </div>
       <div class="dm-hero__side">
@@ -457,7 +457,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </template>
     </div>
   </v-alert>
-  <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure)">
+  <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure, gcp ? 'gcp' : 'aws')">
     <div class="text-body-medium">{{ status.failure.message }}</div>
     <div class="text-body-small text-medium-emphasis mt-1">{{ failureDetail }}</div>
   </v-alert>
@@ -631,7 +631,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card>
       <v-card title="Settings">
         <v-card-text class="d-flex flex-wrap align-center ga-2 text-body-medium">
-          <v-tooltip v-for="row in settingRows(status.settings, status.settingsFrom)" :key="row.key" location="top" max-width="380" open-on-focus>
+          <v-tooltip v-for="row in settingRows(status.settings, status.settingsFrom, gcp ? 'gcp' : 'aws')" :key="row.key" location="top" max-width="380" open-on-focus>
             <template #activator="{ props }">
               <span v-bind="props" class="setting dm-setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
                 {{ row.label }} <strong>{{ row.value }}</strong>
@@ -689,7 +689,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
         : confirm === 'offboard'
           ? 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
-          : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
+          : gcp ? 'The backends start now; the route switches back to the application once its backend service\'s health check passes.'
+            : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />
         <v-btn variant="text" @click="confirm = null">Cancel</v-btn>
@@ -699,7 +700,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
   <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :join="status" :name="title" :kinds="backendKinds(status?.backends ?? [])" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
-  <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" @submit="setTags" />
+  <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" :cloud="gcp ? 'gcp' : 'aws'" @submit="setTags" />
 </template>
 
 <style scoped>

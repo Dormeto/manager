@@ -34,6 +34,8 @@ const joinOpen = ref(false);
 const savingJoin = ref(false);
 const joinError = ref('');
 const path = computed(() => `/routers/${encodeURIComponent(props.name)}`);
+// A Google Cloud router (manager 0.24.0): no Lambda or queue figure, suspension for hibernation.
+const gcp = computed(() => details.value?.cloud === 'gcp');
 
 async function load() {
   try {
@@ -142,11 +144,14 @@ const columns = computed<Section[][]>(() => {
                 <tr v-if="details.health.lambda.waker"><th>Waker (24 hours)</th>
                   <td>{{ details.health.lambda.waker.errors }} errors, {{ details.health.lambda.waker.throttles }} throttles, peak concurrency {{ details.health.lambda.waker.peakConcurrency }}</td></tr>
               </template>
-              <tr><th>Failure queues</th>
-                <td v-if="details.health.queues.error" class="text-warning">{{ details.health.queues.error }}</td>
-                <td v-else>check-failures {{ details.health.queues.check ?? '—' }}, controller-failures {{ details.health.queues.controller ?? '—' }}</td></tr>
-              <tr><th>Lambda concurrency</th>
-                <td :class="{ 'text-warning': details.health.concurrency?.error }">{{ concurrencyText(details.health.concurrency) }}</td></tr>
+              <!-- AWS's: a Google Cloud router has no failure queue and no Lambda concurrency. -->
+              <template v-if="!gcp">
+                <tr><th>Failure queues</th>
+                  <td v-if="details.health.queues.error" class="text-warning">{{ details.health.queues.error }}</td>
+                  <td v-else>check-failures {{ details.health.queues.check ?? '—' }}, controller-failures {{ details.health.queues.controller ?? '—' }}</td></tr>
+                <tr><th>Lambda concurrency</th>
+                  <td :class="{ 'text-warning': details.health.concurrency?.error }">{{ concurrencyText(details.health.concurrency) }}</td></tr>
+              </template>
             </tbody>
           </v-table>
         </v-card>
@@ -213,7 +218,7 @@ const columns = computed<Section[][]>(() => {
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.checkSchedule.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
           <tr><th>Wake statistics metrics</th><td>{{ details.configuration.metrics.value === null ? '—' : details.configuration.metrics.value ? 'published' : 'off' }}</td>
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.metrics.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
-          <tr v-if="details.settings && details.managerSettings" data-test="hibernate"><th>Hibernate</th>
+          <tr v-if="details.settings && details.managerSettings" data-test="hibernate"><th>{{ gcp ? 'Suspend instead of stop' : 'Hibernate' }}</th>
             <td>
               <template v-if="details.settings.hibernate === null">Inherit <span class="text-medium-emphasis">({{ routerInheritText(details.managerSettings, now, details.cloud) }})</span></template>
               <template v-else>{{ details.settings.hibernate ? 'On' : 'Off' }}<span v-if="details.settings.by" class="text-medium-emphasis"> (set by {{ details.settings.by }}, {{ relative(details.settings.at, now) }})</span></template>
@@ -266,7 +271,7 @@ const columns = computed<Section[][]>(() => {
     </v-card>
     <DefaultsDialog v-if="details.settings && takesDefaults" v-model="defaultsOpen" :title="`Defaults of ${name}`" level="router" :name="name" :values="details.settings.defaults ?? {}"
       :inherited="inheritedDefaults" :saving="savingDefaults" @submit="saveDefaults" />
-    <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :subject="name" :current="details.settings.hibernate"
+    <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :cloud="gcp ? 'gcp' : 'aws'" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now, details.cloud)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"
       :default-label="joinDefaultText(joinInherited)" :saving="savingJoin" @submit="saveJoin">

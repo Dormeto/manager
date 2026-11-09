@@ -29,6 +29,25 @@ describe('settingRows', () => {
   });
 });
 
+// What Google Cloud fixes (the router's `fixed`: no hold, no held request, no drain) and its waker, a Cloud Run service.
+describe('settingRows of a Google Cloud workload', () => {
+  it('explains each setting in Google Cloud\'s words: nothing of Lambda, and the values it fixes said so', () => {
+    const rows = settingRows({ waitSeconds: 0, idleMinutes: 15, drainSeconds: 0, wakeTimeoutSeconds: 600, maxHolders: 0, failedRetrySeconds: 60 },
+      { waitSeconds: 'fixed', drainSeconds: 'fixed', maxHolders: 'fixed', idleMinutes: 'default', wakeTimeoutSeconds: 'default', failedRetrySeconds: 'default' }, 'gcp');
+    for (const row of rows) expect(`${row.help} ${row.range}`, row.key).not.toMatch(/Lambda|AWS|EC2|Auto Scaling|Fargate|RDS|Aurora|load balancer rule/);
+    expect(Object.fromEntries(rows.filter((r) => r.from === 'fixed').map((r) => [r.key, r.range]))).toEqual({
+      waitSeconds: 'Fixed at 0 on Google Cloud.', drainSeconds: 'Fixed at 0 on Google Cloud.', maxHolders: 'Fixed at 0 on Google Cloud.',
+    });
+    expect(rows.find((r) => r.key === 'wakeTimeoutSeconds')!.range).toContain('at most 1,700 s');
+    // AWS's texts are AWS's.
+    expect(settingRows({ waitSeconds: 60, idleMinutes: 15, drainSeconds: 30, wakeTimeoutSeconds: 600, maxHolders: 50 })[1]!.range).toMatch(/waker Lambda timeout/);
+  });
+
+  it('says a value Google Cloud fixes in a few words', () => {
+    expect(sourceText('fixed')).toBe('fixed on Google Cloud');
+  });
+});
+
 describe('sources and types', () => {
   it('says each level in a few words', () => {
     expect(['workload', 'type', 'router', 'organization', 'default', undefined].map((from) => sourceText(from, { name: 'api', from: 'tags' })))

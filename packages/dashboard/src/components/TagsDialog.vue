@@ -4,8 +4,10 @@ import { computed, ref, watch } from 'vue';
 import { mdiTagMultipleOutline } from '@mdi/js';
 import { rowsOf, rowsProblem, tagsOf, type TagRow, type Tags } from '../tags';
 import TagsEditor from './TagsEditor.vue';
+import type { Cloud } from '@dormeto/fleet/clouds';
 
-const props = defineProps<{ modelValue: boolean; tags: Tags | undefined; name: string }>();
+// cloud: the workload's, whose own tags or labels these are not.
+const props = defineProps<{ modelValue: boolean; tags: Tags | undefined; name: string; cloud?: Cloud }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Tags] }>();
 const rows = ref<TagRow[]>([]);
 watch(() => props.modelValue, (open) => { if (open) rows.value = rowsOf(props.tags); });
@@ -17,7 +19,8 @@ const problem = computed(() => rowsProblem(rows.value));
     <v-card :title="`Tags of ${name}`">
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiTagMultipleOutline" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-4 text-medium-emphasis">Dormeto's own labels, not AWS tags: the groups' grants pick workloads by them. Nothing changes in AWS.</p>
+        <p v-if="cloud === 'gcp'" class="mb-4 text-medium-emphasis">Dormeto's own labels, not Google Cloud labels: the groups' grants pick workloads by them. Nothing changes in Google Cloud.</p>
+        <p v-else class="mb-4 text-medium-emphasis">Dormeto's own labels, not AWS tags: the groups' grants pick workloads by them. Nothing changes in AWS.</p>
         <TagsEditor v-model="rows" empty="No tags: only the built-in roles and the grants on every workload see this workload." />
         <v-alert v-if="problem" type="error" variant="tonal" density="compact" class="mt-2" :text="problem" />
       </v-card-text>

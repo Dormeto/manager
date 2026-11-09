@@ -186,7 +186,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
         <v-list v-if="attention.length" lines="two" class="bg-transparent">
           <v-list-item v-for="w in attention" :key="`${w.router}/${w.workloadId}`" :to="`/workloads/${w.router}/${w.workloadId}`"
             :title="w.name ?? w.workloadId" :subtitle="`${w.router} · changed ${relative(w.updatedAt, now)}`">
-            <template #append><span class="d-inline-flex align-center ga-1"><PauseChip :pauses="w.pauses" /><StateChip :state="w.state" :failure="w.failure" /></span></template>
+            <template #append><span class="d-inline-flex align-center ga-1"><PauseChip :pauses="w.pauses" /><StateChip :state="w.state" :failure="w.failure" :cloud="rowCloud(w)" /></span></template>
           </v-list-item>
         </v-list>
         <v-card-text v-else class="dm-calm">

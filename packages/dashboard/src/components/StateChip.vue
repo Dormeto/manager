@@ -3,9 +3,11 @@
 import { stateColor } from '../format';
 import { failureTitle, type Failure } from '../failures';
 import { stateHelp, stateIcon } from '../state';
+import type { Cloud } from '@dormeto/fleet/clouds';
 
-defineProps<{ state: string; failure?: Failure | null }>();
-const help = (state: string, failure?: Failure | null) => [stateHelp(state), failure && `${failureTitle(failure)} (${failure.message})`].filter(Boolean).join(' ');
+// cloud: the workload's (a Google Cloud failure is said in its words).
+const props = defineProps<{ state: string; failure?: Failure | null; cloud?: Cloud }>();
+const help = (state: string, failure?: Failure | null) => [stateHelp(state), failure && `${failureTitle(failure, props.cloud)} (${failure.message})`].filter(Boolean).join(' ');
 </script>
 
 <template>
