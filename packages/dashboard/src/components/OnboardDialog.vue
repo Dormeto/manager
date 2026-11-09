@@ -44,11 +44,11 @@ function copyAws() {
 }
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
 // The router's pattern for a Compute Engine machine type.
-const MACHINE_TYPE = /^[a-z][a-z0-9]*-[a-z0-9-]+$/;
+const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
 const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.trim()).filter(Boolean));
 const terraform = computed(() => (props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
-const fallbackRule = () => (fallbackTypes.value.length <= 5 && fallbackTypes.value.every((t) => (gcp.value ? MACHINE_TYPE : INSTANCE_TYPE).test(t)))
-  || (gcp.value ? 'At most 5 Compute Engine machine types, for example e2-medium, n2-standard-4' : 'At most 5 EC2 instance types, for example t3a.medium, m6i.large');
+const fallbackRule = () => (fallbackTypes.value.length <= 5 && new Set(fallbackTypes.value).size === fallbackTypes.value.length && fallbackTypes.value.every((t) => (gcp.value ? MACHINE_TYPE : INSTANCE_TYPE).test(t)))
+  || (gcp.value ? 'At most 5 Compute Engine machine types, each once, for example e2-medium, n2-standard-4' : 'At most 5 EC2 instance types, for example t3a.medium, m6i.large');
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   name.value = props.defaultName ?? '';
@@ -155,9 +155,9 @@ function submit() {
           hint="VMs only, comma separated, in order: tried when Compute Engine has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
         <v-text-field v-else-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
-        <v-select v-if="gcp" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
+        <v-select v-if="gcp" v-model="hibernate" label="Suspend instead of stop" class="mt-4" persistent-hint
           :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
-          hint="On Google Cloud, hibernating is suspending: the VMs are suspended instead of stopped at a nap, and resume faster; one that cannot be suspended is stopped" />
+          hint="The VMs are suspended instead of stopped at a nap, and resume faster; one that cannot be suspended is stopped; with fallback machine types, only if On" />
         <v-select v-else-if="!kubernetes" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
           :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
           hint="Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On" />

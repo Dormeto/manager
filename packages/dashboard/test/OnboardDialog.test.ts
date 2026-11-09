@@ -254,8 +254,9 @@ describe('OnboardDialog', () => {
       const buttons = [...document.querySelectorAll('.v-dialog button')];
       (buttons.find((b) => b.textContent?.includes('Copy the VMs'))! as HTMLButtonElement).click();
       await flushPromises();
-      const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Hibernate')!;
+      const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Suspend instead of stop')!;
       expect(select.props('hint')).toContain('suspended');
+      expect(select.props('hint')).toContain('fallback machine types');
       select.vm.$emit('update:modelValue', 'on');
       await flushPromises();
       onboardButton().click();
@@ -272,7 +273,7 @@ describe('OnboardDialog', () => {
       const wrapper = await gcp();
       await set('Fallback machine types', 'e2-medium');
       expect(onboardButton().disabled).toBe(false);
-      for (const value of ['t3a.medium', 'e2medium', 'a-b, a-b, a-b, a-b, a-b, a-b']) {
+      for (const value of ['t3a.medium', 'e2medium', 'e2-medium-', 'e2--medium', 'e2-medium, e2-medium', 'a-b, a-c, a-d, a-e, a-f, a-g']) {
         await set('Fallback machine types', value);
         expect(onboardButton().disabled, value).toBe(true);
       }

@@ -11,6 +11,13 @@ The manager reaches Google Cloud routers, installed by the CLI, as it does AWS o
 through a connection `dormeto gcp connect` makes, with no key and no change of a Google IAM policy by the manager. An AWS router,
 row, event or call behaves as before.
 
+- **Onboarding and offboarding on Google Cloud from the dashboard:** the onboarding dialog of a Google Cloud candidate asks for its
+name, labels (copied from the VMs on request), Cloud SQL companions by name, fallback machine types (at most 5, each once, as the
+router's pattern), idle minutes, wake mode and suspension, and a router when a `global` candidate's project has several; it says the
+manager binds and removes the tag `dormeto/managed` and shows no Terraform or EC2 text. Offboard and Exclude (by the backend
+service's path) are offered for a Google Cloud workload but a GKE one's Offboard. The demo onboards and offboards Google Cloud
+candidates and workloads in the Google Cloud steps. The API finds a `global` Google Cloud candidate's workload, router and running
+operation by its backend service, not by a region.
 - **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 502 and the watchdog's problem for
 `manager-access-missing` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
 controller's, the message cut to 200 characters; never a token or a signature.
@@ -133,7 +140,8 @@ service and URL map with the console link (a regional URL map links the project'
 instance with theirs and their Google Cloud icons, "suspended" where AWS says "hibernated", fallback machine types, a failure, a wake,
 its tags and settings in Google Cloud's words (no EC2, target or Lambda; the values Google Cloud fixes said so), no target group,
 targets or ARN, and no idle window advice or requests heatmap yet (they come with Google Cloud's request counts); the workload the CLI
-onboarded is renamed, tagged and set from the dashboard, which offers no Offboard for it but the `dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
+onboarded is renamed, tagged and set from the dashboard, which offers Offboard for it, but a GKE workload's, which stays with the
+`dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, and what a disconnect leaves) and `docs/operations.md`

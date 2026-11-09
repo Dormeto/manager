@@ -13,6 +13,7 @@ function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], op
 } = {}) {
   const audit: AuditEntry[] = [];
   const runs: string[] = [];
+  const listed = { calls: 0 };
   const store = memoryStore(candidates, RUN);
   const api = createApi({
     routers: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: '121014831971' }],
@@ -21,12 +22,12 @@ function setup(candidates = [candidate('r1'), R2], { visible, workloads = [], op
     now: () => NOW, newId: () => 'id-1', version: '0.1.0',
     discovery: { store, run: async (by) => { runs.push(by); } },
     fleet: {
-      listRouters: async () => [], listWorkloads: async () => { if (!listAll) throw new Error('the Discovery view never lists every workload of an AWS candidate'); return workloads as never; },
+      listRouters: async () => [], listWorkloads: async () => { listed.calls += 1; return workloads as never; },
       getWorkload: async (account: string, region: string, id: string) => (workloads.find((w) => w.account === account && w.region === region && w.workloadId === id) ?? null) as never,
     },
     ...(visible ? { visible } : {}), ...(operations ? { operations } : {}), ...(defaultMode ? { discoveryMode: defaultMode } : {}),
   });
-  return { api, audit, runs, store };
+  return { api, audit, runs, store, listed };
 }
 
 function event(method: string, path: string, groups = 'dmt-viewer', body?: unknown, query?: Record<string, string>): ApiEvent {
@@ -150,12 +151,14 @@ describe('discovery routes', () => {
       expect(byId).toEqual({ 'app-bs': { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'app', name: 'App' }, 'old-bs': { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'old', name: 'Old' } });
     });
 
-    it('gives a candidate without a workload row none, and an AWS candidate never lists the fleet', async () => {
+    it('gives a candidate without a workload row none, lists the fleet once per request, and an AWS candidate never lists it', async () => {
       const lonely = gcp('lonely-bs', 'global', { status: 'managed', eligibility: 'managed', workloadId: 'lonely' });
-      const { api } = setup([lonely], { listAll: true, workloads: [row({ workloadId: 'lonely', name: 'Elsewhere', account: 'other-project', backendService: 'lonely-bs' })] });
+      const { api, listed } = setup([lonely, gcp('b2', 'global', { workloadId: 'b2', status: 'managed', eligibility: 'managed' })], { listAll: true, workloads: [row({ workloadId: 'lonely', name: 'Elsewhere', account: 'other-project', backendService: 'lonely-bs' })] });
       expect((await ask(api))[0]!.workload).toBeUndefined();
+      expect(listed.calls).toBe(1);
       const aws = setup([candidate('m1', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'a4dffc5bf369a297' })], { workloads: [{ account: '121014831971', region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' }] });
       expect((await ask(aws.api))[0]!.workload).toEqual({ router: 'dmt-dev', workloadId: 'a4dffc5bf369a297', name: 'Shop' });
+      expect(aws.listed.calls).toBe(0);
     });
 
     it('names the onboarding running on a global candidate by its backend service\'s path, and the offboarding by its workload, not another project\'s', async () => {

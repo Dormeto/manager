@@ -172,8 +172,8 @@ function startGoogleOnboarding(d: Demo, c: Candidate, body: Body, name: string |
   const bad = databases.find((x) => x.kind !== 'cloudsql-instance');
   if (bad) fail(400, 'bad_request', `databases: ${bad.kind} is not a Cloud SQL instance (cloudsql-instance)`);
   const types = (body.settings as { fallbackInstanceTypes?: unknown } | undefined)?.fallbackInstanceTypes;
-  if (types !== undefined && (!Array.isArray(types) || types.length > 5 || types.some((t) => typeof t !== 'string' || !/^[a-z][a-z0-9]*-[a-z0-9-]+$/.test(t)))) {
-    fail(400, 'bad_request', 'settings.fallbackInstanceTypes: at most 5 Compute Engine machine types, for example e2-medium');
+  if (types !== undefined && (!Array.isArray(types) || types.length > 5 || new Set(types).size !== types.length || types.some((t) => typeof t !== 'string' || !/^[a-z][a-z0-9]*(-[a-z0-9]+)+$/.test(t)))) {
+    fail(400, 'bad_request', 'settings.fallbackInstanceTypes: at most 5 Compute Engine machine types, each once, for example e2-medium');
   }
   const vm = c.backend?.kind === 'asg' ? 'a managed instance group' : 'a VM';
   const op: Omit<DemoOperation, 'applied'> = {
@@ -188,27 +188,6 @@ function startGoogleOnboarding(d: Demo, c: Candidate, body: Body, name: string |
     }),
   };
   return startedOperation(d, op, `${c.id}${name ? ` as ${name}` : ''}`, now);
-}
-
-// A Google Cloud offboarding: the workload woken, its waker, its routing and its tag bindings removed, its candidate given back.
-function startGoogleOffboarding(d: Demo, router: DemoRouter, w: DemoWorkload, now: number, id: string) {
-  wake(w, 'pause', now);
-  const where = { account: router.account, region: router.region };
-  const op: Omit<DemoOperation, 'applied'> = {
-    id, type: 'offboard', target: { ...where, router: router.name, workloadId: w.workloadId }, input: { router: router.name, ...where, workloadId: w.workloadId }, context: { name: w.name },
-    by: ME, createdAt: now,
-    steps: plan('offboard', now, { cloud: 'gcp', details: { locate: router.name, 'wait awake': 'awake' }, slow: { step: 'wait awake', ms: Math.min(w.wakeMs, 90 * SECOND) + 5 * SECOND, every: 10 * SECOND } }),
-    effect: (at) => {
-      d.workloads = d.workloads.filter((x) => x !== w);
-      const c = d.candidates.find((x) => x.workloadId === w.workloadId && x.account === w.account);
-      if (c) {
-        const { workloadId: _w, ...rest } = c;
-        d.candidates = d.candidates.map((x) => (x === c ? { ...rest, eligibility: 'eligible' as const } : x));
-      }
-      restatus(d, at);
-    },
-  };
-  return startedOperation(d, op, `${router.name}/${w.workloadId}`, now);
 }
 
 function startedOperation(d: Demo, op: Omit<DemoOperation, 'applied'>, target: string, now: number) {
@@ -282,16 +261,16 @@ export function startOperation(d: Demo, body: Body, now: number) {
         if (w.backends.some((b) => b.kind === 'k8s')) {
           fail(409, 'cli-only', `cannot offboard ${w.workloadId} through the manager: a GKE workload's Kubernetes access is the CLI's to remove: dormeto gcp workloads offboard ${w.workloadId} --project ${router.account} --region ${router.region}`);
         }
-        return startGoogleOffboarding(d, router, w, now, id);
       }
       // The workload is woken first (paused), then its instrumentation removed.
+      const google = router.cloud === 'gcp';
       wake(w, 'pause', now);
       op = {
         id, type, target: { ...where, router: router.name, workloadId: w.workloadId }, input: { router: router.name, ...where, workloadId: w.workloadId }, context: { name: w.name },
-        by: ME, createdAt: now, steps: plan(type, now, { details: { locate: router.name, 'wait awake': 'awake' }, slow: { step: 'wait awake', ms: Math.min(w.wakeMs, 90 * SECOND) + 5 * SECOND, every: 10 * SECOND } }),
+        by: ME, createdAt: now, steps: plan(type, now, { ...(google ? { cloud: 'gcp' as const } : {}), details: { locate: router.name, 'wait awake': 'awake' }, slow: { step: 'wait awake', ms: Math.min(w.wakeMs, 90 * SECOND) + 5 * SECOND, every: 10 * SECOND } }),
         effect: (at) => {
           d.workloads = d.workloads.filter((x) => x !== w);
-          const c = d.candidates.find((x) => x.workloadId === w.workloadId && x.account === w.account && x.region === w.region);
+          const c = d.candidates.find((x) => x.workloadId === w.workloadId && x.account === w.account && (google || x.region === w.region));
           if (c) {
             const { workloadId: _w, ...rest } = c;
             const released: Candidate = { ...rest, eligibility: 'eligible', rules: c.rules.map((x) => ({ ...x, managed: false })) };
@@ -322,11 +301,7 @@ export function startOperation(d: Demo, body: Body, now: number) {
       target = router.name;
     }
   }
-  return audited(d, `operation-${type}`, target, () => {
-    const created = addOperation(d, op);
-    if (type === 'onboard') created.effect = onboardEffect(d, String(op.input.candidateId), created);
-    return { result: `started ${id}`, response: { operation: operationView(created, now) } };
-  });
+  return startedOperation(d, op, target, now);
 }
 
 // --- Exclusions ----------------------------------------------------------------------------------------------------------

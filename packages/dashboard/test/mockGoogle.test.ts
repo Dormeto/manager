@@ -129,6 +129,13 @@ describe('the demo\'s Google Cloud router', () => {
     const post = (body: Record<string, unknown>) => mockApi('/operations', { method: 'POST', body: JSON.stringify(body) }).catch((e: unknown) => e) as Promise<{ operation: Op } & { status: number; message: string }>;
     const later = (ms: number) => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + ms); };
 
+    it('refuses machine types the router refuses: a trailing dash, a double dash, a repeat, more than 5', async () => {
+      for (const types of [['e2-medium-'], ['e2--medium'], ['e2-medium', 'e2-medium'], ['a-b', 'a-c', 'a-d', 'a-e', 'a-f', 'a-g']]) {
+        const refused = await post({ type: 'onboard', candidateId: SHOP, settings: { fallbackInstanceTypes: types }, databases: [] });
+        expect([types, refused.status]).toEqual([types, 400]);
+      }
+    });
+
     it('onboards a global candidate through the project\'s router in the Google Cloud plan, then shows it managed with its workload', async () => {
       expect((await post({ type: 'onboard', candidateId: SHOP, router: 'dmtr-nope', settings: {}, databases: [] })).status).toBe(404);
       const answer = await post({ type: 'onboard', candidateId: SHOP, name: 'Shop', settings: { idleMinutes: 20, fallbackInstanceTypes: ['e2-medium'] }, databases: [{ kind: 'cloudsql-instance', id: 'db-shop' }], tags: { team: 'shop' } });

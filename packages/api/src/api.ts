@@ -2217,7 +2217,10 @@ export function createApi({
   type FleetRows = () => Promise<WorkloadSummary[]>;
   const rowsOf = (): FleetRows => {
     let rows: Promise<WorkloadSummary[]> | undefined;
-    return () => (rows ??= fleet ? fleet.listWorkloads().catch(() => []) : Promise.resolve([]));
+    return () => (rows ??= fleet ? fleet.listWorkloads().catch((err: Error) => {
+      console.warn(JSON.stringify({ level: 'warn', event: 'FleetNotListed', error: err.message }));
+      return [] as WorkloadSummary[];
+    }) : Promise.resolve([]));
   };
   const serviceScope = (row: WorkloadSummary) => (row.lb?.kind === 'regional' || row.lb?.kind === 'internal' ? `regions/${row.lb.region ?? row.region}` : 'global');
   const googleKey = (c: Candidate) => {
