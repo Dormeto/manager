@@ -484,6 +484,16 @@ describe('the poll of Google Cloud routers', () => {
     expect(await w.store.getWorkload(PROJECT, 'us-central1', 'web')).toMatchObject({ state: 'NAPPING' });
   });
 
+  it('polls a dev router of 0.40.0 (0.40.0-dev.1), and only reads the version of one of 0.39.0 (0.39.0-dev.3)', async () => {
+    const w = world();
+    const dev = await w.add('europe-west2', { version: '0.40.0-dev.1' });
+    const old = await w.add('us-central1', { version: '0.39.0-dev.3' });
+    old.version = '0.39.0-dev.3';
+    await w.poll();
+    expect([dev.calls.length, dev.healthReads, old.calls.length, old.healthReads]).toEqual([1, 0, 0, 1]);
+    expect((await w.registry.list()).map((r) => r.version).sort()).toEqual(['0.39.0-dev.3', '0.40.0-dev.1']);
+  });
+
   it('polls only the Google Cloud routers with a controller, at 0.40.0 or later or an unknown version', async () => {
     const w = world();
     const current = await w.add('europe-west2');

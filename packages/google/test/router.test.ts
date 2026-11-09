@@ -212,6 +212,10 @@ describe('routerTooOld', () => {
     expect(['0.39.0', '0.9.12', '0.39.9-rc.1'].map(routerTooOld)).toEqual([true, true, true]);
     expect(['0.40.0', '0.40.0-rc.1', '1.0.0', '', 'dev'].map(routerTooOld)).toEqual([false, false, false, false, false]);
   });
+
+  it('compares major.minor.patch only: a dev router of 0.40.0 meets the minimum, one of 0.39.0 doesn\'t', () => {
+    expect(['0.40.0-dev.1', '0.41.0-dev.2', '0.39.0-dev.3', '0.39.12-dev.1'].map(routerTooOld)).toEqual([false, false, true, true]);
+  });
 });
 
 describe('the refusals\' texts', () => {

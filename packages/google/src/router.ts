@@ -46,7 +46,9 @@ export class RouterCallError extends Error {
   }
 }
 
-// A known version below the minimum; an unknown one ('' or not a version) is called, and its answer says.
+// A known version below the minimum, by major.minor.patch alone (a dev router's 0.40.0-dev.1 meets 0.40.0, 0.39.0-dev.3
+// doesn't; the registry keeps the version as the router reports it); an unknown one ('' or not a version) is called, and
+// its answer says.
 export function routerTooOld(version: string): boolean {
   const v = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
   if (!v) return false;

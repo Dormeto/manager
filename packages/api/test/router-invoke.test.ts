@@ -52,6 +52,16 @@ describe('a Google Cloud router\'s controller, from the manager', () => {
     expect([err instanceof RouterError, err.refusal, err.message]).toEqual([true, 'manager-access-missing', 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project <host> --profile <profile> --env dev']);
   });
 
+  it('calls a dev router of 0.40.0 (0.40.0-dev.1), and refuses one of 0.39.0 (0.39.0-dev.3) as too old without a call', async () => {
+    const sent: unknown[] = [];
+    const request = async (...args: unknown[]) => { sent.push(args[4]); return { status: 200, text: '{"workloads":[]}' }; };
+    const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev', routerVersion: '0.40.0' });
+    expect(await invoke({ ...GCP, installed: { ...GCP.installed!, version: '0.40.0-dev.1' } }, { action: 'list' })).toEqual({ workloads: [] });
+    const err = await invoke({ ...GCP, installed: { ...GCP.installed!, version: '0.39.0-dev.3' } }, { action: 'list' }).catch((e: unknown) => e) as RouterError;
+    expect([err.refusal, err.message]).toEqual(['router-too-old', 'router 0.39.0-dev.3 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0']);
+    expect(sent).toEqual([{ action: 'list', refusals: true }]);
+  });
+
   it('reads the controller\'s failure as a router error without a code, as a thrown AWS one', async () => {
     const request = async () => ({ status: 500, text: JSON.stringify({ error: 'internal', message: 'Firestore unavailable' }) });
     const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev' });

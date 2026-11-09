@@ -68,6 +68,15 @@ const PROJECT = 'acme-prod';
 const gcp = (installedAgoMs = 10 * HOUR, extra: Partial<InstalledRouter> = {}) => installed(PROJECT, 'europe-west1', installedAgoMs, { cloud: 'gcp', onboarder: '', installedBy: 'cli', controller: 'https://c.run.app', version: '0.40.0', ...extra });
 
 describe('watchdog: Google Cloud routers', () => {
+  it('compares a dev router\'s version by major.minor.patch: 0.39.0-dev.3 is too old, 0.40.0-dev.1 is not', async () => {
+    const old = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.39.0-dev.3' })] });
+    await old.watchdog.run();
+    expect(old.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
+    const dev = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.40.0-dev.1' })] });
+    await dev.watchdog.run();
+    expect(dev.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['silent']);
+  });
+
   it('calls a router below 0.40.0 too old, with the install command, never silent', async () => {
     const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.39.0' })] });
     await s.watchdog.run();
