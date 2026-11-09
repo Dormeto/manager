@@ -76,13 +76,22 @@ const singleKubernetes = computed(() => {
   const backend = single.value?.backend as { kind?: string; kubernetes?: KubernetesCandidate } | null | undefined;
   return backend?.kind === 'k8s' ? backend.kubernetes ?? null : null;
 });
+const singleBackendKind = computed(() => (single.value?.backend as { kind?: string } | null | undefined)?.kind);
 const clusterAccess = ref<ClusterCheck | null>(null);
+// A Google Cloud candidate's routers: its region's, or for a `global` one every router of the project (the dialog asks which
+// when there are several).
+const projectRouters = ref<{ name: string; region: string }[]>([]);
 watchValue(onboardOpen, async (open) => {
   clusterAccess.value = null;
+  projectRouters.value = [];
   const c = single.value;
   const kubernetes = singleKubernetes.value;
-  if (!open || !c || !kubernetes) return;
+  if (!open || !c || (!kubernetes && !isGoogle(c))) return;
   const routers = (await api<{ routers: RouterInfo[] }>('/routers').catch(() => ({ routers: [] as RouterInfo[] }))).routers;
+  if (!kubernetes) {
+    projectRouters.value = routers.filter((r) => r.cloud === 'gcp' && r.account === c.account && (c.region === 'global' || r.region === c.region)).map((r) => ({ name: r.name, region: r.region }));
+    return;
+  }
   clusterAccess.value = routers.find((r) => r.account === c.account && r.region === c.region)?.clusters?.find((x) => x.name === kubernetes.cluster) ?? null;
 });
 const excludeOpen = ref(false);
@@ -253,7 +262,8 @@ const onboardable = computed(() => single.value?.status === 'pending-onboarding'
 // Refused by the API where the last run found the account's command role missing, or the account set up for discovery
 // only: said here, before trying.
 const noCommand = computed(() => onboardRefusal(access.value, single.value?.account));
-const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status));
+// A GKE workload is offboarded with the CLI (the API refuses it through the manager).
+const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status) && !(isGoogle(single.value!) && singleBackendKind.value === 'k8s'));
 
 async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<string, unknown>, c: Listed, subject: string) {
   try {
@@ -528,7 +538,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" :backend-kind="(single?.backend as { kind?: string } | null | undefined)?.kind ?? null" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" :cloud="single && isGoogle(single) ? 'gcp' : 'aws'" :routers="projectRouters" :backend-kind="(single?.backend as { kind?: string } | null | undefined)?.kind ?? null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">

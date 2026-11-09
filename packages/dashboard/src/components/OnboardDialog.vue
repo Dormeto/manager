@@ -11,10 +11,15 @@ import { useSession } from '../stores/session';
 import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
 import { terraformSnippet } from '../terraform';
 
-const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null }>();
+// On Google Cloud (`cloud`): the candidate's labels come in `awsTags` (the candidate's `tags`), and `routers` are the project's routers
+// a `global` candidate may go through (asked when there are several).
+const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] }>();
+const gcp = computed(() => props.cloud === 'gcp');
+const several = computed(() => gcp.value && (props.routers?.length ?? 0) > 1);
+const router = ref<string | null>(null);
 const access = computed(() => (props.kubernetes ? accessText(props.kubernetes.cluster, props.access) : null));
 const snippet = computed(() => (props.kubernetes ? gitopsSnippet(props.kubernetes) : null));
-const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Tags }] }>();
+const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ name?: string; router?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Tags }] }>();
 // Tags at onboarding are the administrators' (the API refuses an operator's).
 const session = useSession();
 const name = ref('');
@@ -35,12 +40,15 @@ function copyAws() {
   const { tags, left } = copiedTags(props.awsTags);
   // What the administrator already wrote stays.
   tagRows.value = rowsOf({ ...tags, ...tagsOf(tagRows.value) });
-  copyNote.value = left ? `${left} AWS tag${left === 1 ? '' : 's'} left out: reserved or with characters the tags do not allow.` : '';
+  copyNote.value = left ? `${left} ${gcp.value ? 'label' : 'AWS tag'}${left === 1 ? '' : 's'} left out: reserved or with characters the tags do not allow.` : '';
 }
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
+// The router's pattern for a Compute Engine machine type.
+const MACHINE_TYPE = /^[a-z][a-z0-9]*-[a-z0-9-]+$/;
 const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.trim()).filter(Boolean));
-const terraform = computed(() => (props.kubernetes ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
-const fallbackRule = () => (fallbackTypes.value.length <= 5 && fallbackTypes.value.every((t) => INSTANCE_TYPE.test(t))) || 'At most 5 EC2 instance types, for example t3a.medium, m6i.large';
+const terraform = computed(() => (props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
+const fallbackRule = () => (fallbackTypes.value.length <= 5 && fallbackTypes.value.every((t) => (gcp.value ? MACHINE_TYPE : INSTANCE_TYPE).test(t)))
+  || (gcp.value ? 'At most 5 Compute Engine machine types, for example e2-medium, n2-standard-4' : 'At most 5 EC2 instance types, for example t3a.medium, m6i.large');
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   name.value = props.defaultName ?? '';
@@ -49,6 +57,7 @@ watch(() => props.modelValue, (open) => {
   databases.value = '';
   fallbacks.value = '';
   hibernate.value = 'inherit';
+  router.value = null;
   tagRows.value = [];
   copyNote.value = '';
 });
@@ -66,8 +75,8 @@ const changes = computed(() => {
 });
 
 function submit() {
-  const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
-  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), settings: { ...(idleMinutes.value === null || idleMinutes.value === '' ? {} : { idleMinutes: Number(idleMinutes.value) }), ...(wakeMode.value ? { wakeMode: wakeMode.value } : {}), ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(!props.kubernetes && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
+  const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (gcp.value ? { kind: 'cloudsql-instance', id: d } : d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
+  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), ...(several.value && router.value ? { router: router.value } : {}), settings: { ...(idleMinutes.value === null || idleMinutes.value === '' ? {} : { idleMinutes: Number(idleMinutes.value) }), ...(wakeMode.value ? { wakeMode: wakeMode.value } : {}), ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(!props.kubernetes && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
 }
 </script>
 
@@ -96,6 +105,16 @@ function submit() {
                 <span>The router of its account and region (installed first if needed, with its access entries in the cluster) naps it once idle.</span>
               </li>
             </template>
+            <template v-else-if="gcp">
+              <li class="dm-change">
+                <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
+                <span>The router of its project and region adds the waker to its backend service's routing in the URL map (traffic unchanged) and naps it once idle.</span>
+              </li>
+              <li class="dm-change">
+                <v-avatar color="info" variant="tonal" size="28"><v-icon :icon="mdiCheckCircleOutline" size="16" /></v-avatar>
+                <span>The manager binds the tag <code>dormeto/managed</code> to the VMs, managed instance groups and Cloud SQL instances the preview names, and removes the bindings it made when the router refuses.</span>
+              </li>
+            </template>
             <li v-else class="dm-change">
               <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
               <span>The router of its account and region (installed first if needed) tags its backends, adds the waker before every rule
@@ -119,7 +138,7 @@ function submit() {
           <pre data-test="terraform" class="gitops">{{ terraform }}</pre>
         </template>
         <div class="dm-eyebrow mt-6 mb-3">Settings</div>
-        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" hint="Shown in the manager; the target group name if empty. It can be changed later." persistent-hint autofocus class="mb-3" />
+        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" :hint="`Shown in the manager; the ${gcp ? 'backend service' : 'target group'} name if empty. It can be changed later.`" persistent-hint autofocus class="mb-3" />
         <v-row dense>
           <v-col cols="12" sm="5">
             <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" placeholder="Inherit" persistent-placeholder clearable />
@@ -128,17 +147,25 @@ function submit() {
             <v-select v-model="wakeMode" :items="[{ title: 'Inherit', value: null }, { title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
           </v-col>
         </v-row>
-        <v-text-field v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
-        <v-text-field v-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
+        <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
+          hint="The project has several routers: this one serves the workload (a global load balancer has no region of its own)" />
+        <v-text-field v-if="gcp" v-model="databases" label="Companion Cloud SQL instances (optional)" hint="Cloud SQL instance names, comma separated: stopped after the application, started before it" persistent-hint />
+        <v-text-field v-else v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
+        <v-text-field v-if="gcp" v-model="fallbacks" label="Fallback machine types (optional)" :rules="[fallbackRule]" class="mt-4"
+          hint="VMs only, comma separated, in order: tried when Compute Engine has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
+        <v-text-field v-else-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
           hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
-        <v-select v-if="!kubernetes" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
+        <v-select v-if="gcp" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
+          :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
+          hint="On Google Cloud, hibernating is suspending: the VMs are suspended instead of stopped at a nap, and resume faster; one that cannot be suspended is stopped" />
+        <v-select v-else-if="!kubernetes" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
           :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
           hint="Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On" />
         <template v-if="session.isAdmin">
         <div class="dm-eyebrow mt-6 mb-1">Tags</div>
-        <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not AWS tags: the groups' grants pick workloads by them. Administrators can change them later.</p>
+        <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not {{ gcp ? 'Google Cloud labels' : 'AWS tags' }}: the groups' grants pick workloads by them. Administrators can change them later.</p>
         <TagsEditor v-model="tagRows" />
-        <v-btn v-if="hasAwsTags" variant="tonal" size="small" class="mb-2" @click="copyAws">Copy the target group's AWS tags</v-btn>
+        <v-btn v-if="hasAwsTags" variant="tonal" size="small" class="mb-2" @click="copyAws">{{ gcp ? 'Copy the VMs\' labels' : 'Copy the target group\'s AWS tags' }}</v-btn>
         <p v-if="copyNote" class="text-body-small text-medium-emphasis">{{ copyNote }}</p>
         <v-alert v-if="tagsError" type="error" variant="tonal" density="compact" class="mt-2" :text="tagsError" />
         </template>
@@ -146,7 +173,7 @@ function submit() {
       <v-card-actions class="dm-dialog__actions">
         <v-spacer />
         <v-btn variant="text" @click="emit('update:modelValue', false)">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" :disabled="nameRule(name) !== true || fallbackRule() !== true || Boolean(tagsError)" @click="submit">Onboard</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="nameRule(name) !== true || fallbackRule() !== true || Boolean(tagsError) || (several && !router)" @click="submit">Onboard</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

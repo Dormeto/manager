@@ -12,7 +12,7 @@ import { useSession } from '../src/stores/session';
 
 const calls: { path: string; init?: RequestInit }[] = [];
 // The server's side: the onboarding running on the candidate (named by the candidates while it runs) and how it ended.
-const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; tags?: Record<string, string[]>; row?: Record<string, unknown> } = { running: null, ended: { status: 'succeeded' } };
+const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; tags?: Record<string, string[]>; row?: Record<string, unknown> } = { running: null, ended: { status: 'succeeded' } };
 const CHECK = { name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-11T10:00:00.000Z' };
 const candidate = () => ({
   id: 'c-1', status: 'pending-onboarding', statusReason: 'eligible', account: '111122223333', accountName: 'example', region: 'eu-west-3',
@@ -33,6 +33,7 @@ vi.mock('../src/api', () => ({
     if (path === '/exclusions' && init?.method === 'POST') return { candidates: 1, operation: { id: 'op-x' } };
     if (path === '/discovery') return { lastRun: null, counts: { 'pending-onboarding': 1 } };
     if (path === '/exclusions') return { exclusions: [] };
+    if (path === '/routers' && server.routers) return { routers: server.routers };
     if (path === '/routers') return { routers: [{ name: 'dmtr-dev-eu-west-3', account: '111122223333', region: 'eu-west-3', clusters: [CHECK] }] };
     if (path.startsWith('/discovery/candidates?')) return { candidates: [candidate()], cursor: null };
     throw new Error(`unexpected ${path}`);
@@ -130,6 +131,7 @@ describe('Discovery view, a Google Cloud candidate', () => {
   });
   afterEach(() => {
     delete server.row;
+    delete server.routers;
   });
 
   it('shows its backend service and URL map by name, linked to the Google Cloud console, in `global`, with its idle share said estimated', async () => {
@@ -192,6 +194,70 @@ describe('Discovery view, a Google Cloud candidate', () => {
     const sent = calls.find((c) => c.path === '/operations')!;
     expect(JSON.parse(sent.init!.body as string)).toMatchObject({ type: 'offboard', router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'shop-bs' });
     wrapper.unmount();
+  });
+});
+
+describe('Discovery view, onboarding a Google Cloud candidate', () => {
+  const ROUTERS = [
+    { name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2' },
+    { name: 'dmtr-dormeto-dev-us-east1', cloud: 'gcp', account: 'dormeto-dev', region: 'us-east1' },
+    { name: 'dmtr-other-us-east1', cloud: 'gcp', account: 'other', region: 'us-east1' },
+  ];
+  beforeEach(() => {
+    calls.length = 0;
+    server.running = null;
+    delete server.backend;
+    document.body.innerHTML = '';
+    server.row = gcpRow();
+  });
+  afterEach(() => {
+    delete server.row;
+    delete server.routers;
+  });
+  const open = async () => {
+    const wrapper = await mountView();
+    await wrapper.findAll('tr').find((tr) => tr.text().includes('host shop.example.com'))!.find('input[type="checkbox"]').trigger('click');
+    await nextTick();
+    await wrapper.findAll('button').find((b) => b.text().includes('Onboard'))!.trigger('click');
+    await flushPromises();
+    return wrapper;
+  };
+
+  it('asks a global candidate for one of its project\'s routers when there are several, and sends it with the Cloud SQL instances', async () => {
+    server.routers = ROUTERS;
+    const wrapper = await open();
+    const dialog = wrapper.findComponent(OnboardDialog);
+    expect(dialog.props('cloud')).toBe('gcp');
+    expect(dialog.props('routers')).toEqual([{ name: 'dmtr-dormeto-dev-europe-west2', region: 'europe-west2' }, { name: 'dmtr-dormeto-dev-us-east1', region: 'us-east1' }]);
+    dialog.vm.$emit('submit', { router: 'dmtr-dormeto-dev-us-east1', settings: {}, databases: [{ kind: 'cloudsql-instance', id: 'db-demo' }] });
+    await flushPromises();
+    const sent = calls.find((c) => c.path === '/operations')!;
+    expect(JSON.parse(sent.init!.body as string)).toEqual({ type: 'onboard', candidateId: GCP_BS, router: 'dmtr-dormeto-dev-us-east1', settings: {}, databases: [{ kind: 'cloudsql-instance', id: 'db-demo' }] });
+    wrapper.unmount();
+  });
+
+  it('gives a regional candidate its region\'s router alone, so no choice', async () => {
+    server.routers = ROUTERS;
+    server.row = { ...gcpRow(), region: 'us-east1', lb: { kind: 'regional', region: 'us-east1' } };
+    const wrapper = await open();
+    expect(wrapper.findComponent(OnboardDialog).props('routers')).toEqual([{ name: 'dmtr-dormeto-dev-us-east1', region: 'us-east1' }]);
+    wrapper.unmount();
+  });
+
+  it('offers Offboard for a managed VM or instance group candidate, not for a GKE one', async () => {
+    const managed = { ...gcpRow(), status: 'managed', workloadId: 'shop-bs', workload: { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'shop-bs', name: 'Shop' } };
+    const offboardButton = async (backend: unknown) => {
+      server.row = { ...managed, backend };
+      document.body.innerHTML = '';
+      const wrapper = await mountView();
+      await wrapper.findAll('tr').find((tr) => tr.text().includes('host shop.example.com'))!.find('input[type="checkbox"]').trigger('click');
+      await nextTick();
+      const found = wrapper.findAll('button').some((b) => b.text().includes('Offboard'));
+      wrapper.unmount();
+      return found;
+    };
+    expect(await offboardButton({ kind: 'instance', id: 'vm' })).toBe(true);
+    expect(await offboardButton({ kind: 'k8s', kubernetes: { cluster: 'gke' } })).toBe(false);
   });
 });
 

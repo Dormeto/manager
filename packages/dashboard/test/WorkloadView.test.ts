@@ -32,6 +32,7 @@ let descriptionRefusal = '';
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
     if (path.endsWith('/description') && descriptionRefusal) throw new Error(descriptionRefusal);
+    if (path === '/operations') return { operation: { id: 'op-9' } };
     return structuredClone(current);
   }),
 }));
@@ -1058,7 +1059,7 @@ describe('a Google Cloud workload', () => {
     const admin = await mountView('admin');
     expect(admin.find('[data-test="edit-tags"]').exists()).toBe(true);
     expect(admin.find('[data-test="tags-terraform"]').exists()).toBe(false);
-    expect(await openActions(admin)).toEqual(['Wake', 'Nap', 'Pause', 'Rename']);
+    expect(await openActions(admin)).toEqual(['Wake', 'Nap', 'Pause', 'Rename', 'Exclude', 'Offboard']);
     admin.unmount();
     current = { ...google, settingsFrom: { idleMinutes: 'workload' } };
     const operator = await mountView('operator');
@@ -1066,17 +1067,54 @@ describe('a Google Cloud workload', () => {
     operator.unmount();
   });
 
-  // The manager's operations are AWS's until it onboards on Google Cloud (design §8, plan 2).
-  it('offers no Offboard: an operator is given the CLI\'s command, a viewer nothing', async () => {
+  it('offers Exclude (its backend service\'s path) and Offboard for a VM workload, and a viewer neither', async () => {
     current = google;
     // The menus an earlier test left open in the document (unmounted with them open).
     document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());
     const operator = await mountView('operator');
-    expect(await openActions(operator)).toEqual(['Wake', 'Nap', 'Pause', 'Rename']);
-    expect(operator.find('[data-test="gcp-offboard"]').text()).toContain('dormeto gcp workloads offboard 5cdfbf844b925bf8 --project dormeto-dev --region europe-west2');
+    expect(await openActions(operator)).toEqual(['Wake', 'Nap', 'Pause', 'Rename', 'Exclude', 'Offboard']);
+    expect(operator.find('[data-test="gcp-offboard"]').exists()).toBe(false);
+    vi.mocked(api).mockClear();
+    const item = (title: string) => [...document.querySelectorAll<HTMLElement>('[data-test="action"]')].find((i) => i.textContent?.trim() === title)!;
+    item('Exclude').click();
+    await flushPromises();
+    const dialog = document.querySelector('.v-dialog')!;
+    expect(dialog.textContent).toContain('Backend service vm-demo');
+    const reason = dialog.querySelector('input[type="text"]') as HTMLInputElement;
+    reason.value = 'maintenance';
+    reason.dispatchEvent(new Event('input'));
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>('.v-dialog button')].find((b) => b.textContent?.trim() === 'Exclude')!.click();
+    await flushPromises();
+    const post = vi.mocked(api).mock.calls.find((c) => c[0] === '/exclusions')!;
+    expect(JSON.parse(String((post[1] as RequestInit).body))).toMatchObject({ target: { kind: 'target-group', path: `${PROJECT}/global/backendServices/vm-demo` }, workload: { router: 'dmtr-dev', id: '5cdfbf844b925bf8' } });
     operator.unmount();
     const viewer = await mountView('viewer');
-    expect(viewer.find('[data-test="gcp-offboard"]').exists()).toBe(false);
+    expect(viewer.text()).not.toContain('Offboard');
     viewer.unmount();
+  });
+
+  it('starts the offboarding of a VM workload through the operations', async () => {
+    current = google;
+    document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());
+    const operator = await mountView('operator');
+    await openActions(operator);
+    vi.mocked(api).mockClear();
+    [...document.querySelectorAll<HTMLElement>('[data-test="action"]')].find((i) => i.textContent?.trim() === 'Offboard')!.click();
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>('.v-dialog button')].find((b) => b.textContent?.trim() === 'Offboard')!.click();
+    await flushPromises();
+    const post = vi.mocked(api).mock.calls.find((c) => c[0] === '/operations')!;
+    expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ type: 'offboard', router: 'dmtr-dev', workloadId: '5cdfbf844b925bf8' });
+    operator.unmount();
+  });
+
+  it('gives a GKE workload the CLI\'s command, not Offboard (the API refuses it)', async () => {
+    current = { ...google, backends: [{ kind: 'k8s', id: 'gke/demo/Deployment/web', status: 'stopped', cluster: 'gke', namespace: 'demo', owner: { kind: 'Deployment', name: 'web' }, replicas: 1, keda: false, switch: 'ingress' }] };
+    document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());
+    const operator = await mountView('operator');
+    expect(await openActions(operator)).not.toContain('Offboard');
+    expect(operator.find('[data-test="gcp-offboard"]').text()).toContain('dormeto gcp workloads offboard 5cdfbf844b925bf8 --project dormeto-dev --region europe-west2');
+    operator.unmount();
   });
 });

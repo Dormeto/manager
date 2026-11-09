@@ -448,10 +448,15 @@ export function accessReport(d: Demo, limit: number): AccessReport {
 }
 
 export function candidateView(d: Demo, c: Candidate, now: number) {
-  const w = c.workloadId ? d.workloads.find((x) => x.workloadId === c.workloadId && x.account === c.account && x.region === c.region) : undefined;
-  const router = routerIn(d, c.account, c.region);
-  const op = d.operations.find((o) => operationStatus(o, now) === 'running' && o.target.account === c.account && o.target.region === c.region
-    && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : o.type === 'offboard' && Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
+  // A Google Cloud candidate of a `global` load balancer is on its project's router of any region.
+  const google = cloudOf(c.account) === 'gcp';
+  const w = c.workloadId ? d.workloads.find((x) => x.workloadId === c.workloadId && x.account === c.account && (google || x.region === c.region)) : undefined;
+  const router = google ? d.routers.find((r) => r.name === w?.router) : routerIn(d, c.account, c.region);
+  const running = (o: DemoOperation) => operationStatus(o, now) === 'running';
+  const op = google
+    ? d.operations.find((o) => running(o) && (o.type === 'onboard' ? o.target.backendService === c.id : o.type === 'offboard' && Boolean(c.workloadId) && o.target.workloadId === c.workloadId && o.target.account === c.account))
+    : d.operations.find((o) => running(o) && o.target.account === c.account && o.target.region === c.region
+      && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : o.type === 'offboard' && Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
   return {
     ...c, ...(cloudOf(c.account) === 'gcp' ? { cloud: 'gcp' as const } : {}), ...(c.workloadId && (w || router) ? { workload: { router: router?.name ?? w!.router, workloadId: c.workloadId, name: w?.name ?? c.workloadId } } : {}),
     ...(op ? { operation: { id: op.id, type: op.type as 'onboard' | 'offboard' } } : {}),

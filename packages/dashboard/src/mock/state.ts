@@ -12,6 +12,7 @@ import type { ClusterCheck, DescriptionInfo, Exclusion, HistoryEntry, OperationT
 import {
   AVAILABLE, EC2_PRICES, PREVIOUS, FARGATE_PRICES, RDS_PRICES, TIME_ZONES, type BackendSpec, type CandidateSpec, type RouterSpec, type State, type WorkloadSpec,
 } from './fixtures';
+import { cloudOf } from '@dormeto/fleet/clouds';
 import { ACCOUNTS, ME, ORG, accountName } from './org';
 import { bursts, checkAfter, entriesOf, sessions, wakeCause, type Burst } from './history';
 import { DAY, HOUR, MINUTE, SECOND, hash, hex, iso, random, uuid } from './util';
@@ -149,6 +150,12 @@ const PLANS: Record<WorkflowType, string[]> = {
   'lift-exclusion': ['resume workloads'],
   'connect-account': ['forwarder role', 'forwarder rules', 'connected'],
   'disconnect-account': ['remove forwarder rules', 'remove forwarder role', 'disconnected'],
+};
+
+// Google Cloud's (packages/operations engine PLANS): the router's actions and the tag binding take the place of AWS's installation steps.
+const GOOGLE_PLANS: Partial<Record<WorkflowType, string[]>> = {
+  onboard: ['find router', 'slot', 'lock load balancer', 'preview', 'tag', 'onboard', 'verify', 'candidate'],
+  offboard: ['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'untag', 'candidate'],
 };
 
 const CAPACITY = (type: string, zone: string) => `We currently do not have sufficient ${type} capacity in the Availability Zone you requested (${zone}). Our system will be working on provisioning additional capacity.`;
@@ -907,13 +914,13 @@ export function operationStatus(op: DemoOperation, now: number): 'running' | 'su
 // (slow) or fail (it ends the operation, undone).
 export function plan(type: WorkflowType, start: number, options: {
   skip?: (step: string) => boolean; details?: Record<string, string>; slow?: { step: string; ms: number; every: number };
-  fail?: { step: string; detail: string }; seed?: string;
+  fail?: { step: string; detail: string }; seed?: string; cloud?: 'gcp';
 } = {}): PlannedStep[] {
   const r = random(options.seed ?? `${type}:${start}`);
   const steps: PlannedStep[] = [];
   let t = start;
   let stopped = false;
-  for (const name of PLANS[type]) {
+  for (const name of (options.cloud === 'gcp' ? GOOGLE_PLANS[type] : undefined) ?? PLANS[type]) {
     if (stopped) {
       steps.push({ name, start: Infinity, end: Infinity, outcome: 'done' });
       continue;
@@ -937,6 +944,29 @@ export function addOperation(d: Demo, op: Omit<DemoOperation, 'applied'>): DemoO
 
 // The router of an account and region (the manager installs one per account and region).
 export const routerIn = (d: Demo, account: string, region: string) => d.routers.find((r) => r.account === account && r.region === region) ?? null;
+
+type OnboardInput = { name?: string; settings?: Record<string, unknown>; databases?: { kind: string; id: string }[]; tags?: Record<string, string> };
+
+// A Google Cloud workload onboarded by the manager from a candidate (a backend service named in a URL map): awake, named as the
+// backend service, on its router (a `global` candidate may be on any region's), its load balancer's kind kept. Its Cloud SQL
+// companions are in the operation's input only: the demo prices no Google backend.
+export function onboardedGoogleWorkload(c: Candidate, router: DemoRouter, input: OnboardInput, at: number): DemoWorkload {
+  const service = c.targetGroup ?? c.id;
+  const kind = c.backend?.kind === 'asg' ? 'asg' : 'instance';
+  const types = Array.isArray(input.settings?.fallbackInstanceTypes) ? input.settings.fallbackInstanceTypes as string[] : [];
+  const idle = Number(input.settings?.idleMinutes ?? 15);
+  const w = baseWorkload({
+    name: service, router, backends: [kind === 'asg' ? { kind: 'asg', type: 'e2-standard-2', count: 1 } : { kind: 'instance', type: 'e2-medium' }], idleMinutes: Number.isFinite(idle) && idle >= 5 ? idle : 15,
+    wakeMode: input.settings?.wakeMode === 'browser' ? 'browser' : 'any', source: 'manager', hosts: c.hosts.length ? c.hosts : [`${service}.dev.example.com`],
+  });
+  const lb = c.lb?.kind && c.lb.kind !== 'global' ? { kind: c.lb.kind as NonNullable<GoogleWorkload['lb']>['kind'], ...(c.region !== 'global' ? { region: c.region } : {}) } : undefined;
+  return Object.assign(w, {
+    workloadId: service, name: input.name ?? service, cloud: 'gcp' as const, source: 'manager' as const, tags: { ...(input.tags ?? {}) }, fallbackTypes: types,
+    google: { backendService: service, wakerBackendService: `${service}-waker`, urlMap: c.loadBalancer, ...(lb ? { lb } : {}) } as GoogleWorkload,
+    targetGroupArn: '', loadBalancerArn: '', ruleArns: [], items: [], itemsKnown: false, schedule: null, hibernate: input.settings?.hibernate === undefined ? null : Boolean(input.settings.hibernate),
+    state: 'AWAKE' as State, entries: [{ from: null, to: 'AWAKE', at: iso(at) }], awakeSince: at, updatedAt: at, activeUntil: at + 4 * MINUTE, idleHours7d: c.idleHours7d, requests7d: c.requests7d,
+  });
+}
 
 // A workload onboarded from a candidate: awake, its costs known from its first nap.
 export function onboardedWorkload(d: Demo, c: Candidate, router: DemoRouter, input: { name?: string; settings?: Record<string, unknown>; databases?: { kind: string; id: string }[]; tags?: Record<string, string> }, at: number): DemoWorkload {
@@ -1088,6 +1118,15 @@ export function onboardEffect(d: Demo, candidateId: string, op: DemoOperation) {
   return (at: number) => {
     const c = d.candidates.find((x) => x.id === candidateId);
     if (!c) return;
+    if (cloudOf(c.account) === 'gcp') {
+      const router = routerOf(d, op.target.router!);
+      const w = onboardedGoogleWorkload(c, router, op.input as OnboardInput, at);
+      d.workloads.push(w);
+      Object.assign(c, { eligibility: 'managed', workloadId: w.workloadId });
+      op.context = { ...op.context, workloadId: w.workloadId, name: w.name };
+      restatus(d, at);
+      return;
+    }
     let router = routerIn(d, c.account, c.region);
     if (!router) {
       router = makeRouter({ name: `dmtr-${accountName(c.account)}-${c.region}`, account: c.account, region: c.region, source: 'manager', ...AVAILABLE, installedDays: 0, metrics: false, concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1 }, at);

@@ -225,4 +225,75 @@ describe('OnboardDialog', () => {
     expect(onboardButton().disabled).toBe(true);
     wrapper.unmount();
   });
+
+  // Google Cloud candidates (Google Cloud manager design section 10).
+  describe('a Google Cloud candidate', () => {
+    const gcp = (over: Record<string, unknown> = {}) => openDialog({ cloud: 'gcp', title: 'vm-demo', defaultName: 'vm-demo', awsTags: { team: ['payments'] }, ...over });
+    const set = async (label: string, value: string) => {
+      const field = input(label);
+      field.value = value;
+      field.dispatchEvent(new Event('input'));
+      await flushPromises();
+    };
+
+    it('says what the manager binds and removes, with no Terraform snippet, no EC2 or RDS words and no Kubernetes branch', async () => {
+      const wrapper = await gcp();
+      const text = dialogText();
+      expect(text).toContain('dormeto/managed');
+      expect(text).toContain('removes the bindings it made when the router refuses');
+      expect(document.querySelector('[data-test="terraform"]')).toBeNull();
+      expect(text).not.toMatch(/EC2|RDS|Auto Scaling|target group|Terraform|AWS/);
+      wrapper.unmount();
+    });
+
+    it('sends the Cloud SQL instances by name, the machine types, the settings and the labels it copied', async () => {
+      const wrapper = await gcp();
+      await set('Companion Cloud SQL instances', ' db-demo, db-two ');
+      await set('Fallback machine types', 'e2-medium, n2-standard-4');
+      await set('Idle window', '20');
+      const buttons = [...document.querySelectorAll('.v-dialog button')];
+      (buttons.find((b) => b.textContent?.includes('Copy the VMs'))! as HTMLButtonElement).click();
+      await flushPromises();
+      const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Hibernate')!;
+      expect(select.props('hint')).toContain('suspended');
+      select.vm.$emit('update:modelValue', 'on');
+      await flushPromises();
+      onboardButton().click();
+      expect(wrapper.emitted('submit')![0]![0]).toEqual({
+        name: 'vm-demo',
+        settings: { idleMinutes: 20, fallbackInstanceTypes: ['e2-medium', 'n2-standard-4'], hibernate: true },
+        databases: [{ kind: 'cloudsql-instance', id: 'db-demo' }, { kind: 'cloudsql-instance', id: 'db-two' }],
+        tags: { team: 'payments' },
+      });
+      wrapper.unmount();
+    });
+
+    it('accepts e2-medium and refuses t3a.medium and more than 5 machine types', async () => {
+      const wrapper = await gcp();
+      await set('Fallback machine types', 'e2-medium');
+      expect(onboardButton().disabled).toBe(false);
+      for (const value of ['t3a.medium', 'e2medium', 'a-b, a-b, a-b, a-b, a-b, a-b']) {
+        await set('Fallback machine types', value);
+        expect(onboardButton().disabled, value).toBe(true);
+      }
+      wrapper.unmount();
+    });
+
+    it('asks for the router only when the project has several, and sends it', async () => {
+      const one = await gcp({ routers: [{ name: 'dmtr-dev-europe-west2', region: 'europe-west2' }] });
+      expect(document.querySelector('.v-dialog')!.textContent).not.toContain('Router');
+      onboardButton().click();
+      expect(one.emitted('submit')![0]![0]).not.toHaveProperty('router');
+      one.unmount();
+      const wrapper = await gcp({ routers: [{ name: 'dmtr-dev-europe-west2', region: 'europe-west2' }, { name: 'dmtr-dev-us-east1', region: 'us-east1' }] });
+      expect(onboardButton().disabled).toBe(true);
+      const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Router')!;
+      select.vm.$emit('update:modelValue', 'dmtr-dev-us-east1');
+      await flushPromises();
+      expect(onboardButton().disabled).toBe(false);
+      onboardButton().click();
+      expect((wrapper.emitted('submit')![0]![0] as { router?: string }).router).toBe('dmtr-dev-us-east1');
+      wrapper.unmount();
+    });
+  });
 });

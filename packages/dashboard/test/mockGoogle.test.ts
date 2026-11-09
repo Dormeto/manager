@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mockApi } from '../src/mock';
 import type { GoogleConnectionAnswer, RouterInfo, WorkloadSummary } from '../src/types';
 
@@ -102,11 +102,6 @@ describe('the demo\'s Google Cloud router', () => {
     expect(wrong.status).toBe(400);
   });
 
-  it('refuses to onboard on Google Cloud, which the demo does not model, before anything starts', async () => {
-    const refused = await mockApi('/operations', { method: 'POST', body: JSON.stringify({ type: 'onboard', candidateId: 'projects/dormeto-dev/global/backendServices/shop-bs', settings: {}, databases: [] }) }).catch((e: unknown) => e) as { status: number; message: string };
-    expect([refused.status, refused.message]).toEqual([409, 'the demo does not onboard on Google Cloud: dormeto gcp workloads onboard']);
-  });
-
   it('has the router\'s own view with the CLI as the source of its settings, and resource paths for the VM\'s backend', async () => {
     const details = await mockApi(`/routers/${ROUTER}`) as { configuration: { checkSchedule: { source: string } } };
     expect(details.configuration.checkSchedule.source).toBe('cli');
@@ -122,11 +117,49 @@ describe('the demo\'s Google Cloud router', () => {
     expect(details.managerSettings?.readAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
-  it('refuses to offboard one of its workloads as the API does: the CLI\'s command', async () => {
-    const refused = await mockApi('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: ROUTER, workloadId: 'vm-demo' }) }).catch((e: unknown) => e) as { status: number; message: string };
-    expect([refused.status, refused.message]).toEqual([400, 'a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard vm-demo --project dormeto-dev --region europe-west2']);
-    const { workloads } = await mockApi(`/workloads?router=${ROUTER}`) as { workloads: WorkloadSummary[] };
-    expect(workloads.map((w) => w.workloadId).sort()).toEqual(['mig-demo', 'vm-demo']);
+  describe('onboarding and offboarding', () => {
+    afterEach(() => vi.useRealTimers());
+    // The exclusions an earlier test made on the project.
+    beforeAll(async () => {
+      const { exclusions } = await mockApi('/exclusions') as { exclusions: { id: string; target: { account: string } }[] };
+      for (const e of exclusions.filter((x) => x.target.account === 'dormeto-dev')) await mockApi(`/exclusions/${e.id}`, { method: 'DELETE' });
+    });
+    const SHOP = 'projects/dormeto-dev/global/backendServices/shop-bs';
+    type Op = { id: string; status: string; steps: { name: string; status: string; detail?: string }[]; target: Record<string, string> };
+    const post = (body: Record<string, unknown>) => mockApi('/operations', { method: 'POST', body: JSON.stringify(body) }).catch((e: unknown) => e) as Promise<{ operation: Op } & { status: number; message: string }>;
+    const later = (ms: number) => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + ms); };
+
+    it('onboards a global candidate through the project\'s router in the Google Cloud plan, then shows it managed with its workload', async () => {
+      expect((await post({ type: 'onboard', candidateId: SHOP, router: 'dmtr-nope', settings: {}, databases: [] })).status).toBe(404);
+      const answer = await post({ type: 'onboard', candidateId: SHOP, name: 'Shop', settings: { idleMinutes: 20, fallbackInstanceTypes: ['e2-medium'] }, databases: [{ kind: 'cloudsql-instance', id: 'db-shop' }], tags: { team: 'shop' } });
+      if (!answer.operation) throw new Error(JSON.stringify(answer));
+      const { operation } = answer;
+      expect(operation.steps.map((x) => x.name)).toEqual(['find router', 'slot', 'lock load balancer', 'preview', 'tag', 'onboard', 'verify', 'candidate']);
+      expect(operation.steps[0]!.detail).toContain(ROUTER);
+      expect(operation.target).toMatchObject({ account: 'dormeto-dev', region: 'europe-west2', router: ROUTER, backendService: SHOP });
+      const running = (await google('pending-onboarding')).find((c) => c.id === SHOP)!;
+      expect(running.operation).toMatchObject({ id: operation.id, type: 'onboard' });
+      later(5 * 60_000);
+      const managed = (await google('managed')).find((c) => c.id === SHOP)!;
+      expect(managed.workload).toMatchObject({ router: ROUTER, name: 'Shop' });
+      const w = await mockApi(`/workloads/${ROUTER}/${managed.workloadId}`) as { name: string; source: string; cloud: string; backendService: string; urlMap: string; tags: Record<string, string> };
+      expect(w).toMatchObject({ name: 'Shop', source: 'manager', cloud: 'gcp', backendService: 'shop-bs', urlMap: 'shop-lb', tags: { team: 'shop' } });
+    });
+
+    it('refuses a GKE candidate, which is ineligible', async () => {
+      const gke = (await google('ineligible')).find((c) => c.backend?.kind === 'k8s')!;
+      const refused = await post({ type: 'onboard', candidateId: gke.id, settings: {}, databases: [] });
+      expect(refused.status).toBe(409);
+    });
+
+    it('offboards one of its workloads in the Google Cloud plan, and gives its candidate back', async () => {
+      const { operation } = await post({ type: 'offboard', router: ROUTER, workloadId: 'vm-demo' });
+      expect(operation.steps.map((x) => x.name)).toEqual(['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'untag', 'candidate']);
+      later(5 * 60_000);
+      const { workloads } = await mockApi(`/workloads?router=${ROUTER}`) as { workloads: WorkloadSummary[] };
+      expect(workloads.map((w) => w.workloadId)).not.toContain('vm-demo');
+      expect((await google('pending-onboarding')).map((c) => c.targetGroup)).toContain('vm-demo');
+    });
   });
 
   it('answers the connection of its host project at GET /discovery/google as the API does, under connection', async () => {

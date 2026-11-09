@@ -73,7 +73,9 @@ const gcp = computed(() => (status.value ? rowCloud(status.value) : 'aws') === '
 // Who can change it: what the manager onboarded, and a Google Cloud workload the CLI onboarded (both renamed, tagged and set
 // from here); a Terraform workload is written in Terraform.
 const managed = computed(() => status.value?.source === 'manager' || status.value?.source === 'cli');
-// A Google Cloud workload is offboarded with the CLI until the manager onboards there (Google Cloud manager design §8).
+// The manager offboards a Google Cloud workload but a GKE one (and a request-logs one, which the API refuses with the CLI's
+// command, shown by the operation); a GKE workload is offboarded with the CLI.
+const offboardable = computed(() => !(gcp.value && status.value?.backends.some((b) => b.kind === 'k8s')));
 const offboardCommand = computed(() => `dormeto gcp workloads offboard ${props.id} --project ${status.value?.account ?? '<project>'} --region ${status.value?.region ?? '<region>'}`);
 // The name people gave the workload (routers 0.20.0 and later), else its id.
 const title = computed(() => status.value?.name ?? props.id);
@@ -279,7 +281,9 @@ const googlePath = (collection: 'backendServices' | 'urlMaps', name: string) => 
 const urlMapLink = computed(() => (status.value?.urlMap ? urlMapConsoleUrl(googlePath('urlMaps', status.value.urlMap), status.value.lb, project.value) : null));
 // Where the workload is: the ARNs of its backends and targets.
 const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
-const excludeOptions = computed<TargetOption[]>(() => (status.value?.targetGroupArn
+const excludeOptions = computed<TargetOption[]>(() => (gcp.value && status.value?.backendService
+  ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, status.value.region ?? ''), label: `Backend service ${resourceName(status.value.backendService)} (this workload)` }]
+  : status.value?.targetGroupArn
   ? [{ kind: 'target-group', arn: status.value.targetGroupArn, label: `Target group ${shortId(status.value.targetGroupArn.replace(/\/[0-9a-f]+$/, ''))} (this workload)` }]
   : []));
 
@@ -435,8 +439,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
             </template>
             <v-list-item v-if="session.canOperate && managed" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
             <v-list-item v-if="session.canOperate && !excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
-            <!-- A Google Cloud workload's offboarding is the CLI's for now: its Offboarding card gives the command. -->
-            <template v-if="session.canOperate && status.source !== 'terraform' && !gcp">
+            <!-- A GKE workload's offboarding is the CLI's: its Offboarding card gives the command. -->
+            <template v-if="session.canOperate && status.source !== 'terraform' && offboardable">
               <v-divider class="my-1" />
               <v-list-item data-test="action" :prepend-icon="mdiLogoutVariant" title="Offboard" base-color="error" @click="confirm = 'offboard'" />
             </template>
@@ -665,9 +669,9 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <div v-if="!gcp && freshBootLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ freshBootLine(status.hibernation) }}</div>
         </v-card-text>
       </v-card>
-      <v-card v-if="gcp && session.canOperate && status.source !== 'terraform'" data-test="gcp-offboard" title="Offboarding">
+      <v-card v-if="gcp && !offboardable && session.canOperate && status.source !== 'terraform'" data-test="gcp-offboard" title="Offboarding">
         <v-card-text class="text-body-medium">
-          <div class="mb-2">A Google Cloud workload is offboarded with the Dormeto CLI, in a terminal signed in to its project: it is woken, then its waker backend service, its routing in the URL map and its tags are removed.</div>
+          <div class="mb-2">A GKE workload is offboarded with the Dormeto CLI, in a terminal signed in to its project: it is woken, then its waker backend service, its routing in the URL map and its tags are removed.</div>
           <CommandBlock :command="offboardCommand" />
         </v-card-text>
       </v-card>
@@ -688,7 +692,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
         : confirm === 'offboard'
-          ? 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
+          ? gcp ? 'The workload is woken, then Dormeto removes what onboarding added: its waker backend service, its routing in the URL map, the tags.'
+            : 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
           : gcp ? 'The backends start now; the route switches back to the application once its backend service\'s health check passes.'
             : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
       <v-card-actions class="px-4 pb-4">

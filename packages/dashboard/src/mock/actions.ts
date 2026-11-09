@@ -147,6 +147,78 @@ const newRouter = (account: string, region: string, at: number): DemoRouter => (
   concurrency: { limit: 1000, needed: 6, worstCase: 12 }, peak: 1, clusters: [], ownLists: [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, description: null, page: null,
 });
 
+const googleScope = (path: string) => /\/regions\/([^/]+)\//.exec(path)?.[1] ?? 'global';
+// The project's router a Google Cloud candidate goes through: the named one, else the one of its region (a `global` candidate: the
+// project's only one).
+function googleRouterFor(d: Demo, c: Candidate, named: unknown): DemoRouter {
+  if (typeof named === 'string' && named) {
+    const router = routerOf(d, named);
+    if (router.cloud !== 'gcp' || router.account !== c.account) fail(400, 'bad_request', `${named} is not a router of the project ${c.account}`);
+    return router;
+  }
+  const routers = d.routers.filter((r) => r.cloud === 'gcp' && r.account === c.account && (c.region === 'global' || r.region === googleScope(c.id)));
+  if (routers.length === 0) fail(409, 'conflict', `no router of the manager in ${c.account}${c.region === 'global' ? '' : `/${c.region}`}: dormeto gcp install`);
+  if (routers.length > 1) fail(400, 'bad_request', `${c.account} has several routers (${routers.map((r) => r.name).join(', ')}): router is required`);
+  return routers[0]!;
+}
+
+// A Google Cloud onboarding (engine plan): through the project's router, the tag binding between its preview and its onboarding.
+function startGoogleOnboarding(d: Demo, c: Candidate, body: Body, name: string | undefined, now: number, id: string) {
+  const router = googleRouterFor(d, c, body.router);
+  const service = c.backendService ?? c.id;
+  const urlMap = c.urlMap ?? '';
+  conflict(d, now, (o) => o.target.backendService === service);
+  const databases = (Array.isArray(body.databases) ? body.databases : []) as { kind: string; id: string }[];
+  const bad = databases.find((x) => x.kind !== 'cloudsql-instance');
+  if (bad) fail(400, 'bad_request', `databases: ${bad.kind} is not a Cloud SQL instance (cloudsql-instance)`);
+  const types = (body.settings as { fallbackInstanceTypes?: unknown } | undefined)?.fallbackInstanceTypes;
+  if (types !== undefined && (!Array.isArray(types) || types.length > 5 || types.some((t) => typeof t !== 'string' || !/^[a-z][a-z0-9]*-[a-z0-9-]+$/.test(t)))) {
+    fail(400, 'bad_request', 'settings.fallbackInstanceTypes: at most 5 Compute Engine machine types, for example e2-medium');
+  }
+  const vm = c.backend?.kind === 'asg' ? 'a managed instance group' : 'a VM';
+  const op: Omit<DemoOperation, 'applied'> = {
+    id, type: 'onboard', target: { account: c.account, region: router.region, router: router.name, backendService: service, urlMap, projectNumber: '1034397096264' },
+    input: { candidateId: c.id, ...(name ? { name } : {}), settings: body.settings ?? {}, databases, ...(body.tags !== undefined ? { tags: body.tags } : {}) }, context: { name: name ?? c.targetGroup ?? c.id, router: router.name },
+    by: ME, createdAt: now,
+    steps: plan('onboard', now, {
+      cloud: 'gcp', details: {
+        'find router': `${router.name} ${router.version}`, preview: `${vm}${databases.length ? ` and ${databases.length} Cloud SQL instance${databases.length === 1 ? '' : 's'}` : ''}, the waker backend service to create`,
+        tag: `dormeto/managed bound to ${vm}${databases.length ? ' and its Cloud SQL instances' : ''}`,
+      },
+    }),
+  };
+  return startedOperation(d, op, `${c.id}${name ? ` as ${name}` : ''}`, now);
+}
+
+// A Google Cloud offboarding: the workload woken, its waker, its routing and its tag bindings removed, its candidate given back.
+function startGoogleOffboarding(d: Demo, router: DemoRouter, w: DemoWorkload, now: number, id: string) {
+  wake(w, 'pause', now);
+  const where = { account: router.account, region: router.region };
+  const op: Omit<DemoOperation, 'applied'> = {
+    id, type: 'offboard', target: { ...where, router: router.name, workloadId: w.workloadId }, input: { router: router.name, ...where, workloadId: w.workloadId }, context: { name: w.name },
+    by: ME, createdAt: now,
+    steps: plan('offboard', now, { cloud: 'gcp', details: { locate: router.name, 'wait awake': 'awake' }, slow: { step: 'wait awake', ms: Math.min(w.wakeMs, 90 * SECOND) + 5 * SECOND, every: 10 * SECOND } }),
+    effect: (at) => {
+      d.workloads = d.workloads.filter((x) => x !== w);
+      const c = d.candidates.find((x) => x.workloadId === w.workloadId && x.account === w.account);
+      if (c) {
+        const { workloadId: _w, ...rest } = c;
+        d.candidates = d.candidates.map((x) => (x === c ? { ...rest, eligibility: 'eligible' as const } : x));
+      }
+      restatus(d, at);
+    },
+  };
+  return startedOperation(d, op, `${router.name}/${w.workloadId}`, now);
+}
+
+function startedOperation(d: Demo, op: Omit<DemoOperation, 'applied'>, target: string, now: number) {
+  return audited(d, `operation-${op.type}`, target, () => {
+    const created = addOperation(d, op);
+    if (op.type === 'onboard') created.effect = onboardEffect(d, String(op.input.candidateId), created);
+    return { result: `started ${op.id}`, response: { operation: operationView(created, now) } };
+  });
+}
+
 export function startOperation(d: Demo, body: Body, now: number) {
   const type = String(body.type ?? '') as WorkflowType;
   if (!['onboard', 'offboard', 'install-router', 'upgrade-router', 'uninstall-router'].includes(type)) {
@@ -161,8 +233,10 @@ export function startOperation(d: Demo, body: Body, now: number) {
     if (name && name.length > 64) fail(400, 'bad_request', 'name: at most 64 characters');
     const tagsError = body.tags === undefined ? null : tagsProblem(body.tags as Record<string, string>);
     if (tagsError) fail(400, 'bad_request', tagsError);
-    // The demo's Google Cloud has no onboarding to run: the CLI's command does it there.
-    if (cloudOf(c.account) === 'gcp') fail(409, 'conflict', 'the demo does not onboard on Google Cloud: dormeto gcp workloads onboard');
+    if (cloudOf(c.account) === 'gcp') {
+      if (c.status !== 'pending-onboarding') fail(409, 'conflict', `${c.targetGroup ?? c.id} is not to onboard (${c.status}${c.statusReason ? `: ${c.statusReason}` : ''})`);
+      return startGoogleOnboarding(d, c, body, name, now, id);
+    }
     commandRole(c.account);
     if (c.status !== 'pending-onboarding') fail(409, 'conflict', `${c.targetGroup ?? c.id} is not to onboard (${c.status})`);
     conflict(d, now, (o) => o.target.targetGroupArn === c.targetGroupArn);
@@ -203,8 +277,13 @@ export function startOperation(d: Demo, body: Body, now: number) {
     conflict(d, now, (o) => o.target.account === router.account && o.target.region === router.region && (o.type.endsWith('-router') || (body.workloadId !== undefined && o.target.workloadId === body.workloadId)));
     if (type === 'offboard') {
       const w = workloadOf(d, router.name, String(body.workloadId ?? ''));
-      // As the API: a Google Cloud workload is offboarded with the CLI until the manager onboards there.
-      if (router.cloud === 'gcp') fail(400, 'bad_request', `a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard ${w.workloadId} --project ${router.account} --region ${router.region}`);
+      if (router.cloud === 'gcp') {
+        // The router's `cli-only` answer (gcp/src/actions.mjs): what only the CLI undoes is refused before anything changes.
+        if (w.backends.some((b) => b.kind === 'k8s')) {
+          fail(409, 'cli-only', `cannot offboard ${w.workloadId} through the manager: a GKE workload's Kubernetes access is the CLI's to remove: dormeto gcp workloads offboard ${w.workloadId} --project ${router.account} --region ${router.region}`);
+        }
+        return startGoogleOffboarding(d, router, w, now, id);
+      }
       // The workload is woken first (paused), then its instrumentation removed.
       wake(w, 'pause', now);
       op = {
