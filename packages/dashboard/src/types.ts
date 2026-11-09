@@ -137,7 +137,7 @@ export interface Counts {
 export interface Backend {
   kind: string;
   id: string;
-  status: string;
+  status: string | null; // null on a Google Cloud backend
   // A Kubernetes workload (router 0.29.0): its cluster, recorded replicas, KEDA and how the waker is switched in.
   cluster?: string;
   replicas?: number;

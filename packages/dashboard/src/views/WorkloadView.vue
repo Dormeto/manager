@@ -492,7 +492,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
                 <v-list-item-subtitle class="text-wrap">{{ backendDetails(b) }}</v-list-item-subtitle>
                 <template #append>
                   <a v-if="backendLink(b)" :href="backendLink(b)!" target="_blank" rel="noopener" class="mr-3" :aria-label="`Open ${resourceName(b.id)} in the Google Cloud console`" @click.stop><v-icon :icon="mdiOpenInNew" size="small" /></a>
-                  <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
+                  <v-chip v-if="b.status" :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
                 </template>
               </v-list-item>
             </template>

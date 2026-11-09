@@ -939,6 +939,14 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
+  it('shows no state chip beside a backend whose status the router answers as null', async () => {
+    current = { ...google, backends: (google.backends as Record<string, unknown>[]).map((b) => ({ ...b, status: null })) };
+    const wrapper = await mountView('operator');
+    const [vm, db] = wrapper.findAll('[data-test="backend"]');
+    expect([vm!, db!].map((b) => b.find('.v-chip').exists())).toEqual([false, false]);
+    wrapper.unmount();
+  });
+
   it('says machine types, not instance types, for its VMs on fallbacks and the suspension they turn off', async () => {
     current = {
       ...google, state: 'AWAKE', fallbacks: [{ instance: 'vm-demo', from: 'n2-standard-2', to: 'n2d-standard-2' }],
