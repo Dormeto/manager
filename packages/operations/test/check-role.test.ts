@@ -78,9 +78,34 @@ describe('command role check', () => {
 
     it('names each permission of the project, an unreadable tag value and an unbindable one', async () => {
       const lacking = await google({ projectLacks: ['compute.instances.createTagBinding'], tag: 'unreadable' }).check(project, [controller]);
-      expect(lacking).toMatchObject({ ok: false, message: expect.stringContaining(`compute.instances.createTagBinding on the project ${project}; `) });
-      expect((lacking as { message: string }).message).toContain(`the tag value ${project}/dormeto/managed can't be read`);
+      expect(lacking).toMatchObject({ ok: false, message: expect.stringContaining(`compute.instances.createTagBinding on the project ${project}`) });
+      expect((lacking as { message: string }).message).toContain(`can't read the tag value ${project}/dormeto/managed`);
       expect(await google({ tag: 'unbindable' }).check(project, [controller])).toMatchObject({ ok: false, message: expect.stringContaining(`resourcemanager.tagValueBindings.create on the tag value ${project}/dormeto/managed`) });
+    });
+
+    it('says what the command account is missing and what it can\'t read in a sentence', async () => {
+      const connect = 'dormeto gcp connect --project host-project --profile <profile> --env dev';
+      const account = 'the command account dmt-dev-command@host-project.iam.gserviceaccount.com';
+      expect(await google({ projectLacks: ['compute.instances.createTagBinding'], invoke: false, tag: 'unreadable' }).check(project, [controller])).toEqual({
+        ok: false, name: 'AccessDenied',
+        message: `${account} is missing compute.instances.createTagBinding on the project ${project}; run.routes.invoke on ${controller} and can't read the tag value ${project}/dormeto/managed: ${connect}`,
+      });
+      expect(await google({ tag: 'unreadable' }).check(project, [controller])).toEqual({ ok: false, name: 'AccessDenied', message: `${account} can't read the tag value ${project}/dormeto/managed: ${connect}` });
+    });
+
+    // The manager acts as the command account through the federation (STS) and the account's grant (iamcredentials): a
+    // refusal there comes before any permission is asked, and says so rather than listing every permission as missing.
+    it.each([
+      ['iamcredentials.googleapis.com', 'IAM_PERMISSION_DENIED', 'Permission \'iam.serviceAccounts.getAccessToken\' denied on resource (or it may not exist).'],
+      ['sts.googleapis.com', 'PERMISSION_DENIED', 'The caller does not have permission'],
+    ])('says the manager can\'t act as the command account when %s refuses its token', async (host, reason, message) => {
+      const calls: string[] = [];
+      const call = async (_method: string, url: string) => { calls.push(url); throw new GoogleError({ status: 403, reason, host, message }); };
+      expect(await checkProject({ call, connection: async () => connection, env: 'dev' })(project, [controller])).toEqual({
+        ok: false, name: 'AccessDenied',
+        message: `the manager can't act as the command account dmt-dev-command@host-project.iam.gserviceaccount.com: the workload identity federation or the account's grant to the manager is missing (Google: ${host} 403 ${reason}): dormeto gcp connect --project host-project --profile <profile> --env dev`,
+      });
+      expect(calls).toHaveLength(1);
     });
 
     it('checks nothing for a project without a router, and says so without a connection', async () => {

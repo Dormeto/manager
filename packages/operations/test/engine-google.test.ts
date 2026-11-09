@@ -332,6 +332,73 @@ describe('onboarding a Google Cloud candidate', () => {
     expect(s.tagCalls).toEqual([]);
   });
 
+  // A removal waits up to 60 s for its operation, after a router call of up to 300 s: one per run of the step keeps each run
+  // within the operations function's 360 s.
+  describe('the removals after a refusal or a failed binding', () => {
+    const ALL = [VM, ZONAL, REGIONAL, SQL];
+    // The runs of the operation from the step named, each with the removals it made and its outcome.
+    async function runsFrom(s: ReturnType<typeof setup>, id: string, step: string) {
+      for (;;) {
+        const o = (await s.records.getOperation(id))!;
+        if (o.steps[o.cursor]!.name === step) break;
+        await s.engine.next(id);
+      }
+      const unbinds = () => s.tagCalls.filter((c) => c.startsWith('unbind')).length;
+      const runs: [number, Awaited<ReturnType<typeof s.engine.next>>][] = [];
+      for (;;) {
+        const before = unbinds();
+        const r = await s.engine.next(id);
+        runs.push([unbinds() - before, r]);
+        if (r.done) return runs;
+      }
+    }
+
+    it('a refused onboarding removes none in the refusal\'s run, then one per run, waiting 0 s between, and the router is not called again', async () => {
+      const s = setup();
+      s.answers.onboard = () => ({ refused: { code: 'invalid', message: 'refused' } });
+      const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+      const runs = await runsFrom(s, op.id, 'onboard');
+      expect(runs.map(([n]) => n)).toEqual([0, 1, 1, 1, 1]);
+      expect(runs.slice(0, -1).map(([, r]) => r)).toEqual(Array(4).fill({ done: false, waitSeconds: 0 }));
+      expect(runs.at(-1)![1]).toEqual({ done: true, status: 'failed' });
+      expect(actionsOf(s).map(([, action]) => action)).toEqual(['preview', 'onboard']);
+      expect((await s.records.getOperation(op.id))!.error).toBe(`onboard: refused; the tag bindings it made are removed: ${ALL.map((t) => t.label).join(', ')}`);
+    });
+
+    it('a failed binding removes none in its run, then one per run', async () => {
+      const s = setup({ failBind: [SQL.parent] });
+      const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+      const runs = await runsFrom(s, op.id, 'tag');
+      // VM, ZONAL and REGIONAL bound a run each; SQL's binding fails; then one removal per run.
+      expect(runs.map(([n]) => n)).toEqual([0, 0, 0, 0, 1, 1, 1]);
+      expect(runs.at(-1)![1]).toEqual({ done: true, status: 'failed' });
+      expect([...s.bindings]).toEqual([]);
+      expect((await s.records.getOperation(op.id))!.error).toBe(`tag: ${SQL.label}: Google: 403 IAM_PERMISSION_DENIED: Permission denied; the tag bindings it made are removed: ${[VM, ZONAL, REGIONAL].map((t) => t.label).join(', ')}`);
+    });
+
+    it('the workflow failing outside a step (a timeout, a crash) after the tag step names the bindings it made as kept', async () => {
+      const s = setup();
+      const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+      for (;;) {
+        const o = (await s.records.getOperation(op.id))!;
+        if (o.steps[o.cursor]!.name === 'onboard') break;
+        await s.engine.next(op.id);
+      }
+      await s.engine.fail(op.id, 'States.Timeout');
+      const stored = (await s.records.getOperation(op.id))!;
+      expect(stored.error).toBe(`States.Timeout; the tag bindings it made are kept: ${ALL.map((t) => t.label).join(', ')}`);
+      expect(stored.context.tagged).toEqual(ALL);
+      expect([...s.bindings]).toEqual(ALL.map((t) => t.parent));
+    });
+
+    it('the workflow failing before any binding says nothing more', async () => {
+      const s = setup();
+      const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+      await s.engine.fail(op.id, 'States.Timeout');
+      expect((await s.records.getOperation(op.id))!.error).toBe('States.Timeout');
+    });
+  });
+
   it('a workload FAILED at the verification fails the operation, its bindings kept: the router onboarded it', async () => {
     const s = setup();
     s.answers.status = () => ({ workloadId: WORKLOAD_ID, name: 'Demo', backendService: 'dmt-demo-app', state: 'FAILED', issues: [] });

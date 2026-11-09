@@ -423,8 +423,9 @@ export function createEngine(deps: EngineDeps) {
   // instances given. The tag value and the targets are read at the first run and kept; each run binds one (a binding waits
   // up to 60 s, so the step never outlasts its function) and keeps it in `tagged` with the operation. A binding there
   // before (409) is not this operation's: never in `tagged`, never removed. A binding that fails removes those the step
-  // made, then fails the step.
+  // made (one per run, see failAfterUntag), then fails the step.
   async function tag(op: Operation): Promise<Outcome> {
+    if (untaggingOf(op)) return untagNext(op);
     const { tags } = google();
     const project = op.target.account!;
     if (!op.context.tagTargets) {
@@ -448,7 +449,7 @@ export function createEngine(deps: EngineDeps) {
       try {
         (await tags.bindTag(target, op.context.tagValue as string) ? tagged : already).push(target);
       } catch (err) {
-        throw new Error(`${target.label}: ${(err as Error).message}${await untag(op)}`);
+        return failAfterUntag(op, `${target.label}: ${(err as Error).message}`);
       }
       const done = tagged.length + already.length;
       if (done < targets.length) return { status: 'wait', seconds: 0, detail: `${done} of ${targets.length}`, changed: tagged.length > 0 };
@@ -458,36 +459,51 @@ export function createEngine(deps: EngineDeps) {
     return { status: tagged.length ? 'done' : 'skipped', detail };
   }
 
-  // The bindings this operation made removed; those it could not remove stay in `tagged`. Said for the step's detail: what
-  // was removed, and what is still tagged with why ('' when it made none).
-  async function untag(op: Operation): Promise<string> {
+  // A refusal of the onboarding, or a binding that failed: the bindings this operation made are removed before the step fails
+  // with `failure`, none in the run that met it (the router's call may have taken 300 s), then one per run of the step (a
+  // removal waits up to 60 s), so that no run outlasts the operations function. Kept with the operation in `untagging`.
+  type Untagging = { failure: string; removed: TagTarget[]; left: { target: TagTarget; why: string }[] };
+  const untaggingOf = (op: Operation) => op.context.untagging as Untagging | undefined;
+  async function failAfterUntag(op: Operation, failure: string): Promise<Outcome> {
+    op.context.untagging = { failure, removed: [], left: [] } satisfies Untagging;
+    if (!((op.context.tagged ?? []) as TagTarget[]).length) return untagNext(op);
+    return { status: 'wait', seconds: 0, detail: `${failure}; removing the tag bindings it made` };
+  }
+
+  // The next binding this operation made removed; one whose removal fails stays in `tagged`, with why. Once none is left
+  // the step fails, saying what was removed and what is still tagged.
+  async function untagNext(op: Operation): Promise<Outcome> {
+    const u = untaggingOf(op)!;
+    const tried = (t: TagTarget) => u.left.some((l) => l.target.parent === t.parent);
     const tagged = (op.context.tagged ?? []) as TagTarget[];
-    if (!tagged.length) return '';
-    const { tags } = google();
-    const removed: TagTarget[] = [];
-    const left: { target: TagTarget; why: string }[] = [];
-    for (const target of tagged) {
+    const target = tagged.find((t) => !tried(t));
+    if (target) {
       try {
-        await tags.unbindTag(target, op.context.tagValue as string);
-        removed.push(target);
+        await google().tags.unbindTag(target, op.context.tagValue as string);
+        u.removed.push(target);
+        op.context.tagged = tagged.filter((t) => t.parent !== target.parent);
       } catch (err) {
-        left.push({ target, why: (err as Error).message });
+        u.left.push({ target, why: (err as Error).message });
       }
+      const rest = ((op.context.tagged ?? []) as TagTarget[]).filter((t) => !tried(t)).length;
+      const done = u.removed.length + u.left.length;
+      if (rest) return { status: 'wait', seconds: 0, detail: `${u.failure}; removing the tag bindings it made: ${done} of ${done + rest}` };
     }
-    op.context.tagged = left.map((l) => l.target);
-    return [
-      ...(removed.length ? [`; the tag bindings it made are removed: ${labelsOf(removed)}`] : []),
-      ...(left.length ? [`; still tagged: ${left.map((l) => `${l.target.label} (${l.why})`).join(', ')}`] : []),
-    ].join('');
+    throw new Error(`${u.failure}${[
+      ...(u.removed.length ? [`; the tag bindings it made are removed: ${labelsOf(u.removed)}`] : []),
+      ...(u.left.length ? [`; still tagged: ${u.left.map((l) => `${l.target.label} (${l.why})`).join(', ')}`] : []),
+    ].join('')}`);
   }
 
   // The router's onboarding. A refusal (an error with its code: the router's, or the manager's own before any call) means
-  // no router acted: the bindings this operation made are removed before the step fails. Without a code (a timeout, a
-  // failure, an answer lost) the router may have onboarded it: nothing is removed, and the step says what is kept.
+  // no router acted: the bindings this operation made are removed (one per run, see failAfterUntag) before the step fails.
+  // Without a code (a timeout, a failure, an answer lost) the router may have onboarded it: nothing is removed, and the
+  // step says what is kept.
   // A conflict may be this operation's own onboarding: the workflow runs the step again when an attempt's answer was lost
   // (the step's state is saved after its outcome), and the router answers "onboarded already". Its status tells: the
   // workload on this candidate's backend service is done, nothing removed; another one, or none, and the refusal stands.
   async function googleOnboard(op: Operation): Promise<Outcome> {
+    if (untaggingOf(op)) return untagNext(op);
     let result;
     try {
       result = await invokeRouter(op, 'onboarder', { action: 'onboard', workloadId: op.context.workloadId, name: op.context.name, ...(await googlePayload(op)), by: op.by });
@@ -503,7 +519,7 @@ export function createEngine(deps: EngineDeps) {
         if (earlier.onboarded) return { status: 'done', detail: earlier.onboarded };
         if (earlier.unread) throw new Error(`${message}; its status can't be read (${earlier.unread})${keptText(': ')}`);
       }
-      if (code) throw new Error(`${message}${await untag(op)}`);
+      if (code) return failAfterUntag(op, message);
       throw new Error(`${message}${keptText('; ')}`);
     }
     return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
@@ -1229,16 +1245,19 @@ export function createEngine(deps: EngineDeps) {
     }
   }
 
-  // The workflow failed outside a step (a task timeout, a Lambda error): release and record.
+  // The workflow failed outside a step (a task timeout, a Lambda error): release and record. A Google Cloud onboarding
+  // keeps the tag bindings it made (the router may have onboarded it), said with the error.
   async function fail(id: string, error: string) {
     const op = await records.getOperation(id);
     if (!op || op.status !== 'running') return;
+    const kept = op.type === 'onboard' && onGoogle(op.target) ? (op.context.tagged ?? []) as TagTarget[] : [];
+    const said = kept.length ? `${error}; the tag bindings it made are kept: ${labelsOf(kept)}` : error;
     const step = op.steps[op.cursor];
     if (step && step.status === 'running') {
       step.status = 'failed';
-      step.detail = error;
+      step.detail = said;
     }
-    await finish(op, 'failed', error);
+    await finish(op, 'failed', said);
   }
 
   // The connections decided by a discovery run (packaging design §5): an operation per account, none for an account with
