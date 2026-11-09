@@ -73,7 +73,7 @@ describe('callRouter', () => {
   it('answers Google\'s 403 in front of the controller (an HTML page) as the refusal manager-access-missing', async () => {
     const err = await failure(callRouter(fakeGoogle(() => html(403, 'Forbidden')).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
     expect(err).toBeInstanceOf(RouterCallError);
-    expect([err.refusal, err.status, err.google]).toEqual(['manager-access-missing', 403, true]);
+    expect([err.refusal, err.status, err.google, err.token]).toEqual(['manager-access-missing', 403, true, false]);
   });
 
   it('answers Google\'s 401 (its JSON) as manager-access-missing once a new token was refused too', async () => {
@@ -83,13 +83,37 @@ describe('callRouter', () => {
     expect(g.to(ACTIONS)).toHaveLength(2);
   });
 
-  it('answers iamcredentials\' refusal of the ID token as manager-access-missing, without calling the controller', async () => {
-    const g = fakeGoogle(() => json(200, {}), (req) => (req.url.endsWith(':generateIdToken') ? json(403, {
-      error: { code: 403, message: 'Permission \'iam.serviceAccounts.getOpenIdToken\' denied on resource (or it may not exist).', status: 'PERMISSION_DENIED' },
-    }) : undefined));
+  // A broken connection fails before the controller is called: the token's failure is marked apart from Google's answer
+  // to the controller URL (never a router gone), and is manager-access-missing.
+  const tokenRefusal = async (url: string, refusal: Response) => {
+    const g = fakeGoogle(() => json(200, {}), (req) => (req.url === url || req.url.endsWith(url) ? refusal : undefined));
     const err = await failure(callRouter(g.google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
-    expect([err.refusal, err.status, err.google]).toEqual(['manager-access-missing', 403, true]);
     expect(g.to(ACTIONS)).toHaveLength(0);
+    return err;
+  };
+
+  it('answers iamcredentials\' refusal of the ID token (the impersonation grant revoked) as manager-access-missing, marked as the token\'s', async () => {
+    const err = await tokenRefusal(':generateIdToken', json(403, {
+      error: { code: 403, message: 'Permission \'iam.serviceAccounts.getOpenIdToken\' denied on resource (or it may not exist).', status: 'PERMISSION_DENIED' },
+    }));
+    expect([err.refusal, err.status, err.google, err.token]).toEqual(['manager-access-missing', 403, false, true]);
+  });
+
+  it('answers iamcredentials\' 404 (the command account deleted) as manager-access-missing, never as Google\'s 404 for the router', async () => {
+    const err = await tokenRefusal(':generateIdToken', json(404, { error: { code: 404, message: 'Not found; Gaia id not found for email dmt-dev-command@dormeto-host.iam.gserviceaccount.com', status: 'NOT_FOUND' } }));
+    expect([err.refusal, err.status, err.google, err.token]).toEqual(['manager-access-missing', 404, false, true]);
+  });
+
+  it('answers STS\'s invalid_target (the pool or provider gone) and invalid_grant (the provider refuses the role) as manager-access-missing', async () => {
+    const target = await tokenRefusal('https://sts.googleapis.com/v1/token', json(400, { error: 'invalid_target', error_description: 'The target service indicated by the "audience" parameters is invalid.' }));
+    expect([target.refusal, target.status, target.google, target.token]).toEqual(['manager-access-missing', 400, false, true]);
+    const grant = await tokenRefusal('https://sts.googleapis.com/v1/token', json(400, { error: 'invalid_grant', error_description: 'The audience in ID Token does not match the expected audience.' }));
+    expect([grant.refusal, grant.status, grant.google, grant.token]).toEqual(['manager-access-missing', 400, false, true]);
+  });
+
+  it('keeps STS\'s 5xx a failure of the call, not the manager\'s access', async () => {
+    const err = await tokenRefusal('https://sts.googleapis.com/v1/token', new Response('<html>Service Unavailable</html>', { status: 503 }));
+    expect([err.refusal, err.status, err.google, err.token]).toEqual([undefined, 503, false, true]);
   });
 
   it('reads a 403 in the controller\'s own JSON as its failure, not as the manager\'s access', async () => {
@@ -104,7 +128,7 @@ describe('callRouter', () => {
 
   it('keeps Google\'s own 404 (an HTML page: no such service) apart, as Google\'s', async () => {
     const err = await failure(callRouter(fakeGoogle(() => html(404, 'Page not found')).google, ROUTER, { action: 'router' }, { timeoutMs: 10_000 }));
-    expect([err.refusal, err.status, err.google, err.message]).toEqual([undefined, 404, true, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
+    expect([err.refusal, err.status, err.google, err.token, err.message]).toEqual([undefined, 404, true, false, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
   });
 
   it('says an action the router does not know in the AWS controller\'s words', async () => {

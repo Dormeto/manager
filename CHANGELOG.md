@@ -33,7 +33,7 @@ The manager calls Google Cloud routers: every action it sends an AWS router's co
 `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, 10 s per call (a cold Cloud Run
 start; an AWS router keeps its 5 s), 10 at once and 20 s per request as before, refusals read as the AWS controller answers them.
 A Google Cloud router the manager can't use answers 502 with the command that fixes it: `manager-access-missing` when Google
-refuses the manager's token (`the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`),
+refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked) (`the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`),
 `router-too-old` for a router below 0.40.0, without calling it, or one whose controller has no `/v1/actions`
 (`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router-unknown`
 while discovery hasn't found its controller. `install-router` for a project, and `upgrade-router` and `uninstall-router` for a Google

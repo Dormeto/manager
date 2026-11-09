@@ -315,12 +315,17 @@ describe('Google Cloud routers', () => {
 
   // The manager as index.ts builds it: the invoker's Google transport over a fake Google (its STS, iamcredentials and the
   // controllers, which `controller` answers), the AWS routers of Terraform called through Lambda (recorded).
-  function manager({ routers = [gcp()], controller = () => answer(200, {}) }: { routers?: InstalledRouter[]; controller?: (req: Seen, payload: Record<string, unknown>) => Response } = {}) {
+  // `tokens` answers Google's token endpoints first when it returns a Response.
+  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens }: {
+    routers?: InstalledRouter[]; controller?: (req: Seen, payload: Record<string, unknown>) => Response; tokens?: (req: Seen) => Response | undefined;
+  } = {}) {
     const seen: Seen[] = [];
     let n = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit) => {
       const req: Seen = { url: String(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body ?? '') };
       seen.push(req);
+      const own = tokens?.(req);
+      if (own) return own;
       if (req.url === 'https://sts.googleapis.com/v1/token') return answer(200, { access_token: `federated-${++n}`, expires_in: 3600 });
       if (req.url.endsWith(':generateIdToken')) return answer(200, { token: jwt({ aud: (JSON.parse(req.body) as { audience: string }).audience, exp: Math.floor(NOW / 1000) + 3600, n: ++n }) });
       return controller(req, JSON.parse(req.body) as Record<string, unknown>);
@@ -383,6 +388,20 @@ describe('Google Cloud routers', () => {
       error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
     }]);
     expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
+  });
+
+  it('answers a connection broken at the token (STS invalid_target, iamcredentials 404) as manager-access-missing; STS\'s 503 stays a router error', async () => {
+    const access = { error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' };
+    const gone = manager({ tokens: (req) => (req.url === 'https://sts.googleapis.com/v1/token' ? answer(400, { error: 'invalid_target', error_description: 'The target service indicated by the "audience" parameters is invalid.' }) : undefined) });
+    const res = await gone.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([502, access]);
+    const deleted = manager({ tokens: (req) => (req.url.endsWith(':generateIdToken') ? answer(404, { error: { code: 404, message: 'Not found', status: 'NOT_FOUND' } }) : undefined) });
+    const listed = json(await deleted.api(event('GET', '/api/workloads', 'dmt-operator')));
+    expect(listed.errors).toEqual([{ router: NAME, message: access.message }]);
+    expect(deleted.actions()).toEqual([]);
+    const down = manager({ tokens: (req) => (req.url === 'https://sts.googleapis.com/v1/token' ? new Response('<html>Service Unavailable</html>', { status: 503 }) : undefined) });
+    const failed = await down.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
+    expect([failed.statusCode, json(failed).error]).toEqual([502, 'router_error']);
   });
 
   it('answers router-too-old for a 0.39.0 router without calling it, the install command with the pinned version', async () => {

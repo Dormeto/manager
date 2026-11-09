@@ -2,6 +2,7 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // within its bound. The controller answers in the AWS controller's shapes, in its own JSON; Google answers in front of it
 // when it refuses the token (401 or 403: an HTML page or Google's JSON error) or knows no such service (an HTML 404).
+// A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
 // The API and the fleet's poll call routers through it.
 import { GoogleError } from './errors.js';
 import type { Google } from './google.js';
@@ -13,16 +14,19 @@ export const ROUTER_MINIMUM = '0.40.0';
 export type RouterRefusal = 'manager-access-missing' | 'router-too-old';
 
 export class RouterCallError extends Error {
-  // status: the HTTP status, 0 when nothing came back; google: the answer was Google's, not the controller's JSON.
+  // status: the HTTP status, 0 when nothing came back; google: Google's own answer to the controller URL, not the
+  // controller's JSON; token: STS or iamcredentials refused or failed the ID token, and the controller was not called.
   readonly status: number;
   readonly google: boolean;
+  readonly token: boolean;
   readonly refusal?: RouterRefusal;
 
-  constructor(message: string, { status = 0, google = false, refusal }: { status?: number; google?: boolean; refusal?: RouterRefusal } = {}) {
+  constructor(message: string, { status = 0, google = false, token = false, refusal }: { status?: number; google?: boolean; token?: boolean; refusal?: RouterRefusal } = {}) {
     super(message);
     this.name = 'RouterCallError';
     this.status = status;
     this.google = google;
+    this.token = token;
     if (refusal) this.refusal = refusal;
   }
 }
@@ -38,6 +42,10 @@ export function routerTooOld(version: string): boolean {
 
 const ok = (status: number) => status >= 200 && status <= 299;
 const denied = (status: number) => status === 401 || status === 403;
+// The connection broken at the token: STS refusing the provider (its pool or provider gone, its condition refusing the
+// role), iamcredentials refusing the impersonation (the grant revoked) or not knowing the account (deleted).
+const BROKEN_EXCHANGE = new Set(['invalid_grant', 'invalid_target', 'unauthorized_client']);
+const brokenConnection = (err: GoogleError) => denied(err.status) || err.status === 404 || (err.status === 400 && BROKEN_EXCHANGE.has(err.reason));
 // Google's JSON error ({error: {code, message, status}}); the controller's own errors hold a string.
 const googleShaped = (body: unknown) => typeof (body as { error?: unknown } | null)?.error === 'object' && (body as { error: unknown }).error !== null;
 
@@ -48,8 +56,12 @@ async function answerOf(google: Pick<Google, 'request'>, origin: string, payload
   try {
     ({ status, text } = await google.request('command', origin, 'POST', `${origin}/v1/actions`, payload));
   } catch (err) {
-    // The ID token refused (STS or iamcredentials), or no answer at all.
-    if (err instanceof GoogleError) throw new RouterCallError(err.message, { status: err.status, google: err.status !== 0, ...(denied(err.status) ? { refusal: 'manager-access-missing' as const } : {}) });
+    // request answers whatever the controller URL answers, so a GoogleError with a status is the ID token's (STS or
+    // iamcredentials); one without is no answer at all, from either.
+    if (err instanceof GoogleError && err.status !== 0) {
+      throw new RouterCallError(err.message, { status: err.status, token: true, ...(brokenConnection(err) ? { refusal: 'manager-access-missing' as const } : {}) });
+    }
+    if (err instanceof GoogleError) throw new RouterCallError(err.message);
     throw err;
   }
   let body: unknown = null;
