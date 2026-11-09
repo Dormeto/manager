@@ -162,6 +162,22 @@ describe('watchdog: Google Cloud routers', () => {
     await s.watchdog.run();
     expect(s.sent.at(-1)!.attributes).toMatchObject({ kind: 'digest', cloud: 'gcp' });
   });
+
+  // An SNS filter policy matches a String.Array attribute when one of its elements matches: a cloud's filter gets the digest.
+  it('gives a digest whose alarms mix the clouds both, as a String.Array: a filter on either cloud receives it', async () => {
+    const s = setup({
+      terraform: [], registry: [
+        // 15 of each: whatever their order, the 20 past the first 10 messages hold both.
+        ...Array.from({ length: 15 }, (_, i) => gcp(10 * HOUR, { region: `europe-west${i + 1}`, version: '0.39.0' })),
+        ...Array.from({ length: 15 }, (_, i) => installed(`0386060773${String(i).padStart(2, '0')}`, 'eu-west-3')),
+      ],
+    });
+    await s.watchdog.run();
+    const digest = s.sent.at(-1)!;
+    expect(digest.attributes).toMatchObject({ kind: 'digest', cloud: ['aws', 'gcp'] });
+    expect(snsInput(digest, 'arn:topic').MessageAttributes.cloud).toEqual({ DataType: 'String.Array', StringValue: '["aws","gcp"]' });
+    expect(snsInput(s.sent[0]!, 'arn:topic').MessageAttributes.cloud).toEqual({ DataType: 'String', StringValue: s.sent[0]!.attributes.cloud });
+  });
 });
 
 // The fleet's poll and the watchdog over one table: the advised `dormeto gcp install` clears too-old within 10 minutes.

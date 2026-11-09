@@ -33,8 +33,9 @@ export interface Notification {
   subject: string;
   message: string;
   chat?: ChatNotification;
-  // Message attributes, for subscription filter policies.
-  attributes: { level: Level | 'resolved' | 'info'; kind: Subject['kind'] | 'digest' | 'update'; cloud?: Cloud; account?: string; region?: string; router?: string; workload?: string };
+  // Message attributes, for subscription filter policies; a digest whose alarms mix the clouds names both (a String.Array,
+  // which a filter policy matches by any of its elements).
+  attributes: { level: Level | 'resolved' | 'info'; kind: Subject['kind'] | 'digest' | 'update'; cloud?: Cloud | Cloud[]; account?: string; region?: string; router?: string; workload?: string };
 }
 export interface Observation { subject: Subject; problems: Problem[] }
 interface Log { info(event: string, data?: object): void; warn(event: string, data?: object): void; error(event: string, data?: object): void }
@@ -356,9 +357,9 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
           const subject = snsSubject(`[Dormeto ${env}] ${digested.length} more alarms changed`);
           const chat = chatNotification(subject, [`${digested.length} more alarms changed in this check:`, ...listed,
             ...(digested.length > DIGEST_LISTED ? [`- and ${digested.length - DIGEST_LISTED} more`] : []), `[Open the dashboard](${dashboardUrl}/)`].join('\n'));
-          // The cloud when every alarm of the digest is of one; a mixed digest names none.
-          const clouds = new Set(digested.map((d) => d.note!.attributes.cloud));
-          const cloud = clouds.size === 1 ? [...clouds][0] : undefined;
+          // The cloud every alarm of the digest is of, or both when they mix (a filter on either cloud receives it).
+          const clouds = [...new Set(digested.flatMap((d) => d.note!.attributes.cloud ?? []))].sort();
+          const cloud = clouds.length === 1 ? clouds[0] : clouds.length ? clouds : undefined;
           await notify.publish({ subject, message, chat, attributes: { level: digested.some((d) => d.change.alarm.level === 'error') ? 'error' : 'warning', kind: 'digest', ...(cloud ? { cloud } : {}) } });
           for (const { change } of digested) await write(change);
         } catch (err) {
@@ -378,11 +379,13 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
 }
 
 // The SNS Publish input of a notification (R7b): the text for email (and default), the chat body for https subscriptions
-// (Amazon Q Developer in chat applications), the attributes for subscription filter policies.
+// (Amazon Q Developer in chat applications), the attributes for subscription filter policies: a list as a String.Array.
 export function snsInput(n: Notification, topicArn: string) {
   const bodies = { default: n.message, email: n.message, ...(n.chat ? { https: JSON.stringify(n.chat) } : {}) };
+  const attribute = (v: unknown) => (typeof v === 'string' && v ? { DataType: 'String', StringValue: v }
+    : Array.isArray(v) && v.length ? { DataType: 'String.Array', StringValue: JSON.stringify(v) } : null);
   return {
     TopicArn: topicArn, Subject: n.subject, Message: JSON.stringify(bodies), MessageStructure: 'json',
-    MessageAttributes: Object.fromEntries(Object.entries(n.attributes).filter(([, v]) => typeof v === 'string' && v).map(([k, v]) => [k, { DataType: 'String', StringValue: v as string }])),
+    MessageAttributes: Object.fromEntries(Object.entries(n.attributes).flatMap(([k, v]) => { const a = attribute(v); return a ? [[k, a]] : []; })),
   };
 }
