@@ -21,7 +21,8 @@ function notification(env: string, running: string, latest: string, dashboardUrl
     subject,
     message: `${text}\n\nRelease notes: ${CHANGELOG}\nUpdate it from the dashboard: ${link}\n`,
     chat: chatNotification(subject, `${text} [Release notes](${CHANGELOG}) · [Update it](${link})`),
-    attributes: { level: 'info', kind: 'update' },
+    // The manager's own update: the manager runs on AWS.
+    attributes: { level: 'info', kind: 'update', cloud: 'aws' },
   };
 }
 

@@ -29,6 +29,11 @@ their Cloud Run services `dmtr-<region>-controller`, and adds, updates (controll
 a project that fails is recorded in the run and keeps its routers, Cloud Run turned off means no router there. AWS registrations are
 never touched.
 
+The watchdog watches Google Cloud routers: one below 0.40.0, or that answered the poll it has no `/v1/actions`, is `too-old` with the
+`dormeto gcp install` command (never `silent`); a silent one gets the advice for Cloud Run, its Scheduler job `dmtr-<region>-check`
+and the controller's logs. Every alert gains the message attribute `cloud` (`aws` or `gcp`); the update check's is `aws`, a digest
+carries the cloud its alarms share and none when they mix.
+
 The manager calls Google Cloud routers: every action it sends an AWS router's controller goes to a Google Cloud router's
 `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, 10 s per call (a cold Cloud Run
 start; an AWS router keeps its 5 s), 10 at once and 20 s per request as before, refusals read as the AWS controller answers them.

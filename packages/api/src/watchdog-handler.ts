@@ -22,6 +22,7 @@ const watchdog = createWatchdog({
   env: process.env.ENV ?? 'dev',
   managerAccount: process.env.MANAGER_ACCOUNT ?? '',
   dashboardUrl: process.env.DASHBOARD_URL ?? '',
+  routerVersion: process.env.ROUTER_VERSION,
   terraformRouters: JSON.parse(process.env.ROUTERS ?? '[]') as TerraformRouter[],
   fleet,
   registry: createRecords({ dynamo, table }),

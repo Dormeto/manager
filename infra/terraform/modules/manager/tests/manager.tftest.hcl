@@ -222,6 +222,10 @@ run "health_alarms" {
     error_message = "The watchdog publishes to the alert topic; the API reads its subscriptions."
   }
   assert {
+    condition     = aws_lambda_function.watchdog.environment[0].variables.ROUTER_VERSION == local.router_version
+    error_message = "The watchdog names the pinned router version in the install command of a Google Cloud router too old to report."
+  }
+  assert {
     condition     = toset([for s in aws_sns_topic_subscription.alert_email : "${s.protocol} ${s.endpoint}"]) == toset(["email ops@example.com", "email oncall@example.com"])
     error_message = "One email subscription per address of alert_emails."
   }

@@ -1,12 +1,14 @@
 // Health alarms (vision docs/specs/2026-10-08-reliability-security-design.md, R6a): every 5 minutes, the routers the
 // manager knows are compared with what they report; an alarm per subject keeps its open problems, and each change that
 // matters (a problem opened or raised, a subject resolved) is published to the environment's alert topic.
-import { reporting, type RouterSummary } from '@dormeto/fleet';
+import { reporting, type RouterPoll, type RouterSummary } from '@dormeto/fleet';
+import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
+import { routerTooOld, tooOldText } from '@dormeto/google/router';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fleetRouters, type TerraformRouter } from './routers.js';
 
 export type Level = 'warning' | 'error';
-export interface Subject { id: string; kind: 'router' | 'list' | 'workload'; name: string; account?: string; region?: string; router?: string; workloadId?: string; url?: string | null }
+export interface Subject { id: string; kind: 'router' | 'list' | 'workload'; name: string; cloud?: Cloud; account?: string; region?: string; router?: string; workloadId?: string; url?: string | null }
 export interface Problem { code: string; level: Level; text: string; hint?: string }
 export interface OpenProblem extends Problem { since: string }
 export interface Alarm {
@@ -32,7 +34,7 @@ export interface Notification {
   message: string;
   chat?: ChatNotification;
   // Message attributes, for subscription filter policies.
-  attributes: { level: Level | 'resolved' | 'info'; kind: Subject['kind'] | 'digest' | 'update'; account?: string; region?: string; router?: string; workload?: string };
+  attributes: { level: Level | 'resolved' | 'info'; kind: Subject['kind'] | 'digest' | 'update'; cloud?: Cloud; account?: string; region?: string; router?: string; workload?: string };
 }
 export interface Observation { subject: Subject; problems: Problem[] }
 interface Log { info(event: string, data?: object): void; warn(event: string, data?: object): void; error(event: string, data?: object): void }
@@ -77,13 +79,20 @@ function reportedProblems(summary: RouterSummary): Problem[] {
   }).filter((p) => !FAILED_WORKLOADS.has(p.code));
 }
 
-export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now }: {
+// What a silent router's owner checks first, per cloud.
+const AWS_SILENT_HINT = 'Its idle check does not run, or its reports do not reach the manager\'s event bus: open the router in the dashboard, which calls it directly and shows why.';
+const gcpSilentHint = (region: string) => `Its Cloud Run service (the controller) does not answer, or its Cloud Scheduler job dmtr-${region}-check does not run: open the router in the dashboard, which calls it directly and shows why, then read the controller's logs in Cloud Logging.`;
+
+export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now, polls = [], routerVersion }: {
   terraformRouters: TerraformRouter[]; installed: InstalledRouter[]; summaries: RouterSummary[]; managerAccount: string; now: number;
+  // The Google Cloud routers' polls (RS# items), and the version the manager pins (the install command's).
+  polls?: { account: string; region: string; poll: RouterPoll | null }[]; routerVersion?: string;
 }): Observation[] {
   const observations: Observation[] = [];
   for (const router of fleetRouters(terraformRouters, installed, managerAccount)) {
     const account = router.account ?? managerAccount;
-    const subject: Subject = { id: `router#${account}#${router.region}`, kind: 'router', name: router.name, account, region: router.region };
+    const cloud = router.cloud ?? 'aws';
+    const subject: Subject = { id: `router#${account}#${router.region}`, kind: 'router', name: router.name, cloud, account, region: router.region };
     const summary = summaries.find((s) => s.account === account && s.region === router.region);
     if (summary && reporting(summary, now)) {
       try {
@@ -93,11 +102,20 @@ export function routerObservations({ terraformRouters, installed, summaries, man
       }
       continue;
     }
+    // A Google Cloud router the manager can't poll (older than 0.40.0, or without /v1/actions) can't report: never silent.
+    if (cloud === 'gcp') {
+      const poll = polls.find((p) => p.account === account && p.region === router.region)?.poll;
+      const version = summary?.version || router.installed?.version || '';
+      if (routerTooOld(version) || poll?.tooOld !== undefined) {
+        observations.push({ subject, problems: [{ code: 'too-old', level: 'error', text: tooOldText(version || poll?.tooOld || '', account, router.region, routerVersion) }] });
+        continue;
+      }
+    }
     if (!summary && router.installed && now - Date.parse(router.installed.at) < GRACE_MS) {
       observations.push({ subject, problems: [] });
       continue;
     }
-    const hint = 'Its idle check does not run, or its reports do not reach the manager\'s event bus: open the router in the dashboard, which calls it directly and shows why.';
+    const hint = cloud === 'gcp' ? gcpSilentHint(router.region) : AWS_SILENT_HINT;
     observations.push({ subject, problems: [{ code: 'silent', level: 'error', text: summary ? `no report for ${minutes(now - Date.parse(summary.checkedAt))} minutes` : 'no report received', hint }] });
   }
   return observations;
@@ -148,7 +166,7 @@ export function workloadObservations(entries: FailureIndexEntry[], now = Date.no
     const hint = [`${e.failure.backend ? `Backend: ${e.failure.backend}. ` : ''}${next}`, ADVICE[e.failure.kind] ?? ADVICE.unknown,
       'If its backends keep running without a healthy target, Dormeto stops them after its idle window.'].join('\n  ');
     return {
-      subject: { id: `workload#${e.account}#${e.region}#${e.workloadId}`, kind: 'workload' as const, name: e.name ?? e.workloadId, account: e.account, region: e.region, router: e.router, workloadId: e.workloadId, url: e.url ?? null },
+      subject: { id: `workload#${e.account}#${e.region}#${e.workloadId}`, kind: 'workload' as const, name: e.name ?? e.workloadId, cloud: cloudOf(e.account) ?? 'aws', account: e.account, region: e.region, router: e.router, workloadId: e.workloadId, url: e.url ?? null },
       problems: [{ code: `${e.failure.step === 'nap' ? 'nap' : 'wake'}-failed:${e.failure.kind}`, level: 'error' as const, text: `${e.failure.step === 'nap' ? 'nap' : 'wake'} failed: ${e.failure.message}`, hint }],
     };
   });
@@ -196,8 +214,9 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
   const s = alarm.subject;
   const where = s.kind === 'list' ? `IP list ${s.name}` : `${s.name} (${s.account} ${s.region})`;
   const link = s.kind === 'workload' ? `${dashboardUrl}/workloads/${s.router}/${s.workloadId}` : `${dashboardUrl}/routers${s.kind === 'list' ? '#ip-lists' : ''}`;
+  // A subject without a cloud (an IP list) is the manager's own, which runs on AWS.
   const attributes = {
-    kind: s.kind,
+    kind: s.kind, cloud: s.cloud ?? ('aws' as Cloud),
     ...(s.account ? { account: s.account } : {}), ...(s.region ? { region: s.region } : {}),
     ...(s.kind === 'router' ? { router: s.name } : s.router ? { router: s.router } : {}),
     ...(s.workloadId ? { workload: s.workloadId } : {}),
@@ -223,12 +242,14 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
   return { subject, message, chat: chatNotification(subject, description, nextSteps), attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', ...attributes } };
 }
 
-export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations }: {
+export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations, routerVersion }: {
   env: string;
+  // The router version the manager pins: the install command's --version for a Google Cloud router too old to report.
+  routerVersion?: string;
   managerAccount: string;
   dashboardUrl: string;
   terraformRouters: TerraformRouter[];
-  fleet: { listRouters(): Promise<RouterSummary[]> };
+  fleet: { listRouters(): Promise<RouterSummary[]>; routerPolls?(): Promise<{ account: string; region: string; poll: RouterPoll | null }[]> };
   registry: { listRouters(): Promise<InstalledRouter[]> };
   alarms: AlarmStore;
   notify: { publish(n: Notification): Promise<void> };
@@ -240,7 +261,7 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
   return {
     async run() {
       const t = now();
-      const [summaries, installed, existing] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list()]);
+      const [summaries, installed, existing, polls] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list(), fleet.routerPolls?.() ?? []]);
       // Subjects other than routers that could not be read keep their alarms as they are (never resolved nor removed).
       let extra: Observation[] = [];
       let extraUnread: string | null = null;
@@ -256,7 +277,7 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       const named = fleetRouters(terraformRouters, installed, managerAccount);
       const routerName = (account?: string, region?: string) => named.find((r) => (r.account ?? managerAccount) === account && r.region === region)?.name;
       const observations = [
-        ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t }),
+        ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t, polls, routerVersion }),
         ...extra.map((o) => (o.subject.kind === 'workload' ? { ...o, subject: { ...o.subject, router: routerName(o.subject.account, o.subject.region) ?? o.subject.router } } : o)),
       ];
       const known = new Map(existing.map((x) => [x.alarm.subject.id, x]));
@@ -314,7 +335,10 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
           const subject = snsSubject(`[Dormeto ${env}] ${digested.length} more alarms changed`);
           const chat = chatNotification(subject, [`${digested.length} more alarms changed in this check:`, ...listed,
             ...(digested.length > DIGEST_LISTED ? [`- and ${digested.length - DIGEST_LISTED} more`] : []), `[Open the dashboard](${dashboardUrl}/)`].join('\n'));
-          await notify.publish({ subject, message, chat, attributes: { level: digested.some((d) => d.change.alarm.level === 'error') ? 'error' : 'warning', kind: 'digest' } });
+          // The cloud when every alarm of the digest is of one; a mixed digest names none.
+          const clouds = new Set(digested.map((d) => d.note!.attributes.cloud));
+          const cloud = clouds.size === 1 ? [...clouds][0] : undefined;
+          await notify.publish({ subject, message, chat, attributes: { level: digested.some((d) => d.change.alarm.level === 'error') ? 'error' : 'warning', kind: 'digest', ...(cloud ? { cloud } : {}) } });
           for (const { change } of digested) await write(change);
         } catch (err) {
           log.error('AlertNotSent', { subject: 'digest', count: digested.length, error: (err as Error).message });

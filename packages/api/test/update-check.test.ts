@@ -43,7 +43,7 @@ describe('runUpdateCheck', () => {
     expect(s.sent).toHaveLength(1);
     const n = s.sent[0]!;
     expect(n.subject).toBe('[Dormeto dev] Manager 0.14.0 is available');
-    expect(n.attributes).toEqual({ level: 'info', kind: 'update' });
+    expect(n.attributes).toEqual({ level: 'info', kind: 'update', cloud: 'aws' });
     for (const text of [n.message, n.chat!.content.description]) {
       expect(text).toContain('0.13.0');
       expect(text).toContain('https://github.com/Dormeto/manager/blob/main/CHANGELOG.md');

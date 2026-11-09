@@ -111,6 +111,7 @@ resource "aws_lambda_function" "watchdog" {
       MANAGER_ACCOUNT = local.account_id
       ENV             = var.env
       ALERTS_TOPIC    = aws_sns_topic.alerts.arn
+      ROUTER_VERSION  = local.router_version
       DASHBOARD_URL   = "https://${local.dashboard_host}"
       # The manager's IP lists (R6b): their status, alarmed on.
       LISTS_BUCKET = aws_s3_bucket.lists.id
