@@ -6,7 +6,7 @@ import { addEnergy, savedEnergy } from '@dormeto/fleet/energy';
 import type { AccessReport } from '../access';
 import type {
   AlertsInfo, Backend, Costs, Counts, Discounts, Exclusion, FleetStates, IdleWindowAdvice, IpListsInfo, Operation, Problem, RouterDetails, RouterInfo,
-  GoogleConnection, SavingsSummary, StoppedItem, WorkloadHistory, WorkloadStatus, WorkloadSummary,
+  GoogleConnectionAnswer, SavingsSummary, StoppedItem, WorkloadHistory, WorkloadStatus, WorkloadSummary,
 } from '../types';
 import { ROUTER_RULES } from './fixtures';
 import { ACCOUNTS, ORG } from './org';
@@ -62,16 +62,19 @@ export function routerRow(d: Demo, r: DemoRouter, now: number): RouterInfo {
   };
 }
 
-// The Google Cloud connection of the demo: its host project (dormeto-dev), two service accounts, and the routers installed there.
-export function googleConnection(d: Demo, now: number): GoogleConnection {
+// The Google Cloud connection of the demo, as the API answers it ({ connection }, null when there is none): its host project
+// (dormeto-dev), two service accounts, and the routers installed there.
+export function googleConnection(d: Demo, now: number): GoogleConnectionAnswer {
   const routers = d.routers.filter((r) => r.cloud === 'gcp');
-  if (!routers.length) return fail(404, 'not_found', 'no Google Cloud connection');
+  if (!routers.length) return { connection: null };
   const project = routers[0]!.account;
   return {
-    project, projectNumber: '1034397096264', pool: 'dmt-demo', provider: 'aws', scopes: [`projects/${project}`],
-    serviceAccounts: { discovery: `dmt-demo-discovery@${project}.iam.gserviceaccount.com`, command: `dmt-demo-command@${project}.iam.gserviceaccount.com` },
-    routers: routers.map((r) => ({ project: r.account, region: r.region, controller: `https://dmtr-${r.region}-controller-demo-nw.a.run.app`, version: r.version })),
-    googleAdded: [], connectedAt: iso(now - 9 * DAY), connectedBy: ORG.me, cli: '0.14.0',
+    connection: {
+      project, projectNumber: '1034397096264', pool: 'dmt-demo', provider: 'aws', scopes: [`projects/${project}`],
+      serviceAccounts: { discovery: `dmt-demo-discovery@${project}.iam.gserviceaccount.com`, command: `dmt-demo-command@${project}.iam.gserviceaccount.com` },
+      routers: routers.map((r) => ({ project: r.account, region: r.region, controller: `https://dmtr-${r.region}-controller-demo-nw.a.run.app`, version: r.version })),
+      googleAdded: [], connectedAt: iso(now - 9 * DAY), connectedBy: ORG.me, cli: '0.14.0',
+    },
   };
 }
 

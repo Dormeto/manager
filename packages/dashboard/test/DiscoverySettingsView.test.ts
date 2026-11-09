@@ -8,6 +8,8 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import DiscoverySettingsView from '../src/views/DiscoverySettingsView.vue';
 import { useSession } from '../src/stores/session';
+// The API's own answers, as its test checks them (packages/api/test/api.test.ts).
+import { GOOGLE_ANSWER, NO_GOOGLE_ANSWER } from '../../api/test/google-connection';
 
 const CONFIG = { mode: 'account', regions: ['*'], refreshHours: 24, excludes: [], filters: [], eventRefresh: { enabled: false } };
 const CONNECTION = {
@@ -16,7 +18,9 @@ const CONNECTION = {
   routers: [{ project: 'dormeto-dev', region: 'europe-west2', controller: 'https://dmtr-europe-west2-controller-abc-nw.a.run.app', version: '0.40.0' }],
   googleAdded: ['monitoring.googleapis.com'], connectedAt: new Date(Date.now() - 3_600_000).toISOString(), connectedBy: 'fab@example.com', cli: '0.14.0',
 };
+// What GET /discovery/google answers: { connection }, null when there is none; `answer` in its place when set.
 let connection: typeof CONNECTION | null = CONNECTION;
+let answer: unknown;
 let failure = '';
 const calls: string[] = [];
 vi.mock('../src/api', async (importOriginal) => {
@@ -28,8 +32,7 @@ vi.mock('../src/api', async (importOriginal) => {
       if (path === '/discovery/config') return { config: structuredClone(CONFIG), lint: [], updatedAt: null, updatedBy: null };
       if (path === '/discovery/google') {
         if (failure) throw new original.ApiError(500, failure);
-        if (!connection) throw new original.ApiError(404, 'no Google Cloud connection');
-        return structuredClone(connection);
+        return structuredClone(answer ?? { connection });
       }
       return {};
     }),
@@ -49,7 +52,23 @@ async function mountView() {
 }
 
 describe('Discovery settings: the Google Cloud connection', () => {
-  beforeEach(() => { connection = CONNECTION; failure = ''; calls.length = 0; });
+  beforeEach(() => { connection = CONNECTION; answer = undefined; failure = ''; calls.length = 0; });
+
+  it('reads the API\'s own answer (its test\'s fixture): the connection under connection, its routers with or without a controller', async () => {
+    answer = GOOGLE_ANSWER;
+    const wrapper = await mountView();
+    const text = wrapper.find('[data-test="google-connection"]').text();
+    const c = GOOGLE_ANSWER.connection;
+    for (const shown of [c.project, c.projectNumber, ...c.scopes, c.serviceAccounts.discovery, c.serviceAccounts.command, c.pool, c.provider, c.connectedBy, c.cli]) expect(text).toContain(shown);
+    expect(text).toContain('europe-west2 · 0.40.0');
+    expect(text).toContain('us-central1');
+    expect(text).not.toContain('No Google Cloud connection');
+    wrapper.unmount();
+    answer = NO_GOOGLE_ANSWER;
+    const none = await mountView();
+    expect(none.find('[data-test="google-connection"]').text()).toContain('No Google Cloud connection');
+    none.unmount();
+  });
 
   it('shows the host project, the scopes, the two service accounts, the routers, and who connected and when, read-only', async () => {
     const wrapper = await mountView();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mockApi } from '../src/mock';
-import type { RouterInfo, WorkloadSummary } from '../src/types';
+import type { GoogleConnectionAnswer, RouterInfo, WorkloadSummary } from '../src/types';
 
 const ROUTER = 'dmtr-dormeto-dev-europe-west2';
 
@@ -47,8 +47,10 @@ describe('the demo\'s Google Cloud router', () => {
     expect(status.backends[0]!.id).toBe('projects/dormeto-dev/zones/europe-west2-a/instances/vm-demo');
   });
 
-  it('answers the connection of its host project at GET /discovery/google', async () => {
-    const connection = await mockApi('/discovery/google') as { project: string; routers: { region: string }[]; serviceAccounts: { discovery: string } };
+  it('answers the connection of its host project at GET /discovery/google as the API does, under connection', async () => {
+    const answer = await mockApi('/discovery/google') as GoogleConnectionAnswer;
+    expect(Object.keys(answer)).toEqual(['connection']);
+    const connection = answer.connection!;
     expect(connection.project).toBe('dormeto-dev');
     expect(connection.routers.map((r) => r.region)).toEqual(['europe-west2']);
     expect(connection.serviceAccounts.discovery).toMatch(/^dmt-.*-discovery@dormeto-dev\.iam\.gserviceaccount\.com$/);

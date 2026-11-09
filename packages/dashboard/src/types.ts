@@ -442,7 +442,7 @@ export interface IdleWindowAdvice {
   hours?: { from: string; counts: number[] };
 }
 
-// GET /api/discovery/google: the Google Cloud connection `dormeto gcp connect` recorded (manager 0.24.0); 404 when there is none.
+// The Google Cloud connection `dormeto gcp connect` recorded (manager 0.24.0).
 export interface GoogleConnection {
   project: string;
   projectNumber: string;
@@ -450,9 +450,14 @@ export interface GoogleConnection {
   provider: string;
   scopes: string[]; // organizations/<n>, folders/<n>, projects/<id>
   serviceAccounts: { discovery: string; command: string };
-  routers: { project: string; region: string; controller: string; version: string | null }[];
+  // controller and version: what connect read of the router's Cloud Run service; absent when it left them to discovery.
+  routers: { project: string; region: string; controller?: string; version?: string }[];
   googleAdded: string[];
   connectedAt: string;
   connectedBy: string;
   cli?: string;
+}
+// GET /api/discovery/google: the connection, null when there is none.
+export interface GoogleConnectionAnswer {
+  connection: GoogleConnection | null;
 }

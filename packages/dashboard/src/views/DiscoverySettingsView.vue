@@ -14,7 +14,7 @@ import { useNow } from '../now';
 import { procedureLink, type AccessReport } from '../access';
 import PageTitle from '../components/PageTitle.vue';
 import GoogleConnectionCard from '../components/GoogleConnectionCard.vue';
-import type { GoogleConnection } from '../types';
+import type { GoogleConnection, GoogleConnectionAnswer } from '../types';
 
 type Answer = { config: DiscoveryConfig; lint: LintFinding[]; updatedAt?: string | null; updatedBy?: string | null };
 
@@ -70,12 +70,13 @@ async function load() {
   }
 }
 
-// The Google Cloud connection (read-only): none is a 404, any other failure is said.
+// The Google Cloud connection (read-only): the API answers { connection }, null when there is none; a 404 (a manager before
+// 0.24.0) is none too, any other failure is said.
 const connection = ref<GoogleConnection | null>(null);
 const connectionError = ref('');
 async function loadConnection() {
   try {
-    connection.value = await api<GoogleConnection>('/discovery/google');
+    connection.value = (await api<GoogleConnectionAnswer>('/discovery/google')).connection ?? null;
   } catch (err) {
     connection.value = null;
     if (!(err instanceof ApiError && err.status === 404)) connectionError.value = (err as Error).message;

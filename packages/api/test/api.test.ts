@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import type { InstalledRouter } from '@dormeto/operations';
 import { createApi, RouterError, routerInvoker, type ApiEvent, type AuditEntry, type Invoke } from '../src/api.js';
+import { GOOGLE_ANSWER, GOOGLE_RECORD, NO_GOOGLE_ANSWER } from './google-connection.js';
 
 const ROUTERS = [
   { name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller' },
@@ -329,7 +330,16 @@ describe('the Google Cloud connection', () => {
 
   it('answers a GET with no connection as null', async () => {
     const { api } = connected();
-    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-admin')))).toEqual({ connection: null });
+    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-admin')))).toEqual(NO_GOOGLE_ANSWER);
+  });
+
+  // The answers the dashboard's Discovery settings read (its test reads the same fixture).
+  it('answers the record connect wrote as { connection }, and { connection: null } once disconnected: google-connection.ts', async () => {
+    const { api } = connected();
+    expect((await api(viaIam('PUT', '/iam/discovery/google', GOOGLE_RECORD))).statusCode).toBe(200);
+    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-viewer')))).toEqual(GOOGLE_ANSWER);
+    expect((await api(viaIam('DELETE', '/iam/discovery/google'))).statusCode).toBe(200);
+    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-viewer')))).toEqual(NO_GOOGLE_ANSWER);
   });
 
   it('deletes the record and the Google Cloud routers, keeping the AWS ones', async () => {
