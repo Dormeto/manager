@@ -62,6 +62,29 @@ export function createRegistry({ dynamo, table }: { dynamo: { send(command: obje
     async put(router: InstalledRouter): Promise<void> {
       await dynamo.send(new PutItemCommand({ TableName: table, Item: routerItem(router) }));
     },
+    // A router's new state, written only while its registration is still there (a disconnect may have removed it since it was read).
+    async update(router: InstalledRouter): Promise<boolean> {
+      try {
+        await dynamo.send(new PutItemCommand({ TableName: table, Item: routerItem(router), ConditionExpression: 'attribute_exists(sk)' }));
+        return true;
+      } catch (err) {
+        if ((err as Error).name === 'ConditionalCheckFailedException') return false;
+        throw err;
+      }
+    },
+    // The removal of the registration as it was read: false when it changed or went since (connect or discovery rewrote it).
+    async deleteIf(account: string, region: string, read: InstalledRouter): Promise<boolean> {
+      try {
+        await dynamo.send(new DeleteItemCommand({
+          TableName: table, Key: routerKey(account, region), ConditionExpression: '#d = :read',
+          ExpressionAttributeNames: { '#d': 'data' }, ExpressionAttributeValues: { ':read': { S: JSON.stringify(read) } },
+        }));
+        return true;
+      } catch (err) {
+        if ((err as Error).name === 'ConditionalCheckFailedException') return false;
+        throw err;
+      }
+    },
     async delete(account: string, region: string): Promise<void> {
       await dynamo.send(new DeleteItemCommand({ TableName: table, Key: routerKey(account, region) }));
     },

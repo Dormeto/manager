@@ -38,6 +38,7 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIn
         if (input.ConditionExpression === 'attribute_exists(sk) AND (attribute_not_exists(version) OR version = :version)'
           && (!existing || (existing.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N))) throw fail('ConditionalCheckFailedException');
         if (input.ConditionExpression === VERSIONED && existing?.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
+        if (input.ConditionExpression === 'attribute_exists(sk)' && !existing) throw fail('ConditionalCheckFailedException');
         if (input.ConditionExpression === 'attribute_not_exists(sk)' && existing) throw fail('ConditionalCheckFailedException');
         items.set(keyOf(input.Item), input.Item);
         return {};
@@ -63,6 +64,7 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIn
         const existing = items.get(keyOf(input.Key));
         if (input.ConditionExpression === 'runId = :id' && existing?.runId?.S !== input.ExpressionAttributeValues[':id'].S) throw fail('ConditionalCheckFailedException');
         if (input.ConditionExpression === VERSIONED && existing?.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
+        if (input.ConditionExpression === '#d = :read' && existing?.data?.S !== input.ExpressionAttributeValues[':read'].S) throw fail('ConditionalCheckFailedException');
         items.delete(keyOf(input.Key));
         return {};
       }

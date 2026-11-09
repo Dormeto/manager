@@ -31,4 +31,19 @@ describe('the registry of routers', () => {
     await registry.delete('dormeto-dev', 'europe-west2');
     expect(await registry.list()).toEqual([aws]);
   });
+
+  it('updates a registration only while it exists, and deletes it only while it holds what was read', async () => {
+    const dynamo = fakeDynamo();
+    const registry = createRegistry({ dynamo, table: 't' });
+    expect(await registry.update(router)).toBe(false);
+    expect(await registry.list()).toEqual([]);
+    await registry.put(router);
+    expect(await registry.update({ ...router, version: '0.40.1' })).toBe(true);
+    expect((await registry.list())[0]!.version).toBe('0.40.1');
+    expect(await registry.deleteIf(router.account, router.region, router)).toBe(false);
+    expect(await registry.list()).toHaveLength(1);
+    expect(await registry.deleteIf(router.account, router.region, { ...router, version: '0.40.1' })).toBe(true);
+    expect(await registry.list()).toEqual([]);
+    expect(await registry.deleteIf(router.account, router.region, router)).toBe(false);
+  });
 });

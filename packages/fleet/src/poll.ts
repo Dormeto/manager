@@ -165,12 +165,17 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     }
     // Only at a poll Google answered with its own 404: a count kept from before never removes a router on its own.
     if (gone && poll.misses >= MISSES_MAX) {
-      await registry.delete(router.account, router.region);
+      // Only the registration this poll read: a controller connect rewrote since is another router's.
+      const removed = await registry.deleteIf(router.account, router.region, router);
       // Registered again later (installed again), it counts from 0.
       poll.misses = 0;
-      log?.warn('RouterUnregistered', {
-        router: router.name, account: router.account, region: router.region, reason: 'its controller URL answered Google\'s own 404 twice in a row: the router is uninstalled',
-      });
+      if (removed) {
+        log?.warn('RouterUnregistered', {
+          router: router.name, account: router.account, region: router.region, reason: 'its controller URL answered Google\'s own 404 twice in a row: the router is uninstalled',
+        });
+      } else {
+        log?.info('RouterKept', { router: router.name, account: router.account, region: router.region, reason: 'its registration changed since the poll read it' });
+      }
     }
     await store.putPoll(router.account, router.region, poll);
   }
@@ -187,8 +192,11 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     try {
       const { version } = await routerHealth(run.google, router, { timeoutMs: CALL_MS });
       if (version !== router.version) {
-        await registry.put({ ...router, version });
-        log?.info('RouterVersionRead', { router: router.name, account: router.account, region: router.region, from: router.version, version });
+        if (await registry.update({ ...router, version })) {
+          log?.info('RouterVersionRead', { router: router.name, account: router.account, region: router.region, from: router.version, version });
+        } else {
+          log?.info('RouterVersionNotKept', { router: router.name, account: router.account, region: router.region, version, reason: 'its registration is gone' });
+        }
       }
       if (routerTooOld(version) || poll.tooOld === version) {
         poll.lastRefusal = 'router-too-old';

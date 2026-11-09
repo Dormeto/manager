@@ -382,6 +382,40 @@ describe('the poll of Google Cloud routers', () => {
     expect(await w.registry.list()).toHaveLength(1);
   });
 
+  it('writes a version it read only while the registration is still there: a disconnect\'s DELETE between the read and the write re-creates nothing', async () => {
+    const w = world();
+    const r = await w.add('europe-west2', { version: '0.39.0' });
+    r.version = '0.39.0';
+    const health = r.health;
+    r.version = '0.40.0';
+    r.health = async () => {
+      const answer = await health();
+      await w.registry.delete(PROJECT, 'europe-west2');
+      return answer;
+    };
+    await w.poll();
+    expect(await w.registry.list()).toEqual([]);
+    expect(w.logs).toContainEqual(['RouterVersionNotKept', { router: 'dmtr-europe-west2', account: PROJECT, region: 'europe-west2', version: '0.40.0', reason: 'its registration is gone' }]);
+    expect(w.logs.map(([event]) => event)).not.toContain('RouterVersionRead');
+  });
+
+  it('removes a router after Google\'s 404 twice only while its registration still holds what the poll read: a controller URL rewritten by connect in between keeps it', async () => {
+    const w = world();
+    const r = await w.add('europe-west2');
+    r.answer = () => GOOGLE_404;
+    await w.poll();
+    w.clock.t += 60 * S;
+    const rewritten = { ...(await w.registry.list())[0]!, controller: 'https://dmtr-europe-west2-controller-new.europe-west2.run.app' };
+    r.answer = () => {
+      w.dynamo.items.set(`ROUTER#${PROJECT}#europe-west2`, routerItem(rewritten));
+      return GOOGLE_404;
+    };
+    await w.poll();
+    expect(await w.registry.list()).toEqual([rewritten]);
+    expect(w.logs.map(([event]) => event)).not.toContain('RouterUnregistered');
+    expect(w.logs).toContainEqual(['RouterKept', { router: 'dmtr-europe-west2', account: PROJECT, region: 'europe-west2', reason: 'its registration changed since the poll read it' }]);
+  });
+
   it('keeps a router whose controller answers its own JSON 404 (older than 0.40.0), and calls it again only once its version changes', async () => {
     const w = world();
     const r = await w.add('europe-west2', { version: '' });
