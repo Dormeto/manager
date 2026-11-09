@@ -1,5 +1,7 @@
 # Organization access
 
+This page covers AWS first, then [Google Cloud](#google-cloud).
+
 Discovery reads the AWS organization from the manager account and scans each account of its perimeter through a
 read-only role, `DmtDiscoveryRole`; operations act through `DmtCommandRole` (vision
 `docs/architecture/organization-iam.md`). Dormeto never deploys these roles (no CloudFormation): they are created with the
@@ -29,3 +31,50 @@ tfenv exec apply dev.tfplan
 
 Apply it again after a router version that changes `dist/router-boundary.json`. The modules' tests run offline with a
 mocked provider: `cd infra/terraform/modules/<module> && tfenv exec init -backend=false && tfenv exec test`.
+
+## Google Cloud
+
+A manager reaches Google Cloud without a key or a secret: its Lambda roles act as two service accounts of one **host
+project** through workload identity federation, and every change that makes this possible is made by the CLI, never by
+the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud` or console command is needed.
+
+- **The host project** holds the federation for one manager environment `<env>`: the workload identity pool `dmt-<env>`
+  with its AWS provider `aws` (the manager's account), and two service accounts, the Google twins of the AWS roles.
+  The provider maps `google.subject=assertion.arn` and `attribute.aws_role=assertion.arn.extract('assumed-role/{role}/')`,
+  and admits only the manager's roles, with the condition
+  `assertion.arn.startsWith('arn:aws:sts::<account>:assumed-role/dmt-<env>-manager-')`.
+- **`dmt-<env>-discovery@<host>.iam.gserviceaccount.com`**, twin of `DmtDiscoveryRole`, is impersonated by the manager's
+  roles `dmt-<env>-manager-discovery`, `-api` and `-savings` (`roles/iam.workloadIdentityUser`, granted to the principal
+  set of each role name). It holds read-only access, through the custom role `dormetoDiscovery`, at each scope: the
+  projects, folders and organizations, the load balancers' parts, the Cloud Run services (the routers) and Monitoring's
+  request counts.
+- **`dmt-<env>-command@<host>.iam.gserviceaccount.com`**, twin of `DmtCommandRole`, is impersonated by
+  `dmt-<env>-manager-operations`, `-api` and `-fleet`. In each project that has a router it holds
+  `roles/run.invoker` on the router's controller (a Cloud Run service `dmtr-<region>-controller`),
+  `roles/resourcemanager.tagUser` on the tag value `<project>/dormeto/managed` and the custom role `dormetoCommand` on the
+  project (the tag bindings of the onboarding and the offboarding). It holds nothing else: no router install, no IAM
+  policy, no backend service.
+- **`dormeto gcp connect`** makes every change, as you: the host's APIs (`iam`, `iamcredentials`, `sts`,
+  `cloudresourcemanager`, `cloudbilling`), the roles, the pool and provider, the accounts, the impersonation grants, the
+  bindings at the scopes and on the routers. It finds the manager through its profile and environment, tests your
+  permissions first, prints the plan and asks. The CLI's README has the command
+  (`dormeto gcp connect --project <host> --profile <profile> --env <env>`); `dormeto gcp disconnect` removes it.
+- **The scopes** are what discovery sees: `organizations/<n>`, `folders/<n>` or `projects/<id>`, repeatable; the default
+  is the host project alone. A Google Cloud account without an organization has project scopes only.
+- **The connection's record** (`GET|PUT|DELETE /iam/discovery/google`, administrators; reads also under `/api`) is what
+  connect writes in the manager: the host and its number, the pool, the provider, the scopes, the two accounts, the
+  routers, what Google added, who connected and when, with which CLI. The Discovery settings show it read-only, or the
+  command that connects one. Without a record, there is no Google Cloud scan.
+- **Routers** are registered when connect writes the record (the routers at the scopes, with their controller's URL and
+  version). Each discovery run then lists the Cloud Run services `dmtr-<region>-controller` of the scanned projects and
+  adds, updates or removes the registrations (the version is the service's `DMT_VERSION`: the discovery account never
+  calls a router). The [poll](operations.md#google-cloud-routers) removes a router whose controller no longer exists.
+- **A router installed later**, in a project the command account does not reach yet, is reached after
+  `dormeto gcp connect` is run again; `dormeto gcp install` changes nothing about the manager. Until then, a call to that
+  router is refused with the command (`manager-access-missing`).
+- **After a disconnect,** the record is cleared and the manager's Google Cloud routers are unregistered. The disconnect
+  removes, under the two accounts' names, every binding at the recorded scopes and router projects and at the host, the
+  two custom roles where connect defined them, the accounts, the provider and the pool; the APIs stay. It looks only
+  at the scopes and the host: a project that has left the scopes keeps its `dormetoCommand` role, bound to nobody, after a
+  disconnect. It grants nothing; to delete it, make the project a scope again (`dormeto gcp connect --scope
+  projects/<id>`) and disconnect.

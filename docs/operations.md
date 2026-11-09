@@ -15,6 +15,50 @@ roles under `/dormeto/router/`), and the role may only create roles there carryi
 `DmtRouterBoundary`, and change or delete only `dmtr-*` resources, never a router written in Terraform nor the manager. In the manager's account both are created by the `access` module (see below); one operation at a
 time per target group, router or workload, one per load balancer (lock), three per account and region.
 
+## Google Cloud routers
+
+A Google Cloud router (`dmtr-<project>-<region>` in the manager, `cloud: 'gcp'`, installed by the CLI) pushes nothing:
+the manager reaches it through the [connection](organization-access.md#google-cloud) and reads it. Everything the
+manager does there is `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, the
+actions an AWS router's controller answers and two of Google Cloud's (`events`, `manager-settings`). A call gives up
+after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 s at most.
+
+- **The poll** runs every minute (the schedule `dmt-<env>-manager-poll` invokes the fleet function with `{ "task":
+  "poll" }`, never retried): 10 routers at once, at most 50 s a run, the least recently polled first, each router at 0.40.0
+  or of a version not yet known. It asks the router's journal (`events`) after the cursor kept on the router's `RS#` item,
+  and ingests each event as the `Workload state changed` an AWS router sends, with the project and region of the router
+  called as its identity. The journal is **read again from 5 minutes before the newest event already read**, so a late
+  write is not missed: an event read twice is one history entry, and an older one never sets a summary back. When the
+  router's check is newer than its summary, its rows (`list`, pages of 1000) come in as `Router checked` chunks.
+  A router that does not answer gets no new summary, so the watchdog's `silent` rule applies as on AWS.
+- **A router removed:** one whose controller URL answers Google's own 404 (not the controller's JSON) **twice in a row**
+  is unregistered (`RouterUnregistered`): an uninstalled router leaves within two minutes instead of alarming. A broken
+  connection never counts as a router gone, and a controller that has no `/v1/actions` is kept and not called again
+  until its version changes.
+- **`too-old`:** a router below 0.40.0 has no `/v1/actions`. It is listed with its version, never polled, and the
+  watchdog says `too-old`, not `silent`, with the command that upgrades it: `dormeto gcp install --project <p> --region <r>
+  --version <pinned>`.
+- **The refusals,** as a 502 with the command that fixes it:
+  - `manager-access-missing`: Google refuses the manager's token or the connection is broken (pool, provider or
+    service account gone, a grant revoked), `the manager's accounts can't reach the router: dormeto gcp connect
+    --project <host> --profile <profile> --env <env>`;
+  - `router-too-old`, without a call for a router below 0.40.0, or when its controller has no `/v1/actions`:
+    `router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`;
+  - `router-unknown`: discovery has not found the router's controller yet, `dormeto gcp connect` again.
+  An action the router does not know (an `unknown-action` answer) is an error that names the action.
+- **The organization's settings:** each write of `settings.json` (`PUT /api/settings/workloads`, `/settings/types`,
+  `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller as `manager-settings`
+  (the object written and its S3 ETag), 10 at a time. A router that fails is logged (`ManagerSettingsNotPushed`), and the
+  poll pushes it when the ETag the router holds differs from the file's (`ManagerSettingsPushed`); the write's answer
+  does not change.
+- **What stays with the CLI:** every change of an IAM policy, a backend service or a cluster. `install-router` for a project
+  and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp install` or
+  `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
+  uninstall, `--request-logs` and a GKE workload's Kubernetes access are CLI commands (`dormeto gcp`). A workload the CLI
+  onboarded is renamed, tagged, set and offboarded from the manager as any other.
+- **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
+  the cloud its alarms share, and none when they mix.
+
 ## Health alerts, IP lists and MFA
 
 - **Health alerts:** the watchdog (`dmt-<env>-manager-watchdog`, every 5 minutes, a second bundle of the API package)

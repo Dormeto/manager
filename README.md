@@ -21,7 +21,8 @@ real visitor arrives. Awake, traffic goes straight to your application: Dormeto 
 This repository is the **manager**, which runs in one account of your organization: a dashboard, an API, and the
 discovery and operations it runs in your other accounts through roles you create. It finds what could nap in every
 account and region, onboards it in a click, and installs and upgrades the [routers](https://github.com/Dormeto/router)
-that nap and wake each workload.
+that nap and wake each workload. It also reads the routers that the [Dormeto CLI](https://github.com/Dormeto/cli) installs
+in your Google Cloud projects, and shows both clouds in the same dashboard.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/overview-dark.webp">
@@ -50,6 +51,22 @@ flowchart TB
 3. **Wake just in time.** The first real request starts the backends. The visitor is held while they start and
    redirected as soon as the application answers, or sees a page that reloads by itself. The rules then switch back to
    your application.
+
+**On Google Cloud** the same three steps run in a Cloud Run router, behind a Google Cloud Application Load Balancer, for
+Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs the router and onboards its workloads
+(`dormeto gcp install`, `dormeto gcp workloads onboard`), because those change Google IAM policies and load balancers,
+which the manager never does. The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
+identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
+([Organization access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
+reads the router's journal of state changes and its check summary, which feed the same history, health and alerts
+as an AWS router's, and it pushes the organization's settings to it ([Operations](docs/operations.md#google-cloud-routers)).
+A router older than 0.40.0 is listed with the `dormeto gcp install` command that upgrades it.
+
+```mermaid
+flowchart LR
+    manager[Manager<br>in AWS] -->|workload identity federation,<br>one call a minute| gcp[Router<br>Cloud Run, one per project and region]
+    gcp -->|journal and check summary| manager
+```
 
 ## From discovery to the first nap
 
@@ -101,6 +118,8 @@ account, one change per load balancer at a time.</p>
 - **Savings you can check.** AWS list prices of what each nap stopped, Spot capacity at Spot prices, less the discounts
   you set, net of Dormeto's own cost. Each workload's idle window card replays its last 14 days of requests to choose
   the window.
+- **Both clouds, one dashboard.** A cloud mark before each account or project, Google Cloud regions and backend kinds
+  (VM, managed instance group, GKE workload, Cloud SQL instance) and console links. An alert carries its `cloud` for filter policies.
 - **Alerts where you work.** Failed wakes and router health reach your email and chat channels (Amazon Q Developer in
   Slack or Microsoft Teams) within 5 minutes.
 - **Runs in your account.** The manager and the routers run in your AWS accounts, through least-privilege roles you
@@ -163,10 +182,10 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | Topic | What it covers |
 |---|---|
 | [Access control](docs/access-control.md) | Roles, members, workload tags, groups and grants, permissions, when changes apply |
-| [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, health alerts, IP lists, MFA, failed wakes, state history |
+| [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, Google Cloud routers (the poll, `too-old`, the refusals), health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced, Spot, discounts, the daily job, the idle window advisor |
 | [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto aws estimate`: accounts, filters, uptime, companion databases, cache, permissions |
-| [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules |
+| [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |
 | [Development](docs/development.md) | Build, test, a development environment, screenshots, releases |
 
 ## Repository layout

@@ -7,38 +7,37 @@ CLI script, of the same release).
 
 ## Unreleased
 
-One model for both clouds: an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
+The manager reaches Google Cloud routers, installed by the CLI, as it does AWS ones: it reads them every minute and calls them,
+through a connection `dormeto gcp connect` makes, with no key and no change of a Google IAM policy by the manager. An AWS router,
+row, event or call behaves as before.
+
+- **One model for both clouds:** an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
 and a region is checked against its account's cloud (`@dormeto/fleet/clouds`). The manager accepts a Google Cloud router's
 rows and events (a backend service instead of a target group, VM names in `hibernated`), names its router
 `dmtr-<project>-<region>`, and reads a `*/N * * * *` check schedule. An AWS router behaves as before.
-
-The manager's Google identity (`@dormeto/google`): its Lambda roles act as the two service accounts of a Google Cloud host
+- **The manager's Google identity (`@dormeto/google`):** its Lambda roles act as the two service accounts of a Google Cloud host
 project through workload identity federation (a signed `GetCallerIdentity` exchanged at Google's STS, then
 `iamcredentials`), with no key and nothing stored; tokens are kept in memory until 5 minutes before they expire, and every
 call gives up after 3 s without a connection or 10 s of silence.
-
-The Google Cloud connection: `GET`, `PUT` and `DELETE /iam/discovery/google` (administrators; reads also under `/api`) keep the
+- **The Google Cloud connection:** `GET`, `PUT` and `DELETE /iam/discovery/google` (administrators; reads also under `/api`) keep the
 record `dormeto gcp connect` writes (`DISC#GOOGLE`), with its projects and regions checked. A `PUT` registers each of its routers
 as `ROUTER#<project>#<region>` under its own name `dmtr-<region>` (shown in the manager as `dmtr-<project>-<region>`; `cloud: 'gcp'`),
 with the controller URL and version the record carries (a router's entry may leave them empty: discovery or the poll then learns them,
 and a later record keeps what they learnt when it leaves them empty) and unregisters the Google Cloud routers a later record drops; a `DELETE` removes the record and every Google Cloud
 registration. AWS registrations are never touched. Audited as `google-connection`.
-
-Discovery lists Google Cloud routers: with a connection, each run (in its finalize step) lists the projects the discovery account sees and
+- **Discovery lists Google Cloud routers:** with a connection, each run (in its finalize step) lists the projects the discovery account sees and
 their Cloud Run services `dmtr-<region>-controller`, and adds, updates (controller URL, `DMT_VERSION`) or removes the `ROUTER#` registrations;
 a project that fails is recorded in the run and keeps its routers, Cloud Run turned off means no router there. AWS registrations are
 never touched.
-
-The watchdog watches Google Cloud routers: one below 0.40.0, or that answered the poll it has no `/v1/actions`, is `too-old` with the
+- **The watchdog watches Google Cloud routers:** one below 0.40.0, or whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the
 `dormeto gcp install` command (never `silent`); a silent one gets the advice for Cloud Run, its Scheduler job `dmtr-<region>-check`
 and the controller's logs. Every alert gains the message attribute `cloud` (`aws` or `gcp`); the update check's is `aws`, a digest
 carries the cloud its alarms share and none when they mix.
-
-The manager calls Google Cloud routers: every action it sends an AWS router's controller goes to a Google Cloud router's
+- **The manager calls Google Cloud routers:** every action it sends an AWS router's controller goes to a Google Cloud router's
 `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, 10 s per call (a cold Cloud Run
 start; an AWS router keeps its 5 s), 10 at once and 20 s per request as before, refusals read as the AWS controller answers them.
 A Google Cloud router the manager can't use answers 502 with the command that fixes it: `manager-access-missing` when Google
-refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked) (`the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`),
+refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked), with `the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`),
 `router-too-old` for a router below 0.40.0, without calling it, or one whose controller has no `/v1/actions`
 (`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router-unknown`
 while discovery hasn't found its controller. `install-router` for a project, and `upgrade-router` and `uninstall-router` for a Google
@@ -47,8 +46,7 @@ Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PU
 every Google Cloud router with a controller as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
 onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
-
-The manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
+- **The poll:** The manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
 function with `{ task: 'poll' }`, never retried), 10 at once for at most 50 s a run, the least recently polled first, each
 router at 0.40.0 or of an unknown version. Its journal (`events`), read again from 5 minutes before the newest event already
 read, comes in as an AWS router's `Workload state changed` events (an event read twice is one history entry, an older one
@@ -61,13 +59,11 @@ a router gone. Each router's poll (where its journal was read up to, its 404s in
 fixes it, the ETag it holds) is kept on its `RS#` item, beside the summary. The fleet function reads `settings.json`
 (`s3:GetObject`; `s3:ListBucket` on the lists bucket, so a missing one answers 404) and updates its table's items
 (`dynamodb:UpdateItem`). A Google Cloud row's Cloud SQL backend is kept as `cloudsql-instance`.
-
-The dashboard's lists show both clouds: a cloud mark (Material Design Icons' AWS and Google Cloud marks) before the account or project of a router
+- **The dashboard's lists show both clouds:** a cloud mark (Material Design Icons' AWS and Google Cloud marks) before the account or project of a router
 and a workload, "Account or project" columns, the Google Cloud regions (every region Google lists, with the location Google names) in the region labels, which say
 "AWS location" or "Google Cloud location", the Google Cloud backend kinds (Compute Engine VM, managed instance group, Kubernetes workload, Cloud SQL instance) as
 Material Design icons, and Discovery's filter taking a project ID. `npm run dev:mock` gains a Google Cloud router `dmtr-dormeto-dev-europe-west2` (0.40.0) and two workloads.
-
-The dashboard's Google Cloud router and workload views: a router installed by the CLI (`source: 'cli'`) shows its version, health (a `too-old`
+- **The dashboard's Google Cloud router and workload views:** a router installed by the CLI (`source: 'cli'`) shows its version, health (a `too-old`
 router with the `dormeto gcp install ... --version <pinned>` command), pauses, settings, waiting page and description, and no install, upgrade,
 uninstall or Terraform control: the `dormeto gcp install` and `uninstall` commands and its controller's page in the Google Cloud console instead;
 the Routers install form stays AWS's with one line naming `dormeto gcp install`. A Google Cloud workload shows its backend service, waker backend
@@ -75,6 +71,9 @@ service and URL map with the console link (a regional URL map links the project'
 instance with theirs, "suspended" where AWS says "hibernated", Google Cloud list prices, and no target group, targets or ARN; the workload the CLI
 onboarded is renamed, tagged, set and offboarded from the dashboard. Discovery settings shows the Google Cloud connection read-only
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
+- **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
+  project, the two service accounts, the pool and provider, the scopes, and what a disconnect leaves) and `docs/operations.md`
+  (the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).
 
 ## 0.22.0 — 2026-11-05
 
