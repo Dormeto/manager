@@ -24,6 +24,11 @@ with the controller URL and version the record carries (a router's entry may lea
 and a later record keeps what they learnt when it leaves them empty) and unregisters the Google Cloud routers a later record drops; a `DELETE` removes the record and every Google Cloud
 registration. AWS registrations are never touched. Audited as `google-connection`.
 
+Discovery lists Google Cloud routers: with a connection, each run (in its finalize step) lists the projects the discovery account sees and
+their Cloud Run services `dmtr-<region>-controller`, and adds, updates (controller URL, `DMT_VERSION`) or removes the `ROUTER#` registrations;
+a project that fails is recorded in the run and keeps its routers, Cloud Run turned off means no router there. AWS registrations are
+never touched.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'
