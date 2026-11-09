@@ -5,7 +5,7 @@ import { ref, watch } from 'vue';
 import { mdiPowerSleep } from '@mdi/js';
 
 type Choice = 'inherit' | 'on' | 'off';
-const props = withDefaults(defineProps<{ modelValue: boolean; subject: string; current: boolean | null; inheritable?: boolean; inheritText?: string; saving?: boolean }>(), { inheritable: true, inheritText: '', saving: false });
+const props = withDefaults(defineProps<{ modelValue: boolean; subject: string; current: boolean | null; inheritable?: boolean; inheritText?: string; saving?: boolean; cloud?: 'aws' | 'gcp' }>(), { inheritable: true, inheritText: '', saving: false, cloud: 'aws' });
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [boolean | null] }>();
 const choice = ref<Choice>('inherit');
 const choiceOf = (value: boolean | null): Choice => (value === null ? (props.inheritable ? 'inherit' : 'on') : value ? 'on' : 'off');
@@ -15,10 +15,13 @@ const value = (): boolean | null => (choice.value === 'inherit' ? null : choice.
 
 <template>
   <v-dialog :model-value="modelValue" max-width="480" @update:model-value="emit('update:modelValue', $event)">
-    <v-card :title="`Hibernate ${subject}`">
+    <v-card :title="cloud === 'gcp' ? `Suspend instead of stop ${subject}` : `Hibernate ${subject}`">
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiPowerSleep" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-4 text-medium-emphasis">Decides whether the standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are
+        <p v-if="cloud === 'gcp'" class="mb-4 text-medium-emphasis">Decides whether the VMs of the workload are suspended instead of stopped when it naps: a suspended VM keeps its memory
+          and resumes faster. A VM that cannot be suspended (with a GPU or a TPU, confidential, or with more than 208 GB of memory) is stopped. After 60 days Compute Engine stops a suspended
+          VM itself. A workload with fallback machine types is not suspended unless it is set to On on the workload itself.</p>
+        <p v-else class="mb-4 text-medium-emphasis">Decides whether the standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are
           hibernated instead of stopped when the workload naps. Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched.
           A workload with fallback instance types does not hibernate unless it is set to On on the workload itself.</p>
         <v-radio-group v-model="choice" hide-details>

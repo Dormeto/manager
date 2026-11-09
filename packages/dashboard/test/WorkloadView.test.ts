@@ -947,6 +947,30 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
+  it('shows the suspension setting in Google Cloud words and writes it as the same setting, with no EC2 or hibernation text', async () => {
+    current = { ...google, hibernation: { hibernate: true, from: 'router', workload: null, router: true, manager: null, instances: [{ id: `${PROJECT}/zones/europe-west2-a/instances/vm-demo`, configured: true, hibernated: true }], freshBoot: false } };
+    const wrapper = await mountView('operator');
+    const card = wrapper.find('[data-test="hibernate"]');
+    expect(card.text()).toContain('Suspend instead of stop');
+    expect(card.text()).toContain('On, from the router');
+    vi.mocked(api).mockClear();
+    await card.find('[data-test="edit-hibernate"]').trigger('click');
+    await flushPromises();
+    const dialog = document.querySelector('.v-dialog')!;
+    expect(dialog.textContent).toContain('Suspend instead of stop');
+    expect(dialog.textContent).toContain('60 days');
+    (dialog.querySelector('input[type="radio"][value="on"]') as HTMLInputElement).click();
+    await flushPromises();
+    ([...document.querySelectorAll<HTMLElement>('.v-dialog button')].find((b) => b.textContent?.trim() === 'Save'))!.click();
+    await flushPromises();
+    const put = vi.mocked(api).mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === 'PUT')!;
+    expect(put[0]).toBe('/workloads/dmtr-dev/5cdfbf844b925bf8/settings');
+    expect(JSON.parse(String((put[1] as RequestInit).body))).toEqual({ hibernate: true });
+    expect(wrapper.text().match(/.{0,25}(EC2|hibernat).{0,25}/i)?.[0]).toBeUndefined();
+    expect(dialog.textContent).not.toMatch(/EC2|hibernat/i);
+    wrapper.unmount();
+  });
+
   it('lets an operator rename, tag, set and offboard it: the CLI onboarded it, unlike a Terraform workload', async () => {
     current = google;
     const admin = await mountView('admin');

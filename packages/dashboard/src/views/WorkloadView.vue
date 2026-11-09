@@ -131,7 +131,7 @@ async function setHibernate(hibernate: boolean | null) {
   try {
     await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate }) });
     hibernateOpen.value = false;
-    notice.value = { type: 'success', text: 'Hibernation saved: it applies from the next nap.' };
+    notice.value = { type: 'success', text: `${gcp.value ? 'Suspension' : 'Hibernation'} saved: it applies from the next nap.` };
     await run();
   } catch (err) {
     hibernateOpen.value = false;
@@ -643,22 +643,22 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         <v-card-text v-if="!gcp && status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
           Hibernate: <strong>does not apply</strong> (standalone EC2 instances only)
         </v-card-text>
-        <v-card-text v-else-if="!gcp && status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
+        <v-card-text v-else-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
           <div class="d-flex flex-wrap align-center ga-2">
-            <span>Hibernate <strong>{{ hibernationLine(status.hibernation) }}</strong></span>
+            <span>{{ gcp ? 'Suspend instead of stop' : 'Hibernate' }} <strong>{{ hibernationLine(status.hibernation) }}</strong></span>
             <v-spacer />
-            <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set hibernate in its workload module</span>
+            <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set {{ gcp ? 'it' : 'hibernate' }} in its workload module</span>
             <v-btn v-else-if="session.canOperate && managed" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="hibernateOpen = true">Edit</v-btn>
           </div>
-          <div v-if="readinessLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ readinessLine(status.hibernation) }}</div>
-          <div v-if="freshBootLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ freshBootLine(status.hibernation) }}</div>
+          <div v-if="!gcp && readinessLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ readinessLine(status.hibernation) }}</div>
+          <div v-if="!gcp && freshBootLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ freshBootLine(status.hibernation) }}</div>
         </v-card-text>
       </v-card>
     </div>
   </div>
 
   <WorkloadSettingsDialog v-if="status?.settingsFrom" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
-  <HibernateDialog v-if="!gcp && status?.hibernation" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
+  <HibernateDialog v-if="status?.hibernation" :cloud="gcp ? 'gcp' : 'aws'" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
   <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
