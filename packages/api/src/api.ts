@@ -6,7 +6,8 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import type { GoogleConnection } from '@dormeto/google';
+import type { Google, GoogleConnection } from '@dormeto/google';
+import { callRouter, RouterCallError, ROUTER_MINIMUM, routerTooOld } from '@dormeto/google/router';
 import { cloudOf, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
@@ -128,10 +129,13 @@ export interface DiscoveryApi {
 }
 
 // A router answered with an error (function error, unknown workload): 502 for the caller. A refusal of a router 0.37.0
-// or later has its code (vision refusals design §1): invalid, not_found, conflict or unsupported.
+// or later has its code (vision refusals design §1): invalid, not_found, conflict or unsupported. A Google Cloud router
+// the manager can't use is a 502 with its own code (Google Cloud manager design §6.2): the manager's accounts can't reach
+// it, it predates /v1/actions, or discovery hasn't found its controller yet.
 export type RefusalCode = 'invalid' | 'not_found' | 'conflict' | 'unsupported';
+export type CallRefusal = 'manager-access-missing' | 'router-too-old' | 'router-unknown';
 export class RouterError extends Error {
-  constructor(message: string, readonly code?: RefusalCode) {
+  constructor(message: string, readonly code?: RefusalCode, readonly refusal?: CallRefusal) {
     super(message);
   }
 }
@@ -143,16 +147,66 @@ const REFUSALS: Partial<Record<RefusalCode, [number, string]>> = { invalid: [400
 // without. An asynchronous call is sent as it is: nothing reads its answer, and a refusal there stays an error.
 export type ControllerSend = (router: Router, input: { FunctionName: string; InvocationType: 'Event' | 'RequestResponse'; Payload: Uint8Array })
   => Promise<{ Payload?: Uint8Array; FunctionError?: string }>;
-export function routerInvoker(send: ControllerSend): Invoke {
+// A Google Cloud router's calls (Google Cloud manager design §6.2): the connection's Google instance, and what the
+// refusals' commands name.
+export interface GoogleCalls {
+  // The connection's record and its Google instance (one per execution environment), null while there is none.
+  current(): Promise<{ connection: GoogleConnection; google: Pick<Google, 'request'> } | null>;
+  env: string; // the manager's environment
+  routerVersion?: string; // the router version the manager installs and upgrades to
+  timeoutMs?: number; // each call's bound (10 s: a cold Cloud Run start)
+}
+export const GOOGLE_CALL_MS = 10_000;
+
+// The commands that fix what the manager can't do on Google Cloud. The operator's AWS profile is theirs to fill in.
+const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
+const installCommand = (project: string, region: string, pinned: string | undefined) => `dormeto gcp install --project ${project} --region ${region}${pinned ? ` --version ${pinned}` : ''}`;
+export const accessMissingText = (host: string, env: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}`;
+// version: '' when it is unknown (the router answered that it has no /v1/actions).
+export const tooOldText = (version: string, project: string, region: string, pinned: string | undefined) =>
+  `router ${version || `older than ${ROUTER_MINIMUM}`} can't report to the manager: ${installCommand(project, region, pinned)}`;
+export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
+
+// A refusal answered (refusals: true), as a router error with its code; any other answer as it is.
+function refusalOf(answer: unknown): unknown {
+  const refused = (answer as { refused?: { code?: RefusalCode; message?: string } } | null)?.refused;
+  if (refused) throw new RouterError(refused.message ?? 'refused', refused.code);
+  return answer;
+}
+
+// A Google Cloud router: the payload to its controller's /v1/actions with the command account's ID token, which answers
+// as the AWS controller does. A router the manager can't use is refused before any call: a version before 0.40.0, no
+// connection, or no controller known yet. Google has no asynchronous call: an asynchronous one is sent as it is and its
+// answer not read.
+async function googleInvoke(calls: GoogleCalls | undefined, router: Router, payload: Record<string, unknown>, options: { async?: boolean }): Promise<unknown> {
+  const env = calls?.env ?? '';
+  const [project, region, version] = [router.account ?? '', router.region, router.installed?.version ?? ''];
+  if (routerTooOld(version)) throw new RouterError(tooOldText(version, project, region, calls?.routerVersion), undefined, 'router-too-old');
+  const current = (await calls?.current()) ?? null;
+  const host = current?.connection.project ?? '<host>';
+  if (!router.controller) throw new RouterError(controllerUnknownText(host, env), undefined, 'router-unknown');
+  if (!current) throw new RouterError(accessMissingText(host, env), undefined, 'manager-access-missing');
+  let answer: unknown;
+  try {
+    answer = await callRouter(current.google, router, options.async ? payload : { ...payload, refusals: true }, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS });
+  } catch (err) {
+    if (!(err instanceof RouterCallError)) throw err;
+    if (err.refusal === 'manager-access-missing') throw new RouterError(accessMissingText(host, env), undefined, err.refusal);
+    if (err.refusal === 'router-too-old') throw new RouterError(tooOldText('', project, region, calls?.routerVersion), undefined, err.refusal);
+    throw new RouterError(err.message);
+  }
+  return options.async ? null : refusalOf(answer);
+}
+
+export function routerInvoker(send: ControllerSend, google?: GoogleCalls): Invoke {
   return async (router, payload, options = {}) => {
+    if (router.cloud === 'gcp') return googleInvoke(google, router, payload, options);
     const body = options.async ? payload : { ...payload, refusals: true };
     const out = await send(router, { FunctionName: router.controller, InvocationType: options.async ? 'Event' : 'RequestResponse', Payload: new Uint8Array(Buffer.from(JSON.stringify(body))) });
     if (options.async) return null;
     const answer = JSON.parse(out.Payload?.length ? Buffer.from(out.Payload).toString('utf8') : 'null');
     if (out.FunctionError) throw new RouterError((answer as { errorMessage?: string } | null)?.errorMessage ?? out.FunctionError);
-    const refused = (answer as { refused?: { code?: RefusalCode; message?: string } } | null)?.refused;
-    if (refused) throw new RouterError(refused.message ?? 'refused', refused.code);
-    return answer;
+    return refusalOf(answer);
   };
 }
 
@@ -274,6 +328,7 @@ export interface ApiOptions {
   accessRoles?: { discoveryRole: string; commandRole: string };
   historyDays?: number; // how long the savings job's day items are kept (HISTORY_DAYS, 400)
   callTimeoutMs?: number; // a router that does not report, called directly: answer within (5 s)
+  googleCallTimeoutMs?: number; // a Google Cloud router's (10 s: a cold Cloud Run start)
   callConcurrency?: number; // at most this many such calls at once (10)
   callDeadlineMs?: number; // and all of them within (20 s: API Gateway answers within 29 s); the others are not called
   // Health alarms (R6a): the watchdog's open alarms, and where the alert topic sends them.
@@ -291,8 +346,9 @@ export interface ApiOptions {
     status(): Promise<{ lists?: (ListStatusLine & { dropped?: number })[] } | null>;
   };
   // The manager's settings for every router (settings.json of the lists bucket): read and rewritten whole, so the keys
-  // this API does not know survive. Without it, the defaults are answered and nothing can be set.
-  globalSettings?: { read(): Promise<Record<string, unknown> | null>; write(doc: Record<string, unknown>): Promise<void> };
+  // this API does not know survive. Without it, the defaults are answered and nothing can be set. A write answers S3's
+  // ETag of the object, pushed with it to the Google Cloud routers.
+  globalSettings?: { read(): Promise<Record<string, unknown> | null>; write(doc: Record<string, unknown>): Promise<string | void> };
 }
 
 // An alert endpoint as administrators see it: an address reduced to its first letter and domain, an ARN to its name.
@@ -555,7 +611,7 @@ const settingsText = ({ hibernate, joinMinutes, endedWindowDays, defaults }: { h
 ].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, google, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
-  fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
+  fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -736,9 +792,11 @@ export function createApi({
     const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RouterError(`no answer within ${ms} ms`)), ms); });
     return Promise.race([promise, late]).finally(() => clearTimeout(timer));
   }
+  // A router's bound: a Google Cloud router's is longer (a cold Cloud Run start).
+  const callTimeout = (router: Router) => (router.cloud === 'gcp' ? googleCallTimeoutMs : callTimeoutMs);
   // A call that timed out keeps its place until the router answers (its Lambda still runs): at most callConcurrency
   // router invocations at once, without waiting for those answers.
-  async function each<T, R>(items: T[], work: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  async function each<T, R>(items: T[], work: (item: T) => Promise<R>, timeoutOf: (item: T) => number = () => callTimeoutMs): Promise<PromiseSettledResult<R>[]> {
     const out: PromiseSettledResult<R>[] = new Array(items.length);
     const deadline = Date.now() + callDeadlineMs;
     let next = 0;
@@ -780,7 +838,7 @@ export function createApi({
         const call = work(items[i]!);
         call.then(free, free);
         try {
-          out[i] = { status: 'fulfilled', value: await bounded(call, Math.max(1, Math.min(callTimeoutMs, deadline - Date.now()))) };
+          out[i] = { status: 'fulfilled', value: await bounded(call, Math.max(1, Math.min(timeoutOf(items[i]!), deadline - Date.now()))) };
         } catch (reason) {
           out[i] = { status: 'rejected', reason };
         }
@@ -1061,7 +1119,7 @@ export function createApi({
     const { summaries, workloads } = await reports();
     const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
     const silent = shown.filter((r) => !summaries.has(r));
-    const called = await each(silent, (r) => invoke(r, { action: 'list' }));
+    const called = await each(silent, (r) => invoke(r, { action: 'list' }), callTimeout);
     const rows: Record<string, unknown>[] = [];
     const errors: { router: string; message: string }[] = [];
     for (const router of shown) {
@@ -1143,6 +1201,17 @@ export function createApi({
       if (err instanceof RouterError && err.message.startsWith('workload not configured')) throw new HttpError(404, 'not_found', err.message);
       throw err;
     }
+  }
+  // The organization's settings pushed to every Google Cloud router that has a controller (Google Cloud manager design
+  // §5.5, §6.5): those routers can't read settings.json. 10 at a time within the request's bound; a router that fails
+  // gets them at the manager's next poll, and the write's answer stays as it is.
+  async function pushSettings(settings: Record<string, unknown>, etag: string | void) {
+    const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller);
+    if (!targets.length) return;
+    const results = await each(targets, (r) => invoke(r, { action: 'manager-settings', settings, etag: etag ?? '' }), callTimeout);
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', router: targets[i]!.name, error: (result.reason as Error).message }));
+    });
   }
   // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
   // by hand): read as never set. Only a write naming hibernate replaces it, so that an administrator can repair it: another would
@@ -1402,7 +1471,7 @@ export function createApi({
           },
           updatedAt, updatedBy: identity.email,
         };
-        await globalSettings.write(next);
+        await pushSettings(next, await globalSettings.write(next));
         const sent = { ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }), ...(endedWindowDays === undefined ? {} : { endedWindowDays }), ...(defaults === undefined ? {} : { defaults }) };
         return { result: settingsText(sent, 'default', before), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
@@ -1430,7 +1499,7 @@ export function createApi({
         const { types: _replaced, ...others } = workloads;
         const list = types as { name: string }[];
         const next = { ...doc, workloads: { ...others, ...(list.length ? { types: list } : {}) }, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
-        await globalSettings.write(next);
+        await pushSettings(next, await globalSettings.write(next));
         return { result: typesChangeText(validTypes(workloads.types), list), response: reply(200, { ...shownTypes(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
     }
@@ -1477,7 +1546,8 @@ export function createApi({
         if (found === 'unreadable') throw new HttpError(409, 'conflict', UNREADABLE_SETTINGS);
         const { waitingPage: before, ...kept } = found ?? {};
         const at = new Date(now()).toISOString();
-        await globalSettings.write({ ...kept, ...(page ? { waitingPage: { ...page, by: identity.email, at } } : {}) });
+        const written = { ...kept, ...(page ? { waitingPage: { ...page, by: identity.email, at } } : {}) };
+        await pushSettings(written, await globalSettings.write(written));
         return {
           result: pageText('organization', page, before),
           response: reply(200, { page, warnings: pageWarnings(page), ...(page ? { by: identity.email, at } : { by: null, at: null }), note: 'routers at 0.35.0 or later apply it within about a minute' }),
@@ -1512,7 +1582,7 @@ export function createApi({
       const shown = routers.filter((r) => visible(identity, { account: accountOfRouter(r), region: r.region }));
       const [{ summaries, workloads }, listed] = await Promise.all([reports(), operations?.list() ?? []]);
       const silent = shown.filter((r) => !summaries.has(r));
-      const called = await each(silent, (r) => routerRow(r));
+      const called = await each(silent, (r) => routerRow(r), callTimeout);
       // The install, upgrade or uninstall running on a router (the dashboard shows it in progress).
       const running = listed.filter((op) => op.status === 'running' && ADMIN_TYPES.has(op.type));
       const operationOf = (router: Router) => {
@@ -2481,6 +2551,8 @@ export function createApi({
     } else if (type === 'install-router') {
       const account = String(body.account ?? '');
       const region = String(body.region ?? '');
+      // A Google Cloud router's install, upgrade and uninstall change IAM policies: the CLI's (Google Cloud manager design §8).
+      if (isProject(account)) throw new HttpError(400, 'bad_request', `a Google Cloud router is installed with the CLI: ${installCommand(account, isRegion('gcp', region) ? region : '<region>', routerVersion)}`);
       if (!isAccount(account) || !isRegion('aws', region)) throw new HttpError(400, 'bad_request', 'account (12 digits) and region required');
       if (!sees(identity, account, region)) throw new HttpError(404, 'not_found', `unknown account or region: ${account}/${region}`);
       await needCommandRole(account);
@@ -2495,6 +2567,11 @@ export function createApi({
         input = { router: router.name, account, region: router.region, workloadId };
         target = `${router.name}/${workloadId}`;
       } else {
+        if (router.cloud === 'gcp') {
+          throw new HttpError(400, 'bad_request', type === 'upgrade-router'
+            ? `a Google Cloud router is upgraded with the CLI: ${installCommand(account, router.region, routerVersion)}`
+            : `a Google Cloud router is uninstalled with the CLI: dormeto gcp uninstall --project ${account} --region ${router.region}`);
+        }
         input = { account, region: router.region };
         target = router.name;
       }
@@ -2559,7 +2636,7 @@ export function createApi({
     } catch (err) {
       if (err instanceof HttpError) return reply(err.statusCode, { error: err.code, message: err.message });
       if (err instanceof RouterError) {
-        const [status, code] = (err.code && REFUSALS[err.code]) || [502, 'router_error'];
+        const [status, code] = (err.code && REFUSALS[err.code]) || [502, err.refusal ?? 'router_error'];
         return reply(status, { error: code, message: err.message });
       }
       console.error(JSON.stringify({ level: 'error', event: 'ApiError', error: (err as Error).message }));

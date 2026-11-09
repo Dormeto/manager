@@ -41,3 +41,29 @@ describe('a router\'s controller, from the manager', () => {
     expect([payload(), sent[0]!.input.InvocationType]).toEqual([{ action: 'check' }, 'Event']);
   });
 });
+
+describe('a Google Cloud router\'s controller, from the manager', () => {
+  const GCP: Router = { name: 'dmtr-dormeto-dev-europe-west2', region: 'europe-west2', account: 'dormeto-dev', cloud: 'gcp', controller: 'https://dmtr-europe-west2-controller-abc-nw.a.run.app', installed: { version: '0.40.0', build: '', at: '2026-11-09T10:00:00.000Z' } };
+  const never = async () => { throw new Error('not an AWS call'); };
+
+  it('answers manager-access-missing without a connection, the host left for the operator', async () => {
+    const invoke = routerInvoker(never, { current: async () => null, env: 'dev', routerVersion: '0.40.0' });
+    const err = await invoke(GCP, { action: 'list' }).catch((e: unknown) => e) as RouterError;
+    expect([err instanceof RouterError, err.refusal, err.message]).toEqual([true, 'manager-access-missing', 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project <host> --profile <profile> --env dev']);
+  });
+
+  it('reads the controller\'s failure as a router error without a code, as a thrown AWS one', async () => {
+    const request = async () => ({ status: 500, text: JSON.stringify({ error: 'internal', message: 'Firestore unavailable' }) });
+    const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev' });
+    const err = await invoke(GCP, { action: 'list' }).catch((e: unknown) => e) as RouterError;
+    expect([err instanceof RouterError, err.message, err.code, err.refusal]).toEqual([true, 'Firestore unavailable', undefined, undefined]);
+  });
+
+  it('sends an asynchronous call without asking for refusals, and reads nothing of its answer', async () => {
+    const sent: unknown[] = [];
+    const request = async (...args: unknown[]) => { sent.push(args[4]); return { status: 200, text: '{"refused":{"code":"conflict","message":"x"}}' }; };
+    const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev' });
+    expect(await invoke(GCP, { action: 'nap', workloadId: 'demo' }, { async: true })).toBeNull();
+    expect(sent).toEqual([{ action: 'nap', workloadId: 'demo' }]);
+  });
+});

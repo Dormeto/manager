@@ -11,7 +11,7 @@ export async function readJson<T>(s3: S3Client, bucket: string, key: string): Pr
   }
 }
 
-// Rewrites a JSON object whole (the last write wins).
-export async function writeJson(s3: S3Client, bucket: string, key: string, doc: unknown): Promise<void> {
-  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(doc), ContentType: 'application/json' }));
+// Rewrites a JSON object whole (the last write wins), and answers its ETag as S3 gives it (quotes included).
+export async function writeJson(s3: S3Client, bucket: string, key: string, doc: unknown): Promise<string | undefined> {
+  return (await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: JSON.stringify(doc), ContentType: 'application/json' }))).ETag;
 }

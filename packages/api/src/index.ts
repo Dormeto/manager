@@ -19,7 +19,7 @@ import { createFleetStore, createPriceBook } from '@dormeto/fleet';
 import { createSpotPort } from './spot.js';
 import { baselineOf } from './baseline.js';
 import { createEngine, createRecords, type InstalledRouter } from '@dormeto/operations';
-import type { GoogleConnection } from '@dormeto/google';
+import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import { createApi, routerInvoker, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
@@ -36,9 +36,6 @@ const lambdaFor = (region: string) => {
   if (!lambdas.has(region)) lambdas.set(region, new LambdaClient({ region }));
   return lambdas.get(region)!;
 };
-
-// The router's controller, in the router's region (refusals as answers: api.ts routerInvoker).
-const invoke = routerInvoker((router, input) => lambdaFor(router.region).send(new InvokeCommand(input)));
 
 const dynamo = new DynamoDBClient({});
 const audit = {
@@ -151,6 +148,14 @@ const google = {
   },
   routers: { list: () => records.listRouters(), put: (r: InstalledRouter) => records.putRouter(r), delete: (account: string, region: string) => records.deleteRouter(account, region) },
 };
+// One Google instance per execution environment for that record, so its tokens are kept between invocations.
+const googleSource = createGoogleSource({ read: () => google.get(), create: (connection) => createGoogle({ connection }) });
+
+// The router's controller: an AWS one in the router's region, a Google Cloud one at its URL with the command account's
+// ID token (refusals as answers: api.ts routerInvoker).
+const invoke = routerInvoker((router, input) => lambdaFor(router.region).send(new InvokeCommand(input)), {
+  current: () => googleSource.current(), env: process.env.ENV ?? 'dev', routerVersion: process.env.ROUTER_VERSION,
+});
 const operations = {
   create: engine.create,
   list: () => records.listOperations(),

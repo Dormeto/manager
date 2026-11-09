@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { createApi, RouterError, type ApiEvent, type AuditEntry, type Invoke } from '../src/api.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
+import type { InstalledRouter } from '@dormeto/operations';
+import { createApi, RouterError, routerInvoker, type ApiEvent, type AuditEntry, type Invoke } from '../src/api.js';
 
 const ROUTERS = [
   { name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller' },
@@ -289,5 +291,208 @@ describe('the Google Cloud connection', () => {
     expect(stored()).toBeNull();
     expect([...store.keys()]).toEqual(['121014831971#eu-west-1']);
     expect(audit.at(-1)?.action).toBe('google-connection');
+  });
+});
+
+describe('Google Cloud routers', () => {
+  const CONTROLLER = 'https://dmtr-europe-west2-controller-abc123-nw.a.run.app';
+  const OTHER = 'https://dmtr-us-central1-controller-abc123-uc.a.run.app';
+  const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
+  const NAME = 'dmtr-dormeto-dev-europe-west2';
+  const record: GoogleConnection = {
+    project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-host'],
+    serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: COMMAND },
+    routers: [{ project: 'dormeto-dev', region: 'europe-west2' }], googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'cli', cli: '0.14.0',
+  };
+  const gcp = (over: Partial<InstalledRouter> = {}): InstalledRouter => ({
+    name: 'dmtr-europe-west2', account: 'dormeto-dev', region: 'europe-west2', controller: CONTROLLER, onboarder: '', version: '0.40.0', build: '',
+    installedBy: 'cli', cloud: 'gcp', installedAt: '2026-11-09T10:00:00.000Z', ...over,
+  });
+  type Seen = { url: string; method: string; headers: Record<string, string>; body: string };
+  const answer = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const jwt = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+  const claimsOf = (authorization: string) => JSON.parse(Buffer.from(authorization.replace(/^Bearer /, '').split('.')[1]!, 'base64url').toString());
+
+  // The manager as index.ts builds it: the invoker's Google transport over a fake Google (its STS, iamcredentials and the
+  // controllers, which `controller` answers), the AWS routers of Terraform called through Lambda (recorded).
+  function manager({ routers = [gcp()], controller = () => answer(200, {}) }: { routers?: InstalledRouter[]; controller?: (req: Seen, payload: Record<string, unknown>) => Response } = {}) {
+    const seen: Seen[] = [];
+    let n = 0;
+    const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+      const req: Seen = { url: String(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body ?? '') };
+      seen.push(req);
+      if (req.url === 'https://sts.googleapis.com/v1/token') return answer(200, { access_token: `federated-${++n}`, expires_in: 3600 });
+      if (req.url.endsWith(':generateIdToken')) return answer(200, { token: jwt({ aud: (JSON.parse(req.body) as { audience: string }).audience, exp: Math.floor(NOW / 1000) + 3600, n: ++n }) });
+      return controller(req, JSON.parse(req.body) as Record<string, unknown>);
+    };
+    const source = createGoogleSource({
+      read: async () => record,
+      create: (connection) => createGoogle({ connection, credentials: { accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret' }, fetch: fetch as typeof globalThis.fetch, now: () => NOW }),
+    });
+    const aws: unknown[] = [];
+    const invoke = routerInvoker(async (router, input) => {
+      aws.push([router.name, JSON.parse(Buffer.from(input.Payload).toString())]);
+      return { Payload: new Uint8Array(Buffer.from(JSON.stringify({ workloads: [] }))) };
+    }, { current: () => source.current(), env: 'dev', routerVersion: '0.40.0' });
+    const audit: AuditEntry[] = [];
+    const created: unknown[] = [];
+    const settings = { doc: null as Record<string, unknown> | null };
+    const api = createApi({
+      routers: ROUTERS, invoke, audit: { write: async (e) => { audit.push(e); }, list: async () => audit }, now: () => NOW, newId: () => 'id-1', version: '0.1.0',
+      routerVersion: '0.40.0', managerAccount: '121014831971',
+      operations: {
+        installedRouters: async () => routers, list: async () => [], get: async () => null,
+        create: async (type, input, by) => { created.push([type, input]); return { id: 'op-1', type, input, by } as never; },
+      },
+      globalSettings: { read: async () => settings.doc, write: async (doc) => { settings.doc = doc; return '"5d41402abc4b2a76b9719d911017c592"'; } },
+    });
+    const actions = () => seen.filter((s) => s.url.endsWith('/v1/actions')).map((s) => ({ url: s.url, payload: JSON.parse(s.body) as Record<string, unknown>, authorization: s.headers['authorization']! }));
+    return { api, seen, actions, aws, audit, created, settings };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('sends a nap to the controller\'s /v1/actions as request-nap, with a bearer ID token of the command account for the controller', async () => {
+    const m = manager({ controller: () => answer(200, { requested: true }) });
+    const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/nap`, 'dmt-operator'));
+    expect(res.statusCode).toBe(202);
+    const [call, ...more] = m.actions();
+    expect(more).toEqual([]);
+    expect(call!.url).toBe(`${CONTROLLER}/v1/actions`);
+    expect(call!.payload).toEqual({ action: 'request-nap', workloadId: 'demo', by: 'ops@example.com', refusals: true });
+    expect(claimsOf(call!.authorization)).toMatchObject({ aud: CONTROLLER });
+    const asked = m.seen.filter((s) => s.url === `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${COMMAND}:generateIdToken`);
+    expect(asked.map((s) => JSON.parse(s.body))).toEqual([{ audience: CONTROLLER, includeEmail: true }]);
+    expect(m.aws).toEqual([]);
+    expect(m.audit.at(-1)).toMatchObject({ action: 'nap', target: `${NAME}/demo`, result: 'requested' });
+  });
+
+  it('reads a refusal the controller answers as the AWS one: its code decides the status', async () => {
+    const m = manager({ controller: () => answer(200, { refused: { code: 'not_found', message: 'workload not configured: gone' } }) });
+    const res = await m.api(event('POST', `/api/workloads/${NAME}/gone/wake`, 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([404, { error: 'not_found', message: 'workload not configured: gone' }]);
+  });
+
+  it('answers Google\'s 403 with 502 and the refusal manager-access-missing, the connect command in its words', async () => {
+    const m = manager({ controller: () => new Response('<html><title>403 Forbidden</title></html>', { status: 403, headers: { 'content-type': 'text/html' } }) });
+    const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/nap`, 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([502, {
+      error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+    }]);
+    expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
+  });
+
+  it('answers router-too-old for a 0.39.0 router without calling it, the install command with the pinned version', async () => {
+    const m = manager({ routers: [gcp({ version: '0.39.0' })] });
+    const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([502, {
+      error: 'router-too-old', message: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    }]);
+    expect(m.seen).toEqual([]);
+  });
+
+  it('calls a router of unknown version, and answers router-too-old when its controller has no /v1/actions (its JSON 404)', async () => {
+    const m = manager({ routers: [gcp({ version: '' })], controller: () => answer(404, { error: 'no route for POST /v1/actions', reason: 'not-found' }) });
+    const res = await m.api(event('GET', `/api/workloads/${NAME}/demo`, 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([502, {
+      error: 'router-too-old', message: 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    }]);
+    expect(m.actions()).toHaveLength(1);
+  });
+
+  it('answers router-unknown for a router whose controller discovery hasn\'t found yet, without a call', async () => {
+    const m = manager({ routers: [gcp({ controller: '' })] });
+    const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
+    expect([res.statusCode, json(res)]).toEqual([502, {
+      error: 'router-unknown', message: 'discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again',
+    }]);
+    expect(m.seen).toEqual([]);
+  });
+
+  it('refuses install-router for a project with 400 and the CLI\'s command, and upgrade-router and uninstall-router for a Google Cloud router', async () => {
+    const m = manager();
+    const install = await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'install-router', account: 'dormeto-dev', region: 'europe-west2' }));
+    expect([install.statusCode, json(install)]).toEqual([400, {
+      error: 'bad_request', message: 'a Google Cloud router is installed with the CLI: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    }]);
+    const upgrade = await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'upgrade-router', router: NAME }));
+    expect([upgrade.statusCode, json(upgrade)]).toEqual([400, {
+      error: 'bad_request', message: 'a Google Cloud router is upgraded with the CLI: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    }]);
+    const uninstall = await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'uninstall-router', router: NAME }));
+    expect([uninstall.statusCode, json(uninstall)]).toEqual([400, {
+      error: 'bad_request', message: 'a Google Cloud router is uninstalled with the CLI: dormeto gcp uninstall --project dormeto-dev --region europe-west2',
+    }]);
+    expect(m.created).toEqual([]);
+    // An AWS account's install is as before.
+    expect((await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'install-router', account: '038606077307', region: 'eu-west-1' }))).statusCode).toBe(202);
+    expect(m.created).toEqual([['install-router', { account: '038606077307', region: 'eu-west-1' }]]);
+  });
+
+  it('pushes each settings write to every Google Cloud router with a controller, as manager-settings with the object written and its ETag; the AWS routers untouched', async () => {
+    const m = manager({
+      routers: [gcp(), gcp({ name: 'dmtr-us-central1', region: 'us-central1', controller: OTHER }), gcp({ name: 'dmtr-asia-east1', region: 'asia-east1', controller: '' })],
+      controller: () => answer(200, { etag: 'stored' }),
+    });
+    const res = await m.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
+    expect(res.statusCode).toBe(200);
+    expect(json(res)).toMatchObject({ hibernate: false, note: 'routers apply it at their next check, within 5 minutes' });
+    const pushed = m.actions();
+    expect(pushed.map((a) => a.url).sort()).toEqual([`${CONTROLLER}/v1/actions`, `${OTHER}/v1/actions`]);
+    for (const a of pushed) expect(a.payload).toEqual({ action: 'manager-settings', settings: m.settings.doc, etag: '"5d41402abc4b2a76b9719d911017c592"', refusals: true });
+    expect(m.settings.doc).toMatchObject({ workloads: { hibernate: false }, updatedBy: 'ops@example.com' });
+    expect(m.aws).toEqual([]);
+
+    expect((await m.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [{ name: 'api', tags: { kind: 'api' }, settings: { idleMinutes: 30 } }] }))).statusCode).toBe(200);
+    expect((await m.api(event('PUT', '/api/settings/waiting-page', 'dmt-admin', { page: { mode: 'template', title: 'Back soon' } }))).statusCode).toBe(200);
+    expect((await m.api(event('DELETE', '/api/settings/waiting-page', 'dmt-admin'))).statusCode).toBe(200);
+    expect(m.actions().map((a) => a.payload.action)).toEqual(Array(8).fill('manager-settings'));
+    expect(m.actions().at(-1)!.payload.settings).toEqual(m.settings.doc);
+    expect(m.aws).toEqual([]);
+  });
+
+  it('answers a settings write as before when a router refuses the push, and logs it for the poll', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const m = manager({ controller: () => new Response('<html>Forbidden</html>', { status: 403 }) });
+    const res = await m.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
+    expect([res.statusCode, json(res).hibernate]).toEqual([200, false]);
+    expect(m.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'hibernate off' });
+    const logged = warn.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' }]);
+  });
+
+  it('renames, tags, sets and offboards a workload the CLI onboarded (source cli): nothing refuses it as a Terraform one is', async () => {
+    const m = manager({
+      controller: (_req, payload) => answer(200, payload.action === 'rename' ? { workloadId: 'demo', name: payload.name }
+        : payload.action === 'tag' ? { workloadId: 'demo', tags: payload.tags } : { workloadId: 'demo', settings: payload.settings, source: 'cli' }),
+    });
+    const rename = await m.api(event('POST', `/api/workloads/${NAME}/demo/rename`, 'dmt-operator', { name: 'Shop' }));
+    expect([rename.statusCode, json(rename)]).toEqual([200, { workloadId: 'demo', name: 'Shop' }]);
+    const tags = await m.api(event('PUT', `/api/workloads/${NAME}/demo/tags`, 'dmt-admin', { tags: { team: 'shop' } }));
+    expect([tags.statusCode, json(tags)]).toEqual([200, { workloadId: 'demo', tags: { team: 'shop' } }]);
+    const settings = await m.api(event('PUT', `/api/workloads/${NAME}/demo/settings`, 'dmt-operator', { idleMinutes: 30 }));
+    expect(settings.statusCode).toBe(200);
+    expect(m.actions().map((a) => a.payload.action)).toEqual(['rename', 'tag', 'settings']);
+    const offboard = await m.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: NAME, workloadId: 'demo' }));
+    expect(offboard.statusCode).toBe(202);
+    expect(m.created).toEqual([['offboard', { router: NAME, account: 'dormeto-dev', region: 'europe-west2', workloadId: 'demo' }]]);
+  });
+
+  it('gives a Google Cloud router 10 s to answer a list, an AWS one 5 s', async () => {
+    vi.useFakeTimers({ now: NOW });
+    const slow = (ms: number, value: unknown) => new Promise((resolve) => { setTimeout(() => resolve(value), ms); });
+    const api = createApi({
+      routers: ROUTERS, invoke: async (router) => slow(7_000, { workloads: [{ workloadId: router.cloud === 'gcp' ? 'g' : 'a', state: 'AWAKE' }] }),
+      audit: { write: async () => {}, list: async () => [] }, now: () => NOW, version: '0.1.0',
+      operations: { installedRouters: async () => [gcp()], list: async () => [], get: async () => null, create: async () => { throw new Error('none'); } },
+    });
+    const listed = api(event('GET', '/api/workloads'));
+    await vi.advanceTimersByTimeAsync(8_000);
+    const body = json(await listed);
+    expect(body.workloads.map((w: { router: string; workloadId: string }) => [w.router, w.workloadId])).toEqual([[NAME, 'g']]);
+    expect(body.errors).toEqual([{ router: 'dmt-dev', message: 'no answer within 5000 ms' }, { router: 'dmt-test', message: 'no answer within 5000 ms' }]);
   });
 });
