@@ -7,7 +7,7 @@ import {
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import type { Google, GoogleConnection } from '@dormeto/google';
-import { callRouter, RouterCallError, ROUTER_MINIMUM, routerTooOld } from '@dormeto/google/router';
+import { accessMissingText, callRouter, connectCommand, installCommand, RouterCallError, routerTooOld, tooOldText } from '@dormeto/google/router';
 import { cloudOf, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
@@ -158,13 +158,8 @@ export interface GoogleCalls {
 }
 export const GOOGLE_CALL_MS = 10_000;
 
-// The commands that fix what the manager can't do on Google Cloud. The operator's AWS profile is theirs to fill in.
-const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
-const installCommand = (project: string, region: string, pinned: string | undefined) => `dormeto gcp install --project ${project} --region ${region}${pinned ? ` --version ${pinned}` : ''}`;
-export const accessMissingText = (host: string, env: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}`;
-// version: '' when it is unknown (the router answered that it has no /v1/actions).
-export const tooOldText = (version: string, project: string, region: string, pinned: string | undefined) =>
-  `router ${version || `older than ${ROUTER_MINIMUM}`} can't report to the manager: ${installCommand(project, region, pinned)}`;
+// The commands that fix what the manager can't do on Google Cloud: @dormeto/google/router's texts (the fleet's poll records
+// them too), and this one.
 export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
 
 // A refusal answered (refusals: true), as a router error with its code; any other answer as it is.

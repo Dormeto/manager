@@ -2,7 +2,7 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // bounded; Google's refusal of the token is the refusal manager-access-missing, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { callRouter, createGoogle, RouterCallError, routerTooOld, type GoogleConnection } from '../src/index.js';
+import { accessMissingText, callRouter, createGoogle, RouterCallError, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
 const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
@@ -167,5 +167,13 @@ describe('routerTooOld', () => {
   it('is a known version below 0.40.0; an unknown version is called', () => {
     expect(['0.39.0', '0.9.12', '0.39.9-rc.1'].map(routerTooOld)).toEqual([true, true, true]);
     expect(['0.40.0', '0.40.0-rc.1', '1.0.0', '', 'dev'].map(routerTooOld)).toEqual([false, false, false, false, false]);
+  });
+});
+
+describe('the refusals\' texts', () => {
+  it('name the command that fixes each, as the API answers them and the poll records them', () => {
+    expect(accessMissingText('dormeto-host', 'dev')).toBe('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
+    expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')).toBe('router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
+    expect(tooOldText('', 'dormeto-dev', 'europe-west2', undefined)).toBe('router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2');
   });
 });
