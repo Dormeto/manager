@@ -219,6 +219,23 @@ describe('the Google Cloud connection', () => {
     expect(stored()).toBeNull();
   });
 
+  // dormeto gcp connect writes it through /iam: a dashboard administrator can't unregister the fleet's Google Cloud routers by
+  // mistake.
+  it('takes writes from IAM callers only: a Cognito administrator\'s PUT and DELETE under /api are refused; viewers read it under both', async () => {
+    const { api, stored, store } = connected();
+    const refusal = { error: 'forbidden', message: 'the Google Cloud connection is written by dormeto gcp connect and removed by dormeto gcp disconnect (through /iam): the dashboard only reads it' };
+    const put = await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    expect([put.statusCode, json(put)]).toEqual([403, refusal]);
+    expect(stored()).toBeNull();
+    expect((await api(viaIam('PUT', '/iam/discovery/google', record))).statusCode).toBe(200);
+    const removed = await api(event('DELETE', '/api/discovery/google', 'dmt-admin'));
+    expect([removed.statusCode, json(removed)]).toEqual([403, refusal]);
+    expect(stored()).toEqual(record);
+    expect(store.has('dormeto-dev#europe-west1')).toBe(true);
+    expect(json(await api(event('GET', '/api/discovery/google', 'dmt-viewer')))).toEqual({ connection: record });
+    expect(json(await api(viaIam('GET', '/iam/discovery/google')))).toEqual({ connection: record });
+  });
+
   it('stores an administrator\'s record, registers its routers and audits it', async () => {
     const { api, store, audit } = connected();
     const res = await api(viaIam('PUT', '/iam/discovery/google', record));
@@ -234,9 +251,9 @@ describe('the Google Cloud connection', () => {
 
   it('keeps what discovery learnt of a router the record names again', async () => {
     const { api, store } = connected();
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    await api(viaIam('PUT', '/iam/discovery/google', record));
     store.set('dormeto-dev#europe-west1', { ...store.get('dormeto-dev#europe-west1'), controller: 'https://c.run.app', version: '0.40.0' });
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    await api(viaIam('PUT', '/iam/discovery/google', record));
     expect(store.get('dormeto-dev#europe-west1').controller).toBe('https://c.run.app');
     expect(store.get('dormeto-dev#europe-west1').version).toBe('0.40.0');
   });
@@ -244,26 +261,26 @@ describe('the Google Cloud connection', () => {
   it('registers a router with the controller and version the record carries, and updates them on a later PUT', async () => {
     const { api, store } = connected();
     const withUrl = (controller: string, version: string) => ({ ...record, routers: [{ ...record.routers[0], controller, version }] });
-    expect((await api(event('PUT', '/api/discovery/google', 'dmt-admin', withUrl('https://dmtr-europe-west1-controller-abc-ew.a.run.app', '0.40.0')))).statusCode).toBe(200);
+    expect((await api(viaIam('PUT', '/iam/discovery/google', withUrl('https://dmtr-europe-west1-controller-abc-ew.a.run.app', '0.40.0')))).statusCode).toBe(200);
     expect(store.get('dormeto-dev#europe-west1')).toMatchObject({ controller: 'https://dmtr-europe-west1-controller-abc-ew.a.run.app', version: '0.40.0' });
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', withUrl('https://dmtr-europe-west1-controller-abc-ew.a.run.app', '0.41.0')));
+    await api(viaIam('PUT', '/iam/discovery/google', withUrl('https://dmtr-europe-west1-controller-abc-ew.a.run.app', '0.41.0')));
     expect(store.get('dormeto-dev#europe-west1').version).toBe('0.41.0');
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', withUrl('', '')));
+    await api(viaIam('PUT', '/iam/discovery/google', withUrl('', '')));
     expect(store.get('dormeto-dev#europe-west1')).toMatchObject({ controller: 'https://dmtr-europe-west1-controller-abc-ew.a.run.app', version: '0.41.0' });
   });
 
   it('refuses a controller that is not an https run.app URL and a version that is not semver', async () => {
     const { api } = connected();
     for (const bad of [{ controller: 'http://x.a.run.app' }, { controller: 'https://example.com' }, { version: 'latest' }, { version: 4 }]) {
-      const res = await api(event('PUT', '/api/discovery/google', 'dmt-admin', { ...record, routers: [{ ...record.routers[0], ...bad }] }));
+      const res = await api(viaIam('PUT', '/iam/discovery/google', { ...record, routers: [{ ...record.routers[0], ...bad }] }));
       expect(res.statusCode).toBe(400);
     }
   });
 
   it('unregisters the routers a later PUT drops, and never an AWS one', async () => {
     const { api, store } = connected();
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', { ...record, routers: [record.routers[0]] }));
+    await api(viaIam('PUT', '/iam/discovery/google', record));
+    await api(viaIam('PUT', '/iam/discovery/google', { ...record, routers: [record.routers[0]] }));
     expect([...store.keys()].sort()).toEqual(['121014831971#eu-west-1', 'dormeto-dev#europe-west1']);
   });
 
@@ -274,7 +291,7 @@ describe('the Google Cloud connection', () => {
       { ...record, routers: [{ project: '123456789012', region: 'europe-west1' }] },
       { ...record, routers: [{ project: 'dormeto-dev', region: 'eu-west-1' }] },
       { ...record, pool: undefined },
-    ]) expect((await api(event('PUT', '/api/discovery/google', 'dmt-admin', bad))).statusCode).toBe(400);
+    ]) expect((await api(viaIam('PUT', '/iam/discovery/google', bad))).statusCode).toBe(400);
     expect([...store.keys()]).toEqual(['121014831971#eu-west-1']);
   });
 
@@ -285,7 +302,7 @@ describe('the Google Cloud connection', () => {
 
   it('deletes the record and the Google Cloud routers, keeping the AWS ones', async () => {
     const { api, store, stored, audit } = connected();
-    await api(event('PUT', '/api/discovery/google', 'dmt-admin', record));
+    await api(viaIam('PUT', '/iam/discovery/google', record));
     expect((await api(event('DELETE', '/api/discovery/google', 'dmt-operator'))).statusCode).toBe(403);
     expect((await api(viaIam('DELETE', '/iam/discovery/google'))).statusCode).toBe(200);
     expect(stored()).toBeNull();

@@ -2190,10 +2190,13 @@ export function createApi({
 
   // --- The Google Cloud connection: the CLI's record (dormeto gcp connect), whose routers are registered at once ---------
 
+  // Viewers read it under /api and /iam; only an IAM caller (dormeto gcp connect and disconnect) writes it, so that no
+  // dashboard session unregisters the fleet's Google Cloud routers by mistake.
   async function googleRoute(method: string, identity: Identity, event: ApiEvent, g: GoogleApi): Promise<ApiResponse | null> {
     if (method === 'GET') return reply(200, { connection: await g.get() });
     if (method !== 'PUT' && method !== 'DELETE') return null;
     need(identity, 'admin');
+    if (identity.via !== 'iam') throw new HttpError(403, 'forbidden', 'the Google Cloud connection is written by dormeto gcp connect and removed by dormeto gcp disconnect (through /iam): the dashboard only reads it');
     const before = await g.get();
     const registered = await g.routers.list();
     if (method === 'PUT') {
