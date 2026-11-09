@@ -345,6 +345,24 @@ describe('onboarding on Google Cloud', () => {
     expect(s.created).toEqual([]);
   });
 
+  it('offboards a workload of a Google Cloud router: its project, the router\'s region and the project\'s number in the target, the Google Cloud plan; a number Google refuses to read starts nothing', async () => {
+    const s = await googleSetup();
+    const res = await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: `dmtr-${PROJECT}-europe-west2`, workloadId: 'dmt-demo-app' }));
+    expect(res.statusCode).toBe(202);
+    const { operation } = json(res);
+    expect(operation.target).toEqual({ account: PROJECT, region: 'europe-west2', router: `dmtr-${PROJECT}-europe-west2`, workloadId: 'dmt-demo-app', projectNumber: NUMBER });
+    expect(operation.activeKey).toBe(`WL#${PROJECT}#europe-west2#dmt-demo-app`);
+    expect(operation.steps.map((x: { name: string }) => x.name)).toEqual(['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'untag', 'candidate']);
+    expect(s.reads).toEqual([['discovery', 'GET', READ]]);
+    expect(s.calls).toEqual([]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'operation-offboard', target: `dmtr-${PROJECT}-europe-west2/dmt-demo-app`, result: 'started op1' });
+    const { GoogleError } = await import('@dormeto/google');
+    const refused = await googleSetup({ refused: new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', host: 'cloudresourcemanager.googleapis.com', message: 'Permission \'resourcemanager.projects.get\' denied' }) });
+    const unread = await refused.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: `dmtr-${PROJECT}-europe-west2`, workloadId: 'dmt-demo-app' }));
+    expect([unread.statusCode, json(unread).error]).toEqual([502, 'google_error']);
+    expect(refused.created).toEqual([]);
+  });
+
   it('an AWS onboarding beside Google Cloud routers keeps its body and its target', async () => {
     const s = await googleSetup();
     const res = await s.api(onboard({ candidateId: TG, router: `dmtr-${PROJECT}-europe-west2`, settings: { fallbackInstanceTypes: ['t3a.medium'] } }));

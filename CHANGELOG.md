@@ -57,6 +57,18 @@ the step (one bound already is left alone). A refused onboarding removes the bin
 answer was lost (a timeout, a failure) removes none and names them. A step run again after a lost answer that the router refuses as
 onboarded already is done when the router's status shows the workload on the candidate's backend service, nothing removed. The
 workload is verified by the router's status (its backend service, no issue, not `FAILED`). AWS onboardings are unchanged.
+- **Offboarding and exclusions on Google Cloud:** `POST /api/operations` `{type: 'offboard'}` takes a workload of a Google Cloud
+router, the project's number read as the discovery account (a refusal: 502 with Google's words). The operation runs `locate` (the
+router's status), `slot`, `lock load balancer` (the URL map), `pause`, `wait awake`, `offboard` (the router's, within 300 s),
+`untag` and `candidate`. A GKE workload, or one whose onboarding turned request logs on, fails at `locate` before anything changes,
+in the router's words with `dormeto gcp workloads offboard <id> --project <p> --region <r>`. After the router's offboarding the tag
+`dormeto/managed` is removed as the command account from the VMs and managed instance groups its status names (by the ids the
+onboarding stored) and from its Cloud SQL instances, one per run of the step: one not tagged is said, a failure fails the step
+naming what stays tagged, and a VM or group an older onboarding stored no id for is named, its tag to remove by hand. The candidate
+is eligible again. An `offboard` step run again after a lost answer that finds the workload gone is done. An exclusion of a backend
+service, a URL map or a project pauses its managed workloads through every router of the project, with the backend service's path
+instead of a target group (`{action: 'pause', workloadId, backendService, by, reason, until?, exclusionId}`), the next router tried
+when one has no such workload; its lift resumes them by the exclusion's id. AWS offboardings and exclusions are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
 `silent`); one the poll is refused at says that refusal with its command (`manager-access-missing`, `router-unknown`) instead of
@@ -80,9 +92,7 @@ Cloud router, answer 400 with the `dormeto gcp install` or `uninstall` command: 
 Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PUT` and `DELETE /settings/waiting-page`) is pushed to
 every Google Cloud router with a controller, but one below 0.40.0, as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
-onboarded is renamed, tagged and set through the manager as any other; it is offboarded with the CLI until the manager onboards on
-Google Cloud: `offboard` for a Google Cloud workload answers 400 with `dormeto gcp workloads offboard <id> --project <p> --region <r>`.
-AWS routers are called as before.
+onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
 - **The poll:** the manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
 function with `{ task: 'poll' }`, never retried), 10 at once for at most 50 s a run, the least recently polled first, each
 router at 0.40.0 or later (by major.minor.patch) or of an unknown version. Its journal (`events`), read again from 5 minutes before the newest event already

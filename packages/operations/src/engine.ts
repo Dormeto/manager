@@ -1,7 +1,7 @@
 // Operations engine (vision docs/specs/2026-10-05-onboarding-design.md, R4b): an operation is a list of steps run one at a
 // time by the Step Functions workflow (`next` until done, waiting as asked), each step idempotent; `fail` releases what the
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
-import { installCommand, routerTooOld, tagTargets, tooOldText, type TagTarget, type Tags } from '@dormeto/google';
+import { GoogleError, installCommand, routerTooOld, tagTargets, tooOldText, type TagTarget, type Tags } from '@dormeto/google';
 import { cloudOf, googlePath, isAccount, isRegion } from '@dormeto/fleet/clouds';
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
@@ -128,9 +128,10 @@ const PLANS: Record<WorkflowType, string[]> = {
 };
 // A Google Cloud operation's own plan (Google Cloud manager design §8), chosen at its creation from its target's account:
 // the CLI installs the router, the manager binds the tag `dormeto/managed` to what the preview names before the router's
-// onboarding.
+// onboarding, and removes it from what the router's status names after its offboarding.
 const GOOGLE_PLANS: Partial<Record<WorkflowType, string[]>> = {
   onboard: ['find router', 'slot', 'lock load balancer', 'preview', 'tag', 'onboard', 'verify', 'candidate'],
+  offboard: ['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'untag', 'candidate'],
 };
 const onGoogle = (target: Record<string, string>) => cloudOf(target.account ?? '') === 'gcp';
 const planOf = (type: WorkflowType, target: Record<string, string>) => (onGoogle(target) ? GOOGLE_PLANS[type] : undefined) ?? PLANS[type];
@@ -142,6 +143,11 @@ const GOOGLE_CALL_MS = 10_000;
 // A project number: Resource Manager's `projects/<number>`, which the tag bindings' parents name.
 const PROJECT_NUMBER = /^\d{1,20}$/;
 const labelsOf = (targets: TagTarget[]) => targets.map((t) => t.label).join(', ');
+// A zone (`europe-west2-b`) rather than a region: a managed instance group there is a zonal one.
+const ZONE = /-[a-z]$/;
+// The load balancers whose URL map and backend services are a region's (the router's status names its `lb`); the others'
+// (global, classic, cross-region internal) are global.
+const REGIONAL_LBS = new Set(['regional', 'internal']);
 // Router calls per step of an exclusion: the step runs again until every workload is done.
 const EXCLUSION_BATCH = 25;
 const EXCLUDED = 'excluded: ';
@@ -193,24 +199,31 @@ export function createEngine(deps: EngineDeps) {
     : (await deps.target(router.account, router.region)).invoke(router.controller, payload));
 
   // The managed workloads an exclusion matches: the candidates of its account (and the workload it was created from, in
-  // the routers of its target group's account and region), each with the routers of its account and region.
+  // the routers of its target group's account and region), each with the routers of its account and region. A Google
+  // Cloud project's, with the backend service's path, in every router of the project: a global load balancer's workload
+  // is on the router it was onboarded on, whatever its region.
   async function excludedWorkloads(e: Exclusion, hint?: { workloadId: string }) {
     const d = deps.discovery!;
     const inventory = (await d.getInventory()) ?? { accounts: [], ous: {} };
     const criterion = exclusionCriterion(e);
     const all = await deps.routers();
-    const routersOf = (account: string, region: string | undefined) => all.filter((r) => r.region === region && r.account === account);
-    const wanted = new Map<string, { workloadId: string; targetGroupArn?: string; routers: RouterRef[] }>();
+    const onProject = cloudOf(e.target.account) === 'gcp';
+    const routersOf = (account: string, region: string | undefined) => all.filter((r) => (onProject ? r.cloud === 'gcp' : r.region === region) && r.account === account);
+    const wanted = new Map<string, { workloadId: string; targetGroupArn?: string; backendService?: string; routers: RouterRef[] }>();
     for (const c of await d.accountCandidates(e.target.account)) {
       const account = inventory.accounts.find((a) => a.id === c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
       if (!c.workloadId || c.goneAt || !matches(criterion, account, c, inventory)) continue;
-      wanted.set(`${c.workloadId} ${c.targetGroupArn}`, {
-        workloadId: c.workloadId, ...(c.targetGroupArn ? { targetGroupArn: c.targetGroupArn } : {}), routers: routersOf(c.account, c.region),
+      wanted.set(`${c.workloadId} ${c.targetGroupArn ?? c.backendService}`, {
+        workloadId: c.workloadId, ...(c.targetGroupArn ? { targetGroupArn: c.targetGroupArn } : {}), ...(onProject && c.backendService ? { backendService: c.backendService } : {}),
+        routers: routersOf(c.account, c.region),
       });
     }
-    const hinted = hint && `${hint.workloadId} ${e.target.arn}`;
+    const hinted = hint && `${hint.workloadId} ${e.target.arn ?? e.target.path}`;
     if (hint && hinted && !wanted.has(hinted)) {
-      wanted.set(hinted, { workloadId: hint.workloadId, ...(e.target.arn ? { targetGroupArn: e.target.arn } : {}), routers: routersOf(e.target.account, e.target.region) });
+      wanted.set(hinted, {
+        workloadId: hint.workloadId, ...(e.target.arn ? { targetGroupArn: e.target.arn } : {}), ...(e.target.path ? { backendService: e.target.path } : {}),
+        routers: routersOf(e.target.account, e.target.region),
+      });
     }
     return [...wanted.entries()].map(([key, w]) => ({ key, ...w }));
   }
@@ -234,8 +247,10 @@ export function createEngine(deps: EngineDeps) {
       let outcome: string | null = `${w.workloadId}: no registered router manages it`;
       for (const router of w.routers) {
         try {
+          // A Google Cloud router takes the backend service instead of a target group (router gcp/src/actions.mjs's pause).
           await callRouter(router, {
-            action: 'pause', workloadId: w.workloadId, ...(w.targetGroupArn ? { targetGroupArn: w.targetGroupArn } : {}), by: op.by, reason: `${EXCLUDED}${e.reason}`,
+            action: 'pause', workloadId: w.workloadId, ...(w.targetGroupArn ? { targetGroupArn: w.targetGroupArn } : {}), ...(w.backendService ? { backendService: w.backendService } : {}),
+            by: op.by, reason: `${EXCLUDED}${e.reason}`,
             ...(e.expiresAt ? { until: e.expiresAt } : {}), exclusionId: e.id,
           });
           made.add(pauseKey(pauseOf(router, w.workloadId)));
@@ -487,6 +502,113 @@ export function createEngine(deps: EngineDeps) {
     return { status: 'done', detail: `${head}, backend service ${expected}` };
   }
 
+  // --- Google Cloud offboarding (Google Cloud manager design §8) ---------------------------------------------------------
+
+  // A name the router's status gives, as the manager's path: a regional or internal load balancer's in its region (the
+  // router's when the status says none), the others' global.
+  const googlePathOf = (op: Operation, kind: 'backendServices' | 'urlMaps', name: string, lb: { kind?: string; region?: string } | undefined) =>
+    `projects/${op.target.account}/${lb?.kind && REGIONAL_LBS.has(lb.kind) ? `regions/${lb.region ?? op.target.region}` : 'global'}/${kind}/${name}`;
+
+  // The router's status of the workload. What only the CLI undoes is refused before anything changes, in the router's
+  // words (router gcp/src/actions.mjs's offboard, `cli-only`): a GKE workload's Kubernetes access, and the request logs
+  // its onboarding turned on. Kept for the next steps: the URL map's path (the lock), the backend service's (the
+  // candidate), and what the untag removes the tag from: the VMs and managed groups by the numeric ids the onboarding
+  // stored, the Cloud SQL instances in their regions. A VM or group without an id (an older onboarding) is named: the
+  // manager can't remove its tag.
+  async function googleLocate(op: Operation): Promise<Outcome> {
+    const [project, region, workloadId] = [op.target.account!, op.target.region!, op.target.workloadId!];
+    const status = await invokeRouter(op, 'controller', { action: 'status', workloadId });
+    const backends = (status?.backends ?? []) as { kind?: string; id?: string; location?: string; resourceId?: string }[];
+    const why = backends.some((b) => b.kind === 'k8s') ? 'a GKE workload\'s Kubernetes access is the CLI\'s to remove'
+      : status?.requestLogs?.before ? 'its onboarding turned its backend service\'s request logs on, which the CLI sets back' : null;
+    if (why) throw new Error(`cannot offboard ${workloadId} through the manager: ${why}: dormeto gcp workloads offboard ${workloadId} --project ${project} --region ${region}`);
+    if (typeof status?.backendService !== 'string' || typeof status?.urlMap !== 'string') throw new Error(`the router's status of ${workloadId} names no backend service and URL map`);
+    const lb = status.lb as { kind?: string; region?: string } | undefined;
+    op.context.backendService = googlePathOf(op, 'backendServices', status.backendService, lb);
+    op.context.urlMap = googlePathOf(op, 'urlMaps', status.urlMap, lb);
+    op.context.wakeTimeoutSeconds = status.settings?.wakeTimeoutSeconds ?? 600;
+    op.context.name = status.name ?? workloadId;
+    const vms: { zone: string; id: string; name?: string }[] = [];
+    const groups: { kind: 'zonal' | 'regional'; location: string; id: string; name?: string }[] = [];
+    const databases: { name: string; region: string }[] = [];
+    const byHand: string[] = [];
+    for (const b of backends) {
+      const [location, name, id] = [String(b.location), String(b.id), b.resourceId];
+      if (b.kind === 'instance') {
+        if (id) vms.push({ zone: location, id, name });
+        else byHand.push(`VM ${location}/${name}`);
+      } else if (b.kind === 'asg') {
+        if (id) groups.push({ kind: ZONE.test(location) ? 'zonal' : 'regional', location, id, name });
+        else byHand.push(`managed instance group ${location}/${name}`);
+      } else if (b.kind === 'cloudsql-instance' && b.id) {
+        let sqlRegion: string;
+        try {
+          sqlRegion = await google().tags.sqlRegionOf(project, b.id);
+        } catch (err) {
+          throw new Error(`Cloud SQL instance ${b.id}: ${(err as Error).message}`);
+        }
+        databases.push({ name: b.id, region: sqlRegion });
+      }
+    }
+    op.context.untag = tagTargets({ project, number: op.target.projectNumber!, vms, groups, databases });
+    op.context.untagByHand = byHand;
+    const unknown = byHand.length ? `; no resource id stored for ${byHand.join(', ')} (an older onboarding): the manager can't remove the tag dormeto/managed there` : '';
+    return { status: 'done', detail: `${op.context.name} ${status.state}${unknown}` };
+  }
+
+  // The router's offboarding, as AWS's step. Run again after an attempt whose answer was lost, it finds the workload gone
+  // (the router deletes its configuration last): done, and the untag follows.
+  async function googleOffboard(op: Operation): Promise<Outcome> {
+    let result;
+    try {
+      result = await invokeRouter(op, 'onboarder', { action: 'offboard', workloadId: op.target.workloadId, by: op.by });
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== 'not_found') throw err;
+      return { status: 'done', detail: `the router no longer has workload ${op.target.workloadId}: offboarded already` };
+    }
+    return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
+  }
+
+  // The tag `dormeto/managed` removed, as the command account, from what the locate kept: one target per run (a removal
+  // waits up to 60 s), each taken out of `untag` once done. A binding gone already (none listed, or a 404) is nothing to
+  // remove; another failure fails the step naming every target still tagged. Said: what was untagged, what was not
+  // tagged, and what to untag by hand.
+  async function untagOffboarded(op: Operation): Promise<Outcome> {
+    const left = (op.context.untag ?? []) as TagTarget[];
+    const byHand = (op.context.untagByHand ?? []) as string[];
+    const untagged = (op.context.untagged ??= []) as TagTarget[];
+    const absent = (op.context.notTagged ??= []) as TagTarget[];
+    const target = left[0];
+    if (target) {
+      const { tags } = google();
+      const failed = (why: string) => new Error(`${why}; still tagged: ${[...left.map((t) => t.label), ...byHand].join(', ')}${untagged.length ? `; untagged ${labelsOf(untagged)}` : ''}`);
+      if (op.context.tagValue === undefined) {
+        try {
+          op.context.tagValue = await tags.tagValueOf(op.target.account!);
+        } catch (err) {
+          throw failed((err as Error).message);
+        }
+      }
+      let removed = 0;
+      try {
+        removed = await tags.unbindTag(target, op.context.tagValue as string);
+      } catch (err) {
+        if (!(err instanceof GoogleError && err.status === 404)) throw failed(`${target.label}: ${(err as Error).message}`);
+      }
+      (removed > 0 ? untagged : absent).push(target);
+      op.context.untag = left.slice(1);
+      const done = untagged.length + absent.length;
+      if (left.length > 1) return { status: 'wait', seconds: 0, detail: `${done} of ${done + left.length - 1}`, changed: untagged.length > 0 };
+    }
+    if (!untagged.length && !absent.length && !byHand.length) return { status: 'skipped', detail: 'nothing to untag' };
+    const detail = [
+      ...(untagged.length ? [`untagged ${labelsOf(untagged)}`] : []),
+      ...(absent.length ? [`not tagged ${labelsOf(absent)}`] : []),
+      ...(byHand.length ? [`remove the tag dormeto/managed from ${byHand.join(', ')} by hand: an older onboarding stored no resource id`] : []),
+    ].join('; ');
+    return { status: untagged.length ? 'done' : 'skipped', detail };
+  }
+
   // The target of an operation, and the key no second operation may claim at the same time.
   async function targetOf(type: WorkflowType, input: Record<string, unknown>): Promise<{ target: Record<string, string>; activeKey: string }> {
     if (type === 'exclude' || type === 'lift-exclusion') {
@@ -509,7 +631,16 @@ export function createEngine(deps: EngineDeps) {
     }
     const account = String(input.account);
     const region = String(input.region);
-    if (type === 'offboard') return { target: { account, region, router: String(input.router), workloadId: String(input.workloadId) }, activeKey: `WL#${account}#${region}#${input.workloadId}` };
+    if (type === 'offboard') {
+      const target: Record<string, string> = { account, region, router: String(input.router), workloadId: String(input.workloadId) };
+      // On Google Cloud, the router's region and the project's number, which the tag bindings it removes name.
+      if (cloudOf(account) === 'gcp') {
+        if (!isRegion('gcp', region)) throw new Error(`bad router region: ${input.region}`);
+        if (typeof input.projectNumber !== 'string' || !PROJECT_NUMBER.test(input.projectNumber)) throw new Error(`bad project number: ${input.projectNumber}`);
+        target.projectNumber = input.projectNumber;
+      }
+      return { target, activeKey: `WL#${account}#${region}#${input.workloadId}` };
+    }
     return { target: { account, region }, activeKey: `ROUTER#${account}#${region}` };
   }
 
@@ -617,7 +748,8 @@ export function createEngine(deps: EngineDeps) {
   }
 
   async function updateCandidate(op: Operation, change: (c: Candidate) => Candidate): Promise<Outcome> {
-    const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? '');
+    // An offboarding's candidate: its target group, a Google Cloud one's backend service (its path).
+    const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? op.context.backendService ?? '');
     const c = id ? await deps.discovery?.getCandidate(id) : null;
     if (!c) return { status: 'skipped', detail: 'no discovery candidate' };
     await deps.discovery!.replaceCandidates([restatus(change(c), iso(now()))], [c]);
@@ -878,6 +1010,7 @@ export function createEngine(deps: EngineDeps) {
         const router = await routerOf(op);
         if (!router) throw new Error(`no router in ${op.target.account}/${op.target.region}`);
         op.context.router = router;
+        if (onGoogle(op.target)) return googleLocate(op);
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.target.workloadId });
         // Refused before waking it: the onboarder only offboards what the manager onboarded.
         if (status?.source === 'terraform') throw new Error(`workload ${op.target.workloadId} was written in Terraform: remove its workload module instead`);
@@ -890,8 +1023,8 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done', detail: `${op.context.name} ${status?.state}` };
       }
       case 'lock load balancer': {
-        // A Google Cloud load balancer is its URL map.
-        const lb = op.target.urlMap ?? op.target.loadBalancerArn ?? (op.context.loadBalancerArn as string | null);
+        // A Google Cloud load balancer is its URL map (an offboarding's, from the router's status).
+        const lb = op.target.urlMap ?? (op.context.urlMap as string | undefined) ?? op.target.loadBalancerArn ?? (op.context.loadBalancerArn as string | null);
         if (!lb) return { status: 'skipped', detail: 'no rule left: no load balancer to lock' };
         return lock(op, `LB#${lb}`, 'load balancer');
       }
@@ -914,6 +1047,7 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done', detail: `${preview.name} (${preview.workloadId})` };
       }
       case 'tag': return tag(op);
+      case 'untag': return untagOffboarded(op);
       case 'onboard': {
         if (onGoogle(op.target)) return googleOnboard(op);
         // An operation started by a manager that did not keep the preview's id yet: ask again.
@@ -945,6 +1079,7 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'wait', seconds: 15, detail: status?.state };
       }
       case 'offboard': {
+        if (onGoogle(op.target)) return googleOffboard(op);
         const result = await invokeRouter(op, 'onboarder', { action: 'offboard', workloadId: op.target.workloadId, by: op.by });
         return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
       }

@@ -63,9 +63,10 @@ doesn't); the registry keeps the version as the router reports it.
   and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp install` or
   `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
   uninstall, `--request-logs` and a GKE workload's Kubernetes access are CLI commands (`dormeto gcp`). A workload the CLI
-  onboarded is renamed, tagged and set from the manager as any other. Until the manager onboards on Google Cloud, it is
-  offboarded with the CLI too: `offboard` for a Google Cloud workload answers 400 with `dormeto gcp workloads offboard <id>
-  --project <p> --region <r>`, which the workload view shows instead of its Offboard action.
+  onboarded is renamed, tagged, set and offboarded through the manager as any other, but a GKE workload and one whose
+  onboarding turned request logs on: their offboarding fails at `locate`, before anything changes, with `dormeto gcp
+  workloads offboard <id> --project <p> --region <r>`. The offboarding removes the tag `dormeto/managed` the onboarding
+  bound, as the command account. The workload view still shows that command instead of its Offboard action.
 - **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
   the cloud its alarms share, and both as the `String.Array` `["aws","gcp"]` when they mix, which a filter on either cloud
   matches. A Google Cloud workload's failed wake is advised in Google Cloud's words for its kind: Compute Engine's zone

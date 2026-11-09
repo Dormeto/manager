@@ -376,8 +376,10 @@ describe('Google Cloud routers', () => {
   // The manager as index.ts builds it: the invoker's Google transport over a fake Google (its STS, iamcredentials and the
   // controllers, which `controller` answers), the AWS routers of Terraform called through Lambda (recorded).
   // `tokens` answers Google's token endpoints first when it returns a Response.
-  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens }: {
+  // `call`: the connection's Google API calls (a project's number read as the discovery account), none by default.
+  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens, call }: {
     routers?: InstalledRouter[]; controller?: (req: Seen, payload: Record<string, unknown>) => Response; tokens?: (req: Seen) => Response | undefined;
+    call?: <T>(sa: string, method: string, url: string) => Promise<T>;
   } = {}) {
     const seen: Seen[] = [];
     let n = 0;
@@ -410,6 +412,7 @@ describe('Google Cloud routers', () => {
         create: async (type, input, by) => { created.push([type, input]); return { id: 'op-1', type, input, by } as never; },
       },
       globalSettings: { read: async () => settings.doc, write: async (doc) => { settings.doc = doc; return '"5d41402abc4b2a76b9719d911017c592"'; } },
+      ...(call ? { google: { get: async () => record, put: async () => {}, delete: async () => {}, routers: { list: async () => routers, put: async () => {}, delete: async () => {} }, call } } : {}),
     });
     const actions = () => seen.filter((s) => s.url.endsWith('/v1/actions')).map((s) => ({ url: s.url, payload: JSON.parse(s.body) as Record<string, unknown>, authorization: s.headers['authorization']! }));
     return { api, seen, actions, aws, audit, created, settings };
@@ -587,17 +590,31 @@ describe('Google Cloud routers', () => {
     expect(m.actions().map((a) => a.payload.action)).toEqual(['rename', 'tag', 'settings']);
   });
 
-  // The operations engine is AWS's until the manager onboards on Google Cloud (design §8, plan 2).
-  it('refuses to offboard a Google Cloud workload with 400 and the CLI\'s command, starting no operation; an AWS one\'s as before', async () => {
-    const m = manager();
+  // The operations engine offboards a Google Cloud workload (design §8, plan 2): the router's offboarding, then the tag
+  // bindings removed, which name the project by its number.
+  it('offboards a Google Cloud workload through the operations engine with 202, the project\'s number read as the discovery account; an AWS one\'s as before', async () => {
+    const reads: string[][] = [];
+    const m = manager({ call: async <T>(sa: string, method: string, url: string) => { reads.push([sa, method, url]); return { name: 'projects/1034397096264', projectId: 'dormeto-dev' } as T; } });
     const offboard = await m.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: NAME, workloadId: 'demo' }));
-    expect([offboard.statusCode, json(offboard)]).toEqual([400, {
-      error: 'bad_request', message: 'a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard demo --project dormeto-dev --region europe-west2',
-    }]);
-    expect(m.created).toEqual([]);
+    expect(offboard.statusCode).toBe(202);
+    expect(m.created).toEqual([['offboard', { router: NAME, account: 'dormeto-dev', region: 'europe-west2', workloadId: 'demo', projectNumber: '1034397096264' }]]);
+    expect(reads).toEqual([['discovery', 'GET', 'https://cloudresourcemanager.googleapis.com/v3/projects/dormeto-dev']]);
     expect(m.actions()).toEqual([]);
     expect((await m.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev', workloadId: 'demo' }))).statusCode).toBe(202);
-    expect(m.created).toEqual([['offboard', { router: 'dmt-dev', account: '121014831971', region: 'eu-west-1', workloadId: 'demo' }]]);
+    expect(m.created.at(-1)).toEqual(['offboard', { router: 'dmt-dev', account: '121014831971', region: 'eu-west-1', workloadId: 'demo' }]);
+    expect(reads).toHaveLength(1);
+  });
+
+  // An exclusion's pause is apart in the router (`pauses/<workloadId>#<exclusionId>`) and its lift names it: the operator's
+  // pause and resume name none, so lifting one leaves the other (plan 2's review focus 4).
+  it('sends an operator\'s pause and resume of a Google Cloud workload without an exclusionId, which the router keeps apart', async () => {
+    const m = manager({ controller: (_req, payload) => answer(200, payload.action === 'pause' ? { pause: { scope: 'workload' }, woken: [] } : { resumed: true }) });
+    expect((await m.api(event('POST', `/api/workloads/${NAME}/demo/pause`, 'dmt-operator', { reason: 'release' }))).statusCode).toBe(200);
+    expect((await m.api(event('POST', `/api/workloads/${NAME}/demo/resume`, 'dmt-operator'))).statusCode).toBe(200);
+    expect(m.actions().map((a) => a.payload)).toEqual([
+      { action: 'pause', workloadId: 'demo', by: 'ops@example.com', reason: 'release', keepAsleep: false, refusals: true },
+      { action: 'resume', workloadId: 'demo', by: 'ops@example.com', refusals: true },
+    ]);
   });
 
   it('gives a Google Cloud router 10 s to answer a list, an AWS one 5 s', async () => {

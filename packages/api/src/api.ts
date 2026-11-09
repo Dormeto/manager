@@ -2610,12 +2610,10 @@ export function createApi({
       if (type === 'offboard') {
         const workloadId = String(body.workloadId ?? '');
         if (!ID.test(workloadId)) throw new HttpError(400, 'bad_request', `invalid workload id: ${workloadId}`);
-        // The operations engine is AWS's until the manager onboards on Google Cloud (Google Cloud manager design §8): the
-        // CLI offboards a Google Cloud workload.
-        if (router.cloud === 'gcp') {
-          throw new HttpError(400, 'bad_request', `a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard ${workloadId} --project ${account} --region ${router.region}`);
-        }
-        input = { router: router.name, account, region: router.region, workloadId };
+        // On Google Cloud, the project's number, which the tag bindings the offboarding removes name (Google Cloud manager
+        // design §8). What only the CLI undoes (GKE access, request logs) the operation refuses before anything changes.
+        const onProject = router.cloud === 'gcp' ? { projectNumber: await projectNumberOf(account) } : {};
+        input = { router: router.name, account, region: router.region, workloadId, ...onProject };
         target = `${router.name}/${workloadId}`;
       } else {
         if (router.cloud === 'gcp') {
