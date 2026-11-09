@@ -6,7 +6,7 @@ import { settingRows, sourceText, typeText } from '../settings';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
 import WorkloadSettingsDialog from '../components/WorkloadSettingsDialog.vue';
-import { backendIcon } from '../icons';
+import { backendIcon, backendMdi } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendArn, backendKinds, backendLabel, backendService, googleBackendService, duration, listSourceHref, targetInfo, usd, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText, rowCloud } from '../format';
@@ -483,13 +483,15 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
             :note="costRows(b).some((r) => r.label === 'Base cost') ? costNote : null">
             <template #default="{ tip }">
               <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : gcp ? resourceName(b.id) : shortId(b.id)" class="dm-backend">
-                <template v-if="backendIcon(b.kind)" #prepend>
-                  <img :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
+                <!-- AWS's product icons; Google Cloud's kinds as Material Design icons, named for screen readers. -->
+                <template v-if="gcp ? backendMdi(b.kind) : backendIcon(b.kind)" #prepend>
+                  <v-icon v-if="gcp" :icon="backendMdi(b.kind)!" size="28" class="mr-3 backend-icon dm-backend__mdi" :aria-hidden="false" role="img" :aria-label="backendLabel(b.kind, 'gcp')" />
+                  <img v-else :src="backendIcon(b.kind)!" :alt="backendLabel(b.kind)" width="36" height="36" class="mr-3 backend-icon">
                 </template>
                 <!-- Its details under its name, wrapped: beside the state they crushed the name at a phone's width. -->
                 <v-list-item-subtitle class="text-wrap">{{ backendDetails(b) }}</v-list-item-subtitle>
                 <template #append>
-                  <a v-if="backendLink(b)" :href="backendLink(b)!" target="_blank" rel="noopener" class="mr-3" :aria-label="`Open ${shortId(b.id)} in the Google Cloud console`" @click.stop><v-icon :icon="mdiOpenInNew" size="small" /></a>
+                  <a v-if="backendLink(b)" :href="backendLink(b)!" target="_blank" rel="noopener" class="mr-3" :aria-label="`Open ${resourceName(b.id)} in the Google Cloud console`" @click.stop><v-icon :icon="mdiOpenInNew" size="small" /></a>
                   <v-chip :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
                 </template>
               </v-list-item>
@@ -734,6 +736,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
 
 /* Lists and tables inside cards: on the glass. */
 .dm-backend :deep(.v-list-item-title) { font-weight: 600; letter-spacing: -0.01em; }
+.dm-backend__mdi { padding: 4px; box-sizing: content-box; background: rgba(var(--v-theme-on-surface), 0.06); box-shadow: 0 0 0 1px rgba(var(--v-border-color), 0.12); }
 .dm-backend :deep(.v-list-item-subtitle), .dm-wrap :deep(.v-list-item-subtitle) { display: block; -webkit-line-clamp: none; line-clamp: none; }
 .dm-summary :deep(th) { width: 42%; font-size: 0.86rem !important; }
 .dm-summary :deep(td) { font-variant-numeric: tabular-nums; }

@@ -924,6 +924,20 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
+  it('shows its backends with Google Cloud\'s icons and names, never an EC2 icon or alt, and names each console link by its resource', async () => {
+    current = google;
+    const wrapper = await mountView('operator');
+    const [vm, db] = wrapper.findAll('[data-test="backend"]');
+    for (const b of [vm!, db!]) {
+      expect(b.find('img').exists()).toBe(false);
+      expect(b.html()).not.toMatch(/EC2|Auto Scaling|RDS|Aurora/);
+    }
+    expect(vm!.find('[aria-label="Compute Engine VM"]').exists()).toBe(true);
+    expect(db!.find('[aria-label="Cloud SQL instance"]').exists()).toBe(true);
+    expect([vm!, db!].map((b) => b.find('a').attributes('aria-label'))).toEqual(['Open vm-demo in the Google Cloud console', 'Open db-demo in the Google Cloud console']);
+    wrapper.unmount();
+  });
+
   it('links the load balancers\' list for a regional URL map, whose own page this dashboard cannot confirm', async () => {
     current = { ...google, urlMap: `${PROJECT}/regions/europe-west2/urlMaps/dormeto-lb`, lb: { kind: 'regional', region: 'europe-west2' } };
     const wrapper = await mountView('operator');
