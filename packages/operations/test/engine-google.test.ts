@@ -87,9 +87,12 @@ function setup({ routers = [ROUTER], bound = [] as string[], failBind = [] as st
     target: async () => { throw new Error('no AWS account in a Google Cloud onboarding'); },
     bundle: async () => { throw new Error('no router bundle in a Google Cloud onboarding'); },
     google: {
+      // A `{refused}` answer thrown with its code, as googleInvoker does.
       invoke: async (router, payload, { timeoutMs }) => {
         invocations.push([router.name, payload, timeoutMs]);
-        return answers[payload.action as string]!(payload);
+        const answer = answers[payload.action as string]!(payload) as { refused?: { code: string; message: string } };
+        if (answer?.refused) throw Object.assign(new Error(answer.refused.message), { code: answer.refused.code });
+        return answer;
       },
       tags,
     },
@@ -190,15 +193,17 @@ describe('onboarding a Google Cloud candidate', () => {
 
   it('a refused onboarding removes the bindings this operation made, keeps the one there before, and fails with the refusal', async () => {
     const s = setup({ bound: [VM.parent] });
-    s.answers.onboard = () => { throw Object.assign(new Error('backend service dmt-demo-app is already workload other'), { code: 'conflict' }); };
+    // The router's not-eligible refusal (router gcp/src/onboarding.mjs:709, a 400: `invalid`).
+    const refusal = `cannot onboard ${WORKLOAD_ID}: backend service dmt-demo-app is already workload other`;
+    s.answers.onboard = () => ({ refused: { code: 'invalid', message: refusal } });
     const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
     expect(s.tagCalls.filter((c) => c.startsWith('unbind'))).toEqual([ZONAL, REGIONAL, SQL].map((t) => `unbind ${t.parent} ${TAG_VALUE}`));
     expect([...s.bindings]).toEqual([VM.parent]);
     const stored = (await s.records.getOperation(op.id))!;
     const removed = `the tag bindings it made are removed: ${[ZONAL, REGIONAL, SQL].map((t) => t.label).join(', ')}`;
-    expect(stored.error).toBe(`onboard: backend service dmt-demo-app is already workload other; ${removed}`);
-    expect(stored.steps.find((x) => x.name === 'onboard')).toMatchObject({ status: 'failed', detail: `backend service dmt-demo-app is already workload other; ${removed}` });
+    expect(stored.error).toBe(`onboard: ${refusal}; ${removed}`);
+    expect(stored.steps.find((x) => x.name === 'onboard')).toMatchObject({ status: 'failed', detail: `${refusal}; ${removed}` });
     expect(stored.context.tagged).toEqual([]);
     expect(actionsOf(s).map(([, action]) => action)).toEqual(['preview', 'onboard']);
     expect(s.items.get(SERVICE)).toMatchObject({ eligibility: 'eligible' });
@@ -214,6 +219,61 @@ describe('onboarding a Google Cloud candidate', () => {
     expect(stored.error).toBe(`onboard: the manager's accounts can't reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev; the tag bindings it made are removed: ${[VM, ZONAL, SQL].map((t) => t.label).join(', ')}; still tagged: ${REGIONAL.label} (Google: 503 UNAVAILABLE: try again)`);
     expect([...s.bindings]).toEqual([REGIONAL.parent]);
     expect(stored.context.tagged).toEqual([REGIONAL]);
+  });
+
+  describe('an onboarding refused as onboarded already (the step run again after an attempt whose answer was lost)', () => {
+    const exists = { refused: { code: 'conflict', message: `workload ${WORKLOAD_ID} is onboarded already` } };
+    const ALL = [VM, ZONAL, REGIONAL, SQL];
+
+    it('the router has the workload on this candidate\'s backend service: an earlier attempt onboarded it, the step is done and nothing is removed', async () => {
+      const s = setup();
+      s.answers.onboard = () => exists;
+      const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      expect(s.tagCalls.filter((c) => c.startsWith('unbind'))).toEqual([]);
+      expect([...s.bindings]).toEqual(ALL.map((t) => t.parent));
+      const stored = (await s.records.getOperation(op.id))!;
+      expect(stored.steps.slice(-3).map((x) => [x.name, x.status, x.detail])).toEqual([
+        ['onboard', 'done', `the router already had workload ${WORKLOAD_ID} on backend service dmt-demo-app: an earlier attempt onboarded it`],
+        ['verify', 'done', 'Demo AWAKE, backend service dmt-demo-app'],
+        ['candidate', 'done', undefined],
+      ]);
+      expect(stored.context.tagged).toEqual(ALL);
+      // The status read after the refusal, then the verification's.
+      expect(actionsOf(s)).toEqual([[ROUTER.name, 'preview', 300_000], [ROUTER.name, 'onboard', 300_000], [ROUTER.name, 'status', 10_000], [ROUTER.name, 'status', 10_000]]);
+      expect(s.invocations[2]![1]).toEqual({ action: 'status', workloadId: WORKLOAD_ID });
+      expect(s.items.get(SERVICE)).toMatchObject({ eligibility: 'managed', workloadId: WORKLOAD_ID });
+    });
+
+    it('the router\'s workload of that id has another backend service, or the router has none: the refusal stands, the bindings removed', async () => {
+      for (const status of [
+        () => ({ workloadId: WORKLOAD_ID, name: 'Other', backendService: 'other-app', state: 'AWAKE', issues: [] }),
+        () => ({ refused: { code: 'not_found', message: `no workload ${WORKLOAD_ID}` } }),
+      ]) {
+        const s = setup();
+        s.answers.onboard = () => exists;
+        s.answers.status = status;
+        const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+        expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+        expect([...s.bindings]).toEqual([]);
+        const stored = (await s.records.getOperation(op.id))!;
+        expect(stored.error).toBe(`onboard: workload ${WORKLOAD_ID} is onboarded already; the tag bindings it made are removed: ${ALL.map((t) => t.label).join(', ')}`);
+        expect(stored.context.tagged).toEqual([]);
+        expect(actionsOf(s).map(([, action]) => action)).toEqual(['preview', 'onboard', 'status']);
+      }
+    });
+
+    it('a status whose answer is lost too can\'t tell: nothing is removed, and the detail says so', async () => {
+      const s = setup();
+      s.answers.onboard = () => exists;
+      s.answers.status = () => { throw new Error('no answer within 10000 ms'); };
+      const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+      expect(s.tagCalls.filter((c) => c.startsWith('unbind'))).toEqual([]);
+      expect((await s.records.getOperation(op.id))!.error).toBe(
+        `onboard: workload ${WORKLOAD_ID} is onboarded already; its status can't be read (no answer within 10000 ms): the tag bindings it made are kept, as the router may have onboarded it: ${ALL.map((t) => t.label).join(', ')}`,
+      );
+    });
   });
 
   it('an onboarding whose answer was lost (a timeout) removes no binding: the router may have onboarded it, and the detail names what is kept', async () => {

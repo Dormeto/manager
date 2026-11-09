@@ -54,8 +54,9 @@ account (a refusal: 502 with Google's words). The operation runs `find router`, 
 AWS's onboarder payload (the URL map's and backend service's names, the load balancer's kind), the tag `dormeto/managed` bound as
 the command account to the VMs and managed instance groups the preview names and to the Cloud SQL instances given, one per run of
 the step (one bound already is left alone). A refused onboarding removes the bindings the operation made and says so; one whose
-answer was lost (a timeout, a failure) removes none and names them. The workload is verified by the router's status (its backend
-service, no issue, not `FAILED`). AWS onboardings are unchanged.
+answer was lost (a timeout, a failure) removes none and names them. A step run again after a lost answer that the router refuses as
+onboarded already is done when the router's status shows the workload on the candidate's backend service, nothing removed. The
+workload is verified by the router's status (its backend service, no issue, not `FAILED`). AWS onboardings are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
 `silent`); one the poll is refused at says that refusal with its command (`manager-access-missing`, `router-unknown`) instead of

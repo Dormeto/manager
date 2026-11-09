@@ -436,17 +436,41 @@ export function createEngine(deps: EngineDeps) {
   // The router's onboarding. A refusal (an error with its code: the router's, or the manager's own before any call) means
   // no router acted: the bindings this operation made are removed before the step fails. Without a code (a timeout, a
   // failure, an answer lost) the router may have onboarded it: nothing is removed, and the step says what is kept.
+  // A conflict may be this operation's own onboarding: the workflow runs the step again when an attempt's answer was lost
+  // (the step's state is saved after its outcome), and the router answers "onboarded already". Its status tells: the
+  // workload on this candidate's backend service is done, nothing removed; another one, or none, and the refusal stands.
   async function googleOnboard(op: Operation): Promise<Outcome> {
     let result;
     try {
       result = await invokeRouter(op, 'onboarder', { action: 'onboard', workloadId: op.context.workloadId, name: op.context.name, ...(await googlePayload(op)), by: op.by });
     } catch (err) {
       const message = (err as Error).message;
-      if ((err as { code?: unknown }).code) throw new Error(`${message}${await untag(op)}`);
-      const kept = (op.context.tagged ?? []) as TagTarget[];
-      throw new Error(kept.length ? `${message}; the tag bindings it made are kept, as the router may have onboarded it: ${labelsOf(kept)}` : message);
+      const code = (err as { code?: unknown }).code;
+      const keptText = (why: string) => {
+        const kept = (op.context.tagged ?? []) as TagTarget[];
+        return kept.length ? `${why}the tag bindings it made are kept, as the router may have onboarded it: ${labelsOf(kept)}` : '';
+      };
+      if (code === 'conflict') {
+        const earlier = await onboardedEarlier(op);
+        if (earlier.onboarded) return { status: 'done', detail: earlier.onboarded };
+        if (earlier.unread) throw new Error(`${message}; its status can't be read (${earlier.unread})${keptText(': ')}`);
+      }
+      if (code) throw new Error(`${message}${await untag(op)}`);
+      throw new Error(`${message}${keptText('; ')}`);
     }
     return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
+  }
+
+  // Whether the router has the operation's workload on the candidate's backend service (`onboarded`: the step's detail);
+  // `unread`: its status was lost too (no code), which can't tell. A refused status (the workload unknown) is no.
+  async function onboardedEarlier(op: Operation): Promise<{ onboarded?: string; unread?: string }> {
+    const service = googlePath(op.target.backendService)!.name;
+    try {
+      const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
+      return status?.backendService === service ? { onboarded: `the router already had workload ${op.context.workloadId} on backend service ${service}: an earlier attempt onboarded it` } : {};
+    } catch (err) {
+      return (err as { code?: unknown }).code ? {} : { unread: (err as Error).message };
+    }
   }
 
   // The router's status of the new workload: the candidate's backend service, no issue, not FAILED.
