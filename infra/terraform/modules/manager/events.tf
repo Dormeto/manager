@@ -104,10 +104,15 @@ data "aws_iam_policy_document" "fleet" {
     resources = ["${aws_s3_bucket.lists.arn}/settings.json"]
   }
   statement {
-    # So that a settings.json never written answers 404, not 403.
+    # So that a settings.json never written answers 404, not 403; that object's name alone, never the lists.
     sid       = "OrganizationSettingsListing"
     actions   = ["s3:ListBucket"]
     resources = [aws_s3_bucket.lists.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:prefix"
+      values   = ["settings.json"]
+    }
   }
   statement {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]

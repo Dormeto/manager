@@ -919,6 +919,10 @@ run "google_cloud_routers_polled_every_minute" {
     error_message = "The fleet function may list the bucket, so a settings.json never written answers 404 rather than 403."
   }
   assert {
+    condition     = flatten([for s in data.aws_iam_policy_document.fleet.statement : [for c in s.condition : [c.test, c.variable, c.values]] if s.sid == "OrganizationSettingsListing"]) == ["StringEquals", "s3:prefix", "settings.json"]
+    error_message = "The fleet function lists only settings.json of the lists bucket (s3:prefix), never the lists themselves."
+  }
+  assert {
     condition     = contains(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "Summaries"]), "dynamodb:UpdateItem")
     error_message = "The fleet function writes a router's poll beside its summary (UpdateItem)."
   }
