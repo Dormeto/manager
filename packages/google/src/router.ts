@@ -1,7 +1,8 @@
 // The manager's calls to a Google Cloud router (Google Cloud manager design §5.1, §6.2): the AWS controller's payload
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // within its bound. The controller answers in the AWS controller's shapes, in its own JSON; Google answers in front of it
-// when it refuses the token (401 or 403: an HTML page or Google's JSON error) or knows no such service (an HTML 404).
+// when it refuses the token (401 or 403: an HTML page, Google's JSON error or nothing) or knows no such service (an HTML
+// or empty 404).
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
 // The API and the fleet's poll call routers through it.
 import { GoogleError } from './errors.js';
@@ -74,7 +75,9 @@ async function answerOf(google: Pick<Google, 'request'>, origin: string, payload
     throw err;
   }
   let body: unknown = null;
-  let json = true;
+  // The controller always answers JSON: an empty failure, as one that isn't JSON, is Google's in front of it (an empty 2xx
+  // is the controller's empty answer).
+  let json = ok(status) || text.trim() !== '';
   try {
     if (text.trim()) body = JSON.parse(text);
   } catch {

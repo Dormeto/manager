@@ -131,6 +131,19 @@ describe('callRouter', () => {
     expect([err.refusal, err.status, err.google, err.token, err.message]).toEqual([undefined, 404, true, false, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
   });
 
+  // The controller always answers JSON: an empty body in front of it is Google's.
+  it('reads an empty 404 as Google\'s own (no such service), never as a router too old', async () => {
+    const err = await failure(callRouter(fakeGoogle(() => new Response('', { status: 404 })).google, ROUTER, { action: 'router' }, { timeoutMs: 10_000 }));
+    expect([err.refusal, err.status, err.google, err.token, err.message]).toEqual([undefined, 404, true, false, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
+  });
+
+  it('reads an empty 401 or 403 as Google\'s refusal of the manager\'s token: manager-access-missing', async () => {
+    for (const status of [401, 403]) {
+      const err = await failure(callRouter(fakeGoogle(() => new Response('', { status })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+      expect([err.refusal, err.status, err.google], String(status)).toEqual(['manager-access-missing', status, true]);
+    }
+  });
+
   it('says an action the router does not know in the AWS controller\'s words', async () => {
     const err = await failure(callRouter(fakeGoogle(() => json(400, { error: 'unknown-action' })).google, ROUTER, { action: 'exclude' }, { timeoutMs: 10_000 }));
     expect([err.status, err.message]).toEqual([400, 'unknown action: exclude']);
