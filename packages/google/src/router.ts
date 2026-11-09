@@ -7,6 +7,7 @@
 // The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
 // health (GET /v1/health, which every router version answers), the same way.
 import { errorOf, GoogleError, redacted } from './errors.js';
+import type { Bounds } from './fetch.js';
 import type { Google, GoogleConnection } from './google.js';
 
 // The router version the manager needs (/v1/actions, the journal, the check summary).
@@ -78,15 +79,15 @@ const googleShaped = (body: unknown) => typeof (body as { error?: unknown } | nu
 type Reply = { host: string; status: number; body: unknown; json: boolean; text: string };
 type Own = { refused?: unknown; error?: unknown; message?: unknown } | null;
 
-async function replyOf(google: Pick<Google, 'request'>, origin: string, method: string, path: string, payload?: Record<string, unknown>): Promise<Reply> {
+async function replyOf(google: Pick<Google, 'request'>, origin: string, method: string, path: string, payload: Record<string, unknown> | undefined, bounds: Bounds): Promise<Reply> {
   const host = new URL(origin).host;
   let status: number;
   let text: string;
   try {
-    ({ status, text } = await google.request('command', origin, method, `${origin}${path}`, payload));
+    ({ status, text } = await google.request('command', origin, method, `${origin}${path}`, payload, bounds));
   } catch (err) {
     // request answers whatever the controller URL answers, so a GoogleError with a status is the ID token's (STS or
-    // iamcredentials); one without is no answer at all, from either.
+    // iamcredentials); one without is no answer at all, from either. The bound's own error goes as it is.
     if (err instanceof GoogleError && err.status !== 0) {
       throw new RouterCallError(err.message, { status: err.status, token: true, said: googleSaid(err.host, err.status, err.reason, err.message), ...(brokenConnection(err) ? { refusal: 'manager-access-missing' as const } : {}) });
     }
@@ -118,8 +119,8 @@ function googleFailure({ host, status, body, json, text }: Reply): RouterCallErr
   return new RouterCallError(message, { status, google: true, said: googleSaid(host, status, said.reason, said.message), ...(denied(status) ? { refusal: 'manager-access-missing' as const } : {}) });
 }
 
-async function answerOf(google: Pick<Google, 'request'>, origin: string, payload: Record<string, unknown>): Promise<unknown> {
-  const reply = await replyOf(google, origin, 'POST', '/v1/actions', payload);
+async function answerOf(google: Pick<Google, 'request'>, origin: string, payload: Record<string, unknown>, bounds: Bounds): Promise<unknown> {
+  const reply = await replyOf(google, origin, 'POST', '/v1/actions', payload, bounds);
   const { host, status, body, json } = reply;
   if (json && ok(status)) return body;
   if (json && !googleShaped(body)) {
@@ -135,8 +136,8 @@ async function answerOf(google: Pick<Google, 'request'>, origin: string, payload
 // What a router's health answers (every router version has it): its version, project and region.
 export type RouterHealth = { version: string; project?: string; region?: string };
 
-async function healthOf(google: Pick<Google, 'request'>, origin: string): Promise<RouterHealth> {
-  const reply = await replyOf(google, origin, 'GET', '/v1/health');
+async function healthOf(google: Pick<Google, 'request'>, origin: string, bounds: Bounds): Promise<RouterHealth> {
+  const reply = await replyOf(google, origin, 'GET', '/v1/health', undefined, bounds);
   const { host, status, body, json } = reply;
   if (json && ok(status)) {
     const health = body as { version?: unknown; project?: unknown; region?: unknown } | null;
@@ -147,12 +148,15 @@ async function healthOf(google: Pick<Google, 'request'>, origin: string): Promis
   throw googleFailure(reply);
 }
 
-// The work within timeoutMs, the ID token's requests included.
-async function bounded<T>(timeoutMs: number, work: () => Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RouterCallError(`no answer within ${timeoutMs} ms`)), timeoutMs); });
+// The work within timeoutMs, the ID token's requests included. At timeoutMs the work's signal aborts the controller's
+// request (or keeps it from being sent), and the call fails as an answer lost: no refusal.
+async function bounded<T>(timeoutMs: number, work: (bounds: Bounds) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const late = new Promise<never>((_, reject) => { controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }); });
+  const timer = setTimeout(() => controller.abort(new RouterCallError(`no answer within ${timeoutMs} ms`)), timeoutMs);
   try {
-    return await Promise.race([work(), late]);
+    // The controller answers once its action is done (an onboarding waits for Compute Engine): it may be silent up to the bound.
+    return await Promise.race([work({ silenceMs: timeoutMs, signal: controller.signal }), late]);
   } finally {
     clearTimeout(timer);
   }
@@ -161,14 +165,14 @@ async function bounded<T>(timeoutMs: number, work: () => Promise<T>): Promise<T>
 // The controller's JSON answer, or a RouterCallError; the whole call (the ID token's requests included) within timeoutMs.
 export async function callRouter(google: Pick<Google, 'request'>, router: { controller: string }, payload: Record<string, unknown>, { timeoutMs }: { timeoutMs: number }): Promise<unknown> {
   const origin = new URL(router.controller).origin;
-  return bounded(timeoutMs, () => answerOf(google, origin, payload));
+  return bounded(timeoutMs, (bounds) => answerOf(google, origin, payload, bounds));
 }
 
 // The router's health (GET /v1/health, as the command account), or a RouterCallError read as callRouter's: the poll reads
 // the version of a router too old to poll there.
 export async function routerHealth(google: Pick<Google, 'request'>, router: { controller: string }, { timeoutMs }: { timeoutMs: number }): Promise<RouterHealth> {
   const origin = new URL(router.controller).origin;
-  return bounded(timeoutMs, () => healthOf(google, origin));
+  return bounded(timeoutMs, (bounds) => healthOf(google, origin, bounds));
 }
 
 // A router the manager acts on (Google Cloud manager design §6.2): the connection and its Google instance as read now

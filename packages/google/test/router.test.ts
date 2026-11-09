@@ -17,8 +17,10 @@ const connection: GoogleConnection = {
 };
 const credentials = { accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret', sessionToken: 'the-session-token' };
 
-type Seen = { url: string; method: string; headers: Record<string, string>; body: string };
+type Seen = { url: string; method: string; headers: Record<string, string>; body: string; signal?: AbortSignal };
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+// An answer that never comes: rejected when its request is aborted, as fetch's.
+const silent = (req: Seen) => new Promise<Response>((_resolve, reject) => { req.signal!.addEventListener('abort', () => reject(req.signal!.reason)); });
 const html = (status: number, title: string) => new Response(`<html><head><title>${status} ${title}</title></head><body><h1>Error: ${title}</h1></body></html>`, { status, headers: { 'content-type': 'text/html' } });
 const jwt = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
 
@@ -27,7 +29,7 @@ function fakeGoogle(controller: (req: Seen) => Response | Promise<Response>, tok
   let n = 0;
   const seen: Seen[] = [];
   const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const req: Seen = { url: String(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body ?? '') };
+    const req: Seen = { url: String(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body ?? ''), ...(init?.signal ? { signal: init.signal } : {}) };
     seen.push(req);
     const own = tokens?.(req);
     if (own) return own;
@@ -223,6 +225,53 @@ describe('callRouter', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(await call).toMatchObject({ message: 'no answer within 8000 ms', status: 0 });
     await vi.advanceTimersByTimeAsync(5_000);
+  });
+
+  // The controller sends nothing until its answer is complete (router gcp/src/server.mjs), and an onboarding waits for
+  // Compute Engine's operations: the router's call is silent up to its own bound, Google's token requests 10 s at most.
+  it('lets a controller silent for 20 s answer under a 300 s bound', async () => {
+    vi.useFakeTimers();
+    const g = fakeGoogle(() => new Promise<Response>((resolve) => { setTimeout(() => resolve(json(200, { steps: [{ name: 'url map', status: 'done' }] })), 20_000); }));
+    const call = callRouter(g.google, ROUTER, { action: 'onboard' }, { timeoutMs: 300_000 });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await call).toEqual({ steps: [{ name: 'url map', status: 'done' }] });
+  });
+
+  it('aborts a controller still silent at the bound, never sooner, as a lost answer: no refusal', async () => {
+    vi.useFakeTimers();
+    const g = fakeGoogle(silent);
+    let settled: unknown = 'pending';
+    const call = failure(callRouter(g.google, ROUTER, { action: 'onboard' }, { timeoutMs: 300_000 }));
+    void call.then((v) => { settled = v; });
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(settled).toBe('pending');
+    const [sent] = g.to(ACTIONS);
+    expect(sent!.signal!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const err = await call;
+    expect([err.message, err.status, err.refusal, err.google, err.token]).toEqual(['no answer within 300000 ms', 0, undefined, false, false]);
+    expect(sent!.signal!.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps Google\'s 10 s of silence for the ID token\'s requests under a 300 s bound', async () => {
+    vi.useFakeTimers();
+    const g = fakeGoogle(() => json(200, {}), (req) => (req.url.endsWith(':generateIdToken') ? silent(req) : undefined));
+    const call = failure(callRouter(g.google, ROUTER, { action: 'onboard' }, { timeoutMs: 300_000 }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await call).message).toBe('no answer from iamcredentials.googleapis.com in 10 s');
+    expect(g.to(ACTIONS)).toHaveLength(0);
+  });
+
+  it('sends nothing to the controller once the bound is past: an ID token that comes later is not used', async () => {
+    vi.useFakeTimers();
+    const later = (ms: number) => new Promise<Response>((resolve) => { setTimeout(() => resolve(json(200, { token: jwt({ exp: Math.floor(T0 / 1000) + 3600 }) })), ms); });
+    const g = fakeGoogle(() => json(200, {}), (req) => (req.url.endsWith(':generateIdToken') ? later(9_000) : undefined));
+    const call = failure(callRouter(g.google, ROUTER, { action: 'list' }, { timeoutMs: 8_000 }));
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect((await call).message).toBe('no answer within 8000 ms');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(g.to(ACTIONS)).toHaveLength(0);
   });
 });
 

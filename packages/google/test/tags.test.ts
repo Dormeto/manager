@@ -1,6 +1,7 @@
 // The tag `dormeto/managed` as the manager's command account binds and removes it (Google Cloud manager design §8): the
 // CLI's parents and locations, each binding's operation waited for, a binding that was there already not this call's.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { errorOf } from '../src/errors.js';
 import { bindTag, GoogleError, sqlRegionOf, tagTargets, tagValueOf, unbindTag, type TagTarget } from '../src/index.js';
 
 const VALUE = 'tagValues/1234';
@@ -43,20 +44,29 @@ describe('tagTargets', () => {
 });
 
 describe('tagValueOf', () => {
+  const CONNECT = { host: 'dormeto-host', env: 'dev' };
+
   it('reads the value by its namespaced name', async () => {
     const g = fake(() => ({ name: VALUE }));
-    expect(await tagValueOf(g.google, 'shop-prd')).toBe(VALUE);
+    expect(await tagValueOf(g.google, 'shop-prd', CONNECT)).toBe(VALUE);
     expect(g.calls).toEqual([{ sa: 'command', method: 'GET', url: 'https://cloudresourcemanager.googleapis.com/v3/tagValues/namespaced?name=shop-prd%2Fdormeto%2Fmanaged', body: undefined }]);
   });
 
   it.each([403, 404])('names the tag and the connect command when Google answers %s', async (status) => {
     const g = fake(() => gerr(status, 'PERMISSION_DENIED'));
-    await expect(tagValueOf(g.google, 'shop-prd')).rejects.toThrow(/shop-prd\/dormeto\/managed.*dormeto gcp connect/);
+    await expect(tagValueOf(g.google, 'shop-prd', CONNECT)).rejects.toThrow(/shop-prd\/dormeto\/managed.*dormeto gcp connect/);
+  });
+
+  it('names the whole connect command, as the other refusals do, without backticks', async () => {
+    const g = fake(() => gerr(403, 'PERMISSION_DENIED'));
+    await expect(tagValueOf(g.google, 'shop-prd', CONNECT)).rejects.toThrow(
+      'the tag value shop-prd/dormeto/managed can\'t be read: dormeto gcp connect --project dormeto-host --profile <profile> --env dev gives the manager\'s command account access to it',
+    );
   });
 
   it('lets any other failure through', async () => {
     const g = fake(() => gerr(503, 'UNAVAILABLE', 'try later'));
-    await expect(tagValueOf(g.google, 'shop-prd')).rejects.toThrow('try later');
+    await expect(tagValueOf(g.google, 'shop-prd', CONNECT)).rejects.toThrow('try later');
   });
 });
 
@@ -102,6 +112,20 @@ describe('bindTag', () => {
     expect(err.message).toContain(vm.parent);
   });
 
+  it('gives up 60 s after it started, however long each poll takes to answer', async () => {
+    vi.useFakeTimers();
+    let settled: unknown = 'pending';
+    // Each poll answers after 8 s: 2 s of sleep and 8 s of answer per poll, the 60 s spent by the sixth.
+    const g = fake((method) => (method === 'POST' ? { name: 'operations/o1' } : new Promise((resolve) => { setTimeout(() => resolve({ name: 'operations/o1' }), 8_000); })));
+    const bound = bindTag(g.google, vm, VALUE).catch((e: unknown) => e as Error);
+    void bound.then((v) => { settled = v; });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect((settled as Error).message).toMatch(/didn't finish within 60 s/);
+    expect(g.calls.filter((c) => c.method === 'GET')).toHaveLength(6);
+  });
+
   it('throws the operation\'s error as a GoogleError', async () => {
     const g = fake(() => ({ name: 'operations/o1', done: true, error: { code: 7, message: 'no tagUser' } }));
     const err = await bindTag(g.google, vm, VALUE).catch((e: unknown) => e);
@@ -112,6 +136,18 @@ describe('bindTag', () => {
   it('says it did not make a binding that was there already (409 ALREADY_EXISTS), and fails on another 409', async () => {
     expect(await bindTag(fake(() => gerr(409, 'ALREADY_EXISTS')).google, vm, VALUE)).toBe(false);
     await expect(bindTag(fake(() => gerr(409, 'ABORTED', 'try again')).google, vm, VALUE)).rejects.toThrow('try again');
+  });
+
+  // errorOf puts an ErrorInfo's reason first: the binding there already is told by Google's status, ALREADY_EXISTS.
+  it('says it did not make a binding Google answers 409 ALREADY_EXISTS to, whatever its ErrorInfo\'s reason', async () => {
+    const url = 'https://europe-west2-b-cloudresourcemanager.googleapis.com/v3/tagBindings';
+    const exists = errorOf(409, JSON.stringify({ error: {
+      code: 409, message: 'A TagBinding for this parent and value already exists.', status: 'ALREADY_EXISTS',
+      details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'TAG_BINDING_ALREADY_EXISTS', domain: 'cloudresourcemanager.googleapis.com' }],
+    } }), url);
+    expect(await bindTag(fake(() => exists).google, vm, VALUE)).toBe(false);
+    const aborted = errorOf(409, JSON.stringify({ error: { code: 409, message: 'try again', status: 'ABORTED', details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'ALREADY_EXISTS' }] } }), url);
+    await expect(bindTag(fake(() => aborted).google, vm, VALUE)).rejects.toThrow('try again');
   });
 });
 

@@ -31,7 +31,7 @@ const engine = createEngine({
   routers: () => routersOf(JSON.parse(process.env.ROUTERS ?? '[]'), records),
   target: createTargets({ sts: new STSClient({}), roleName: commandRole, sessionName: `dmt-${env}-operations` }),
   bundle: createBundle({ s3: new S3Client({}), bucket: process.env.ARTIFACTS_BUCKET ?? '', version: process.env.ROUTER_VERSION ?? '' }),
-  google: { invoke: googleInvoker(googleSource, { env, routerVersion: process.env.ROUTER_VERSION }), tags: googleTags(googleSource) },
+  google: { invoke: googleInvoker(googleSource, { env, routerVersion: process.env.ROUTER_VERSION }), tags: googleTags(googleSource, { env }) },
   settings: {
     env,
     // The manager's version (VERSION), in what to apply where an account's organization access is older.

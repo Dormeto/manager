@@ -23,15 +23,20 @@ export function googleInvoker(source: Source, { env, routerVersion }: { env: str
   };
 }
 
-// The tag functions as the command account of the connection's current Google instance.
-export function googleTags(source: Source): Tags {
-  const google = async (): Promise<Google> => {
+// The tag functions as the command account of the connection's current Google instance; a tag value that can't be read
+// names the connect command of the connection's host project and the manager's environment.
+export function googleTags(source: Source, { env }: { env: string }): Tags {
+  const connected = async () => {
     const current = await source.current();
     if (!current) throw new Error('no Google Cloud connection');
-    return current.google;
+    return current;
   };
+  const google = async (): Promise<Google> => (await connected()).google;
   return {
-    tagValueOf: async (project) => tagValueOf(await google(), project),
+    tagValueOf: async (project) => {
+      const { connection, google: g } = await connected();
+      return tagValueOf(g, project, { host: connection.project, env });
+    },
     bindTag: async (target, value) => bindTag(await google(), target, value),
     unbindTag: async (target, value) => unbindTag(await google(), target, value),
     sqlRegionOf: async (project, name) => sqlRegionOf(await google(), project, name),

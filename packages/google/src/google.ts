@@ -8,7 +8,7 @@
 import { createHash, createHmac, type Hash, type Hmac } from 'node:crypto';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { errorOf, GoogleError } from './errors.js';
-import { fetchTransport, httpsTransport, send, type Answer, type Fetch } from './fetch.js';
+import { fetchTransport, httpsTransport, send, type Answer, type Bounds, type Fetch } from './fetch.js';
 
 // The connection's record (`DISC#GOOGLE`, `T#default`), written by `dormeto gcp connect`.
 export interface GoogleConnection {
@@ -136,7 +136,7 @@ function fieldsOf(answer: Answer, url: string, fields: Record<string, Field>): R
 export function createGoogle({ connection, credentials = lambdaCredentials, fetch, now = Date.now }: {
   connection: GoogleConnection;
   credentials?: AwsCredentials | AwsCredentialsProvider;
-  // A fetch in place of node:https (the tests'): bounded by its 10 s of silence only.
+  // A fetch in place of node:https (the tests'): bounded by its silence only.
   fetch?: Fetch;
   now?: () => number;
 }) {
@@ -189,13 +189,13 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
   });
 
   // A request with a kept token; Google's 401 (the token revoked before its time) forgets it and sends once more with
-  // a new one.
-  async function authorized(key: string, token: () => Promise<string>, url: string, method: string, body?: unknown): Promise<Answer> {
+  // a new one. `bounds` are the request's own (the token's requests keep theirs).
+  async function authorized(key: string, token: () => Promise<string>, url: string, method: string, body?: unknown, bounds?: Bounds): Promise<Answer> {
     const request = async () => send(transport, url, {
       method,
       headers: { authorization: `Bearer ${await token()}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+    }, bounds);
     const answer = await request();
     if (answer.status !== 401) return answer;
     kept.drop(key);
@@ -230,9 +230,10 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
 
   // A Cloud Run service's answer as it comes (its status and text, whatever they are), as the service account with an
   // ID token for the audience; Google's 401 asks a new token once, as `call` does. The caller reads the answer: the
-  // service's own JSON, or Google's refusal in front of it.
-  const request = (sa: ServiceAccount, audience: string, method: string, url: string, body?: unknown): Promise<Answer> =>
-    authorized(`id ${sa} ${audience}`, () => idToken(sa, audience), url, method, body);
+  // service's own JSON, or Google's refusal in front of it. `bounds`: the service's silence and the caller's signal (a
+  // router's call: its own bound); the ID token's requests keep Google's 10 s.
+  const request = (sa: ServiceAccount, audience: string, method: string, url: string, body?: unknown, bounds?: Bounds): Promise<Answer> =>
+    authorized(`id ${sa} ${audience}`, () => idToken(sa, audience), url, method, body, bounds);
 
   return { accessToken, idToken, call, request };
 }

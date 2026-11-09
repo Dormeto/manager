@@ -217,6 +217,15 @@ describe('createGoogle', () => {
     expect(id.to('https://a.run.app/v1/health')).toEqual([]);
   });
 
+  it('keeps Google\'s status (its canonical code) apart from the ErrorInfo\'s reason, and none for STS\'s error codes', async () => {
+    const g = fakeGoogle((req) => (req.url === 'https://run.googleapis.com/v2/x' ? json(409, {
+      error: { code: 409, message: 'exists', status: 'ALREADY_EXISTS', details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'TAG_BINDING_ALREADY_EXISTS' }] },
+    }) : undefined));
+    await expect(g.google.call('discovery', 'GET', 'https://run.googleapis.com/v2/x')).rejects.toMatchObject({ status: 409, reason: 'TAG_BINDING_ALREADY_EXISTS', code: 'ALREADY_EXISTS' });
+    const sts = fakeGoogle((req) => (req.url === STS ? json(400, { error: 'invalid_grant', error_description: 'no' }) : undefined));
+    await expect(sts.google.accessToken('discovery')).rejects.toMatchObject({ status: 400, reason: 'invalid_grant', code: '' });
+  });
+
   it('says HTTP and the status for a JSON error without a message', async () => {
     const g = fakeGoogle((req) => (req.url === 'https://run.googleapis.com/v2/x' ? json(503, { error: { code: 503, status: 'UNAVAILABLE' } }) : undefined));
     await expect(g.google.call('discovery', 'GET', 'https://run.googleapis.com/v2/x')).rejects.toMatchObject({ name: 'GoogleError', status: 503, reason: 'UNAVAILABLE', message: 'HTTP 503' });
@@ -386,5 +395,32 @@ describe('send over node:https', () => {
     expect(await silent).toMatchObject({ name: 'GoogleError', status: 0, message: 'no answer from sts.googleapis.com in 10 s' });
     expect(second.req.destroyed).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('takes a request\'s own silence and signal: an answer after 20 s under 300 s, then a request aborted by its signal, destroyed', async () => {
+    vi.useFakeTimers();
+    const h = fakeHttps();
+    const slow = send(httpsTransport(h.request), url, init, { silenceMs: 300_000 });
+    const [first] = h.made as [(typeof h.made)[number]];
+    first.req.reusedSocket = true;
+    first.req.emit('socket', new EventEmitter());
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(first.req.destroyed).toBe(false);
+    first.req.emit('response', h.answer(200, '{}'));
+    expect(await slow).toEqual({ status: 200, text: '{}' });
+
+    const controller = new AbortController();
+    const aborted = send(httpsTransport(h.request), url, init, { silenceMs: 300_000, signal: controller.signal }).catch((e: unknown) => e);
+    const second = h.made[1]!;
+    second.req.reusedSocket = true;
+    second.req.emit('socket', new EventEmitter());
+    await vi.advanceTimersByTimeAsync(30_000);
+    controller.abort(new Error('the caller gave up'));
+    expect(await aborted).toMatchObject({ message: 'the caller gave up' });
+    expect(second.req.destroyed).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    // Given up on before it went: never sent.
+    expect(await send(httpsTransport(h.request), url, init, { signal: controller.signal }).catch((e: unknown) => e)).toMatchObject({ message: 'the caller gave up' });
+    expect(h.made).toHaveLength(2);
   });
 });

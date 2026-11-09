@@ -1,7 +1,7 @@
 // The engine's calls of a Google Cloud router, read back as the errors its steps already handle (as function-invoke.test.ts
 // does for AWS): the router's refusal with its code, the manager's own with their text.
 import { describe, expect, it } from 'vitest';
-import { RouterCallError, type Google, type GoogleConnection } from '@dormeto/google';
+import { GoogleError, RouterCallError, type Google, type GoogleConnection } from '@dormeto/google';
 import { googleInvoker, googleTags } from '../src/google.js';
 
 const CONTROLLER = 'https://dmtr-europe-west2-controller-abc123-nw.a.run.app';
@@ -47,8 +47,15 @@ describe('the tags of the connection\'s Google', () => {
   it('reads the tag value as the command account and refuses without a connection', async () => {
     const calls: unknown[][] = [];
     const google = { call: async (...args: unknown[]) => { calls.push(args); return { name: 'tagValues/1' }; } } as unknown as Google;
-    expect(await googleTags({ current: async () => ({ connection, google }) }).tagValueOf('shop-prd')).toBe('tagValues/1');
+    expect(await googleTags({ current: async () => ({ connection, google }) }, { env: 'dev' }).tagValueOf('shop-prd')).toBe('tagValues/1');
     expect(calls[0]!.slice(0, 2)).toEqual(['command', 'GET']);
-    await expect(googleTags({ current: async () => null }).tagValueOf('shop-prd')).rejects.toThrow('no Google Cloud connection');
+    await expect(googleTags({ current: async () => null }, { env: 'dev' }).tagValueOf('shop-prd')).rejects.toThrow('no Google Cloud connection');
+  });
+
+  it('names the connect command of the connection\'s host project and the manager\'s environment when the tag value can\'t be read', async () => {
+    const google = { call: async () => { throw new GoogleError({ status: 403, reason: 'PERMISSION_DENIED', message: 'denied' }); } } as unknown as Google;
+    await expect(googleTags({ current: async () => ({ connection, google }) }, { env: 'prd' }).tagValueOf('shop-prd')).rejects.toThrow(
+      'the tag value shop-prd/dormeto/managed can\'t be read: dormeto gcp connect --project dormeto-host --profile <profile> --env prd gives the manager\'s command account access to it',
+    );
   });
 });
