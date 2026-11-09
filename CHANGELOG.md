@@ -61,14 +61,18 @@ workload is verified by the router's status (its backend service, no issue, not 
 router, the project's number read as the discovery account (a refusal: 502 with Google's words). The operation runs `locate` (the
 router's status), `slot`, `lock load balancer` (the URL map), `pause`, `wait awake`, `offboard` (the router's, within 300 s),
 `untag` and `candidate`. A GKE workload, or one whose onboarding turned request logs on, fails at `locate` before anything changes,
-in the router's words with `dormeto gcp workloads offboard <id> --project <p> --region <r>`. After the router's offboarding the tag
-`dormeto/managed` is removed as the command account from the VMs and managed instance groups its status names (by the ids the
-onboarding stored) and from its Cloud SQL instances, one per run of the step: one not tagged is said, a failure fails the step
-naming what stays tagged, and a VM or group an older onboarding stored no id for is named, its tag to remove by hand. The candidate
-is eligible again. An `offboard` step run again after a lost answer that finds the workload gone is done. An exclusion of a backend
-service, a URL map or a project pauses its managed workloads through every router of the project, with the backend service's path
-instead of a target group (`{action: 'pause', workloadId, backendService, by, reason, until?, exclusionId}`), the next router tried
-when one has no such workload; its lift resumes them by the exclusion's id. AWS offboardings and exclusions are unchanged.
+in the router's words with `dormeto gcp workloads offboard <id> --project <p> --region <r>`; so does a tag value that can't be read
+(with `dormeto gcp connect`) or a Cloud SQL instance whose region Google refuses (one answering 404 is gone: said, nothing to untag
+there). After the router's offboarding the tag `dormeto/managed` is removed as the command account from the VMs and managed
+instance groups its status names (by the ids the onboarding stored) and from its Cloud SQL instances, one per run of the step: one
+not tagged is said, a failure that passes (429, 5xx, no answer) is tried again later, another fails the step naming what stays
+tagged, and a VM or group an older onboarding stored no id for is named, its tag to remove by hand. The candidate is eligible again.
+An `offboard` step run again after a lost answer that finds the workload gone is done. An exclusion of a backend service, a URL map
+or a project pauses its managed workloads through every router of the project, with the backend service's path instead of a target
+group (`{action: 'pause', workloadId, backendService, by, reason, until?, exclusionId}`), the next router tried when one has no such
+workload; its lift resumes them by the exclusion's id. A router below 0.40.0 is never called, and one that fails (a refusal other
+than `not_found`, a timeout) is not called again in that run of the step; their errors are said for a workload no router paused,
+and a lift keeps the pauses on them. AWS offboardings and exclusions are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
 `silent`); one the poll is refused at says that refusal with its command (`manager-access-missing`, `router-unknown`) instead of

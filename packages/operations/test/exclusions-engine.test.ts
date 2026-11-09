@@ -27,8 +27,9 @@ const exclusion = (over: Partial<Exclusion> = {}): Exclusion => ({
 // Workloads each router knows; a pause or resume elsewhere answers "workload not configured", as a refusal with its code on
 // a Google Cloud router (googleInvoker), which answers an exclusion's resume of a workload it no longer has with
 // `{resumed: false}` (router gcp/src/actions.mjs's resume).
-function setup({ candidates, known, fail = new Set<string>(), routers = ROUTERS, failWrite }: {
-  candidates: Candidate[]; known: Record<string, string[]>; fail?: Set<string>; routers?: RouterRef[]; failWrite?: (n: number) => boolean;
+// down: a Google Cloud router's error for any call, thrown as googleInvoker throws it (a refusal's code, or none).
+function setup({ candidates, known, fail = new Set<string>(), routers = ROUTERS, failWrite, down = {} }: {
+  candidates: Candidate[]; known: Record<string, string[]>; fail?: Set<string>; routers?: RouterRef[]; failWrite?: (n: number) => boolean; down?: Record<string, () => Error>;
 }) {
   const dynamo = fakeDynamo();
   const records = createRecords({ dynamo, table: 't', now: () => Date.parse('2026-10-05T12:00:00.000Z') });
@@ -78,6 +79,7 @@ function setup({ candidates, known, fail = new Set<string>(), routers = ROUTERS,
     google: {
       invoke: async (router, payload, { timeoutMs }) => {
         googleCalls.push([router.name, payload, timeoutMs]);
+        if (down[router.name]) throw down[router.name]!();
         return answer(router.name, payload, true);
       },
       tags: {} as never,
@@ -215,9 +217,10 @@ describe('exclusions on Google Cloud', () => {
     { name: 'dmtr-us-central1', account: PROJECT, region: 'us-central1', controller: 'https://dmtr-us-central1-controller-abc123-uc.a.run.app', source: 'manager', version: '0.40.0', cloud: 'gcp' },
   ];
   // A managed Google Cloud candidate (the one model): its id the backend service's path, no target group ARN.
-  const managedOnGoogle = (name: string, workloadId: string, region = 'global'): Candidate => ({
-    ...managed(1, workloadId), id: service(name, region), account: PROJECT, region, loadBalancer: 'dmt-dev', loadBalancerArn: '', listener: '', priority: '', conditions: 'hosts x',
-    targetGroup: name, targetGroupArn: null, backendService: service(name, region), urlMap: `projects/${PROJECT}/${region === 'global' ? 'global' : `regions/${region}`}/urlMaps/dmt-dev`,
+  const urlMap = (name: string, region = 'global') => `projects/${PROJECT}/${region === 'global' ? 'global' : `regions/${region}`}/urlMaps/${name}`;
+  const managedOnGoogle = (name: string, workloadId: string, region = 'global', map = 'dmt-dev'): Candidate => ({
+    ...managed(1, workloadId), id: service(name, region), account: PROJECT, region, loadBalancer: map, loadBalancerArn: '', listener: '', priority: '', conditions: 'hosts x',
+    targetGroup: name, targetGroupArn: null, backendService: service(name, region), urlMap: urlMap(map, region),
     lb: { kind: region === 'global' ? 'global' : 'regional' }, accountName: PROJECT,
   });
 
@@ -280,5 +283,72 @@ describe('exclusions on Google Cloud', () => {
     ]);
     expect(s.exclusions.has('x1')).toBe(false);
     expect((await s.records.getOperation(op.id))!.steps[0]!.detail).toBe('every workload resumed');
+  });
+
+  it('a load-balancer exclusion (a URL map) pauses the managed workloads behind that URL map, not those of another map of the project', async () => {
+    const s = setup({
+      candidates: [managedOnGoogle('shop-app', 'shop'), managedOnGoogle('cart-app', 'cart'), managedOnGoogle('blog-app', 'blog', 'global', 'dmt-blog')],
+      known: { 'dmtr-europe-west2': ['shop', 'cart', 'blog'] }, routers: GOOGLE,
+    });
+    s.exclusions.set('x1', exclusion({ target: { kind: 'load-balancer', path: urlMap('dmt-dev'), account: PROJECT, region: 'global', name: 'dmt-dev' } }));
+    const op = await s.engine.create('exclude', { exclusionId: 'x1' }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(s.googleCalls.map(([router, p]) => [router, p.workloadId, p.backendService])).toEqual([
+      ['dmtr-europe-west2', 'shop', service('shop-app')], ['dmtr-europe-west2', 'cart', service('cart-app')],
+    ]);
+    expect(s.exclusions.get('x1')!.paused!.map((p) => p.workloadId)).toEqual(['shop', 'cart']);
+  });
+
+  describe('a Google Cloud router that can\'t be called', () => {
+    // dmtr-old is below 0.40.0, dmtr-cut's controller refuses the manager's accounts, dmtr-slow never answers.
+    const OLD: RouterRef = { ...GOOGLE[0]!, name: 'dmtr-old', region: 'asia-east1', controller: 'https://dmtr-asia-east1-controller-abc123-de.a.run.app', version: '0.39.2' };
+    const CUT: RouterRef = { ...GOOGLE[0]!, name: 'dmtr-cut', region: 'europe-west1', controller: 'https://dmtr-europe-west1-controller-abc123-ew.a.run.app' };
+    const SLOW: RouterRef = { ...GOOGLE[0]!, name: 'dmtr-slow', region: 'europe-west3', controller: 'https://dmtr-europe-west3-controller-abc123-ey.a.run.app' };
+    const HOLDER = GOOGLE[1]!;
+    const ACCESS = 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev';
+    const TOO_OLD = `router 0.39.2 can't report to the manager: dormeto gcp install --project ${PROJECT} --region asia-east1`;
+    const down = {
+      'dmtr-cut': () => Object.assign(new Error(ACCESS), { code: 'manager-access-missing' }),
+      'dmtr-slow': () => new Error('no answer within 10000 ms'),
+    };
+
+    it('is passed over: one too old is never called, one that fails is called once in the run, and the router that has each workload pauses it', async () => {
+      const s = setup({ candidates: [managedOnGoogle('shop-app', 'shop'), managedOnGoogle('blog-app', 'blog')], known: { 'dmtr-us-central1': ['shop', 'blog'] }, routers: [OLD, CUT, SLOW, HOLDER], down });
+      s.exclusions.set('x1', exclusion({ target: { kind: 'account', account: PROJECT, name: PROJECT } }));
+      const op = await s.engine.create('exclude', { exclusionId: 'x1' }, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      expect(s.googleCalls.map(([router, p]) => `${router}/${p.workloadId}`)).toEqual(['dmtr-cut/shop', 'dmtr-slow/shop', 'dmtr-us-central1/shop', 'dmtr-us-central1/blog']);
+      expect(s.exclusions.get('x1')!.paused).toEqual([
+        { router: 'dmtr-us-central1', account: PROJECT, region: 'us-central1', workloadId: 'shop' }, { router: 'dmtr-us-central1', account: PROJECT, region: 'us-central1', workloadId: 'blog' },
+      ]);
+      expect((await s.records.getOperation(op.id))!.steps[0]!.detail).toBe('paused 2');
+    });
+
+    it('a workload no router paused names the errors of the routers that could not be asked', async () => {
+      const s = setup({ candidates: [managedOnGoogle('shop-app', 'shop')], known: { 'dmtr-us-central1': [] }, routers: [OLD, CUT, SLOW, HOLDER], down });
+      s.exclusions.set('x1', exclusion({ target: { kind: 'account', account: PROJECT, name: PROJECT } }));
+      const op = await s.engine.create('exclude', { exclusionId: 'x1' }, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      expect((await s.records.getOperation(op.id))!.steps[0]!.detail).toBe(
+        `paused 0; not paused shop (dmtr-old): ${TOO_OLD}; not paused shop (dmtr-cut): ${ACCESS}; not paused shop (dmtr-slow): no answer within 10000 ms`,
+      );
+      expect(s.exclusions.get('x1')!.paused).toEqual([]);
+    });
+
+    it('a lift calls a router that failed once in the run: the pauses on it stay with the exclusion, the others are resumed', async () => {
+      const paused = [
+        { router: 'dmtr-slow', account: PROJECT, region: 'europe-west3', workloadId: 'shop' }, { router: 'dmtr-slow', account: PROJECT, region: 'europe-west3', workloadId: 'blog' },
+        { router: 'dmtr-us-central1', account: PROJECT, region: 'us-central1', workloadId: 'news' },
+      ];
+      const s = setup({ candidates: [], known: { 'dmtr-us-central1': ['news'] }, routers: [OLD, CUT, SLOW, HOLDER], down });
+      s.exclusions.set('x1', exclusion({ target: { kind: 'account', account: PROJECT, name: PROJECT }, paused, liftedAt: '2026-10-05T12:00:00.000Z' }));
+      const op = await s.engine.create('lift-exclusion', { exclusionId: 'x1' }, 'ops@example.com');
+      expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+      expect(s.googleCalls.map(([router, p]) => `${router}/${p.workloadId}`)).toEqual(['dmtr-slow/shop', 'dmtr-us-central1/news']);
+      expect(s.exclusions.get('x1')!.paused!.map((p) => `${p.router}/${p.workloadId}`)).toEqual(['dmtr-slow/shop', 'dmtr-slow/blog']);
+      expect((await s.records.getOperation(op.id))!.steps[0]!.detail).toBe(
+        'not resumed: dmtr-slow/shop: no answer within 10000 ms; dmtr-slow/blog: no answer within 10000 ms (lift again to retry)',
+      );
+    });
   });
 });

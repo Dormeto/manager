@@ -43,9 +43,12 @@ const REGIONAL: TagTarget = { label: 'managed instance group europe-west2/mig-r'
 const SQL: TagTarget = { label: 'Cloud SQL instance db-1', location: 'europe-west1', parent: `//sqladmin.googleapis.com/projects/${PROJECT}/instances/db-1` };
 
 // bound: the parents tagged already; failBind and failUnbind: the parents whose binding or removal fails; missing: those
-// whose removal Google answers 404 (gone meanwhile); valueRefused and regionRefused: why the tag value or a Cloud SQL
-// instance's region can't be read.
-function setup({ routers = [ROUTER], bound = [] as string[], failBind = [] as string[], failUnbind = [] as string[], missing = [] as string[], valueRefused = '', regionRefused = '' } = {}) {
+// whose removal Google answers 404 (gone meanwhile); unbindErrors: per parent, the errors its next removals throw, one per
+// call; valueRefused: why the tag value can't be read; regionRefused: Google's refusal of a Cloud SQL instance's region.
+function setup({
+  routers = [ROUTER], bound = [] as string[], failBind = [] as string[], failUnbind = [] as string[], missing = [] as string[], unbindErrors = {} as Record<string, Error[]>,
+  valueRefused = '', regionRefused = null as GoogleError | null,
+} = {}) {
   let now = T0;
   let ids = 0;
   const records = createRecords({ dynamo: fakeDynamo(), table: 't', now: () => now });
@@ -81,7 +84,7 @@ function setup({ routers = [ROUTER], bound = [] as string[], failBind = [] as st
     },
     sqlRegionOf: async (project: string, name: string) => {
       tagCalls.push(`region ${project} ${name}`);
-      if (regionRefused) throw new GoogleError({ status: 404, reason: 'NOT_FOUND', message: regionRefused });
+      if (regionRefused) throw regionRefused;
       return 'europe-west1';
     },
     bindTag: async (target: TagTarget, value: string) => {
@@ -95,6 +98,8 @@ function setup({ routers = [ROUTER], bound = [] as string[], failBind = [] as st
       tagCalls.push(`unbind ${target.parent} ${value}`);
       if (failUnbind.includes(target.parent)) throw new Error('Google: 503 UNAVAILABLE: try again');
       if (missing.includes(target.parent)) throw new GoogleError({ status: 404, reason: 'NOT_FOUND', message: `${target.parent} not found` });
+      const next = unbindErrors[target.parent]?.shift();
+      if (next) throw next;
       return bindings.delete(target.parent) ? 1 : 0;
     },
   };
@@ -402,7 +407,11 @@ describe('offboarding a Google Cloud workload', () => {
     expect(op.target).toEqual({ account: PROJECT, region: REGION, router: ROUTER_NAME, workloadId: WORKLOAD_ID, projectNumber: NUMBER });
     expect(op.activeKey).toBe(`WL#${PROJECT}#${REGION}#${WORKLOAD_ID}`);
     expect(op.steps.map((x) => x.name)).toEqual(['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'untag', 'candidate']);
-    for (let i = 0; i < 3; i += 1) await s.engine.next(op.id);
+    await s.engine.next(op.id);
+    // The Cloud SQL instance's region and the tag value read at the locate, before anything changes.
+    expect(s.tagCalls).toEqual([`region ${PROJECT} db-1`, `value ${PROJECT}`]);
+    expect((await s.records.getOperation(op.id))!.context.tagValue).toBe(TAG_VALUE);
+    for (let i = 0; i < 2; i += 1) await s.engine.next(op.id);
     expect((await s.records.getOperation(op.id))!.holds).toEqual({ locks: [`LB#${MAP}`], slots: ['ORG', `${PROJECT}#${REGION}`] });
 
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
@@ -425,7 +434,7 @@ describe('offboarding a Google Cloud workload', () => {
       { action: 'status', workloadId: WORKLOAD_ID },
       { action: 'offboard', workloadId: WORKLOAD_ID, by: 'ops@example.com' },
     ]);
-    // The Cloud SQL instance's region read at the locate, the tag value at the untag; each binding removed, one per run.
+    // Each binding removed with the value the locate read, one per run.
     expect(s.tagCalls).toEqual([`region ${PROJECT} db-1`, `value ${PROJECT}`, ...ALL.map((t) => `unbind ${t.parent} ${TAG_VALUE}`)]);
     expect([...s.bindings]).toEqual([]);
     expect(stored.steps.find((x) => x.name === 'untag')!.attempts).toBe(4);
@@ -496,33 +505,72 @@ describe('offboarding a Google Cloud workload', () => {
     expect(none.items.get(SERVICE)).toMatchObject({ eligibility: 'eligible' });
   });
 
-  it('a removal that fails fails the step after the router\'s offboarding, naming every target still tagged and those untagged', async () => {
-    const s = offboarding({ failUnbind: [REGIONAL.parent] });
+  it('a removal Google refuses (403) fails the step at once after the router\'s offboarding, naming every target still tagged and those untagged', async () => {
+    const denied = new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', message: 'Permission \'compute.instanceGroupManagers.deleteTagBinding\' denied' });
+    const s = offboarding({ unbindErrors: { [REGIONAL.parent]: [denied] } });
     const op = await s.engine.create('offboard', OFFBOARD, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
     const stored = (await s.records.getOperation(op.id))!;
-    expect(stored.error).toBe(`untag: ${REGIONAL.label}: Google: 503 UNAVAILABLE: try again; still tagged: ${labels([REGIONAL, SQL])}; untagged ${labels([VM, ZONAL])}`);
+    expect(stored.error).toBe(`untag: ${REGIONAL.label}: ${denied.message}; still tagged: ${labels([REGIONAL, SQL])}; untagged ${labels([VM, ZONAL])}`);
+    expect(stored.steps.find((x) => x.name === 'untag')!.retries).toBeUndefined();
     expect(stored.context.untag).toEqual([REGIONAL, SQL]);
     expect([...s.bindings]).toEqual([REGIONAL.parent, SQL.parent]);
     expect(actionsOf(s).map(([, action]) => action)).toEqual(['status', 'pause', 'status', 'offboard']);
     expect(s.items.get(SERVICE)).toMatchObject({ eligibility: 'managed' });
   });
 
-  it('a tag value that can\'t be read fails the step naming every target still tagged', async () => {
+  it('a removal that fails for a while (429, 5xx, no answer) is tried again later, and the step goes on: every target untagged', async () => {
+    for (const status of [503, 429, 0]) {
+      const unavailable = new GoogleError({ status, reason: status ? 'UNAVAILABLE' : '', message: status ? 'The service is currently unavailable.' : 'no answer within 10 s' });
+      const s = offboarding({ unbindErrors: { [REGIONAL.parent]: [unavailable] } });
+      const op = await s.engine.create('offboard', OFFBOARD, 'ops@example.com');
+      expect(await s.drive(op.id), String(status)).toEqual({ done: true, status: 'succeeded' });
+      const untag = (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'untag')!;
+      expect(untag).toMatchObject({ status: 'done', detail: `untagged ${labels(ALL)}`, retries: 1 });
+      expect(s.tagCalls.filter((c) => c.startsWith('unbind'))).toEqual([VM, ZONAL, REGIONAL, REGIONAL, SQL].map((t) => `unbind ${t.parent} ${TAG_VALUE}`));
+      expect([...s.bindings]).toEqual([]);
+    }
+  });
+
+  it('a removal that keeps failing for a while fails the step once its retries are spent, naming what stays tagged', async () => {
+    const unavailable = () => new GoogleError({ status: 503, reason: 'UNAVAILABLE', message: 'The service is currently unavailable.' });
+    const s = offboarding({ unbindErrors: { [REGIONAL.parent]: Array.from({ length: 40 }, unavailable) } });
+    const op = await s.engine.create('offboard', OFFBOARD, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.error).toBe(`untag: ${REGIONAL.label}: The service is currently unavailable.; still tagged: ${labels([REGIONAL, SQL])}; untagged ${labels([VM, ZONAL])}`);
+    expect(stored.steps.find((x) => x.name === 'untag')!.retries).toBe(30);
+  });
+
+  it('a tag value that can\'t be read fails the locate, before any pause or change', async () => {
     const refused = `the tag value ${PROJECT}/dormeto/managed can't be read: \`dormeto gcp connect\` gives the manager's command account access to it`;
     const s = offboarding({ valueRefused: refused });
     const op = await s.engine.create('offboard', OFFBOARD, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
-    expect((await s.records.getOperation(op.id))!.error).toBe(`untag: ${refused}; still tagged: ${labels(ALL)}`);
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.error).toBe(`locate: ${refused}`);
+    expect(stored.steps.map((x) => x.status)).toEqual(['failed', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending', 'pending']);
+    expect(actionsOf(s).map(([, action]) => action)).toEqual(['status']);
     expect([...s.bindings]).toEqual(ALL.map((t) => t.parent));
+    expect(s.items.get(SERVICE)).toMatchObject({ eligibility: 'managed', workloadId: WORKLOAD_ID });
   });
 
-  it('a Cloud SQL instance whose region can\'t be read fails the locate, naming it, before anything changes', async () => {
-    const s = offboarding({ regionRefused: 'The Cloud SQL instance does not exist.' });
+  it('a Cloud SQL instance whose region Google refuses to read (not a 404) fails the locate, naming it, before anything changes', async () => {
+    const s = offboarding({ regionRefused: new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', message: 'The client is not authorized to make this request.' }) });
     const op = await s.engine.create('offboard', OFFBOARD, 'ops@example.com');
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
-    expect((await s.records.getOperation(op.id))!.error).toBe('locate: Cloud SQL instance db-1: The Cloud SQL instance does not exist.');
+    expect((await s.records.getOperation(op.id))!.error).toBe('locate: Cloud SQL instance db-1: The client is not authorized to make this request.');
     expect(actionsOf(s).map(([, action]) => action)).toEqual(['status']);
+  });
+
+  it('a Cloud SQL instance whose region read answers 404 is gone: named at the locate, nothing to untag for it, the rest untagged', async () => {
+    const s = offboarding({ regionRefused: new GoogleError({ status: 404, reason: 'NOT_FOUND', message: 'The Cloud SQL instance does not exist.' }) });
+    const op = await s.engine.create('offboard', OFFBOARD, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.steps.find((x) => x.name === 'locate')!.detail).toBe('Demo ASLEEP; Cloud SQL instance db-1 not found: nothing to untag there');
+    expect(stored.steps.find((x) => x.name === 'untag')!.detail).toBe(`untagged ${labels([VM, ZONAL, REGIONAL])}`);
+    expect(s.tagCalls.filter((c) => c.startsWith('unbind'))).toEqual([VM, ZONAL, REGIONAL].map((t) => `unbind ${t.parent} ${TAG_VALUE}`));
   });
 
   it('a backend without a resource id (an older onboarding) is named at the locate, and the untag says to remove its tag by hand', async () => {

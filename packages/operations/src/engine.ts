@@ -197,6 +197,15 @@ export function createEngine(deps: EngineDeps) {
     google().invoke(router, payload, { timeoutMs: GOOGLE_ONBOARDER_ACTIONS.has(String(payload.action)) ? GOOGLE_ONBOARDER_MS : GOOGLE_CALL_MS });
   const callRouter = async (router: RouterRef, payload: Record<string, unknown>) => (router.cloud === 'gcp' ? googleCall(router, payload)
     : (await deps.target(router.account, router.region)).invoke(router.controller, payload));
+  // A Google Cloud router an exclusion's step passes over for the rest of its run (Google Cloud manager design §8): one
+  // too old to be called (below 0.40.0), or one that failed at the router's level (any error but its "no such workload",
+  // `not_found`: a refusal of the manager's, an unreachable controller, a timeout). Its error is said for what it was asked.
+  const routerKey = (r: RouterRef) => `${r.account}#${r.region}`;
+  const tooOld = (r: RouterRef) => (r.cloud === 'gcp' && routerTooOld(r.version ?? '') ? tooOldText(r.version ?? '', r.account, r.region, deps.settings.routerVersion) : undefined);
+  const passedOver = (down: Map<string, string>, r: RouterRef | undefined) => (r?.cloud === 'gcp' ? down.get(routerKey(r)) ?? tooOld(r) : undefined);
+  const routerFailed = (down: Map<string, string>, r: RouterRef | undefined, err: unknown) => {
+    if (r?.cloud === 'gcp' && (err as { code?: unknown }).code !== 'not_found') down.set(routerKey(r), (err as Error).message);
+  };
 
   // The managed workloads an exclusion matches: the candidates of its account (and the workload it was created from, in
   // the routers of its target group's account and region), each with the routers of its account and region. A Google
@@ -240,12 +249,21 @@ export function createEngine(deps: EngineDeps) {
     const unpaused = [...((op.context.unpaused as string[] | undefined) ?? [])];
     const batch = wanted.filter((w) => !handled.has(w.key)).slice(0, EXCLUSION_BATCH);
     const pauseOf = (router: RouterRef, workloadId: string): Pause => ({ router: router.name, account: router.account, region: router.region, workloadId });
-    const tried = batch.flatMap((w) => w.routers.map((router) => pauseOf(router, w.workloadId)));
+    const tried = batch.flatMap((w) => w.routers.filter((router) => !tooOld(router)).map((router) => pauseOf(router, w.workloadId)));
     if (tried.length) await d.updateExclusion(e.id, (x) => ({ ...x, paused: withPauses(x.paused, tried) }));
     const made = new Set<string>();
+    const down = new Map<string, string>();
     for (const w of batch) {
       let outcome: string | null = `${w.workloadId}: no registered router manages it`;
+      // A Google Cloud workload is asked of the next router when one can't be asked; their errors are said only when no
+      // router paused it.
+      const unasked: string[] = [];
       for (const router of w.routers) {
+        const over = passedOver(down, router);
+        if (over) {
+          unasked.push(`${w.workloadId} (${router.name}): ${over}`);
+          continue;
+        }
         try {
           // A Google Cloud router takes the backend service instead of a target group (router gcp/src/actions.mjs's pause).
           await callRouter(router, {
@@ -258,11 +276,16 @@ export function createEngine(deps: EngineDeps) {
           break;
         } catch (err) {
           if (notConfigured(err)) continue;
+          if (router.cloud === 'gcp') {
+            routerFailed(down, router, err);
+            if (down.has(routerKey(router))) unasked.push(`${w.workloadId} (${router.name}): ${(err as Error).message}`);
+            continue;
+          }
           outcome = `${w.workloadId} (${router.name}): ${(err as Error).message}`;
           break;
         }
       }
-      if (outcome) unpaused.push(outcome);
+      if (outcome) unpaused.push(...(unasked.length ? unasked : [outcome]));
     }
     const notMade = new Set(tried.map(pauseKey).filter((k) => !made.has(k)));
     let after: Exclusion | null = e;
@@ -290,15 +313,25 @@ export function createEngine(deps: EngineDeps) {
     const batch = (e.paused ?? []).filter((p) => !handled.has(pauseKey(p))).slice(0, EXCLUSION_BATCH);
     const all = await deps.routers();
     const resumed = new Set<string>();
+    // A Google Cloud router that failed is not called again in this run: its pauses stay, with its error.
+    const down = new Map<string, string>();
     for (const p of batch) {
       const router = all.find((r) => r.name === p.router && (!p.account || r.account === p.account) && (!p.region || r.region === p.region));
+      const over = passedOver(down, router);
+      if (over) {
+        errors.push(`${p.router}/${p.workloadId}: ${over}`);
+        continue;
+      }
       try {
         if (!router) throw new Error(`router ${p.router} is no longer registered`);
         await callRouter(router, { action: 'resume', workloadId: p.workloadId, by: op.by, exclusionId: id });
         resumed.add(pauseKey(p));
       } catch (err) {
         if (notConfigured(err)) resumed.add(pauseKey(p));
-        else errors.push(`${p.router}/${p.workloadId}: ${(err as Error).message}`);
+        else {
+          routerFailed(down, router, err);
+          errors.push(`${p.router}/${p.workloadId}: ${(err as Error).message}`);
+        }
       }
     }
     for (const p of batch) handled.add(pauseKey(p));
@@ -513,8 +546,9 @@ export function createEngine(deps: EngineDeps) {
   // words (router gcp/src/actions.mjs's offboard, `cli-only`): a GKE workload's Kubernetes access, and the request logs
   // its onboarding turned on. Kept for the next steps: the URL map's path (the lock), the backend service's (the
   // candidate), and what the untag removes the tag from: the VMs and managed groups by the numeric ids the onboarding
-  // stored, the Cloud SQL instances in their regions. A VM or group without an id (an older onboarding) is named: the
-  // manager can't remove its tag.
+  // stored, the Cloud SQL instances in their regions, with the tag value, read here so that one that can't be read fails
+  // before anything changes. A VM or group without an id (an older onboarding) is named: the manager can't remove its tag;
+  // a Cloud SQL instance whose region read answers 404 is gone: nothing to untag there.
   async function googleLocate(op: Operation): Promise<Outcome> {
     const [project, region, workloadId] = [op.target.account!, op.target.region!, op.target.workloadId!];
     const status = await invokeRouter(op, 'controller', { action: 'status', workloadId });
@@ -532,6 +566,7 @@ export function createEngine(deps: EngineDeps) {
     const groups: { kind: 'zonal' | 'regional'; location: string; id: string; name?: string }[] = [];
     const databases: { name: string; region: string }[] = [];
     const byHand: string[] = [];
+    const gone: string[] = [];
     for (const b of backends) {
       const [location, name, id] = [String(b.location), String(b.id), b.resourceId];
       if (b.kind === 'instance') {
@@ -541,19 +576,22 @@ export function createEngine(deps: EngineDeps) {
         if (id) groups.push({ kind: ZONE.test(location) ? 'zonal' : 'regional', location, id, name });
         else byHand.push(`managed instance group ${location}/${name}`);
       } else if (b.kind === 'cloudsql-instance' && b.id) {
-        let sqlRegion: string;
         try {
-          sqlRegion = await google().tags.sqlRegionOf(project, b.id);
+          databases.push({ name: b.id, region: await google().tags.sqlRegionOf(project, b.id) });
         } catch (err) {
-          throw new Error(`Cloud SQL instance ${b.id}: ${(err as Error).message}`);
+          if (!(err instanceof GoogleError && err.status === 404)) throw new Error(`Cloud SQL instance ${b.id}: ${(err as Error).message}`);
+          gone.push(`Cloud SQL instance ${b.id}`);
         }
-        databases.push({ name: b.id, region: sqlRegion });
       }
     }
-    op.context.untag = tagTargets({ project, number: op.target.projectNumber!, vms, groups, databases });
+    const untag = tagTargets({ project, number: op.target.projectNumber!, vms, groups, databases });
+    // Its words name the command that gives the manager's command account access to it (`dormeto gcp connect`).
+    if (untag.length) op.context.tagValue = await google().tags.tagValueOf(project);
+    op.context.untag = untag;
     op.context.untagByHand = byHand;
     const unknown = byHand.length ? `; no resource id stored for ${byHand.join(', ')} (an older onboarding): the manager can't remove the tag dormeto/managed there` : '';
-    return { status: 'done', detail: `${op.context.name} ${status.state}${unknown}` };
+    const missing = gone.length ? `; ${gone.join(', ')} not found: nothing to untag there` : '';
+    return { status: 'done', detail: `${op.context.name} ${status.state}${unknown}${missing}` };
   }
 
   // The router's offboarding, as AWS's step. Run again after an attempt whose answer was lost, it finds the workload gone
@@ -569,10 +607,11 @@ export function createEngine(deps: EngineDeps) {
     return { status: 'done', detail: (result?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
   }
 
-  // The tag `dormeto/managed` removed, as the command account, from what the locate kept: one target per run (a removal
-  // waits up to 60 s), each taken out of `untag` once done. A binding gone already (none listed, or a 404) is nothing to
-  // remove; another failure fails the step naming every target still tagged. Said: what was untagged, what was not
-  // tagged, and what to untag by hand.
+  // The tag `dormeto/managed` removed, as the command account, with the value the locate read, from what it kept: one
+  // target per run (a removal waits up to 60 s), each taken out of `untag` once done. A binding gone already (none
+  // listed, or a 404) is nothing to remove. A failure that passes (Google's 429, a 5xx, no answer) is tried again later,
+  // as the engine's other transient errors, until its retries are spent; another (a 403) fails the step at once. Either
+  // way the failure names every target still tagged. Said: what was untagged, what was not tagged, what to untag by hand.
   async function untagOffboarded(op: Operation): Promise<Outcome> {
     const left = (op.context.untag ?? []) as TagTarget[];
     const byHand = (op.context.untagByHand ?? []) as string[];
@@ -581,19 +620,15 @@ export function createEngine(deps: EngineDeps) {
     const target = left[0];
     if (target) {
       const { tags } = google();
-      const failed = (why: string) => new Error(`${why}; still tagged: ${[...left.map((t) => t.label), ...byHand].join(', ')}${untagged.length ? `; untagged ${labelsOf(untagged)}` : ''}`);
-      if (op.context.tagValue === undefined) {
-        try {
-          op.context.tagValue = await tags.tagValueOf(op.target.account!);
-        } catch (err) {
-          throw failed((err as Error).message);
-        }
-      }
       let removed = 0;
       try {
         removed = await tags.unbindTag(target, op.context.tagValue as string);
       } catch (err) {
-        if (!(err instanceof GoogleError && err.status === 404)) throw failed(`${target.label}: ${(err as Error).message}`);
+        if (!(err instanceof GoogleError && err.status === 404)) {
+          const failed = `${target.label}: ${(err as Error).message}; still tagged: ${[...left.map((t) => t.label), ...byHand].join(', ')}${untagged.length ? `; untagged ${labelsOf(untagged)}` : ''}`;
+          if (err instanceof GoogleError && (err.status === 0 || err.status === 429 || err.status >= 500)) throw new RetryLater(failed);
+          throw new Error(failed);
+        }
       }
       (removed > 0 ? untagged : absent).push(target);
       op.context.untag = left.slice(1);
