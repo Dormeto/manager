@@ -57,19 +57,22 @@ async function listProjects(port: GooglePort): Promise<string[]> {
 }
 
 // The routers of one project; Cloud Run turned off means none.
-async function routersOf(port: GooglePort, project: string): Promise<Found[]> {
+// `unreachable`: the regions whose listing failed (Cloud Run's `projects/<p>/locations/<region>`), on any page.
+async function routersOf(port: GooglePort, project: string): Promise<{ found: Found[]; unreachable: string[] }> {
   try {
+    const unreachable = new Set<string>();
     const services = await pages(
-      (token) => port.call<{ services?: Service[]; nextPageToken?: string }>('GET', `${SERVICES(project)}${token ? `?${new URLSearchParams({ pageToken: token })}` : ''}`),
-      (page) => page.services ?? [],
+      (token) => port.call<{ services?: Service[]; unreachable?: string[]; nextPageToken?: string }>('GET', `${SERVICES(project)}${token ? `?${new URLSearchParams({ pageToken: token })}` : ''}`),
+      (page) => { for (const u of page.unreachable ?? []) unreachable.add(u.split('/').at(-1)!); return page.services ?? []; },
     ) as Service[];
-    return services.flatMap((s) => {
+    const found = services.flatMap((s) => {
       const region = ROUTER_SERVICE.exec(s.name ?? '')?.[1];
       if (!region || !isRegion('gcp', region) || !s.uri) return [];
       return [{ project, region, controller: s.uri, version: s.template?.containers?.[0]?.env?.find((e) => e.name === 'DMT_VERSION')?.value ?? '' }];
-    });
+    }).filter((f) => !unreachable.has(f.region));
+    return { found, unreachable: [...unreachable].sort() };
   } catch (err) {
-    if (err instanceof GoogleError && err.reason === 'SERVICE_DISABLED') return [];
+    if (err instanceof GoogleError && err.reason === 'SERVICE_DISABLED') return { found: [], unreachable: [] };
     throw err;
   }
 }
@@ -87,13 +90,17 @@ export async function discoverGoogleRouters(port: GooglePort, { now, log }: { no
   }
   const found: Found[] = [];
   const listed = new Set<string>();
+  const unreachable = new Set<string>(); // <project>#<region>: neither updated nor removed
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(PROJECTS_AT_ONCE, projects.length) }, async () => {
     while (next < projects.length) {
       const project = projects[next++]!;
       try {
-        found.push(...await routersOf(port, project));
+        const out = await routersOf(port, project);
+        found.push(...out.found);
         listed.add(project);
+        for (const region of out.unreachable) unreachable.add(`${project}#${region}`);
+        if (out.unreachable.length) summary.errors.push({ project, error: `regions unreachable: ${out.unreachable.join(', ')}` });
       } catch (err) {
         summary.errors.push({ project, error: messageOf(err) });
         log.warn('GoogleProjectFailed', { project, error: messageOf(err) });
@@ -121,7 +128,7 @@ export async function discoverGoogleRouters(port: GooglePort, { now, log }: { no
   }
   const still = new Set(found.map((f) => `${f.project}#${f.region}`));
   for (const r of registered) {
-    if (!listed.has(r.account) || still.has(`${r.account}#${r.region}`)) continue;
+    if (!listed.has(r.account) || unreachable.has(`${r.account}#${r.region}`) || still.has(`${r.account}#${r.region}`)) continue;
     await port.registry.delete(r.account, r.region);
     summary.removed += 1;
   }

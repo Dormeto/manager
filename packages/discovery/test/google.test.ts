@@ -97,6 +97,18 @@ describe('Google Cloud routers in a discovery run', () => {
     expect(record.google!.errors).toEqual([{ project: 'dormeto-dev', error: 'permission denied' }]);
   });
 
+  it('keeps and does not update a router of an unreachable region, records why, and still removes a gone router of another region', async () => {
+    const g = fakeGoogle({ projects: ['dormeto-dev'], services: {} });
+    g.registry.set('dormeto-dev#europe-west2', registered('dormeto-dev', 'europe-west2', { version: '0.39.0' }));
+    g.registry.set('dormeto-dev#us-east1', registered('dormeto-dev', 'us-east1'));
+    const call = g.port.call;
+    g.port.call = (async (m: string, url: string) => (url.includes('/v2/projects/') ? { services: [service('dormeto-dev', 'europe-west2', '0.40.0')], unreachable: ['projects/dormeto-dev/locations/europe-west2'] } : call(m, url))) as GooglePort['call'];
+    const record = await run(g);
+    expect([...g.registry.keys()]).toEqual(['dormeto-dev#europe-west2']);
+    expect(g.registry.get('dormeto-dev#europe-west2')!.version).toBe('0.39.0');
+    expect(record.google!.errors).toEqual([{ project: 'dormeto-dev', error: 'regions unreachable: europe-west2' }]);
+  });
+
   it('never touches an AWS registration or a router of a project not listed', async () => {
     const g = fakeGoogle({ projects: ['dormeto-dev'], services: { 'dormeto-dev': [] } });
     g.registry.set(`${A.id}#eu-west-1`, { ...registered(A.id, 'eu-west-1', { name: 'dmtr-1', controller: 'arn:fn', onboarder: 'arn:on' }), cloud: undefined });
