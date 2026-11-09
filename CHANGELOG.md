@@ -12,6 +12,11 @@ and a region is checked against its account's cloud (`@dormeto/fleet/clouds`). T
 rows and events (a backend service instead of a target group, VM names in `hibernated`), names its router
 `dmtr-<project>-<region>`, and reads a `*/N * * * *` check schedule. An AWS router behaves as before.
 
+The manager's Google identity (`@dormeto/google`): its Lambda roles act as the two service accounts of a Google Cloud host
+project through workload identity federation (a signed `GetCallerIdentity` exchanged at Google's STS, then
+`iamcredentials`), with no key and nothing stored; tokens are kept in memory until 5 minutes before they expire, and every
+call gives up after 10 s of silence.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

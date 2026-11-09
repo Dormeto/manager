@@ -9,6 +9,7 @@
   "workspaces": [
     "packages/discovery",
     "packages/fleet",
+    "packages/google",
     "packages/api",
     "packages/operations",
     "packages/dashboard"
