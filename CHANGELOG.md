@@ -29,6 +29,20 @@ their Cloud Run services `dmtr-<region>-controller`, and adds, updates (controll
 a project that fails is recorded in the run and keeps its routers, Cloud Run turned off means no router there. AWS registrations are
 never touched.
 
+The manager calls Google Cloud routers: every action it sends an AWS router's controller goes to a Google Cloud router's
+`POST <controller>/v1/actions` with the command account's ID token for the controller's URL, 10 s per call (a cold Cloud Run
+start; an AWS router keeps its 5 s), 10 at once and 20 s per request as before, refusals read as the AWS controller answers them.
+A Google Cloud router the manager can't use answers 502 with the command that fixes it: `manager-access-missing` when Google
+refuses the manager's token (`the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`),
+`router-too-old` for a router below 0.40.0, without calling it, or one whose controller has no `/v1/actions`
+(`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router-unknown`
+while discovery hasn't found its controller. `install-router` for a project, and `upgrade-router` and `uninstall-router` for a Google
+Cloud router, answer 400 with the `dormeto gcp install` or `uninstall` command: they change IAM policies, which stays with the CLI.
+Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PUT` and `DELETE /settings/waiting-page`) is pushed to
+every Google Cloud router with a controller as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
+fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
+onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

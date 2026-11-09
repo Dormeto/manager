@@ -178,7 +178,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | `packages/discovery` | Discovery: the organization's accounts and regions, the load balancer rules that could nap, the organization access checks |
 | `packages/operations` | Operations, one step at a time in Step Functions: onboarding, offboarding, router installs and upgrades |
 | `packages/fleet` | The routers' events: workload states, history, savings and prices, the idle window replay |
-| `packages/google` | The manager's Google identity: workload identity federation from its Lambda roles to its two Google Cloud service accounts, their tokens, and bounded calls of Google's REST APIs (no Google client library) |
+| `packages/google` | The manager's Google identity: workload identity federation from its Lambda roles to its two Google Cloud service accounts, their tokens, and bounded calls of Google's REST APIs and of Google Cloud routers' controllers (no Google client library) |
 | `infra/terraform/modules/manager` | The manager module (what a release installs): DynamoDB, the Lambdas, HTTP API + JWT authorizer, Step Functions, EventBridge, Cognito, CloudFront + S3, optional custom domain and SES |
 | `infra/terraform/modules/access`, `organization` | The organization roles of an account, the delegation policy of the management account |
 | `infra/terraform/platform` | Dev's certificate and its DNS validation (the dev manager itself is a CLI install) |
