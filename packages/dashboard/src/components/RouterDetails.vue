@@ -215,7 +215,7 @@ const columns = computed<Section[][]>(() => {
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.metrics.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
           <tr v-if="details.settings && details.managerSettings" data-test="hibernate"><th>Hibernate</th>
             <td>
-              <template v-if="details.settings.hibernate === null">Inherit <span class="text-medium-emphasis">({{ routerInheritText(details.managerSettings, now) }})</span></template>
+              <template v-if="details.settings.hibernate === null">Inherit <span class="text-medium-emphasis">({{ routerInheritText(details.managerSettings, now, details.cloud) }})</span></template>
               <template v-else>{{ details.settings.hibernate ? 'On' : 'Off' }}<span v-if="details.settings.by" class="text-medium-emphasis"> (set by {{ details.settings.by }}, {{ relative(details.settings.at, now) }})</span></template>
               <div v-if="saveError" class="text-error text-body-small">{{ saveError }}</div>
             </td>
@@ -267,7 +267,7 @@ const columns = computed<Section[][]>(() => {
     <DefaultsDialog v-if="details.settings && takesDefaults" v-model="defaultsOpen" :title="`Defaults of ${name}`" level="router" :name="name" :values="details.settings.defaults ?? {}"
       :inherited="inheritedDefaults" :saving="savingDefaults" @submit="saveDefaults" />
     <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :subject="name" :current="details.settings.hibernate"
-      :inherit-text="routerInheritText(details.managerSettings, now)" :saving="saving" @submit="saveHibernate" />
+      :inherit-text="routerInheritText(details.managerSettings, now, details.cloud)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"
       :default-label="joinDefaultText(joinInherited)" :saving="savingJoin" @submit="saveJoin">
       Two windows of one kind with a gap of at most this count as one, on the workloads of this router that set no value of their own.

@@ -91,7 +91,8 @@ export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetail
     configuration: {
       checkSchedule: { value: CHECK_SCHEDULE, source },
       ipLists: { value: r.ownLists.map(({ entries: _e, ...l }) => l), source },
-      ...(r.readsManager ? { ipListsCatalog: { value: { url: ORG.catalogUrl, lists: ORG.ipLists.map(({ name, action, refreshHours }) => ({ name, action, refreshHours })) }, source } } : {}),
+      // The manager's IP lists don't reach a Google Cloud router (Google Cloud manager design §6.5).
+      ...(r.readsManager && r.cloud !== 'gcp' ? { ipListsCatalog: { value: { url: ORG.catalogUrl, lists: ORG.ipLists.map(({ name, action, refreshHours }) => ({ name, action, refreshHours })) }, source } } : {}),
       noWakeRules: { value: ROUTER_RULES, source },
       metrics: { value: r.metrics, source },
     },
@@ -100,8 +101,9 @@ export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetail
     ...(hasHibernation(r) ? {
       settings: routerSettingsView(r),
       managerSettings: {
+        // A Google Cloud router reads no URL: the manager pushes the organization's level to it (readAt: when).
         ...(r.readsManager
-          ? { url: ORG.catalogUrl.replace(/[^/]*$/, 'settings.json'), hibernate: d.hibernation.hibernate, readAt: iso(managerReadAt(now)), error: null }
+          ? { url: r.cloud === 'gcp' ? null : ORG.catalogUrl.replace(/[^/]*$/, 'settings.json'), hibernate: d.hibernation.hibernate, readAt: iso(managerReadAt(now)), error: null }
           : { url: null, hibernate: null, readAt: null, error: null }),
         // A router before joined windows answers none.
         ...(knowsRecurrences(r.version) ? { joinMinutes: r.readsManager ? d.hibernation.joinMinutes : null } : {}),
@@ -117,7 +119,7 @@ export function routerDetails(d: Demo, r: DemoRouter, now: number): RouterDetail
       queues: { check: 0, controller: 0 },
       ipLists: [
         ...r.ownLists.map((l) => ({ name: l.name, entries: l.entries, fetchedAt: fetchedAt(l.refreshHours, now), source: 'terraform' as const })),
-        ...(r.readsManager ? ORG.ipLists : []).map((l) => ({ name: l.name, entries: l.entries, fetchedAt: fetchedAt(l.refreshHours, now), source: 'manager' as const })),
+        ...(r.readsManager && r.cloud !== 'gcp' ? ORG.ipLists : []).map((l) => ({ name: l.name, entries: l.entries, fetchedAt: fetchedAt(l.refreshHours, now), source: 'manager' as const })),
       ],
       concurrency: r.concurrency,
     },

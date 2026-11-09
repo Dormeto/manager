@@ -35,8 +35,9 @@ const GOOGLE_ROUTER = {
   health: { status: 'error', problems: [{ level: 'error', code: 'too-old', text: `router 0.25.1 can't report to the manager: ${GCP_COMMAND}` }] }, pauses: [], lastScheduledCheckAt: new Date().toISOString(),
 };
 const calls: { path: string; init?: RequestInit }[] = [];
-// The Google Cloud router GET /routers lists (a test may replace it).
+// The Google Cloud router GET /routers lists, and what its details add (a test may replace them).
 let googleRouter: Record<string, unknown> = GOOGLE_ROUTER;
+let googleDetails: Record<string, unknown> = {};
 let withHibernation = true;
 let failSave: boolean | string = false;
 // The description the manager answers with (undefined: none readable, the key absent) and the refusal of its PUT.
@@ -62,7 +63,7 @@ vi.mock('../src/api', () => ({
       return {};
     }
     if (path === '/routers') return { available: { version: '0.26.0' }, routers: [INSTALLED, { ...INSTALLED, name: 'dmt-dev', source: 'terraform', region: 'eu-west-1' }, googleRouter] };
-    if (path === `/routers/${GCP}`) return { ...DETAILS, cloud: 'gcp', configuration: { ...DETAILS.configuration, checkSchedule: { value: '*/5 * * * *', source: 'cli' }, metrics: { value: null, source: 'cli' }, ipLists: { value: [], source: 'cli' }, noWakeRules: { value: [], source: 'cli' } } };
+    if (path === `/routers/${GCP}`) return { ...DETAILS, cloud: 'gcp', configuration: { ...DETAILS.configuration, checkSchedule: { value: '*/5 * * * *', source: 'cli' }, metrics: { value: null, source: 'cli' }, ipLists: { value: [], source: 'cli' }, noWakeRules: { value: [], source: 'cli' } }, ...googleDetails };
     if (path === '/routers/dmt-dev') return TERRAFORM_DETAILS;
     if (unreachable && path.startsWith('/routers/')) throw new Error('router dmtr-dev-eu-west-3: Task timed out after 30.00 seconds');
     if (path.startsWith('/routers/')) return { ...DETAILS, ...(withHibernation ? HIBERNATION : {}), ...(described === undefined ? {} : { description: described }), clusters: [
@@ -502,6 +503,18 @@ describe('a Google Cloud router', () => {
       wrapper.unmount();
     } finally {
       googleRouter = GOOGLE_ROUTER;
+    }
+  });
+
+  it('says it inherits the organization\'s hibernate the manager pushed to it (its managerSettings.url is always null)', async () => {
+    googleDetails = { settings: { hibernate: null, by: null, at: null }, managerSettings: { url: null, hibernate: false, readAt: minutesAgo(3), error: null } };
+    try {
+      const wrapper = await mountView(GCP);
+      expect(wrapper.find('[data-test="hibernate"]').text()).toContain('Inherit (manager: Off, pushed 3 min ago)');
+      expect(wrapper.find('[data-test="hibernate"]').text()).not.toContain('built-in default');
+      wrapper.unmount();
+    } finally {
+      googleDetails = {};
     }
   });
 

@@ -694,7 +694,8 @@ function addGoogleCloud(d: Demo, now: number): void {
       name: `dmtr-${GOOGLE_PROJECT}-${GOOGLE_REGION}`, account: GOOGLE_PROJECT, region: GOOGLE_REGION, source: 'manager', version: '0.40.0', build: 'b1c2d3e4f5a6', installedDays: 12, metrics: null,
       concurrency: { limit: 0, needed: 0, worstCase: 0 }, peak: 1,
     }, now),
-    cloud: 'gcp', source: 'cli', readsManager: false,
+    // The manager pushes the organization's level to it (it reads no URL); its IP lists are its own (views.ts).
+    cloud: 'gcp', source: 'cli', readsManager: true,
   };
   const google = (name: string): GoogleWorkload => ({
     backendService: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/backendServices/${name}`,

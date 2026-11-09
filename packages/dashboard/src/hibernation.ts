@@ -39,7 +39,14 @@ export const freshBootLine = (h: Pick<Hibernation, 'freshBoot'>): string => (h.f
 
 // What Inherit means for a router: the manager's value as it last read it, unknown (naps stop) while it has read none, or
 // the built-in default without manager settings. `readAt` is its last attempt: the failed one when there is an error.
-export function routerInheritText(m: ManagerSettings, now = Date.now()): string {
+// A Google Cloud router reads no URL (url null): the manager pushes the organization's level to it, `readAt` is when; none
+// pushed, or one it can't read, and the levels go on without it (the built-in default, naps don't stop). An answer
+// without its cloud that has a readAt but no URL is such a pushed level too.
+export function routerInheritText(m: ManagerSettings, now = Date.now(), cloud?: Cloud): string {
+  if (cloud === 'gcp' || (m.url === null && m.readAt)) {
+    if (m.hibernate === null) return `built-in default: On${m.error ? `; manager: ${m.error}` : ''}`;
+    return `manager: ${onOff(m.hibernate)}, pushed ${relative(m.readAt, now)}`;
+  }
   if (m.url === null) return 'built-in default: On';
   if (m.hibernate === null) return `manager: unknown (${m.error ?? 'not read yet'}): naps stop`;
   return m.error ? `manager: ${onOff(m.hibernate)} (last read failed ${relative(m.readAt, now)}: ${m.error})` : `manager: ${onOff(m.hibernate)}, read ${relative(m.readAt, now)}`;

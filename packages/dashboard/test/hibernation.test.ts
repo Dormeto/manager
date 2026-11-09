@@ -61,6 +61,17 @@ describe('hibernation texts', () => {
     expect(routerInheritText({ url: 's3://b/settings.json', hibernate: null, readAt: '2026-10-24T11:57:00.000Z', error: 'settings.json: not JSON' }, now)).toBe('manager: unknown (settings.json: not JSON): naps stop');
     expect(routerInheritText({ url: null, hibernate: null, readAt: null, error: null }, now)).toBe('built-in default: On');
   });
+
+  // A Google Cloud router fetches nothing (url null): the manager pushes the organization's level to it, readAt is when.
+  it('shows a Google Cloud router\'s inherited value as the level the manager pushed, the built-in default while none is', () => {
+    const now = Date.parse('2026-10-24T12:00:00.000Z');
+    expect(routerInheritText({ url: null, hibernate: false, readAt: '2026-10-24T11:57:00.000Z', error: null }, now, 'gcp')).toBe('manager: Off, pushed 3 min ago');
+    expect(routerInheritText({ url: null, hibernate: null, readAt: null, error: null }, now, 'gcp')).toBe('built-in default: On');
+    // One it can't read: the levels go on without it, naps don't stop.
+    expect(routerInheritText({ url: null, hibernate: null, readAt: '2026-10-24T11:57:00.000Z', error: 'manager settings: not a JSON object' }, now, 'gcp')).toBe('built-in default: On; manager: manager settings: not a JSON object');
+    // An answer without its cloud: a level read with no URL is a pushed one too.
+    expect(routerInheritText({ url: null, hibernate: false, readAt: '2026-10-24T11:57:00.000Z', error: null }, now)).toBe('manager: Off, pushed 3 min ago');
+  });
 });
 
 describe('hibernation in the history', () => {

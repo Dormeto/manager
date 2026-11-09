@@ -47,6 +47,12 @@ describe('the demo\'s Google Cloud router', () => {
     expect(status.backends[0]!.id).toBe('projects/dormeto-dev/zones/europe-west2-a/instances/vm-demo');
   });
 
+  it('answers its router\'s organization level as a Google Cloud router does: pushed (a readAt), no URL', async () => {
+    const details = await mockApi(`/routers/${ROUTER}`) as { managerSettings?: { url: string | null; readAt: string | null } };
+    expect(details.managerSettings?.url).toBeNull();
+    expect(details.managerSettings?.readAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
   it('refuses to offboard one of its workloads as the API does: the CLI\'s command', async () => {
     const refused = await mockApi('/operations', { method: 'POST', body: JSON.stringify({ type: 'offboard', router: ROUTER, workloadId: 'vm-demo' }) }).catch((e: unknown) => e) as { status: number; message: string };
     expect([refused.status, refused.message]).toEqual([400, 'a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard vm-demo --project dormeto-dev --region europe-west2']);
