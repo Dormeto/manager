@@ -13,7 +13,7 @@ const NO_REASON = 'the wake failed (a router older than 0.25.0 gives no reason)'
 const WRITES = 10;
 
 // Work on the items, at most `limit` at once; the first failure fails the whole (the event comes back).
-async function eachAtOnce<T>(items: T[], limit: number, work: (item: T) => Promise<void>) {
+export async function eachAtOnce<T>(items: T[], limit: number, work: (item: T) => Promise<void>) {
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (next < items.length) await work(items[next++]!);

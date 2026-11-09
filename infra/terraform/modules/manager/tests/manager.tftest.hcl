@@ -873,3 +873,53 @@ run "update_check_daily_through_its_own_function" {
     error_message = "The scheduler only invokes the function."
   }
 }
+
+# The poll of the Google Cloud routers (Google Cloud manager design §6.3): they push nothing, so the fleet function calls them
+# every minute, invoked with the poll's task; it pushes them settings.json, and keeps each router's poll on its summary item.
+run "google_cloud_routers_polled_every_minute" {
+  command = plan
+
+  override_resource {
+    target          = aws_lambda_function.fleet
+    override_during = plan
+    values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet" }
+  }
+  override_resource {
+    target          = aws_s3_bucket.lists
+    override_during = plan
+    values          = { id = "dmt-test-manager-ip-lists-111122223333", bucket = "dmt-test-manager-ip-lists-111122223333", arn = "arn:aws:s3:::dmt-test-manager-ip-lists-111122223333" }
+  }
+
+  assert {
+    condition     = aws_scheduler_schedule.poll.name == "dmt-test-manager-poll" && aws_scheduler_schedule.poll.schedule_expression == "rate(1 minute)" && aws_scheduler_schedule.poll.flexible_time_window[0].mode == "OFF"
+    error_message = "The Google Cloud routers are polled every minute."
+  }
+  assert {
+    condition     = aws_scheduler_schedule.poll.target[0].arn == "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet" && jsondecode(aws_scheduler_schedule.poll.target[0].input) == { task = "poll" }
+    error_message = "The schedule invokes the fleet function with the poll's task."
+  }
+  assert {
+    condition     = aws_scheduler_schedule.poll.target[0].retry_policy[0].maximum_retry_attempts == 0 && aws_lambda_function_event_invoke_config.fleet.maximum_retry_attempts == 0 && aws_lambda_function_event_invoke_config.fleet.maximum_event_age_in_seconds == 60
+    error_message = "A poll is never retried, nor run late: the next minute's poll is its retry."
+  }
+  assert {
+    condition     = join(",", flatten([for s in data.aws_iam_policy_document.poll_scheduler.statement : tolist(s.actions)])) == "lambda:InvokeFunction" && toset(flatten([for s in data.aws_iam_policy_document.poll_scheduler.statement : tolist(s.resources)])) == toset(["arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet"])
+    error_message = "The schedule's role only invokes the fleet function."
+  }
+  assert {
+    condition     = toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "OrganizationSettings"])) == toset(["s3:GetObject"]) && toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.resources) if s.sid == "OrganizationSettings"])) == toset(["arn:aws:s3:::dmt-test-manager-ip-lists-111122223333/settings.json"])
+    error_message = "The fleet function reads settings.json, which the poll pushes to the Google Cloud routers, and no other object."
+  }
+  assert {
+    condition     = toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "OrganizationSettingsListing"])) == toset(["s3:ListBucket"]) && toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.resources) if s.sid == "OrganizationSettingsListing"])) == toset(["arn:aws:s3:::dmt-test-manager-ip-lists-111122223333"])
+    error_message = "The fleet function may list the bucket, so a settings.json never written answers 404 rather than 403."
+  }
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "Summaries"]), "dynamodb:UpdateItem")
+    error_message = "The fleet function writes a router's poll beside its summary (UpdateItem)."
+  }
+  assert {
+    condition     = aws_lambda_function.fleet.environment[0].variables.LISTS_BUCKET == "dmt-test-manager-ip-lists-111122223333" && aws_lambda_function.fleet.environment[0].variables.ROUTER_VERSION == local.router_version && aws_lambda_function.fleet.environment[0].variables.ENV == "test"
+    error_message = "The poll knows the lists bucket, the router version the manager pins and the environment (the commands its refusals name)."
+  }
+}

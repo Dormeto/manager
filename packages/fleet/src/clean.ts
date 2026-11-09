@@ -66,8 +66,9 @@ const pauseOf = (p: unknown) => (isObject(p)
   : null);
 export const pausesOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, PAUSES_MAX).map(pauseOf).filter(Boolean) : []);
 
-// The kinds of a workload's backends (routers 0.23.3): the known ones, once each.
-const BACKEND_KINDS = new Set(['instance', 'asg', 'ecs', 'k8s', 'rds-instance', 'rds-cluster']);
+// The kinds of a workload's backends (routers 0.23.3): the known ones, once each. A Google Cloud row's (routers 0.40.0) are
+// instance, asg, k8s and cloudsql-instance (Cloud SQL, the twin of rds-instance).
+const BACKEND_KINDS = new Set(['instance', 'asg', 'ecs', 'k8s', 'rds-instance', 'rds-cluster', 'cloudsql-instance']);
 const backendsOf = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((k): k is string => typeof k === 'string' && BACKEND_KINDS.has(k)))] : undefined);
 
 // Why a wake (or a nap) failed (routers 0.25.0, R7a): a known kind, else unknown; the message cut to 300 characters.

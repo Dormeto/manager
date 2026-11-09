@@ -42,6 +42,23 @@ export function fakeDynamo({ pageSize = 1000, unprocessedOnce = false, laggingIn
         items.set(keyOf(input.Item), input.Item);
         return {};
       }
+      // SET a = :a, #b = :b on the item (created with its key when absent), unconditional or versioned.
+      case 'UpdateItemCommand': {
+        const existing = items.get(keyOf(input.Key));
+        if (input.ConditionExpression && input.ConditionExpression !== VERSIONED) throw new Error(`unexpected condition ${input.ConditionExpression}`);
+        if (input.ConditionExpression === VERSIONED && existing?.version && existing.version.N !== input.ExpressionAttributeValues[':version'].N) throw fail('ConditionalCheckFailedException');
+        const set = /^SET (.+)$/.exec(input.UpdateExpression ?? '');
+        if (!set) throw new Error(`unexpected update ${input.UpdateExpression}`);
+        const names = (input.ExpressionAttributeNames ?? {}) as Record<string, string>;
+        const next: Item = { ...(existing ?? input.Key) };
+        for (const clause of set[1]!.split(',')) {
+          const [name, value] = clause.split('=').map((part) => part.trim()) as [string, string];
+          next[names[name] ?? name] = input.ExpressionAttributeValues[value];
+        }
+        if (itemSize(next) > 400 * 1024) throw fail('ValidationException');
+        items.set(keyOf(input.Key), next);
+        return {};
+      }
       case 'DeleteItemCommand': {
         const existing = items.get(keyOf(input.Key));
         if (input.ConditionExpression === 'runId = :id' && existing?.runId?.S !== input.ExpressionAttributeValues[':id'].S) throw fail('ConditionalCheckFailedException');

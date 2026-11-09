@@ -1,8 +1,9 @@
 // The registry of the routers the manager knows by installation (a router installed by the manager, or registered for
 // a Google Cloud project): one item per router in the manager table, `ROUTER#<account>#<region>` under T#default, the
 // router as JSON in `data`. Operations writes and reads it, the API registers a Google Cloud connection's routers, and
-// discovery keeps the Google Cloud ones up to date: they share this format.
-import type { AttributeValue } from '@aws-sdk/client-dynamodb';
+// discovery keeps the Google Cloud ones up to date, and the fleet's poll removes an uninstalled Google Cloud router: they share
+// this format.
+import { DeleteItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 
 export const REGISTRY_PK = 'T#default';
 export const ROUTER_PREFIX = 'ROUTER#';
@@ -41,3 +42,27 @@ export const routerSort = (account: string, region: string) => `${ROUTER_PREFIX}
 export const routerKey = (account: string, region: string) => ({ pk: { S: REGISTRY_PK }, sk: { S: routerSort(account, region) } });
 export const routerItem = (router: InstalledRouter): Record<string, AttributeValue> => ({ ...routerKey(router.account, router.region), data: { S: JSON.stringify(router) } });
 export const routerOf = (item: Record<string, AttributeValue> | undefined): InstalledRouter | null => (item?.data?.S ? (JSON.parse(item.data.S) as InstalledRouter) : null);
+
+// The registry read and written by a DynamoDB client of the manager table (the fleet's poll's).
+export function createRegistry({ dynamo, table }: { dynamo: { send(command: object): Promise<any> }; table: string }) {
+  return {
+    async list(): Promise<InstalledRouter[]> {
+      const routers: InstalledRouter[] = [];
+      let start: Record<string, AttributeValue> | undefined;
+      do {
+        const page = await dynamo.send(new QueryCommand({
+          TableName: table, KeyConditionExpression: 'pk = :pk AND begins_with(sk, :prefix)',
+          ExpressionAttributeValues: { ':pk': { S: REGISTRY_PK }, ':prefix': { S: ROUTER_PREFIX } }, ...(start ? { ExclusiveStartKey: start } : {}),
+        }));
+        routers.push(...(page.Items ?? []).map((item: Record<string, AttributeValue>) => routerOf(item)).filter((r: InstalledRouter | null): r is InstalledRouter => r !== null));
+        start = page.LastEvaluatedKey;
+      } while (start);
+      return routers;
+    },
+    async delete(account: string, region: string): Promise<void> {
+      await dynamo.send(new DeleteItemCommand({ TableName: table, Key: routerKey(account, region) }));
+    },
+  };
+}
+
+export type Registry = ReturnType<typeof createRegistry>;

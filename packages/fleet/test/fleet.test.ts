@@ -139,6 +139,24 @@ describe('fleet', () => {
     expect(items.map((i) => [i.sk!.S, i.expiresAt?.N]).sort()).toEqual([[`RS#${ACCOUNT}#${REGION}`, String(expires)], [`WS#${ACCOUNT}#${REGION}#a`, String(expires)]]);
   });
 
+  it('keeps a Google Cloud router\'s poll on its RS# item beside its summary: a summary written leaves it, a poll alone is no summary, and it expires as summaries do', async () => {
+    const s = setup();
+    const poll = { newestAt: T1, misses: 1, polledAt: T2, lastError: 'events: no answer within 10000 ms' };
+    await s.store.putPoll('dormeto-dev', 'europe-west2', poll);
+    expect([await s.store.listRouters(), await s.store.getRouter('dormeto-dev', 'europe-west2')]).toEqual([[], null]);
+    expect(await s.store.routerPolls()).toEqual([{ account: 'dormeto-dev', region: 'europe-west2', checkedAt: null, poll }]);
+    const router = { name: 'dmtr-europe-west2', version: '0.40.0', build: 'abc', checkSchedule: '*/5 * * * *', region: 'europe-west2' };
+    await s.ingest({ account: 'dormeto-dev', region: 'europe-west2', 'detail-type': 'Router checked', detail: { ...checked(T1, []).detail, router, workloads: [] } });
+    await s.ingest(checked(T2, [workload('a')]));
+    expect((await s.store.getRouter('dormeto-dev', 'europe-west2'))!.summary.checkedAt).toBe(T1);
+    expect(await s.store.routerPolls()).toEqual([
+      { account: ACCOUNT, region: REGION, checkedAt: T2, poll: null },
+      { account: 'dormeto-dev', region: 'europe-west2', checkedAt: T1, poll },
+    ]);
+    const item = s.dynamo.items.get('RS#dormeto-dev#europe-west2')!;
+    expect(item.expiresAt?.N).toBe(String(Math.floor(NOW / 1000) + 7 * 86_400));
+  });
+
   it('a state change of a workload not reported yet creates it; the next check that does not list it removes it', async () => {
     const s = setup();
     await s.ingest(checked(T1, [workload('a')]));
@@ -272,6 +290,13 @@ describe('fleet', () => {
     ]));
     const [a, b, c] = await s.store.listWorkloads();
     expect([a!.backends, b!.backends, c!.backends]).toEqual([['asg', 'rds-instance'], undefined, undefined]);
+  });
+
+  it('keeps a Google Cloud row\'s backend kinds: its VMs, managed instance groups, GKE and Cloud SQL (cloudsql-instance, the twin of rds-instance)', async () => {
+    const s = setup();
+    const detail = { ...checked(T1, []).detail, router: { name: 'dmtr-europe-west2', version: '0.40.0', build: 'abc', checkSchedule: '*/5 * * * *', region: 'europe-west2' } };
+    await s.ingest({ account: 'dormeto-dev', region: 'europe-west2', 'detail-type': 'Router checked', detail: { ...detail, workloads: [{ workloadId: 'web', state: 'AWAKE', source: 'cli', backends: ['instance', 'asg', 'k8s', 'cloudsql-instance', 'cloudsql'] }] } });
+    expect((await s.store.getWorkload('dormeto-dev', 'europe-west2', 'web'))!.backends).toEqual(['instance', 'asg', 'k8s', 'cloudsql-instance']);
   });
 
   it('keeps the tags a router reports (routers 0.30.0) when they follow the tag rules; none at all when one breaks them; a router before reports none', async () => {

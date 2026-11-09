@@ -1,7 +1,8 @@
 // Routers and their workloads as they report (vision scale design §4), partition T#default: RS#<account>#<region> per
 // router, WS#<account>#<region>#<workloadId> per workload. Written from the router events, read by the API. Each
-// workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time.
-import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+// workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time. A Google Cloud
+// router's poll (Google Cloud manager design §6.3) on its RS# item, beside the summary.
+import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import type { Discounts, StoppedItem } from './prices.js';
 import { checkMinutesOf, type IdleWindowAdvice } from './idle.js';
 
@@ -33,6 +34,17 @@ export interface RouterSummary {
   counts: Record<string, number>;
   // The chunks received of the last check: its workloads are complete once every chunk is in.
   check: { checkedAt: string; total: number; received: number[] };
+}
+
+// A Google Cloud router's poll (Google Cloud manager design §6.3), the `poll` attribute of its RS# item: written by each poll,
+// left by the summary's writes, there before the router's first summary.
+export interface RouterPoll {
+  newestAt: string | null; // the newest `at` of the events read (ISO): the next poll reads from 5 minutes before it
+  misses: number; // Google's own 404s in a row at the controller URL: at 2 the router is unregistered
+  polledAt: string; // when its last poll started: the least recently polled go first
+  lastError?: string; // what its last poll could not do, and why
+  etag?: string; // the ETag of the settings.json the router holds, as it last answered (or as pushed); none: it holds none
+  tooOld?: string; // its version when it answered it has no /v1/actions: not polled again until its version changes
 }
 
 export interface WorkloadSummary {
@@ -192,21 +204,30 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       const summary = data<RouterSummary>(Item);
       return summary ? { summary, version: Number(Item.version?.N ?? 0) } : null;
     },
-    // Optimistic: false when another writer changed it since `version` was read.
+    // Optimistic: false when another writer changed it since `version` was read. An update, which leaves the item's poll.
     async putRouter(summary: RouterSummary, version: number): Promise<boolean> {
-      try {
-        await dynamo.send(new PutItemCommand({
-          TableName: table, Item: { ...key(routerKey(summary.account, summary.region)), data: { S: JSON.stringify(summary) }, version: { N: String(version + 1) }, expiresAt: expiresAt() },
-          ConditionExpression: 'attribute_not_exists(sk) OR version = :version', ExpressionAttributeValues: { ':version': { N: String(version) } },
-        }));
-        return true;
-      } catch (err) {
-        if ((err as Error).name === 'ConditionalCheckFailedException') return false;
-        throw err;
-      }
+      return conditional(() => dynamo.send(new UpdateItemCommand({
+        TableName: table, Key: key(routerKey(summary.account, summary.region)), UpdateExpression: 'SET #data = :data, version = :next, expiresAt = :expiresAt',
+        ConditionExpression: VERSIONED, ExpressionAttributeNames: { '#data': 'data' },
+        ExpressionAttributeValues: { ':data': { S: JSON.stringify(summary) }, ':next': { N: String(version + 1) }, ':expiresAt': expiresAt(), ':version': { N: String(version) } },
+      })));
     },
     async listRouters(): Promise<RouterSummary[]> {
       return (await query('RS#')).map((i) => data<RouterSummary>(i)!).filter(Boolean);
+    },
+    // A Google Cloud router's poll, which keeps its RS# item from expiring while the router is polled.
+    async putPoll(account: string, region: string, poll: RouterPoll): Promise<void> {
+      await dynamo.send(new UpdateItemCommand({
+        TableName: table, Key: key(routerKey(account, region)), UpdateExpression: 'SET #poll = :poll, expiresAt = :expiresAt',
+        ExpressionAttributeNames: { '#poll': 'poll' }, ExpressionAttributeValues: { ':poll': { S: JSON.stringify(poll) }, ':expiresAt': expiresAt() },
+      }));
+    },
+    // Every RS# item's poll (null: never polled) and its summary's check time (null: no summary yet), in one query.
+    async routerPolls(): Promise<{ account: string; region: string; checkedAt: string | null; poll: RouterPoll | null }[]> {
+      return (await query('RS#')).map((item) => {
+        const [account = '', region = ''] = item.sk!.S!.slice('RS#'.length).split('#');
+        return { account, region, checkedAt: data<RouterSummary>(item)?.checkedAt ?? null, poll: item.poll?.S ? (JSON.parse(item.poll.S) as RouterPoll) : null };
+      });
     },
     async getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null> {
       const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(workloadKey(account, region, id)), ConsistentRead: true }));
