@@ -139,10 +139,11 @@ export function organizationsPort(client: Sender): OrganizationsPort {
 // which the command role trusts); its refusal comes back as the error it got. A check that does not answer (the function
 // throttled, missing or failing) is no verdict on the role: `unavailable`, and the account keeps its last check.
 export function commandCheck(invoke: (payload: Record<string, unknown>) => Promise<unknown>) {
-  return async (account: string): Promise<void> => {
+  // extra: a Google Cloud project's controllers, beside the account (the project).
+  return async (account: string, extra?: Record<string, unknown>): Promise<void> => {
     let answer: { ok?: boolean; name?: string; message?: string } | null;
     try {
-      answer = (await invoke({ account })) as typeof answer;
+      answer = (await invoke({ account, ...extra })) as typeof answer;
     } catch (err) {
       throw Object.assign(err as Error, { unavailable: true });
     }

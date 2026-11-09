@@ -13,6 +13,8 @@ import { GoogleError, type GoogleConnection } from '@dormeto/google';
 export interface GooglePort {
   // The connection's record (`DISC#GOOGLE`), null while there is none.
   connection(): Promise<GoogleConnection | null>;
+  // The manager's environment (`dev`), for the connect command a missing access names.
+  env?: string;
   // A Google API call as the discovery service account.
   call<T = unknown>(method: string, url: string, body?: unknown): Promise<T>;
   registry: { list(): Promise<InstalledRouter[]>; put(router: InstalledRouter): Promise<void>; delete(account: string, region: string): Promise<void> };

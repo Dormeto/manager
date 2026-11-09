@@ -98,6 +98,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
     google: {
       connection: googleSource.connection,
+      env: process.env.ENV ?? 'dev',
       call: (method, url, body) => googleSource.call('discovery', method, url, body),
       registry: { list: () => records.listRouters(), put: (r) => records.putRouter(r), delete: (a, r) => records.deleteRouter(a, r) },
       routerWorkloads: (account, region) => fleet.routerWorkloads(account, region),

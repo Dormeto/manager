@@ -37,6 +37,13 @@ registrations are never touched. Audited as `google-connection`.
 their Cloud Run services `dmtr-<region>-controller`, and adds, updates (controller URL, `DMT_VERSION`) or removes the `ROUTER#` registrations;
 a project that fails is recorded in the run and keeps its routers, Cloud Run turned off means no router there. AWS registrations are
 never touched.
+- **Access on Google Cloud projects:** each project's step records whether the discovery account could read it (Compute Engine
+turned off is nothing to find) and, where a router is, whether the command account holds what the manager does there: the
+permissions of `dormetoCommand` on the project, `run.routes.invoke` on each router's controller and
+`resourcemanager.tagValueBindings.create` on the tag value `<project>/dormeto/managed`, checked by the access check function (now also
+reading `DISC#GOOGLE`, so it needs the table). The Organization access panel lists projects as accounts, and onboarding a candidate of a
+project that misses access is refused with 409 and the `dormeto gcp connect` command that fixes it. A Google failure that is no
+refusal keeps the last verdict. AWS accounts behave as before.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
 `silent`); one the poll is refused at says that refusal with its command (`manager-access-missing`, `router-unknown`) instead of

@@ -9,7 +9,7 @@ import type { WorkloadSummary } from '@dormeto/fleet';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
 import type { GooglePort } from '../src/google.js';
 import { devProject, workloadRow, type ComputeWorld } from './gcp-fakes.js';
-import { HOUR, setup } from './run-fakes.js';
+import { HOUR, T0, setup } from './run-fakes.js';
 
 const AB = config({ filters: [filter('ab', [{ accountIds: [A.id, B.id] }])] });
 const writes = (calls: string[]) => calls.filter((c) => c === 'BatchWriteItemCommand').length;
@@ -293,6 +293,77 @@ describe('lint from the accounts of a run', () => {
       const error = "GoogleError: Required 'compute.urlMaps.list' permission for 'projects/dev-project'";
       expect((await s.store.getAccountScan('dev-project'))!.result).toMatchObject({
         error, pairs: [{ region: 'europe-west2', ok: false, error }, { region: 'global', ok: false, error }],
+      });
+    });
+
+    describe('access', () => {
+      const CONNECT = 'dormeto gcp connect --project host-project --profile <profile> --env dev';
+      const both = config({ regions: ['*'], filters: [filter('all', [{ accountIds: [A.id, 'dev-project'] }])] });
+      // The project's step, then its access as the panel reads it.
+      async function stepOf(s: ReturnType<typeof setup>, g: GooglePort) {
+        s.deps.google = { ...g, env: 'dev' };
+        const plan = await planRun(s.deps, { source: 'manual' });
+        await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' });
+        return plan;
+      }
+      const refusal = new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', message: "Required 'compute.urlMaps.list' permission for 'projects/dev-project'", host: 'compute.googleapis.com' });
+
+      it('a project with a router the command account cannot act on is missing its command, counted and listed with its words', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        const asked: unknown[] = [];
+        const reason = `the command account c@x is missing run.routes.invoke on projects/dev-project/locations/europe-west2/services/dmtr-europe-west2-controller: ${CONNECT}`;
+        s.deps.assumeCommand = async (account, extra) => {
+          asked.push([account, extra]);
+          if (account === 'dev-project') throw Object.assign(new Error(reason), { name: 'AccessDenied' });
+        };
+        const plan = await stepOf(s, google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')] }));
+        expect(asked).toEqual([['dev-project', { controllers: ['projects/dev-project/locations/europe-west2/services/dmtr-europe-west2-controller'] }]]);
+        expect((await s.store.getAccountScan('dev-project'))!.access).toEqual({ discovery: { ok: true }, command: { ok: false, reason }, checkedAt: new Date(T0).toISOString() });
+        await scanAccount(s.deps, { runId: plan.runId, account: A.id });
+        await finalizeRun(s.deps, plan);
+        const report = await s.store.accessReport({ limit: 10 });
+        expect(report.counts).toEqual({ ready: 1, discoveryMissing: 0, commandMissing: 1, unchecked: 0 });
+        expect(report.accounts.map((a) => [a.account, a.discovery.ok, a.command])).toEqual([['dev-project', true, { ok: false, reason }]]);
+      });
+
+      it('a project without a router is ready, its command not even asked', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        const asked: string[] = [];
+        s.deps.assumeCommand = async (account) => { asked.push(account); };
+        const plan = await stepOf(s, google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal() }));
+        await scanAccount(s.deps, { runId: plan.runId, account: A.id });
+        await finalizeRun(s.deps, plan);
+        expect(asked).toEqual([A.id]);
+        expect((await s.store.getAccountScan('dev-project'))!.access).toEqual({ discovery: { ok: true }, command: { ok: true }, checkedAt: new Date(T0).toISOString() });
+        expect((await s.store.accessReport({ limit: 10 })).counts).toEqual({ ready: 2, discoveryMissing: 0, commandMissing: 0, unchecked: 0 });
+      });
+
+      it('a project whose lists Google refuses is missing its discovery with the connect command; Compute Engine turned off is nothing to find', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        let fail: Error | null = refusal;
+        const plan = await stepOf(s, google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), fail: () => fail }));
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ discovery: { ok: false, reason: `GoogleError: Required 'compute.urlMaps.list' permission for 'projects/dev-project': ${CONNECT}` }, command: { ok: true } });
+        fail = new GoogleError({ status: 403, reason: 'SERVICE_DISABLED', message: 'Compute Engine API has not been used', host: 'compute.googleapis.com' });
+        s.advance(HOUR);
+        await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' });
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ discovery: { ok: true } });
+      });
+
+      it('a read that fails without a refusal, and a check that does not answer, keep the last verdicts', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        let down = false;
+        s.deps.assumeCommand = async () => { if (down) throw Object.assign(new Error('timed out'), { unavailable: true }); };
+        const plan = await stepOf(s, google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], fail: () => (down ? new GoogleError({ status: 503, reason: 'UNAVAILABLE', message: 'try later' }) : null) }));
+        const first = (await s.store.getAccountScan('dev-project'))!.access;
+        expect(first).toMatchObject({ discovery: { ok: true }, command: { ok: true } });
+        down = true;
+        s.advance(HOUR);
+        await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' });
+        expect((await s.store.getAccountScan('dev-project'))!.access).toEqual({ ...first, checkedAt: new Date(T0 + HOUR).toISOString() });
       });
     });
   });

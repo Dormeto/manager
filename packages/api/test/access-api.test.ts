@@ -8,14 +8,22 @@ import { NOW, candidate, memoryStore } from './memory-store.js';
 const READY = '111111111111';
 const NO_COMMAND = '222222222222';
 const UNCHECKED = '333333333333';
+const PROJECT = 'dev-project';
+const CONNECT = 'dormeto gcp connect --project host-project --profile <profile> --env dev';
+const MISSING = `the command account c@x is missing run.routes.invoke on projects/${PROJECT}/locations/europe-west2/services/dmtr-europe-west2-controller: ${CONNECT}`;
+const service = `projects/${PROJECT}/global/backendServices/app`;
 const DENIED = 'access denied: the role is missing or does not trust the manager';
 const tg = (account: string) => `arn:aws:elasticloadbalancing:eu-west-1:${account}:targetgroup/app/73e2d6bc24d8a067`;
 const row = (account: string, command: boolean) => ({ account, name: `n${account}`, discovery: { ok: true as const }, command: command ? { ok: true as const } : { ok: false as const, reason: DENIED } });
 
 function setup({ visible, discoveryOnly = false }: { visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; discoveryOnly?: boolean } = {}) {
-  const store = memoryStore([READY, NO_COMMAND, UNCHECKED].map((account) => candidate(tg(account), { account, region: 'eu-west-1', targetGroupArn: tg(account) })));
+  const store = memoryStore([
+    ...[READY, NO_COMMAND, UNCHECKED].map((account) => candidate(tg(account), { account, region: 'eu-west-1', targetGroupArn: tg(account) })),
+    candidate(service, { account: PROJECT, region: 'global', targetGroupArn: null as never, backendService: service } as never),
+  ]);
   const scans: Record<string, AccountScan> = {
     [READY]: { account: READY, scannedAt: '', regions: {}, access: { discovery: { ok: true }, command: { ok: true }, checkedAt: '' } },
+    [PROJECT]: { account: PROJECT, scannedAt: '', regions: {}, access: { discovery: { ok: true }, command: { ok: false, reason: MISSING }, checkedAt: '' } },
     [NO_COMMAND]: { account: NO_COMMAND, scannedAt: '', regions: {}, access: { discovery: { ok: true }, command: discoveryOnly ? { ok: false, reason: 'discovery only: set up without the command role', discoveryOnly: true } : { ok: false, reason: DENIED }, checkedAt: '' } },
   };
   store.getAccountScan = async (account: string) => scans[account] ?? null;
@@ -73,6 +81,13 @@ describe('organization access', () => {
     expect((await s.api(event('POST', '/api/operations', { type: 'install-router', account: NO_COMMAND, region: 'eu-west-1' }))).statusCode).toBe(409);
     for (const account of [READY, UNCHECKED]) expect((await s.api(event('POST', '/api/operations', { type: 'onboard', candidateId: tg(account) }))).statusCode).toBe(202);
     expect(s.created.map(([type]) => type)).toEqual(['onboard', 'onboard']);
+  });
+
+  it('refuses onboarding a project\'s candidate where its command account misses access, with the connect command that fixes it', async () => {
+    const s = setup();
+    const refused = await s.api(event('POST', '/api/operations', { type: 'onboard', candidateId: service }));
+    expect([refused.statusCode, json(refused)]).toEqual([409, { error: 'no_access', message: `project ${PROJECT}: ${MISSING}; see the Organization access page` }]);
+    expect(s.created).toEqual([]);
   });
 
   it('refuses onboarding and router installs in an account set up for discovery only, saying so', async () => {

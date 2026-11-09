@@ -29,7 +29,9 @@ import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import { createHash } from 'node:crypto';
 import type { Blueprint } from './blueprint.js';
 import type { EksPort } from './cluster-access.js';
+import { isProject } from '@dormeto/fleet/clouds';
 import type { TargetAccess } from './engine.js';
+import { projectInput } from './project-input.js';
 import { createInstaller, type InstallerPorts } from './installer.js';
 import type { KubeProxyPorts } from './kube-proxies.js';
 
@@ -167,8 +169,17 @@ export function checkRole({ sts, roleName, sessionName }: { sts: Pick<STSClient,
 
 // The access check function (packaging design §3): an account id, nothing else, then the check. Discovery may invoke this
 // function only, never the operations function (which could run any operation under the command role).
-export function checkHandler(check: (account: string) => Promise<{ ok: true } | { ok: false; name: string; message: string }>) {
-  return async (event: { account?: unknown }) => {
+export function checkHandler(
+  check: (account: string) => Promise<{ ok: true } | { ok: false; name: string; message: string }>,
+  // A Google Cloud project's check, where the manager has a connection: `{ account: <project>, controllers }`.
+  checkProject?: (project: string, controllers: string[]) => Promise<{ ok: true } | { ok: false; name: string; message: string }>,
+) {
+  return async (event: { account?: unknown; controllers?: unknown }) => {
+    if (checkProject && isProject(event?.account)) {
+      const input = projectInput(event);
+      if (!input) return { ok: false as const, name: 'InvalidInput', message: 'controllers must be router controller services of the project' };
+      return checkProject(input.project, input.controllers);
+    }
     if (typeof event?.account !== 'string' || !/^\d{12}$/.test(event.account)) return { ok: false as const, name: 'InvalidInput', message: 'account must be 12 digits' };
     return check(event.account);
   };

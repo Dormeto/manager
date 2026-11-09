@@ -145,7 +145,7 @@ resource "aws_lambda_function" "access_check" {
   handler          = "check.handler"
   filename         = local.artifact.access_check
   source_code_hash = filebase64sha256(local.artifact.access_check)
-  # Two STS attempts of 10 s at most.
+  # Two STS attempts of 10 s at most; a project's check is a few Google calls.
   timeout     = 30
   memory_size = 256
 
@@ -153,6 +153,8 @@ resource "aws_lambda_function" "access_check" {
     variables = {
       ENV          = var.env
       COMMAND_ROLE = var.command_role_name
+      # The Google Cloud connection (DISC#GOOGLE), read to check a project's command account.
+      TABLE = aws_dynamodb_table.manager.name
     }
   }
 

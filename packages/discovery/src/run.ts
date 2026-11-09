@@ -5,6 +5,8 @@
 import { defaultConfig } from './config.js';
 import { withExclusions } from './exclusions.js';
 import { isProject } from '@dormeto/fleet/clouds';
+import type { InstalledRouter } from '@dormeto/fleet/registry';
+import { connectCommand, GoogleError, type GoogleConnection } from '@dormeto/google';
 import { scanProject, type ProjectScan } from './gcp-scan.js';
 import { discoverGoogleRouters, listProjects, type GooglePort, type GoogleSummary } from './google.js';
 import { scanAccounts, targetPairs } from './filters.js';
@@ -38,7 +40,8 @@ export interface RunDeps {
   defaultMode?: string; // the mode of the default configuration, while none is saved (DISCOVERY_MODE: organization or account)
   roleName?: string;
   assumeRole(account: string): Promise<unknown>; // credentials for the account's discovery role
-  assumeCommand?(account: string): Promise<unknown>; // the account's command role, only to check it (packaging design §3)
+  assumeCommand?(account: string, extra?: { controllers: string[] }): Promise<unknown>; // the account's command role, only to check it (packaging design §3); a Google Cloud project's controllers
+
   enabledRegions(credentials: unknown): Promise<string[]>;
   // Whether the account's discovery role declares the account set up without the command role (tag
   // dormeto:command-role = none, from the access module or the AWS CLI script).
@@ -382,18 +385,24 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
   const started = now();
   let scan: ProjectScan | undefined;
   let error: string | undefined;
+  let cause: unknown;
+  let connected: GoogleConnection | undefined;
+  let routers: InstalledRouter[] = [];
   try {
     const google = deps.google;
     // Read first: the step may be its execution environment's first use of the connection.
-    if (!google || !(await google.connection())) throw new Error(NO_CONNECTION);
-    const routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
+    connected = (await google?.connection()) ?? undefined;
+    if (!google || !connected) throw new Error(NO_CONNECTION);
+    routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
     const managed = (await Promise.all(routers.map((r) => google.routerWorkloads(account, r.region)))).flat();
     scan = await scanProject(google, { project: account, managed, now, log: deps.log });
   } catch (err) {
     error = errorText(err);
+    cause = err;
     (deps.log ?? silent).warn('DiscoveryProjectFailed', { account, error });
   }
   const ms = now() - started;
+  const access = await projectAccess(deps, { account, at, state, connection: connected, routers, scanned: !error, cause });
 
   const stored = await deps.store.accountCandidates(account);
   const known = [...new Set(['global', ...(scan?.regions ?? []).map((r) => r.region), ...stored.filter((c) => !c.goneAt).map((c) => c.region)])].sort();
@@ -431,8 +440,33 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
     lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
     written: changed.length,
   };
-  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result });
+  await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(access ? { access } : {}) });
   return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+}
+
+// A project's access (Google Cloud manager design §7.4): `discovery` is ok when its scan's lists answered (Compute Engine
+// turned off is nothing to find) and missing when Google refused them; `command` is the command account's check through the
+// access check function, ok without a router. A read that failed otherwise (a 5xx, a timeout), a check that does not answer
+// and a missing connection are no verdict: the last one stands, and a project with neither stays unchecked.
+async function projectAccess(deps: RunDeps, { account, at, state, connection, routers, scanned, cause }: {
+  account: string; at: string; state: AccountScan | null; connection: GoogleConnection | undefined; routers: InstalledRouter[]; scanned: boolean; cause: unknown;
+}): Promise<AccountScan['access'] | undefined> {
+  const last = state?.access;
+  if (!connection) return last;
+  const connect = connectCommand(connection.project, deps.google?.env ?? 'dev');
+  const refused = cause instanceof GoogleError && cause.status === 403;
+  const discovery: AccessState | undefined = scanned ? { ok: true } : refused ? { ok: false, reason: `${errorText(cause)}: ${connect}` } : last?.discovery;
+  let command: AccessState | undefined;
+  if (!routers.length) command = { ok: true };
+  else if (deps.assumeCommand) {
+    const controllers = routers.map((r) => `projects/${account}/locations/${r.region}/services/dmtr-${r.region}-controller`);
+    command = await deps.assumeCommand(account, { controllers }).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? last?.command : { ok: false, reason: (err as Error).message }));
+  }
+  if (!discovery || !command) {
+    (deps.log ?? silent).warn('AccessCheckUnavailable', { account });
+    return last;
+  }
+  return { discovery, command, checkedAt: at };
 }
 
 // The account-regions forwarded events name (packaging design §5), each rescanned once per batch. While a run is active
