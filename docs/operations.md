@@ -31,9 +31,11 @@ removes one resource tag, `dormeto/managed`, as the command account.
   run of the step; one bound already is left alone. `verify` reads the router's status: the workload names the backend
   service, has no issue and isn't `FAILED`. The fallback machine types are Compute Engine's (at most 5, each once).
 - **The router refuses, or the answer is lost:** a refusal (or a router the manager can't reach: the request never got to
-  one that acted) removes exactly the bindings this operation made, never one that was there before; the operation says so. A
-  timeout, a 5xx or any lost answer removes none and names the bindings kept, because the router may have onboarded the
-  workload. A step run again after a lost answer, which the router refuses as onboarded already, is done when its status
+  one that acted) removes exactly the bindings this operation made, never one that was there before, one per run of the
+  step after the refusal's (a removal waits up to 60 s: no run outlasts the function); the operation says so. A binding
+  that fails is followed the same way. A timeout, a 5xx or any lost answer removes none and names the bindings kept, because
+  the router may have onboarded the workload; so does an operation the workflow fails outside a step (its function timed
+  out or crashed). A step run again after a lost answer, which the router refuses as onboarded already, is done when its status
   shows the workload on the candidate's backend service; nothing is removed.
 - **Offboarding** runs `locate` (the router's status), `slot`, `lock load balancer`, `pause`, `wait awake`, `offboard`
   (the router's, within 300 s), `untag` and `candidate`. `untag` removes the tag as the command account from the VMs and
@@ -102,7 +104,7 @@ doesn't); the registry keeps the version as the router reports it.
   onboarded is renamed, tagged and set through the manager and, a VM or managed instance group one, offboarded; a GKE workload and one whose
   onboarding turned request logs on are not: their offboarding fails at `locate`, before anything changes, with `dormeto gcp
   workloads offboard <id> --project <p> --region <r>`. The offboarding removes the tag `dormeto/managed` the onboarding
-  bound, as the command account. The workload view still shows that command instead of its Offboard action.
+  bound, as the command account. For either, the workload view shows that command instead of its Offboard action.
 - **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
   the cloud its alarms share, and both as the `String.Array` `["aws","gcp"]` when they mix, which a filter on either cloud
   matches. A Google Cloud workload's failed wake is advised in Google Cloud's words for its kind: Compute Engine's zone

@@ -13,11 +13,14 @@ row, event or call behaves as before.
 
 - **Onboarding and offboarding on Google Cloud from the dashboard:** the onboarding dialog of a Google Cloud candidate asks for its
 name, labels (copied from the VMs on request), Cloud SQL companions by name, fallback machine types (at most 5, each once, as the
-router's pattern), idle minutes, wake mode and suspension, and a router when a `global` candidate's project has several; it says the
+router's pattern), idle minutes, wake mode and suspension, and a router when a `global` candidate's project has several (only those
+of 0.40.0 and later are offered, the only one left chosen already, and Onboard waits for the list); it says the
 manager binds and removes the tag `dormeto/managed` and shows no Terraform or EC2 text. Offboard and Exclude (by the backend
-service's path) are offered for a Google Cloud workload but a GKE one's Offboard. The demo onboards and offboards Google Cloud
+service's path) are offered for a Google Cloud workload but the Offboard of a GKE one and of one whose onboarding turned request
+logs on, which show the CLI's command instead. The demo onboards and offboards Google Cloud
 candidates and workloads in the Google Cloud steps. The API finds a `global` Google Cloud candidate's workload, router and running
-operation by its backend service, not by a region.
+operation by its backend service, not by a region, and names the router as the manager lists it (`dmtr-<project>-<region>`, by
+the workload row's project and region).
 - **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 502 and the watchdog's problem for
 `manager-access-missing` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
 controller's, the message cut to 200 characters; never a token or a signature.
@@ -28,7 +31,8 @@ rows and events (a backend service instead of a target group, VM names in `hiber
 - **The manager's Google identity (`@dormeto/google`):** its Lambda roles act as the two service accounts of a Google Cloud host
 project through workload identity federation (a signed `GetCallerIdentity` exchanged at Google's STS, then
 `iamcredentials`), with no key and nothing stored; tokens are kept in memory until 5 minutes before they expire, and every
-call gives up after 3 s without a connection or 10 s of silence.
+call gives up after 3 s without a connection or 10 s of silence, but a router's: its controller answers once its action is
+done, so the call may be silent up to its own bound (300 s for `preview`, `onboard` and `offboard`), and is aborted there.
 - **The Google Cloud connection:** `PUT` and `DELETE /iam/discovery/google`, for IAM callers only (`dormeto gcp connect` and
 `disconnect`; a dashboard session's write is refused with 403), and `GET` for viewers under `/iam` and `/api`, keep the record
 `dormeto gcp connect` writes (`DISC#GOOGLE`), each field checked against what connect writes: the projects and regions, the pool
@@ -40,15 +44,32 @@ with the controller URL and version the record carries (a router's entry may lea
 the poll the version of a router too old to poll; a later record that leaves them empty keeps what they learnt) and unregisters
 the Google Cloud routers a later record drops; a `DELETE` removes the record and every Google Cloud registration. AWS
 registrations are never touched. Audited as `google-connection`.
-- **Discovery lists Google Cloud routers:** with a connection, each run (in its finalize step) lists the projects the discovery account sees and
-their Cloud Run services `dmtr-<region>-controller`, and adds, updates (controller URL, `DMT_VERSION`) or removes the `ROUTER#` registrations;
+- **Discovery lists Google Cloud routers:** with a connection, each run (in its finalize step) lists the Cloud Run services
+`dmtr-<region>-controller` of the run's projects (those at the connection's scopes, listed once, when the run starts; a listing that
+fails keeps the last run's), and adds, updates (controller URL, `DMT_VERSION`) or removes the `ROUTER#` registrations;
 a project that fails is recorded in the run and keeps its routers, Cloud Run turned off means no router there. AWS registrations are
 never touched.
+- **Discovery of Google Cloud projects:** with a connection, the projects at its scopes join every run, in both modes, as accounts
+of the inventory (their folders and organization as their path, their labels as account tags), each scanned as the discovery
+account. A candidate is a backend service a URL map names (`id` and `backendService` its path, `targetGroup` its name, `urlMap`
+the map's path, `region` the map's region or `global`, `lb` the load balancer's kind): eligible, ineligible with the router's own
+onboarding reason (the first one; a GKE workload's backend is `k8s`, its reason `a GKE workload is onboarded with dormeto gcp
+workloads onboard, after dormeto gcp workloads access grant`), or managed when a router's workload row names it. Its idle share
+comes from Cloud Monitoring's request counts over 7 days (estimated: Google samples them); when Monitoring fails or is turned off a
+candidate keeps the one it had, `null` for one never read. A region Compute Engine answers unreachable fails the project's pair there
+only where a candidate is stored or a candidate's backend is; Compute Engine turned off is nothing to find. The API takes them:
+`PUT /discovery/config` criteria take project IDs in `accountIds`, `folders/<n>` and `organizations/<n>` in `ouIds`, Google Cloud
+regions and `global` in `regions`, and URL map and backend service paths in `loadBalancers`; `POST /exclusions` takes a Google
+Cloud target by `target.path` (a backend service's or a URL map's); `GET /discovery/candidates` takes a project as `account` and
+`region=global`. AWS's discovery is unchanged.
 - **Access on Google Cloud projects:** each project's step records whether the discovery account could read it (Compute Engine
 turned off is nothing to find) and, where a router is, whether the command account holds what the manager does there: the
 permissions of `dormetoCommand` on the project, `run.routes.invoke` on each router's controller and
 `resourcemanager.tagValueBindings.create` on the tag value `<project>/dormeto/managed`, checked by the access check function (now also
-reading `DISC#GOOGLE`, so it needs the table). The Organization access panel lists projects as accounts, and onboarding a candidate of a
+reading `DISC#GOOGLE`, so it needs the table); a refusal of the command account's token itself (STS or iamcredentials: the
+federation or the account's grant) says the manager can't act as the command account instead of listing every permission. The
+Organization access panel lists projects as accounts, its chips and counts naming the discovery and command accounts, and links to
+the Google Cloud connection's page for them; onboarding a candidate of a
 project that misses access is refused with 409 and the `dormeto gcp connect` command that fixes it. A Google failure that is no
 refusal keeps the last verdict. AWS accounts behave as before.
 - **Onboarding on Google Cloud:** `POST /api/operations` `{type: 'onboard'}` takes a candidate of a project, on the router of its
@@ -60,8 +81,9 @@ account (a refusal: 502 with Google's words). The operation runs `find router`, 
 `lock load balancer` (the URL map), `preview`, `tag`, `onboard`, `verify`, `candidate`: the router's dry run and onboarding in
 AWS's onboarder payload (the URL map's and backend service's names, the load balancer's kind), the tag `dormeto/managed` bound as
 the command account to the VMs and managed instance groups the preview names and to the Cloud SQL instances given, one per run of
-the step (one bound already is left alone). A refused onboarding removes the bindings the operation made and says so; one whose
-answer was lost (a timeout, a failure) removes none and names them. A step run again after a lost answer that the router refuses as
+the step (one bound already, Google's 409 `ALREADY_EXISTS`, is left alone). A refused onboarding, or a binding that fails, removes
+the bindings the operation made, one per run of the step after the failure's, and says so; one whose answer was lost (a timeout, a
+failure) removes none and names them, as does an operation the workflow fails outside a step. A step run again after a lost answer that the router refuses as
 onboarded already is done when the router's status shows the workload on the candidate's backend service, nothing removed. The
 workload is verified by the router's status (its backend service, no issue, not `FAILED`). AWS onboardings are unchanged.
 - **Offboarding and exclusions on Google Cloud:** `POST /api/operations` `{type: 'offboard'}` takes a workload of a Google Cloud
@@ -69,7 +91,7 @@ router, the project's number read as the discovery account (a refusal: 502 with 
 router's status), `slot`, `lock load balancer` (the URL map), `pause`, `wait awake`, `offboard` (the router's, within 300 s),
 `untag` and `candidate`. A GKE workload, or one whose onboarding turned request logs on, fails at `locate` before anything changes,
 in the router's words with `dormeto gcp workloads offboard <id> --project <p> --region <r>`; so does a tag value that can't be read
-(with `dormeto gcp connect`) or a Cloud SQL instance whose region Google refuses (one answering 404 is gone: said, nothing to untag
+(with `dormeto gcp connect --project <host> --profile <profile> --env <env>`) or a Cloud SQL instance whose region Google refuses (one answering 404 is gone: said, nothing to untag
 there). After the router's offboarding the tag `dormeto/managed` is removed as the command account from the VMs and managed
 instance groups its status names (by the ids the onboarding stored) and from its Cloud SQL instances, one per run of the step: one
 not tagged is said, a failure that passes (429, 5xx, no answer) is tried again later, another fails the step naming what stays
@@ -140,8 +162,8 @@ service and URL map with the console link (a regional URL map links the project'
 instance with theirs and their Google Cloud icons, "suspended" where AWS says "hibernated", fallback machine types, a failure, a wake,
 its tags and settings in Google Cloud's words (no EC2, target or Lambda; the values Google Cloud fixes said so), no target group,
 targets or ARN, and no idle window advice or requests heatmap yet (they come with Google Cloud's request counts); the workload the CLI
-onboarded is renamed, tagged and set from the dashboard, which offers Offboard for it, but a GKE workload's, which stays with the
-`dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
+onboarded is renamed, tagged and set from the dashboard, which offers Offboard for it, but a GKE workload's and that of one whose
+onboarding turned request logs on, which stay with the `dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`

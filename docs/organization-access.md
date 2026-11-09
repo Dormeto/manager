@@ -74,22 +74,28 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   reads the version of a router too old to poll from its health, every 10 minutes.
 - **Discovery of projects:** with a connection, each run lists the projects at the scopes as the discovery account
   (`projects.search`) and scans each one: its URL maps, backend services, target proxies, forwarding rules, instance
-  groups, VMs and zonal network endpoint groups (Compute Engine's aggregated lists, 10 reads at once), then the 7 days of
-  its load balancers' request counts from Cloud Monitoring. A candidate is a backend service a URL map names. It is
+  group managers and VMs (Compute Engine's aggregated lists), then the instance groups and zonal network endpoint groups
+  each backend service names, read per backend (`instanceGroups.listInstances`, `networkEndpointGroups.get` and
+  `listNetworkEndpoints`), 10 reads at once, then the 7 days of its load balancers' request counts from Cloud Monitoring.
+  The projects are listed once a run; the routers are looked for in the same projects. A candidate is a backend service a URL map names. It is
   eligible, ineligible with the router's own onboarding reason (the first one; a GKE workload's is `a GKE workload is
   onboarded with dormeto gcp workloads onboard, after dormeto gcp workloads access grant`), or managed when a router's
   workload names it, a napped one too (its URL map names the waker's backend service). The router's preview, at the onboarding, has the last word.
-  The idle share is estimated: Google samples the load balancer's metrics, and a project whose Monitoring is turned off
-  has none. A project whose Compute Engine is turned off has nothing to find; one that fails (an unreachable region,
-  a failed read, `projects.search` itself) is recorded in the run and no candidate of it becomes `gone`. The AWS run is
+  The idle share is estimated: Google samples the load balancer's metrics; when Monitoring fails or is turned off, a
+  candidate keeps the idle share it had (none if it never had one). A project whose Compute Engine is turned off has
+  nothing to find; one that fails (a failed read, `projects.search` itself) is recorded in the run and no candidate of it
+  becomes `gone`. A region Compute Engine answers unreachable fails where a candidate is stored or a candidate's backend
+  is, and is no error elsewhere (some regions answer so on every call). The AWS run is
   untouched. The Region filter takes `global`; Exclude offers the backend service, the URL map and the project.
 - **The Organization access panel** lists each project beside the AWS accounts, with its cloud mark: whether the
   discovery account could read it and, in a project that has a router, whether the command account holds what the manager
-  does there. The access check function (it reads `DISC#GOOGLE`, so it needs the table) tests, as the command account,
+  does there (its chips and counts name the two service accounts, and it links to the Google Cloud connection's page). The access check function (it reads `DISC#GOOGLE`, so it needs the table) tests, as the command account,
   the 10 permissions of `dormetoCommand` on the project (Compute Engine's and Cloud SQL's tag bindings and
   `cloudsql.instances.get`), `run.routes.invoke` on each router's controller and
   `resourcemanager.tagValueBindings.create` on the tag value `<project>/dormeto/managed`. A missing one is listed
-  in the reason with `dormeto gcp connect --project <host> --profile <profile> --env <env>`, which grants it; the onboarding of a
+  in the reason with `dormeto gcp connect --project <host> --profile <profile> --env <env>`, which grants it. A refusal of
+  the command account's token itself (Google's STS or IAM Credentials API: the federation or the account's grant) says
+  that the manager can't act as the command account, with the same command, rather than listing every permission. The onboarding of a
   candidate of that project is refused with 409 and the same command. A Google failure that is no refusal keeps the last verdict.
 - **A router installed later**, in a project the command account does not reach yet, is reached after
   `dormeto gcp connect` is run again; `dormeto gcp install` changes nothing about the manager. Until then, a call to that
