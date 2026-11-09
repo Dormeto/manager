@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./description": "./src/description.ts",
-    "./energy": "./src/energy.ts"
+    "./energy": "./src/energy.ts",
+    "./clouds": "./src/clouds.ts"
   },
   "scripts": {
     "test": "vitest run",

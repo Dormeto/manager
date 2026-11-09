@@ -74,6 +74,16 @@ describe('discovery routes', () => {
     }
   });
 
+  it('takes a Google Cloud project and its regions, global included, as the candidates\' scope; each region is checked against its account\'s cloud', async () => {
+    const { api } = setup([candidate('g1', { account: 'dormeto-dev', region: 'global', status: 'ineligible' })]);
+    const page = async (q: Record<string, string>) => api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, q));
+    const listed = json(await page({ status: 'ineligible', account: 'dormeto-dev', region: 'global' })).candidates;
+    expect(listed.map((c: Candidate & { cloud: string }) => [c.id, c.cloud])).toEqual([['g1', 'gcp']]);
+    for (const q of [{ account: 'dormeto-dev', region: 'eu-west-3' }, { account: '121014831971', region: 'europe-west1' }, { account: '121014831971', region: 'global' }, { account: '12345' }] as Record<string, string>[]) {
+      expect((await page({ status: 'ineligible', ...q })).statusCode, JSON.stringify(q)).toBe(400);
+    }
+  });
+
   it('hides the candidates the caller may not see', async () => {
     const { api } = setup([candidate('r1'), candidate('r3', { region: 'eu-west-3' })], { visible: (_identity, item) => item.region !== 'eu-west-3' });
     const body = json(await api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, { status: 'pending-onboarding' })));

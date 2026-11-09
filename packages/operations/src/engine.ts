@@ -1,6 +1,7 @@
 // Operations engine (vision docs/specs/2026-10-05-onboarding-design.md, R4b): an operation is a list of steps run one at a
 // time by the Step Functions workflow (`next` until done, waiting as asked), each step idempotent; `fail` releases what the
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
+import { isAccount, isRegion } from '@dormeto/fleet/clouds';
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
@@ -119,8 +120,6 @@ const PLANS: Record<WorkflowType, string[]> = {
   // Again, after the customer applied the manifest or switched a cluster to access entries.
   'cluster-access': ['find router', ...clusterSteps],
 };
-const ACCOUNT_ID = /^\d{12}$/;
-const REGION_NAME = /^[a-z]{2}(-[a-z]+)+-\d$/;
 // Router calls per step of an exclusion: the step runs again until every workload is done.
 const EXCLUSION_BATCH = 25;
 const EXCLUDED = 'excluded: ';
@@ -296,9 +295,9 @@ export function createEngine(deps: EngineDeps) {
     }
     if (type === 'connect-account' || type === 'disconnect-account') {
       const account = String(input.account);
-      if (!ACCOUNT_ID.test(account)) throw new Error(`bad account: ${input.account}`);
+      if (!isAccount(account)) throw new Error(`bad account: ${input.account}`);
       const regions = input.regions;
-      if (!Array.isArray(regions) || !regions.every((r) => typeof r === 'string' && REGION_NAME.test(r))) throw new Error(`bad regions: ${JSON.stringify(regions)}`);
+      if (!Array.isArray(regions) || !regions.every((r) => typeof r === 'string' && isRegion('aws', r))) throw new Error(`bad regions: ${JSON.stringify(regions)}`);
       return { target: { account }, activeKey: `ACCT#${account}` };
     }
     const account = String(input.account);

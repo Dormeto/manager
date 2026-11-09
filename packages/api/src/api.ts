@@ -6,6 +6,7 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
+import { cloudOf, isAccount, isCandidateRegion, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
@@ -332,7 +333,6 @@ function totalsWithin(phases: { state: string; from: string; to: string }[], fro
 const REASON_MAX = 256;
 // Pause until and exclusion expiry: at most this far ahead.
 const AHEAD_MAX_MS = 366 * DAY_MS;
-const ACCOUNT = /^\d{12}$/;
 // Candidates per page of the Discovery view: 50 by default, at most 200 (scale design §5).
 const CANDIDATES_PAGE = 50;
 // Accounts not ready per page of the Organization access panel.
@@ -395,7 +395,8 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
   if (/[\u0000-\u001f\u007f]/.test(name)) throw new HttpError(400, 'bad_request', 'name: no control characters');
   return name || undefined;
 }
-const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
+// The cloud of an account (the AWS account or the Google Cloud project) as an answer's field.
+const cloudField = (account: string | undefined) => { const cloud = account ? cloudOf(account) : null; return cloud ? { cloud } : {}; };
 
 
 // What a failed wake does (R7a), checked before the operation starts (the router checks it again at its preview).
@@ -1027,13 +1028,13 @@ export function createApi({
       if (summary) {
         rows.push(...workloads.filter((w) => w.account === summary.account && w.region === summary.region)
           .sort((a, b) => a.workloadId.localeCompare(b.workloadId))
-          .map(({ account: _a, router: _r, checkedAt: _c, stateAt: _s, ...w }) => ({ ...w, router: router.name, account: summary.account })));
+          .map(({ account: _a, router: _r, checkedAt: _c, stateAt: _s, ...w }) => ({ ...w, router: router.name, account: summary.account, ...cloudField(summary.account) })));
         continue;
       }
       const result = called[silent.indexOf(router)]!;
       if (result.status === 'fulfilled') {
         const account = accountOfRouter(router);
-        rows.push(...((result.value as { workloads?: Record<string, unknown>[] }).workloads ?? []).map((w) => ({ router: router.name, ...(account ? { account } : {}), region: router.region, ...w })));
+        rows.push(...((result.value as { workloads?: Record<string, unknown>[] }).workloads ?? []).map((w) => ({ router: router.name, ...(account ? { account } : {}), ...cloudField(account), region: router.region, ...w })));
       } else errors.push({ router: router.name, message: (result.reason as Error).message });
     }
     // The routers' rows as well (the Overview): from their summaries, or from the list answer of those that do not report.
@@ -1172,7 +1173,7 @@ export function createApi({
   }
 
   const where = (router: Router) => ({
-    name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), ...(router.source ? { source: router.source } : {}),
+    name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), cloud: router.cloud ?? cloudOf(accountOfRouter(router)) ?? 'aws', ...(router.source ? { source: router.source } : {}),
     ...(router.clusters ? { clusters: router.clusters } : {}),
   });
 
@@ -1720,7 +1721,7 @@ export function createApi({
         return reply(200, {
           ...description,
           // Its account and region: the ARNs of its backends and targets.
-          ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
+          ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), ...cloudField(accountOfRouter(router)), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
         });
       }
@@ -2106,8 +2107,9 @@ export function createApi({
       const q = event.queryStringParameters ?? {};
       const status = q.status as Status;
       if (!CANDIDATE_STATUSES.includes(status)) throw new HttpError(400, 'bad_request', `status must be one of ${CANDIDATE_STATUSES.join(', ')}`);
-      if ((q.account && !ACCOUNT.test(q.account)) || (q.region && (!q.account || !REGION.test(q.region)))) {
-        throw new HttpError(400, 'bad_request', 'account must be 12 digits; a region needs its account');
+      const cloud = q.account ? cloudOf(q.account) : null;
+      if ((q.account && !cloud) || (q.region && (!cloud || !isCandidateRegion(cloud, q.region)))) {
+        throw new HttpError(400, 'bad_request', 'account must be 12 digits or a project ID, with a region of its cloud; a region needs its account');
       }
       const limit = q.limit === undefined ? CANDIDATES_PAGE : Number(q.limit);
       if (!Number.isInteger(limit) || limit < 1) throw new HttpError(400, 'bad_request', 'limit must be a positive integer');
@@ -2126,7 +2128,7 @@ export function createApi({
           && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
         return op ? { operation: { id: op.id, type: op.type } } : {};
       };
-      return reply(200, { candidates: await Promise.all(shown.map(async (c) => ({ ...(await withWorkload(c)), ...operationOf(c) }))), cursor: page.cursor });
+      return reply(200, { candidates: await Promise.all(shown.map(async (c) => ({ ...(await withWorkload(c)), ...cloudField(c.account), ...operationOf(c) }))), cursor: page.cursor });
     }
     if (method === 'POST' && sub === 'run') {
       need(identity, 'operator');
@@ -2190,7 +2192,7 @@ export function createApi({
     if (!target || !EXCLUSION_KINDS.includes(kind)) throw new HttpError(400, 'bad_request', `target.kind must be ${EXCLUSION_KINDS.join(', ')}`);
     if (kind === 'account') {
       const account = String(target.account ?? '');
-      if (!ACCOUNT.test(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID');
+      if (!isAccount(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID');
       return { kind, account, name: inventoryName(account) };
     }
     const arn = String(target.arn ?? '');
@@ -2395,7 +2397,7 @@ export function createApi({
     } else if (type === 'install-router') {
       const account = String(body.account ?? '');
       const region = String(body.region ?? '');
-      if (!ACCOUNT.test(account) || !REGION.test(region)) throw new HttpError(400, 'bad_request', 'account (12 digits) and region required');
+      if (!isAccount(account) || !isRegion('aws', region)) throw new HttpError(400, 'bad_request', 'account (12 digits) and region required');
       if (!sees(identity, account, region)) throw new HttpError(404, 'not_found', `unknown account or region: ${account}/${region}`);
       await needCommandRole(account);
       input = { account, region };

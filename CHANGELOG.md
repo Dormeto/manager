@@ -5,6 +5,13 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+One model for both clouds: an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
+and a region is checked against its account's cloud (`@dormeto/fleet/clouds`). The manager accepts a Google Cloud router's
+rows and events (a backend service instead of a target group, VM names in `hibernated`), names its router
+`dmtr-<project>-<region>`, and reads a `*/N * * * *` check schedule. An AWS router behaves as before.
+
 ## 0.22.0 — 2026-11-05
 
 Router 0.37.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

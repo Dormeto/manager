@@ -2,6 +2,7 @@
 // minute over the last 14 days replayed against idle windows with the router's rules, each window's asleep time priced
 // as the savings of R9, and the window at the knee recommended. Every request counts, as activity and as a wake (the
 // waker's filters are not known per minute: the advice says when the replay counts clearly more wakes than happened).
+import { fiveFieldMinutes } from './clouds.js';
 import { savingsOf, type Baseline } from './savings.js';
 import type { StoppedItem } from './prices.js';
 
@@ -54,8 +55,10 @@ export function windowsFor(current: number): number[] {
 }
 
 // A router's check period from its schedule: rate(n minutes), rate(n hours) or cron(0/n * * * ? *) (routers 0.31.0),
-// 5 minutes otherwise.
+// a Google Cloud router's */n * * * * (routers 0.40.0), 5 minutes otherwise.
 export function checkMinutesOf(schedule: string | null): number {
+  const five = fiveFieldMinutes(schedule);
+  if (five) return five;
   const cron = /^cron\(0\/(\d+) \* \* \* \? \*\)$/.exec(schedule ?? '');
   if (cron) return Number(cron[1]);
   const rate = /rate\((\d+) (minute|minutes|hour|hours)\)/.exec(schedule ?? '');

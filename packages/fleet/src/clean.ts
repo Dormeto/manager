@@ -2,6 +2,8 @@
 // only the known fields are kept, each of its type and size, and a time ahead of the manager's clock is refused: a newer
 // state always wins, so one event dated in the future would pin a summary for good.
 
+import { cloudOf, isRegion, type Cloud } from './clouds.js';
+
 // Clock difference accepted between a router and the manager.
 export const SKEW_MS = 5 * 60_000;
 // Chunks of one check, 64 KB each: about 50,000 workloads, far more than one router has.
@@ -26,7 +28,11 @@ const numbers = (v: unknown, keys?: Set<string>) => (isObject(v)
 
 export const stateOf = (v: unknown) => (typeof v === 'string' && STATES.has(v) ? v : null);
 export const workloadIdOf = (v: unknown) => (typeof v === 'string' && WORKLOAD_ID.test(v) ? v : null);
-export const regionOf = (v: unknown) => (typeof v === 'string' && /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/.test(v) ? v : null);
+// A region of the account's cloud (either cloud's when the account is neither).
+export const regionOf = (v: unknown, account?: string) => {
+  const cloud = account ? cloudOf(account) : null;
+  return (cloud ? isRegion(cloud, v) : isRegion('aws', v) || isRegion('gcp', v)) ? (v as string) : null;
+};
 // Workloads of one chunk: 64 KB hold far fewer.
 export const CHUNK_WORKLOADS_MAX = 1000;
 
@@ -84,6 +90,8 @@ export function failureOf(v: unknown, fallbackAt?: string | null): Failure | und
 
 // The fallback instance types its instances run on (routers 0.25.0, R7a): well-formed ones, at most 20.
 const INSTANCE_ID = /^i-[0-9a-f]{8,17}$/;
+// A Google Cloud VM's name.
+const VM_NAME = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\.[a-z0-9]+$/;
 export interface Fallback { instance: string; from: string; to: string }
 const fallbacksOf = (v: unknown): Fallback[] | undefined => (Array.isArray(v)
@@ -119,15 +127,16 @@ function stoppedItemOf(v: unknown): Json | null {
 export const stoppedOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(stoppedItemOf).filter((i): i is Json => i !== null) : undefined);
 
 // The instances a nap hibernated (routers 0.32.0): well-formed ids, at most 50; nothing when none is valid.
-export function hibernatedOf(v: unknown): string[] | undefined {
+export function hibernatedOf(v: unknown, cloud: Cloud | null = 'aws'): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
-  const ids = v.filter((i): i is string => typeof i === 'string' && INSTANCE_ID.test(i)).slice(0, 50);
+  const valid = cloud === 'gcp' ? VM_NAME : INSTANCE_ID;
+  const ids = v.filter((i): i is string => typeof i === 'string' && valid.test(i)).slice(0, 50);
   return ids.length ? ids : undefined;
 }
 
 // What a state change event says of its transition, for the history (R8): what started it, its wake, the wake's
 // duration, the failure, who asked it from the manager.
-export function transitionOf(d: Json, at: string) {
+export function transitionOf(d: Json, at: string, cloud: Cloud | null = 'aws') {
   return defined({
     from: stateOf(d.from),
     cause: text(d.cause, 64),
@@ -136,19 +145,31 @@ export function transitionOf(d: Json, at: string) {
     failure: failureOf(d.failure, at),
     by: text(d.by, 320),
     stopped: stoppedOf(d.stopped),
-    hibernated: hibernatedOf(d.hibernated),
+    hibernated: hibernatedOf(d.hibernated, cloud),
   });
 }
 
+// A Google Cloud resource path or name.
+const RESOURCE = /^[A-Za-z0-9][A-Za-z0-9_./-]{0,511}$/;
+const resourceOf = (v: unknown) => (typeof v === 'string' && RESOURCE.test(v) ? v : undefined);
+const lbOf = (v: unknown) => (isObject(v) && typeof v.kind === 'string' && /^[a-z][a-z-]{0,31}$/.test(v.kind)
+  ? defined({ kind: v.kind, region: isRegion('gcp', v.region) ? v.region : undefined })
+  : undefined);
+
 // A workload of a check, or null when it has no valid id.
-export function workloadOf(w: unknown): Json | null {
+export function workloadOf(w: unknown, cloud: Cloud | null = 'aws'): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
   return defined({
     workloadId: w.workloadId,
     name: text(w.name, 64),
-    targetGroupArn: typeof w.targetGroupArn === 'string' && w.targetGroupArn.startsWith('arn:') ? w.targetGroupArn.slice(0, 512) : undefined,
+    targetGroupArn: cloud !== 'gcp' && typeof w.targetGroupArn === 'string' && w.targetGroupArn.startsWith('arn:') ? w.targetGroupArn.slice(0, 512) : undefined,
+    // A Google Cloud row (routers 0.40.0): its backend services, URL map and load balancer, as resource paths and names.
+    backendService: cloud === 'gcp' ? resourceOf(w.backendService) : undefined,
+    wakerBackendService: cloud === 'gcp' ? resourceOf(w.wakerBackendService) : undefined,
+    urlMap: cloud === 'gcp' ? resourceOf(w.urlMap) : undefined,
+    lb: cloud === 'gcp' ? lbOf(w.lb) : undefined,
     tags: tagsOf(w.tags),
-    source: w.source === 'manager' ? 'manager' : 'terraform',
+    source: w.source === 'manager' || w.source === 'cli' ? w.source : 'terraform',
     state: typeof w.state === 'string' && STATES.has(w.state) ? w.state : 'UNKNOWN',
     url: typeof w.url === 'string' && URL.test(w.url) ? w.url : null,
     wakeMode: text(w.wakeMode, 16),

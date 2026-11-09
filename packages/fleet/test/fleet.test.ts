@@ -176,6 +176,31 @@ describe('fleet', () => {
     expect((await s.store.listWorkloads()).find((w) => w.workloadId === 'p')!.state).toBe('NAPPING');
   });
 
+  it('ingests a Google Cloud router\'s row and event under its project: a backend service instead of a target group, VM names in hibernated', async () => {
+    const s = setup();
+    const gcp = 'dormeto-dev';
+    const row = {
+      workloadId: 'web', name: 'Web', state: 'ASLEEP', source: 'cli', url: 'https://web.example.com', hibernated: true,
+      backendService: 'projects/dormeto-dev/regions/europe-west2/backendServices/web', wakerBackendService: 'projects/dormeto-dev/regions/europe-west2/backendServices/web-waker',
+      urlMap: 'projects/dormeto-dev/regions/europe-west2/urlMaps/lb', lb: { kind: 'regional', region: 'europe-west2' },
+    };
+    await s.ingest({ account: gcp, region: 'europe-west2', 'detail-type': 'Router checked', detail: { ...checked(T1, []).detail, router: { name: 'dmtr-europe-west2', version: '0.40.0', build: 'abc', checkSchedule: '*/5 * * * *', region: 'europe-west2' }, workloads: [row] } });
+    await s.ingest({ account: gcp, region: 'europe-west2', 'detail-type': 'Workload state changed', detail: { router: 'dmtr-dormeto-dev-europe-west2', region: 'europe-west2', workloadId: 'web', from: 'AWAKE', to: 'ASLEEP', at: at(T1, 10), hibernated: ['web-1', 'Bad_Name'] } });
+    const [router] = await s.store.listRouters();
+    expect([router!.account, router!.region, router!.checkSchedule]).toEqual([gcp, 'europe-west2', '*/5 * * * *']);
+    const [w] = await s.store.listWorkloads();
+    expect([w!.account, w!.region, w!.workloadId, w!.source, w!.backendService, w!.wakerBackendService, w!.urlMap, w!.lb, w!.targetGroupArn]).toEqual([gcp, 'europe-west2', 'web', 'cli', row.backendService, row.wakerBackendService, row.urlMap, row.lb, undefined]);
+    expect((await s.store.getWorkload(gcp, 'europe-west2', 'web'))!.state).toBe('ASLEEP');
+    expect((await s.store.listHistory(gcp, 'europe-west2', 'web', T1, at(T1, 60))).entries.map((e: any) => e.hibernated).filter(Boolean)).toEqual([['web-1']]);
+  });
+
+  it('keeps an AWS row as it was: its target group, its source, and no Google Cloud field', async () => {
+    const s = setup();
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { source: 'manager', backendService: 'projects/p/x', lb: { kind: 'regional' } })]));
+    const [w] = await s.store.listWorkloads();
+    expect([w!.targetGroupArn, w!.source, w!.backendService, w!.lb]).toEqual(['arn:tg/a', 'manager', undefined, undefined]);
+  });
+
   it('refuses a check or a state change dated ahead of the manager\'s clock, or not dated: one event never pins a summary', async () => {
     const s = setup();
     // Any principal of the organization may publish: a check dated in 2099 would win over every later one.

@@ -52,13 +52,13 @@ describe('routers', () => {
     const { api } = setup();
     const { routers } = json(await api(event('GET', '/api/routers')));
     expect(routers[0]).toEqual({
-      name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', source: 'terraform', version: '0.16.0', build: 'abc', workloads: 4,
+      name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', cloud: 'aws', source: 'terraform', version: '0.16.0', build: 'abc', workloads: 4,
       checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-05T11:58:00.000Z',
       health: { status: 'warning', problems: [{ level: 'warning', text: 'controller: 5 errors in 24 hours' }] },
       pauses: ROUTER_INFO.pauses, workloadStates: { AWAKE: 1, ASLEEP: 3 }, paused: 4, lastActivityAt: '2026-10-05T11:30:00.000Z', reporting: false,
     });
     expect(routers[1]).toEqual({
-      name: 'dmt-old', region: 'eu-west-3', account: '121014831971', source: 'terraform', version: '0.15.0', build: 'old', workloads: 2,
+      name: 'dmt-old', region: 'eu-west-3', account: '121014831971', cloud: 'aws', source: 'terraform', version: '0.15.0', build: 'old', workloads: 2,
       checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-05T11:58:00.000Z', reporting: false,
     });
   });
@@ -66,7 +66,7 @@ describe('routers', () => {
   it('reports an unreachable router apart', async () => {
     const { api } = setup({ router: () => { throw new RouterError('throttled'); } });
     const { routers } = json(await api(event('GET', '/api/routers')));
-    expect(routers[0]).toEqual({ name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', source: 'terraform', error: 'throttled', reporting: false });
+    expect(routers[0]).toEqual({ name: 'dmt-dev', region: 'eu-west-1', account: '121014831971', cloud: 'aws', source: 'terraform', error: 'throttled', reporting: false });
   });
 
   it('gives the details of one router: configuration and health figures', async () => {
@@ -94,6 +94,22 @@ describe('the router\'s clusters (R10.5)', () => {
     const clusters = [{ name: 'eks-demo', reachable: true, allowed: true, missing: [], checkedAt: '2026-10-05T11:00:00.000Z' }];
     const [router] = fleetRouters([], [{ name: 'dmtr-dev', account: '121014831971', region: 'eu-west-1', controller: 'c', onboarder: 'o', version: '0.29.0', build: 'b', installedBy: 'a', installedAt: 'x', clusters }], '121014831971');
     expect(router!.clusters).toEqual(clusters);
+  });
+});
+
+describe('routers of both clouds', () => {
+  const base = { account: 'dormeto-dev', region: 'europe-west2', controller: 'https://dmtr-europe-west2-abc-ew.a.run.app', onboarder: '', version: '0.40.0', build: 'b', installedBy: 'cli', installedAt: 'x' };
+
+  it('names a Google Cloud router dmtr-<project>-<region>, from the CLI, with its cloud; an AWS router keeps its name', () => {
+    const routers = fleetRouters([], [{ ...base, name: 'dmtr-europe-west2', cloud: 'gcp' }, { name: 'dmtr-dev', account: '038606077307', region: 'eu-west-1', controller: 'c', onboarder: 'o', version: '0.39.0', build: 'b', installedBy: 'a', installedAt: 'x' }], '121014831971');
+    expect(routers.map((r) => [r.name, r.account, r.region, r.cloud, r.source])).toEqual([
+      ['dmtr-dormeto-dev-europe-west2', 'dormeto-dev', 'europe-west2', 'gcp', 'cli'],
+      ['dmtr-dev-038606077307-eu-west-1', '038606077307', 'eu-west-1', 'aws', 'manager'],
+    ]);
+  });
+
+  it('marks a Terraform router AWS', () => {
+    expect(fleetRouters([{ name: 'dmt-dev', region: 'eu-west-1', controller: 'c' }], [], '121014831971').map((r) => [r.name, r.cloud, r.source])).toEqual([['dmt-dev', 'aws', 'terraform']]);
   });
 });
 

@@ -2,6 +2,7 @@
 // identifies the router's account; its region is the router's own, in the event (the envelope carries the bus's region
 // when a router publishes from another region), so a router can only speak for regions of its own account. Events can
 // arrive late, twice or out of order: a newer state always wins. What they carry is checked first (clean.ts).
+import { cloudOf } from './clouds.js';
 import { CHUNK_WORKLOADS_MAX, SKEW_MS, chunkOf, failureOf, hibernatedOf, regionOf, routerOf, stateOf, timely, transitionOf, workloadIdOf, workloadOf, type Failure } from './clean.js';
 import type { FailureEntry, FleetStore, HistoryEntry, RouterSummary, WorkloadSummary } from './store.js';
 
@@ -43,11 +44,11 @@ export function createIngest({ store, now = Date.now, log }: {
     const chunk = chunkOf(d.chunk);
     const own = routerOf(d);
     if (!checkedAt || !chunk || !own.name) return refuse(event, !checkedAt ? `check time ${String(d.checkedAt).slice(0, 40)}` : !chunk ? 'chunk' : 'router name');
-    const region = regionOf(d.router?.region) ?? envelope;
+    const region = regionOf(d.router?.region, account) ?? envelope;
     const current = await store.getRouter(account, region);
     if (current && current.summary.check.checkedAt > checkedAt) return;
     const listed: unknown[] = Array.isArray(d.workloads) ? d.workloads.slice(0, CHUNK_WORKLOADS_MAX) : [];
-    const workloads = listed.map(workloadOf).filter((w): w is Record<string, unknown> => w !== null);
+    const workloads = listed.map((w) => workloadOf(w, cloudOf(account))).filter((w): w is Record<string, unknown> => w !== null);
     await eachAtOnce(workloads, WRITES, (w) => writeRow(account, region, own.name, w, checkedAt));
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const stored = attempt === 0 ? current : await store.getRouter(account, region);
@@ -112,9 +113,9 @@ export function createIngest({ store, now = Date.now, log }: {
     const d = detail ?? {};
     const when = timely(d.at, now());
     const own = routerOf(d);
-    const w = workloadOf(d.workload);
+    const w = workloadOf(d.workload, cloudOf(account));
     if (!when || !own.name || !w) return refuse(event, !when ? `listing time ${String(d.at).slice(0, 40)}` : !own.name ? 'router name' : 'workload');
-    await writeRow(account, regionOf(d.router?.region) ?? envelope, own.name, w, when);
+    await writeRow(account, regionOf(d.router?.region, account) ?? envelope, own.name, w, when);
   }
 
   // A state change, at once; ignored when the workload already shows a newer state (a later change or check).
@@ -126,13 +127,13 @@ export function createIngest({ store, now = Date.now, log }: {
     const to = stateOf(d.to);
     const router = typeof d.router === 'string' ? d.router.slice(0, 64) : null;
     if (!at || !workloadId || !to || !router) return refuse(event, !at ? `change time ${String(d.at).slice(0, 40)}` : 'workload, state or router');
-    const region = regionOf(d.region) ?? envelope;
+    const region = regionOf(d.region, account) ?? envelope;
     // The history keeps every transition, also one older than the summary (R8).
-    await store.putHistory({ account, region, router, workloadId, to, at, ...transitionOf(d, at), from: stateOf(d.from) } as HistoryEntry);
+    await store.putHistory({ account, region, router, workloadId, to, at, ...transitionOf(d, at, cloudOf(account)), from: stateOf(d.from) } as HistoryEntry);
     // A workload known before its history (R8) starts it with what the manager knew: its stored state, since then.
     let known: WorkloadSummary | null = null;
     // `hibernated` follows the state (routers 0.32.0): only while asleep after a nap that hibernated instances.
-    const asleepHibernated = to === 'ASLEEP' && hibernatedOf(d.hibernated) !== undefined;
+    const asleepHibernated = to === 'ASLEEP' && hibernatedOf(d.hibernated, cloudOf(account)) !== undefined;
     await versioned(account, region, workloadId, (existing) => {
       known = existing && !existing.historySince && existing.state ? existing : null;
       if ((existing?.stateAt ?? '') >= at || (existing?.checkedAt ?? '') > at) return (known = null);

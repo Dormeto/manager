@@ -1,4 +1,5 @@
 // Perimeter configuration: default and validation (spec section 4.4). Every error is listed at once, with its path.
+import { isAccount, isRegion } from '@dormeto/fleet/clouds';
 import { BACKEND_KINDS, type Criterion, type DiscoveryConfig, type Filter } from './types.js';
 
 // A new installation scans nothing until an administrator adds a filter.
@@ -17,10 +18,7 @@ export const defaultConfig = (mode?: string): DiscoveryConfig => ({ ...DEFAULT_C
 const MAX_FILTERS = 50;
 const MAX_CRITERIA = 100;
 const MAX_PATTERN = 256;
-const ACCOUNT_ID = /^\d{12}$/;
 const OU_ID = /^(ou-[0-9a-z]{4,32}-[0-9a-z]{8,32}|r-[0-9a-z]{4,32})$/;
-// Pattern rather than a list: a region launched later must not need an engine upgrade.
-const REGION = /^[a-z]{2}(-[a-z]+)+-\d{1,2}$/;
 const DIMENSIONS = ['accountIds', 'ouIds', 'accountTags', 'regions', 'loadBalancers', 'hosts', 'resourceTags', 'backendKinds'] as const;
 type Dimension = (typeof DIMENSIONS)[number];
 
@@ -81,10 +79,10 @@ function criterion(value: unknown, path: string, errors: string[]): Criterion | 
     else out.note = value.note;
   }
   const present = (d: Dimension) => value[d] !== undefined;
-  if (present('accountIds')) out.accountIds = strings(value.accountIds, `${path}.accountIds`, errors, (s) => (ACCOUNT_ID.test(s) ? null : `"${s}" is not a 12-digit account ID`)) ?? undefined;
+  if (present('accountIds')) out.accountIds = strings(value.accountIds, `${path}.accountIds`, errors, (s) => (isAccount(s) ? null : `"${s}" is not a 12-digit account ID`)) ?? undefined;
   if (present('ouIds')) out.ouIds = strings(value.ouIds, `${path}.ouIds`, errors, (s) => (OU_ID.test(s) ? null : `"${s}" is not an OU or root ID`)) ?? undefined;
   if (present('accountTags')) out.accountTags = tags(value.accountTags, `${path}.accountTags`, errors) ?? undefined;
-  if (present('regions')) out.regions = strings(value.regions, `${path}.regions`, errors, (s) => (REGION.test(s) ? null : `"${s}" is not a region name`)) ?? undefined;
+  if (present('regions')) out.regions = strings(value.regions, `${path}.regions`, errors, (s) => (isRegion('aws', s) ? null : `"${s}" is not a region name`)) ?? undefined;
   if (present('loadBalancers')) out.loadBalancers = strings(value.loadBalancers, `${path}.loadBalancers`, errors, pattern) ?? undefined;
   if (present('hosts')) out.hosts = strings(value.hosts, `${path}.hosts`, errors, pattern) ?? undefined;
   if (present('resourceTags')) out.resourceTags = tags(value.resourceTags, `${path}.resourceTags`, errors) ?? undefined;
@@ -115,7 +113,7 @@ export function validateConfig(input: unknown): { config: DiscoveryConfig | null
   if (input.mode !== 'organization' && input.mode !== 'account') errors.push('mode: must be "organization" or "account"');
   let regions: string[] = [];
   if (Array.isArray(input.regions) && input.regions.length === 1 && input.regions[0] === '*') regions = ['*'];
-  else regions = strings(input.regions, 'regions', errors, (s) => (REGION.test(s) ? null : `"${s}" is not a region name`)) ?? [];
+  else regions = strings(input.regions, 'regions', errors, (s) => (isRegion('aws', s) ? null : `"${s}" is not a region name`)) ?? [];
   const refreshHours = input.refreshHours;
   if (typeof refreshHours !== 'number' || !Number.isInteger(refreshHours) || refreshHours < 1 || refreshHours > 168) {
     errors.push('refreshHours: must be an integer from 1 to 168');
@@ -151,7 +149,7 @@ export function validateConfig(input: unknown): { config: DiscoveryConfig | null
     if (!isObject(e)) errors.push('eventRefresh: must be an object');
     else {
       if (typeof e.enabled !== 'boolean') errors.push('eventRefresh.enabled: must be true or false');
-      const accounts = e.accounts === undefined ? undefined : strings(e.accounts, 'eventRefresh.accounts', errors, (s) => (ACCOUNT_ID.test(s) ? null : `"${s}" is not an account id`));
+      const accounts = e.accounts === undefined ? undefined : strings(e.accounts, 'eventRefresh.accounts', errors, (s) => (isAccount(s) ? null : `"${s}" is not an account id`));
       eventRefresh = { enabled: e.enabled === true, ...(accounts ? { accounts } : {}) };
     }
   }

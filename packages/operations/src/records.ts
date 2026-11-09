@@ -44,6 +44,7 @@ export interface InstalledRouter {
   version: string;
   build: string;
   installedBy: string;
+  cloud?: 'gcp'; // a Google Cloud router (Google Cloud design §3): `account` is its project, `controller` its URL, `onboarder` empty
   installedAt: string;
   uninstalling?: boolean; // an uninstall runs: no new onboarding
   // The EKS clusters of its account and region, as its last check found them (R10.5: the router's view).

@@ -43,6 +43,11 @@ export interface WorkloadSummary {
   name?: string;
   state?: string;
   targetGroupArn?: string;
+  source?: 'cli' | 'manager' | 'terraform';
+  backendService?: string; // a Google Cloud workload's backend services, URL map and load balancer (routers 0.40.0)
+  wakerBackendService?: string;
+  urlMap?: string;
+  lb?: { kind: string; region?: string };
   checkedAt?: string; // the check that wrote it
   stateAt?: string; // when its state began: the last state change applied, or the router's (0.26.0)
   historySince?: string; // the time of its first history entry (R8)
