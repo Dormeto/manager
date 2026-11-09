@@ -343,6 +343,27 @@ describe('watchdog: failed wakes (R7b)', () => {
     extraObservations: async () => workloadObservations(entries() as never, NOW),
   });
 
+  it('advises a Google Cloud workload\'s failed wake in Google Cloud\'s words for each kind; an AWS one\'s advice stays AWS\'s', () => {
+    const hint = (kind: string, over: Record<string, unknown> = {}) => workloadObservations([entry(kind, over)] as never, NOW)[0]!.problems[0]!.hint!;
+    const google = (kind: string) => hint(kind, {
+      account: 'acme-prod', region: 'europe-west1', router: 'dmtr-acme-prod-europe-west1',
+      failure: { kind, step: 'wake', backend: 'projects/acme-prod/zones/europe-west1-b/instances/web-1', message: 'ZONE_RESOURCE_POOL_EXHAUSTED', at: iso(NOW - 2 * MIN) },
+    });
+    expect(google('capacity')).toContain('Compute Engine had no capacity for it in its zone');
+    expect(google('capacity')).toContain('Fallback machine types');
+    expect(google('quota')).toContain('A Compute Engine quota of the project and region was reached');
+    expect(google('permission')).toContain('the router\'s service account dmtr-europe-west1');
+    expect(google('permission')).toContain('dormeto gcp status --project acme-prod --region europe-west1');
+    expect(google('unhealthy')).toContain('the backend service\'s health check');
+    expect(google('unhealthy')).toContain('If its backends keep running without passing the health check, Dormeto stops them after its idle window.');
+    for (const kind of ['capacity', 'quota', 'permission', 'configuration', 'unhealthy', 'throttled', 'timeout', 'cluster', 'unknown']) {
+      expect(google(kind), kind).not.toMatch(/AWS|EC2|Auto Scaling|ECS|ELB|target|DmtRouterBoundary|Service Quotas|wake_timeout_seconds|launch template|subnet|task definition/);
+    }
+    expect(hint('capacity')).toContain('AWS had no capacity for it: Dormeto retried during the wake. Fallback instance types (EC2), a mixed instances policy or several subnets (Auto Scaling), or capacity providers (ECS) let it start elsewhere.');
+    expect(hint('permission')).toContain('A permission refused it: the router\'s role or DmtRouterBoundary (apply the access module of the manager\'s release again), or the key policy of an encrypted volume or snapshot.');
+    expect(hint('unhealthy')).toContain('If its backends keep running without a healthy target, Dormeto stops them after its idle window.');
+  });
+
   it('says that the next request retries it once the next attempt has passed, not a past time', () => {
     const [o] = workloadObservations([entry('unhealthy', { nextAttemptAt: iso(NOW - 10 * MIN) })] as never, NOW);
     expect(o!.problems[0]!.hint).toMatch(/^Backend: rds:shop-db\. The next request retries it \(1 failure in a row\)\./);

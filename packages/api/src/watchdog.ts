@@ -156,17 +156,31 @@ const ADVICE: Record<string, string> = {
   timeout: 'The start took longer than the wake timeout (wake_timeout_seconds), or the wake stopped.',
   unknown: "Dormeto does not know this error: the router's logs (WakeFailed) have it whole.",
 };
+// A Google Cloud workload's (its router dmtr-<region> of the project, a Cloud Run service): the same kinds, Google Cloud's causes.
+const gcpAdvice = (kind: string, project: string, region: string): string => ({
+  capacity: 'Compute Engine had no capacity for it in its zone: Dormeto retried during the wake. Fallback machine types (its VMs\'), or a regional managed instance group (several zones), let it start elsewhere.',
+  quota: 'A Compute Engine quota of the project and region was reached (its CPUs, or a machine family\'s): raise it on the Quotas page of the Google Cloud console.',
+  permission: `A permission refused it: the router's service account dmtr-${region} (dormeto gcp status --project ${project} --region ${region} compares its grants with its install record; dormeto gcp install again restores them), or a VM, group or Cloud SQL instance without the tag dormeto=managed.`,
+  configuration: 'Its configuration refused it: the VM, instance group, GKE workload or Cloud SQL instance named in the message.',
+  unhealthy: "Its backends started but the backend service's health check found none healthy: the health check and the application's logs.",
+  throttled: 'Google Cloud throttled the switch: the URL map kept changing, or too many requests at once in this project.',
+  timeout: 'The start took longer than the wake timeout (the wakeTimeoutSeconds setting), or the wake stopped.',
+  cluster: "The GKE cluster's API did not answer or failed: the cluster's state in the Google Cloud console, then the router's logs (WakeFailed).",
+}[kind] ?? "Dormeto does not know this error: the router's logs in Cloud Logging (WakeFailed) have it whole.");
 export function workloadObservations(entries: FailureIndexEntry[], now = Date.now()): Observation[] {
   return entries.map((e) => {
+    const cloud = cloudOf(e.account) ?? 'aws';
     const n = e.consecutiveFailures ?? 1;
     const inARow = `${n} failure${n === 1 ? '' : 's'} in a row`;
     const next = !e.nextAttemptAt ? 'A request retries it.'
       : Date.parse(e.nextAttemptAt) > now ? `A request retries it, next attempt after ${time(e.nextAttemptAt)} (${inARow}).`
         : `The next request retries it (${inARow}).`;
-    const hint = [`${e.failure.backend ? `Backend: ${e.failure.backend}. ` : ''}${next}`, ADVICE[e.failure.kind] ?? ADVICE.unknown,
-      'If its backends keep running without a healthy target, Dormeto stops them after its idle window.'].join('\n  ');
+    const hint = [`${e.failure.backend ? `Backend: ${e.failure.backend}. ` : ''}${next}`,
+      cloud === 'gcp' ? gcpAdvice(e.failure.kind, e.account, e.region) : ADVICE[e.failure.kind] ?? ADVICE.unknown,
+      cloud === 'gcp' ? 'If its backends keep running without passing the health check, Dormeto stops them after its idle window.'
+        : 'If its backends keep running without a healthy target, Dormeto stops them after its idle window.'].join('\n  ');
     return {
-      subject: { id: `workload#${e.account}#${e.region}#${e.workloadId}`, kind: 'workload' as const, name: e.name ?? e.workloadId, cloud: cloudOf(e.account) ?? 'aws', account: e.account, region: e.region, router: e.router, workloadId: e.workloadId, url: e.url ?? null },
+      subject: { id: `workload#${e.account}#${e.region}#${e.workloadId}`, kind: 'workload' as const, name: e.name ?? e.workloadId, cloud, account: e.account, region: e.region, router: e.router, workloadId: e.workloadId, url: e.url ?? null },
       problems: [{ code: `${e.failure.step === 'nap' ? 'nap' : 'wake'}-failed:${e.failure.kind}`, level: 'error' as const, text: `${e.failure.step === 'nap' ? 'nap' : 'wake'} failed: ${e.failure.message}`, hint }],
     };
   });
