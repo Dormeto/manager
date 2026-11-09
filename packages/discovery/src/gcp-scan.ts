@@ -277,8 +277,8 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
       aggregated<ForwardingRule>('forwardingRules'), aggregated<Manager>('instanceGroupManagers'), aggregated<Instance>('instances'),
     ]);
   } catch (err) {
-    // Compute Engine turned off: no load balancer to find.
-    if (err instanceof GoogleError && err.reason === 'SERVICE_DISABLED') return { rules: [], regions: [{ region: 'global', ok: true }] };
+    // Compute Engine turned off: no load balancer to find. Another API turned off (the token's, in the host project) is a failure.
+    if (err instanceof GoogleError && err.reason === 'SERVICE_DISABLED' && err.host === 'compute.googleapis.com') return { rules: [], regions: [{ region: 'global', ok: true }] };
     throw err;
   }
   const [maps, services, httpsProxies, httpProxies, forwardingRules, managers, instances] = lists;

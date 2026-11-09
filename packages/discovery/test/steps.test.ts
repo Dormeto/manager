@@ -365,6 +365,33 @@ describe('lint from the accounts of a run', () => {
         await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' });
         expect((await s.store.getAccountScan('dev-project'))!.access).toEqual({ ...first, checkedAt: new Date(T0 + HOUR).toISOString() });
       });
+      it('a SERVICE_DISABLED of another host (the token\'s IAM Credentials API) is no Compute Engine turned off: candidates stay, discovery is missing', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        let fail: Error | null = null;
+        const plan = await stepOf(s, google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), fail: () => fail }));
+        const before = (await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort();
+        expect(before.length).toBeGreaterThan(0);
+        fail = new GoogleError({ status: 403, reason: 'SERVICE_DISABLED', message: 'IAM Service Account Credentials API has not been used', host: 'iamcredentials.googleapis.com' });
+        s.advance(HOUR);
+        expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toMatchObject({ ok: false, written: 0 });
+        expect((await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort()).toEqual(before);
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ discovery: { ok: false, reason: expect.stringContaining(CONNECT) } });
+      });
+
+      it('a registry read that fails is no verdict: the last command verdict stands', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        const reason = `the command account c@x is missing run.routes.invoke on x: ${CONNECT}`;
+        s.deps.assumeCommand = async () => { throw Object.assign(new Error(reason), { name: 'AccessDenied' }); };
+        const g = google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')] });
+        const plan = await stepOf(s, g);
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ command: { ok: false, reason } });
+        s.deps.google = { ...g, env: 'dev', registry: { ...g.registry, list: async () => { throw new Error('dynamo throttled'); } } };
+        s.advance(HOUR);
+        await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' });
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ command: { ok: false, reason } });
+      });
     });
   });
 });

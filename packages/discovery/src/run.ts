@@ -387,7 +387,7 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
   let error: string | undefined;
   let cause: unknown;
   let connected: GoogleConnection | undefined;
-  let routers: InstalledRouter[] = [];
+  let routers: InstalledRouter[] | undefined; // undefined: the registry was not read
   try {
     const google = deps.google;
     // Read first: the step may be its execution environment's first use of the connection.
@@ -449,7 +449,7 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
 // access check function, ok without a router. A read that failed otherwise (a 5xx, a timeout), a check that does not answer
 // and a missing connection are no verdict: the last one stands, and a project with neither stays unchecked.
 async function projectAccess(deps: RunDeps, { account, at, state, connection, routers, scanned, cause }: {
-  account: string; at: string; state: AccountScan | null; connection: GoogleConnection | undefined; routers: InstalledRouter[]; scanned: boolean; cause: unknown;
+  account: string; at: string; state: AccountScan | null; connection: GoogleConnection | undefined; routers: InstalledRouter[] | undefined; scanned: boolean; cause: unknown;
 }): Promise<AccountScan['access'] | undefined> {
   const last = state?.access;
   if (!connection) return last;
@@ -457,7 +457,9 @@ async function projectAccess(deps: RunDeps, { account, at, state, connection, ro
   const refused = cause instanceof GoogleError && cause.status === 403;
   const discovery: AccessState | undefined = scanned ? { ok: true } : refused ? { ok: false, reason: `${errorText(cause)}: ${connect}` } : last?.discovery;
   let command: AccessState | undefined;
-  if (!routers.length) command = { ok: true };
+  // A registry that was not read says nothing of the routers: no verdict.
+  if (!routers) command = last?.command;
+  else if (!routers.length) command = { ok: true };
   else if (deps.assumeCommand) {
     const controllers = routers.map((r) => `projects/${account}/locations/${r.region}/services/dmtr-${r.region}-controller`);
     command = await deps.assumeCommand(account, { controllers }).then((): AccessState => ({ ok: true }), (err) => ((err as { unavailable?: boolean }).unavailable ? last?.command : { ok: false, reason: (err as Error).message }));
