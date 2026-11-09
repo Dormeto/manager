@@ -48,12 +48,38 @@ async function pages<T>(call: (token: string | undefined) => Promise<{ nextPageT
   return out;
 }
 
-async function listProjects(port: GooglePort): Promise<string[]> {
+// A project of the connection's scopes, in the shape of the inventory's accounts: `ouPath` its folders and organization
+// (`folders/<id>`, `organizations/<id>`), root first, the project itself left out; `tags` its labels.
+export interface GoogleProject { id: string; name: string; ouPath: string[]; tags: Record<string, string> }
+
+const ANCESTRY = (project: string) => `https://cloudresourcemanager.googleapis.com/v1/projects/${project}:getAncestry`;
+
+// The active projects of the connection's scopes: a project scope names its project, a folder or organization scope every
+// project with it in its ancestry (Cloud Resource Manager v1 getAncestry, ten at a time). A project at no scope is dropped.
+// Any failure fails the listing: the caller keeps what it had.
+export async function listProjects(port: GooglePort, connection: GoogleConnection): Promise<GoogleProject[]> {
   const found = await pages(
-    (token) => port.call<{ projects?: { projectId?: string }[]; nextPageToken?: string }>('GET', `${SEARCH}?${new URLSearchParams({ query: 'state:ACTIVE', pageSize: '500', ...(token ? { pageToken: token } : {}) })}`),
+    (token) => port.call<{ projects?: { projectId?: string; displayName?: string; labels?: Record<string, string> }[]; nextPageToken?: string }>('GET', `${SEARCH}?${new URLSearchParams({ query: 'state:ACTIVE', pageSize: '500', ...(token ? { pageToken: token } : {}) })}`),
     (page) => page.projects ?? [],
-  );
-  return (found as { projectId?: string }[]).map((p) => p.projectId).filter((id): id is string => isProject(id));
+  ) as { projectId?: string; displayName?: string; labels?: Record<string, string> }[];
+  const scopes = new Set(connection.scopes);
+  const onlyProjects = connection.scopes.every((s) => s.startsWith('projects/'));
+  const listed = found.filter((p): p is typeof p & { projectId: string } => isProject(p.projectId))
+    .filter((p) => !onlyProjects || scopes.has(`projects/${p.projectId}`));
+  const out: (GoogleProject | null)[] = new Array(listed.length).fill(null);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(PROJECTS_AT_ONCE, listed.length) }, async () => {
+    while (next < listed.length) {
+      const at = next++;
+      const p = listed[at]!;
+      const answer = await port.call<{ ancestor?: { resourceId?: { type?: string; id?: string } }[] }>('POST', ANCESTRY(p.projectId), {});
+      const ouPath = (answer.ancestor ?? []).flatMap((a) => (a.resourceId?.type === 'folder' || a.resourceId?.type === 'organization') && a.resourceId.id ? [`${a.resourceId.type === 'folder' ? 'folders' : 'organizations'}/${a.resourceId.id}`] : []).reverse();
+      // The answer runs from the project up to the root.
+      if (!scopes.has(`projects/${p.projectId}`) && !ouPath.some((x) => scopes.has(x))) continue;
+      out[at] = { id: p.projectId, name: p.displayName || p.projectId, ouPath, tags: p.labels ?? {} };
+    }
+  }));
+  return out.filter((p): p is GoogleProject => p !== null);
 }
 
 // The routers of one project; Cloud Run turned off means none.
@@ -78,11 +104,12 @@ async function routersOf(port: GooglePort, project: string): Promise<{ found: Fo
 }
 
 export async function discoverGoogleRouters(port: GooglePort, { now, log }: { now: () => number; log: { warn(event: string, data?: object): void } }): Promise<GoogleSummary | null> {
-  if (!(await port.connection())) return null;
+  const connection = await port.connection();
+  if (!connection) return null;
   const summary: GoogleSummary = { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [] };
   let projects: string[];
   try {
-    projects = await listProjects(port);
+    projects = (await listProjects(port, connection)).map((p) => p.id);
   } catch (err) {
     summary.errors.push({ project: '*', error: messageOf(err) });
     log.warn('GoogleProjectsFailed', { error: messageOf(err) });

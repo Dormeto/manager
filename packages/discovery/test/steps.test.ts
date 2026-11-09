@@ -4,6 +4,7 @@ import { lint, lintCounters, sumCounters } from '../src/lint.js';
 import { restatus } from '../src/lifecycle.js';
 import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount } from '../src/run.js';
 import { A, B, C, INVENTORY, config, filter, rule } from './fixtures.js';
+import type { GooglePort } from '../src/google.js';
 import { HOUR, setup } from './run-fakes.js';
 
 const AB = config({ filters: [filter('ab', [{ accountIds: [A.id, B.id] }])] });
@@ -163,5 +164,51 @@ describe('lint from the accounts of a run', () => {
     const perAccount = [A.id, C.id].map((id) => lintCounters(cfg, INVENTORY, rules.filter((r) => r.account === id)));
     expect(lint(cfg, INVENTORY, { counters: sumCounters(perAccount) })).toEqual(lint(cfg, INVENTORY, { rules }));
     expect(lint(cfg, INVENTORY, { rules }).map((f) => [f.code, f.include])).toEqual([['include-only-globally-excluded', 2], ['include-matches-nothing', 3]]);
+  });
+
+  describe('Google Cloud projects', () => {
+    const connection = { project: 'host-project', projectNumber: '1', pool: 'p', provider: 'aws', scopes: ['projects/dev-project'], serviceAccounts: { discovery: 'd@x', command: 'c@x' }, routers: [], googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'ops', cli: '0.14.0' };
+    const google = (search: () => unknown): GooglePort => ({
+      connection: async () => connection,
+      call: (async (_m: string, url: string) => (url.includes(':getAncestry') ? { ancestor: [] } : url.includes('projects:search') ? search() : { services: [] })) as GooglePort['call'],
+      registry: { list: async () => [], put: async () => {}, delete: async () => {} },
+    });
+    const both = config({ regions: ['eu-west-1', 'global'], filters: [filter('all', [{ accountIds: [A.id, 'dev-project'] }])] });
+
+    it('plans the AWS accounts and the previous projects again when projects.search fails, and records the error', async () => {
+      const s = setup({ cfg: both });
+      await s.ready;
+      let fail = false;
+      s.deps.google = google(() => { if (fail) throw new Error('quota exceeded'); return { projects: [{ projectId: 'dev-project', displayName: 'Dev', labels: { env: 'dev' } }] }; });
+      const first = await planRun(s.deps, { source: 'manual' });
+      expect(first.accounts).toEqual([A.id, 'dev-project']);
+      await finalizeRun(s.deps, first);
+      fail = true;
+      s.advance(HOUR);
+      const plan = await planRun(s.deps, { source: 'manual' });
+      expect(plan.accounts).toEqual([A.id, 'dev-project']);
+      expect(plan.googleErrors).toEqual([{ project: '*', error: 'quota exceeded' }]);
+      expect((await s.store.getInventory())!.accounts.find((a) => a.id === 'dev-project')).toMatchObject({ name: 'Dev', tags: { env: 'dev' } });
+      expect((await finalizeRun(s.deps, plan)).google!.errors).toEqual([{ project: '*', error: 'quota exceeded' }]);
+    });
+
+    it('selects a project by its labels as account tags', async () => {
+      const s = setup({ cfg: config({ regions: ['eu-west-1', 'global'], filters: [filter('dev', [{ accountTags: { env: ['dev'] } }])] }) });
+      await s.ready;
+      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project', labels: { env: 'dev' } }] }));
+      const plan = await planRun(s.deps, { source: 'manual' });
+      // B carries env=dev too: the AWS accounts follow the same criterion.
+      expect(plan.accounts).toEqual([B.id, 'dev-project']);
+    });
+
+    it('ends the account step of a project at once, without AWS, its candidates unchanged', async () => {
+      const s = setup({ cfg: both });
+      await s.ready;
+      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project' }] }));
+      const plan = await planRun(s.deps, { source: 'manual' });
+      expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toEqual({ account: 'dev-project', ok: true, written: 0 });
+      expect(s.assumed).toEqual([]);
+      expect((await s.store.getAccountScan('dev-project'))!.result).toMatchObject({ written: 0, skipped: [{ reason: "Google Cloud projects are scanned from plan 2's M13" }] });
+    });
   });
 });

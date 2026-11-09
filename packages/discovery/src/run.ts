@@ -4,7 +4,8 @@
 // Functions runs the account steps in a Distributed Map; runDiscovery runs the three in process.
 import { defaultConfig } from './config.js';
 import { withExclusions } from './exclusions.js';
-import { discoverGoogleRouters, type GooglePort } from './google.js';
+import { isProject } from '@dormeto/fleet/clouds';
+import { discoverGoogleRouters, listProjects, type GooglePort, type GoogleSummary } from './google.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
 import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
@@ -18,6 +19,7 @@ const HOUR_MS = 3_600_000;
 const EMPTY_RUNS = 3;
 const SKIP_RUNS = 6;
 const EMPTY_REASON = 'no load balancer in 3 runs: scanned every 7th run';
+const PROJECT_NOT_SCANNED = "Google Cloud projects are scanned from plan 2's M13";
 const UNFINISHED = 'the account step did not finish (timed out or failed)';
 // A run still running after the state machine's time limit (and its lock's) never finishes: it is recorded as failed.
 const RUN_LIMIT_MS = 3 * HOUR_MS;
@@ -60,6 +62,7 @@ export interface RunPlan {
   accounts: string[]; // to scan, one step each
   delegation?: 'ok' | 'missing'; // organization mode: the delegation policy answered
   skipped: NonNullable<RunRecord['skipped']>; // accounts not scanned, per reason
+  googleErrors?: GoogleSummary['errors']; // the projects of the connection's scopes could not be listed: the last run's are planned again
   record?: RunRecord; // when skipped or failed
 }
 
@@ -94,13 +97,30 @@ async function currentConfig(deps: RunDeps, now: () => number): Promise<Discover
   return withExclusions((await deps.store.getConfig())?.config ?? defaultConfig(deps.defaultMode), await deps.store.listExclusions(), now());
 }
 
-async function inventoryOf(deps: RunDeps, config: DiscoveryConfig): Promise<OrgInventory> {
-  const inventory = config.mode === 'organization'
+// The inventory: AWS's accounts, and with a Google Cloud connection its projects (both modes). A listing that fails keeps
+// the last inventory's projects, planned again with their candidates kept, and says why.
+async function inventoryOf(deps: RunDeps, config: DiscoveryConfig): Promise<{ inventory: OrgInventory; googleErrors: GoogleSummary['errors'] }> {
+  let inventory = config.mode === 'organization'
     ? await loadInventory(requireOrganizations(deps), { tags: usesAccountTags(config) })
     : singleAccount(deps.managerAccount);
-  if (!deps.synthetic?.accounts) return inventory;
-  const synthetic = syntheticInventory(deps.synthetic.accounts, Object.keys(inventory.ous).find((id) => inventory.ous[id]!.parent === null));
-  return { accounts: [...inventory.accounts, ...synthetic.accounts], ous: { ...synthetic.ous, ...inventory.ous } };
+  if (deps.synthetic?.accounts) {
+    const synthetic = syntheticInventory(deps.synthetic.accounts, Object.keys(inventory.ous).find((id) => inventory.ous[id]!.parent === null));
+    inventory = { accounts: [...inventory.accounts, ...synthetic.accounts], ous: { ...synthetic.ous, ...inventory.ous } };
+  }
+  const googleErrors: GoogleSummary['errors'] = [];
+  if (deps.google) {
+    try {
+      const connection = await deps.google.connection();
+      if (connection) inventory = { ...inventory, accounts: [...inventory.accounts, ...await listProjects(deps.google, connection)] };
+    } catch (err) {
+      const message = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      googleErrors.push({ project: '*', error: message });
+      (deps.log ?? silent).warn('GoogleProjectsFailed', { error: message });
+      const before = (await deps.store.getInventory())?.accounts.filter((a) => isProject(a.id)) ?? [];
+      inventory = { ...inventory, accounts: [...inventory.accounts, ...before] };
+    }
+  }
+  return { inventory, googleErrors };
 }
 
 // Reasons, with the accounts and account-regions each one concerns.
@@ -156,8 +176,9 @@ export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manu
   try {
     if (!deps.synthetic?.accounts) await deleteSynthetic(deps);
     let inventory: OrgInventory;
+    let googleErrors: GoogleSummary['errors'];
     try {
-      inventory = await inventoryOf(deps, config);
+      ({ inventory, googleErrors } = await inventoryOf(deps, config));
     } catch (err) {
       // Without the delegation policy, organization mode cannot list the accounts.
       if (config.mode === 'organization' && denied(err)) throw Object.assign(new Error(ORGANIZATION_ACCESS), { delegation: 'missing' as const });
@@ -171,7 +192,7 @@ export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manu
     const accounts = plans.filter((p) => p.scan).map((p) => p.account);
     await deps.store.putRun(record({ status: 'running', finishedAt: runId, skipped, ...delegation }));
     log.info('DiscoveryPlanned', { runId, accounts: accounts.length });
-    return { runId, status: 'planned', ...who, accounts, skipped, ...delegation };
+    return { runId, status: 'planned', ...who, accounts, skipped, ...delegation, ...(googleErrors.length ? { googleErrors } : {}) };
   } catch (err) {
     const missing = (err as { delegation?: 'missing' }).delegation;
     const failed = record({ status: 'failed', error: missing ? ORGANIZATION_ACCESS : errorText(err), ...(missing ? { delegation: missing } : {}) });
@@ -211,6 +232,12 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   const state = await deps.store.getAccountScan(account);
   const allRegions = config.regions.includes('*');
   const synthetic = isSynthetic(account);
+  // A Google Cloud project is no AWS account: its candidates stay as they are until its load balancers are scanned (plan 2's M13).
+  if (isProject(account)) {
+    const result: AccountResult = { pairs: [], skipped: [{ reason: PROJECT_NOT_SCANNED, pairs: 0 }], lint: lintCounters(config, inventory, []), written: 0 };
+    await deps.store.putAccountScan({ account, scannedAt: at, regions: state?.regions ?? {}, runId, result });
+    return { account, ok: true, written: 0 };
+  }
 
   let credentials: unknown = null;
   let discoveryAccess: AccessState = { ok: true };
@@ -524,10 +551,12 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
     const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory, now());
     // Google Cloud's routers: a failure here is recorded, never the run's.
-    const google = deps.google ? await discoverGoogleRouters(deps.google, { now, log }).catch((err) => {
+    let google = deps.google ? await discoverGoogleRouters(deps.google, { now, log }).catch((err) => {
       log.error('GoogleRoutersFailed', { error: errorText(err) });
       return { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [{ project: '*', error: errorText(err) }] };
     }) : null;
+    // What the plan could not list is in the record too.
+    if (google && plan.googleErrors?.length) google = { ...google, errors: [...plan.googleErrors.filter((e) => !google!.errors.some((x) => x.project === e.project && x.error === e.error)), ...google.errors] };
     const record: RunRecord = {
       startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,
       counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),

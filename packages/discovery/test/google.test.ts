@@ -4,7 +4,7 @@ import type { GoogleConnection } from '@dormeto/google';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
 import type { GooglePort } from '../src/google.js';
 import { runDiscovery } from '../src/run.js';
-import { A, B, config, filter } from './fixtures.js';
+import { A, B, C, config, filter } from './fixtures.js';
 import { setup } from './run-fakes.js';
 
 const connection = (over: Partial<GoogleConnection> = {}): GoogleConnection => ({
@@ -21,14 +21,23 @@ const service = (project: string, region: string, version?: string) => ({
 });
 
 // Google answering from projects: their services, or the error each project's listing gives.
-function fakeGoogle({ projects, services, record = connection() }: { projects: string[]; services: Record<string, unknown[] | GoogleError>; record?: GoogleConnection | null }) {
+// projects: a bare ID, or the project with its display name, labels and ancestry (the project up to the root).
+type Project = string | { id: string; displayName?: string; labels?: Record<string, string>; ancestry?: [string, string][] };
+const idOf = (p: Project) => (typeof p === 'string' ? p : p.id);
+function fakeGoogle({ projects, services, record }: { projects: Project[]; services: Record<string, unknown[] | GoogleError>; record?: GoogleConnection | null }) {
+  if (record === undefined) record = connection({ scopes: projects.map((p) => `projects/${idOf(p)}`) });
   const calls: string[] = [];
   const registry = new Map<string, InstalledRouter>();
   const port: GooglePort = {
     connection: async () => record,
     call: (async (method: string, url: string) => {
       calls.push(`${method} ${url}`);
-      if (url.startsWith('https://cloudresourcemanager.googleapis.com/v3/projects:search')) return { projects: projects.map((projectId) => ({ projectId, state: 'ACTIVE' })) };
+      if (url.startsWith('https://cloudresourcemanager.googleapis.com/v3/projects:search')) return { projects: projects.map((p) => ({ projectId: idOf(p), state: 'ACTIVE', ...(typeof p === 'string' ? {} : { displayName: p.displayName, labels: p.labels }) })) };
+      const a = /^https:\/\/cloudresourcemanager\.googleapis\.com\/v1\/projects\/([^/:]+):getAncestry$/.exec(url);
+      if (a) {
+        const p = projects.find((x) => idOf(x) === a[1]);
+        return { ancestor: [{ resourceId: { type: 'project', id: a[1] } }, ...((typeof p === 'object' ? p.ancestry : undefined) ?? []).map(([type, id]) => ({ resourceId: { type, id } }))] };
+      }
       const m = /^https:\/\/run\.googleapis\.com\/v2\/projects\/([^/]+)\/locations\/-\/services/.exec(url);
       const found = services[m![1]!];
       if (found instanceof GoogleError) throw found;
@@ -62,7 +71,7 @@ describe('Google Cloud routers in a discovery run', () => {
     })]);
     expect(record.status).toBe('ok');
     expect(g.calls[0]).toMatch(/^GET https:\/\/cloudresourcemanager\.googleapis\.com\/v3\/projects:search\?.*query=state%3AACTIVE/);
-    expect(g.calls[1]).toBe('GET https://run.googleapis.com/v2/projects/dormeto-dev/locations/-/services');
+    expect(g.calls).toContain('GET https://run.googleapis.com/v2/projects/dormeto-dev/locations/-/services');
   });
 
   it('updates the controller and version of a registration and keeps its other fields', async () => {
@@ -121,11 +130,12 @@ describe('Google Cloud routers in a discovery run', () => {
     const projects = Array.from({ length: 25 }, (_, i) => `project-${String(i).padStart(2, '0')}`);
     let inFlight = 0;
     let most = 0;
-    const g = fakeGoogle({ projects: [], services: {} });
+    const g = fakeGoogle({ projects: [], services: {}, record: connection({ scopes: projects.map((p) => `projects/${p}`) }) });
     const pages: Record<string, unknown> = { '': { projects: projects.slice(0, 20).map((projectId) => ({ projectId })), nextPageToken: 'p2' }, p2: { projects: projects.slice(20).map((projectId) => ({ projectId })) } };
     g.port.call = (async (_m: string, url: string) => {
       const u = new URL(url);
       if (u.pathname === '/v3/projects:search') return pages[u.searchParams.get('pageToken') ?? ''];
+      if (u.pathname.endsWith(':getAncestry')) return { ancestor: [] };
       inFlight += 1;
       most = Math.max(most, inFlight);
       await new Promise((r) => setTimeout(r, 5));
@@ -162,5 +172,50 @@ describe('Google Cloud routers in a discovery run', () => {
     const s = setup({ cfg: config({ filters: [filter('b', [{ accountIds: [B.id] }])] }) });
     await s.ready;
     expect((await runDiscovery(s.deps, { source: 'manual' })).google).toBeUndefined();
+  });
+
+  it('puts the projects of the scopes in the inventory: a project scope and a folder scope, with their ancestry, display name and labels', async () => {
+    const g = fakeGoogle({
+      projects: [
+        { id: 'shop-prod', displayName: 'Shop', labels: { env: 'prod' }, ancestry: [['folder', '222'], ['folder', '111'], ['organization', '9']] },
+        { id: 'dormeto-dev' },
+        { id: 'other-one', ancestry: [['folder', '333'], ['organization', '9']] },
+        { id: 'loose-one' },
+      ],
+      services: {},
+      record: connection({ scopes: ['projects/dormeto-dev', 'folders/111'] }),
+    });
+    const s = setup({ cfg: config({ filters: [filter('a', [{ accountIds: [A.id] }])] }) });
+    await s.ready;
+    s.deps.google = g.port;
+    await runDiscovery(s.deps, { source: 'manual' });
+    const projects = (await s.store.getInventory())!.accounts.filter((a) => !/^\d+$/.test(a.id));
+    expect(projects).toEqual([
+      { id: 'shop-prod', name: 'Shop', ouPath: ['organizations/9', 'folders/111', 'folders/222'], tags: { env: 'prod' } },
+      { id: 'dormeto-dev', name: 'dormeto-dev', ouPath: [], tags: {} },
+    ]);
+    expect([...new Set(g.calls.filter((c) => c.startsWith('POST')))].sort()).toEqual([
+      'POST https://cloudresourcemanager.googleapis.com/v1/projects/dormeto-dev:getAncestry',
+      'POST https://cloudresourcemanager.googleapis.com/v1/projects/loose-one:getAncestry',
+      'POST https://cloudresourcemanager.googleapis.com/v1/projects/other-one:getAncestry',
+      'POST https://cloudresourcemanager.googleapis.com/v1/projects/shop-prod:getAncestry',
+    ]);
+  });
+
+  it('reads only the projects of the scopes for the routers too', async () => {
+    const g = fakeGoogle({ projects: ['dormeto-dev', 'elsewhere'], services: { 'dormeto-dev': [], elsewhere: [service('elsewhere', 'europe-west2', '0.40.0')] }, record: connection({ scopes: ['projects/dormeto-dev'] }) });
+    await run(g);
+    expect(g.registry.size).toBe(0);
+    expect(g.calls.some((c) => c.includes('/projects/elsewhere/'))).toBe(false);
+  });
+
+  it('adds no project and makes no Google call without a connection', async () => {
+    const g = fakeGoogle({ projects: ['dormeto-dev'], services: {}, record: null });
+    const s = setup({ cfg: config({ filters: [filter('a', [{ accountIds: [A.id] }])] }) });
+    await s.ready;
+    s.deps.google = g.port;
+    await runDiscovery(s.deps, { source: 'manual' });
+    expect(g.calls).toEqual([]);
+    expect((await s.store.getInventory())!.accounts.map((a) => a.id).sort()).toEqual([A.id, B.id, C.id]);
   });
 });
