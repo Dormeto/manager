@@ -20,24 +20,32 @@ time per target group, router or workload, one per load balancer (lock), three p
 A Google Cloud router (`dmtr-<project>-<region>` in the manager, `cloud: 'gcp'`, installed by the CLI) pushes nothing:
 the manager reaches it through the [connection](organization-access.md#google-cloud) and reads it. Everything the
 manager does there is `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, the
-actions an AWS router's controller answers and two of Google Cloud's (`events`, `manager-settings`). A call gives up
-after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 s at most.
+actions an AWS router's controller answers and two of Google Cloud's (`events`, `manager-settings`), each asking for
+refusals (an asynchronous one too). A call gives up after 10 s (a cold Cloud Run start), 10 are made at once and a request
+takes 20 s at most. The controller always answers JSON: an answer that isn't, or an empty failure, is Google's in front
+of it. A router's version meets the 0.40.0 minimum by major.minor.patch (a dev router's `0.40.0-dev.1` does, `0.39.0-dev.3`
+doesn't); the registry keeps the version as the router reports it.
 
 - **The poll** runs every minute (the schedule `dmt-<env>-manager-poll` invokes the fleet function with `{ "task":
   "poll" }`, never retried): 10 routers at once, at most 50 s a run, the least recently polled first, each router at 0.40.0
-  or of a version not yet known. It asks the router's journal (`events`) after the cursor kept on the router's `RS#` item,
+  or later or of a version not yet known. It asks the router's journal (`events`) after the cursor kept on the router's `RS#` item,
   and ingests each event as the `Workload state changed` an AWS router sends, with the project and region of the router
   called as its identity. The journal is **read again from 5 minutes before the newest event already read**, so a late
   write is not missed: an event read twice is one history entry, and an older one never sets a summary back. When the
-  router's check is newer than its summary, its rows (`list`, pages of 1000) come in as `Router checked` chunks.
-  A router that does not answer gets no new summary, so the watchdog's `silent` rule applies as on AWS.
+  router's check is newer than its summary, its rows (`list`, answered whole) come in as `Router checked` chunks of 1000,
+  which the manager cuts. A router that does not answer gets no new summary, so the watchdog's `silent` rule applies as on
+  AWS; one the poll is refused at keeps the refusal on its `RS#` item (`lastRefusal`), and the watchdog says that refusal,
+  with its command, instead of `silent`. A registered router whose controller discovery hasn't found yet is not called: its
+  poll records `router-unknown`, once.
 - **A router removed:** one whose controller URL answers Google's own 404 (not the controller's JSON) **twice in a row**
   is unregistered (`RouterUnregistered`): an uninstalled router leaves within two minutes instead of alarming. A broken
-  connection never counts as a router gone, and a controller that has no `/v1/actions` is kept and not called again
-  until its version changes.
-- **`too-old`:** a router below 0.40.0 has no `/v1/actions`. It is listed with its version, never polled, and the
-  watchdog says `too-old`, not `silent`, with the command that upgrades it: `dormeto gcp install --project <p> --region <r>
-  --version <pinned>`.
+  connection never counts as a router gone.
+- **`too-old`:** a router below 0.40.0 has no `/v1/actions`. It is listed with its version, never polled and never pushed
+  to, and the watchdog says `too-old`, not `silent`, with the command that upgrades it: `dormeto gcp install --project <p>
+  --region <r> --version <pinned>`. So is a router of unknown version whose controller answered it has no `/v1/actions`.
+  The poll reads a too-old router's version from its health (`GET /v1/health`, which every router version answers) at most
+  every 10 minutes and keeps it in the registry (`RouterVersionRead`): after the advised install, the router is polled at the
+  next run and its alarm resolves, within 10 minutes.
 - **The refusals,** as a 502 with the command that fixes it:
   - `manager-access-missing`: Google refuses the manager's token or the connection is broken (pool, provider or
     service account gone, a grant revoked), `the manager's accounts can't reach the router: dormeto gcp connect
@@ -47,8 +55,8 @@ after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 
   - `router-unknown`: discovery has not found the router's controller yet, `dormeto gcp connect` again.
   An action the router does not know (an `unknown-action` answer) is an error that names the action.
 - **The organization's settings:** each write of `settings.json` (`PUT /api/settings/workloads`, `/settings/types`,
-  `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller as `manager-settings`
-  (the object written and its S3 ETag), 10 at a time. A router that fails is logged (`ManagerSettingsNotPushed`), and the
+  `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller, but one below
+  0.40.0, as `manager-settings` (the object written and its S3 ETag), 10 at a time. A router that fails is logged (`ManagerSettingsNotPushed`), and the
   poll pushes it when the ETag the router holds differs from the file's (`ManagerSettingsPushed`); the write's answer
   does not change.
 - **What stays with the CLI:** every change of an IAM policy, a backend service or a cluster. `install-router` for a project
@@ -59,7 +67,10 @@ after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 
   offboarded with the CLI too: `offboard` for a Google Cloud workload answers 400 with `dormeto gcp workloads offboard <id>
   --project <p> --region <r>`, which the workload view shows instead of its Offboard action.
 - **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
-  the cloud its alarms share, and none when they mix.
+  the cloud its alarms share, and both as the `String.Array` `["aws","gcp"]` when they mix, which a filter on either cloud
+  matches. A Google Cloud workload's failed wake is advised in Google Cloud's words for its kind: Compute Engine's zone
+  capacity and fallback machine types, its quotas, the router's service account (`dormeto gcp status --project <p> --region
+  <r>`, then `dormeto gcp install` again), the backend service's health check.
 
 ## Health alerts, IP lists and MFA
 
@@ -123,9 +134,9 @@ after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 
   `wake-failed:<kind>`): one alert per kind across retries, "woke again" when the entry leaves; failing again more than
   15 minutes after waking is a new alert (routers and lists are damped 6 hours). Each message is published
   with `MessageStructure: json`: the text for `email` (and `default`), an Amazon Q Developer custom notification for
-  `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`, `update`), `account`,
-  `region`, `router` and `workload` for subscription filter policies (for example `{"kind": ["workload"], "account":
-  ["123456789012"]}` for one team's channel).
+  `https` subscriptions, and the attributes `level`, `kind` (`router`, `list`, `workload`, `digest`, `update`), `cloud`,
+  `account`, `region`, `router` and `workload` for subscription filter policies (for example `{"kind": ["workload"],
+  "account": ["123456789012"]}` for one team's channel; a digest of both clouds' alarms has `cloud` as a `String.Array`).
 - **Chat:** an Amazon Q Developer in chat applications channel (Slack or Microsoft Teams) subscribed to
   `dmt-<env>-manager-alerts` (Terraform `aws_chatbot_slack_channel_configuration` or
   `aws_chatbot_teams_channel_configuration` with `sns_topic_arns`, or the console) receives the chat body.

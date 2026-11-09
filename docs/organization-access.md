@@ -61,14 +61,17 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   (`dormeto gcp connect --project <host> --profile <profile> --env <env>`); `dormeto gcp disconnect` removes it.
 - **The scopes** are what discovery sees: `organizations/<n>`, `folders/<n>` or `projects/<id>`, repeatable; the default
   is the host project alone. A Google Cloud account without an organization has project scopes only.
-- **The connection's record** (`GET|PUT|DELETE /iam/discovery/google`, administrators; reads also under `/api`) is what
-  connect writes in the manager: the host and its number, the pool, the provider, the scopes, the two accounts, the
-  routers, what Google added, who connected and when, with which CLI. The Discovery settings show it read-only, or the
-  command that connects one. Without a record, there is no Google Cloud scan.
+- **The connection's record** (`GET|PUT|DELETE /iam/discovery/google`) is what connect writes in the manager: the host
+  and its number, the pool, the provider, the scopes, the two accounts, the routers, what Google added, who connected and
+  when, with which CLI. Only an IAM caller writes it (`PUT` and `DELETE` under `/iam`: connect and disconnect, with the
+  operator's AWS profile; a dashboard session's write is refused), each field checked against what connect writes;
+  viewers read it under `/iam` and `/api` (`{ "connection": ... }`, `null` when there is none). The Discovery settings
+  show it read-only, or the command that connects one. Without a record, there is no Google Cloud scan.
 - **Routers** are registered when connect writes the record (the routers at the scopes, with their controller's URL and
   version). Each discovery run then lists the Cloud Run services `dmtr-<region>-controller` of the scanned projects and
   adds, updates or removes the registrations (the version is the service's `DMT_VERSION`: the discovery account never
-  calls a router). The [poll](operations.md#google-cloud-routers) removes a router whose controller no longer exists.
+  calls a router). The [poll](operations.md#google-cloud-routers) removes a router whose controller no longer exists, and
+  reads the version of a router too old to poll from its health, every 10 minutes.
 - **A router installed later**, in a project the command account does not reach yet, is reached after
   `dormeto gcp connect` is run again; `dormeto gcp install` changes nothing about the manager. Until then, a call to that
   router is refused with the command (`manager-access-missing`).

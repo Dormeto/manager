@@ -2224,7 +2224,8 @@ export function createApi({
         }
         for (const r of connection.routers) {
           // What the record gives (the controller and version connect read) is registered; what it leaves empty keeps
-          // what discovery or the poll learnt.
+          // what was learnt since: the controller and version discovery read, or the version the poll read from the health
+          // of a router too old to poll.
           const known = registered.find((i) => i.cloud === 'gcp' && i.account === r.project && i.region === r.region);
           await g.routers.put({
             name: `dmtr-${r.region}`, account: r.project, region: r.region, controller: '', onboarder: '', version: '', build: '',
