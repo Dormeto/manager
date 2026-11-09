@@ -413,8 +413,15 @@ const GROUPS_MAX = 100;
 const GROUP_DESCRIPTION_MAX = 200;
 const ROLES = new Set<Role>(['member', 'viewer', 'operator', 'admin']);
 
-// The record `dormeto gcp connect` writes (Google Cloud manager design §4.3): every field checked, the projects and regions
-// as Google Cloud names them.
+// The record `dormeto gcp connect` writes (Google Cloud manager design §4.3, §4.1): every field checked, the projects and
+// regions as Google Cloud names them, the pool `dmt-<env>` (an env as the manager module takes it) and its provider `aws`,
+// the scopes, and the two service accounts of that env in the host project.
+const POOL = /^dmt-([a-z0-9]([a-z0-9-]{0,8}[a-z0-9])?)$/;
+const SCOPE = /^(organizations|folders)\/\d+$/;
+// A Cloud Run URL: https, a host of non-empty labels ending in run.app.
+const RUN_APP = /^https:\/\/([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+run\.app$/;
+// x.y.z, and a prerelease as a dev router reports it (0.40.0-dev.1).
+const ROUTER_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 function googleRecord(body: Record<string, unknown>): GoogleConnection {
   const bad = (message: string): never => { throw new HttpError(400, 'bad_request', message); };
   const text = (name: string): string => (typeof body[name] === 'string' && body[name] ? (body[name] as string) : bad(`${name} must be a non-empty string`));
@@ -423,22 +430,28 @@ function googleRecord(body: Record<string, unknown>): GoogleConnection {
   if (!isProject(project)) bad('project must be a Google Cloud project ID');
   const projectNumber = text('projectNumber');
   if (!/^\d+$/.test(projectNumber)) bad('projectNumber must be digits');
+  const pool = text('pool');
+  const env = POOL.exec(pool)?.[1] ?? bad('pool must be dmt-<env>');
+  if (text('provider') !== 'aws') bad('provider must be aws');
+  const scopes = strings('scopes', body.scopes);
+  if (!scopes.every((s) => SCOPE.test(s) || (s.startsWith('projects/') && isProject(s.slice('projects/'.length))))) bad('scopes must each be organizations/<number>, folders/<number> or projects/<project ID>');
+  // The names connect gives them (serviceAccountEmails of @dormeto/google).
+  const named = { discovery: `dmt-${env}-discovery@${project}.iam.gserviceaccount.com`, command: `dmt-${env}-command@${project}.iam.gserviceaccount.com` };
   const accounts = body.serviceAccounts as Record<string, unknown> | undefined;
-  if (typeof accounts?.discovery !== 'string' || typeof accounts.command !== 'string' || !accounts.discovery || !accounts.command) bad('serviceAccounts must hold discovery and command');
+  if (accounts?.discovery !== named.discovery || accounts.command !== named.command) bad(`serviceAccounts must be ${named.discovery} and ${named.command}`);
   if (!Array.isArray(body.routers)) bad('routers must be a list');
   const routers = (body.routers as Record<string, unknown>[]).map((r) => {
     if (!isProject(r?.project)) return bad('routers[].project must be a Google Cloud project ID');
     if (!isRegion('gcp', r.region)) return bad('routers[].region must be a Google Cloud region');
     const controller = r.controller ?? '';
-    if (typeof controller !== 'string' || (controller !== '' && !/^https:\/\/[a-z0-9.-]+\.run\.app$/.test(controller))) return bad('routers[].controller must be an https://….run.app URL or empty');
+    if (typeof controller !== 'string' || (controller !== '' && !RUN_APP.test(controller))) return bad('routers[].controller must be an https://….run.app URL or empty');
     const version = r.version ?? '';
-    if (typeof version !== 'string' || (version !== '' && !/^\d+\.\d+\.\d+$/.test(version))) return bad('routers[].version must be a version like 0.40.0 or empty');
+    if (typeof version !== 'string' || (version !== '' && !ROUTER_VERSION.test(version))) return bad('routers[].version must be a version like 0.40.0 (or 0.40.0-dev.1) or empty');
     return { project: r.project, region: r.region, ...(controller ? { controller } : {}), ...(version ? { version } : {}) };
   });
   if (new Set(routers.map((r) => `${r.project}/${r.region}`)).size !== routers.length) bad('routers must not repeat a project and region');
   return {
-    project, projectNumber, pool: text('pool'), provider: text('provider'), scopes: strings('scopes', body.scopes),
-    serviceAccounts: { discovery: accounts!.discovery as string, command: accounts!.command as string }, routers,
+    project, projectNumber, pool, provider: 'aws', scopes, serviceAccounts: named, routers,
     googleAdded: strings('googleAdded', body.googleAdded), connectedAt: text('connectedAt'), connectedBy: text('connectedBy'), cli: text('cli'),
   };
 }

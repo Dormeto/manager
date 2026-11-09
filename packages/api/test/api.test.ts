@@ -277,6 +277,38 @@ describe('the Google Cloud connection', () => {
     }
   });
 
+  it('refuses a pool, provider, scope, service account or controller host that is not the shape connect writes', async () => {
+    const { api, store } = connected();
+    const accounts = record.serviceAccounts;
+    const named = 'serviceAccounts must be dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com and dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
+    const scopes = 'scopes must each be organizations/<number>, folders/<number> or projects/<project ID>';
+    const controller = 'routers[].controller must be an https://….run.app URL or empty';
+    for (const [bad, message] of [
+      [{ pool: 'workload-pool' }, 'pool must be dmt-<env>'], [{ pool: 'dmt-' }, 'pool must be dmt-<env>'], [{ pool: 'dmt-Dev' }, 'pool must be dmt-<env>'],
+      [{ provider: 'oidc' }, 'provider must be aws'],
+      [{ scopes: ['projects/dormeto-dev', 'billingAccounts/01ABCD'] }, scopes], [{ scopes: ['organizations/acme'] }, scopes], [{ scopes: ['folders/'] }, scopes],
+      [{ scopes: ['projects/123456789012'] }, scopes],
+      [{ serviceAccounts: { ...accounts, discovery: 'dmt-dev-discovery@another-project.iam.gserviceaccount.com' } }, named],
+      [{ serviceAccounts: { ...accounts, command: 'someone@dormeto-host.iam.gserviceaccount.com' } }, named],
+      [{ serviceAccounts: { discovery: accounts.command, command: accounts.discovery } }, named],
+      [{ pool: 'dmt-prod' }, 'serviceAccounts must be dmt-prod-discovery@dormeto-host.iam.gserviceaccount.com and dmt-prod-command@dormeto-host.iam.gserviceaccount.com'],
+      [{ routers: [{ ...record.routers[0], controller: 'https://a..run.app' }] }, controller], [{ routers: [{ ...record.routers[0], controller: 'https://.run.app' }] }, controller],
+      [{ routers: [{ ...record.routers[0], controller: 'https://-a.run.app' }] }, controller], [{ routers: [{ ...record.routers[0], controller: 'https://run.app' }] }, controller],
+    ] as [Record<string, unknown>, string][]) {
+      const res = await api(viaIam('PUT', '/iam/discovery/google', { ...record, ...bad }));
+      expect([res.statusCode, json(res).message], JSON.stringify(bad)).toEqual([400, message]);
+    }
+    expect([...store.keys()]).toEqual(['121014831971#eu-west-1']);
+  });
+
+  it('takes the scopes connect writes, and a router version with a prerelease (a dev router) as the router reports it', async () => {
+    const { api, store } = connected();
+    const dev = { ...record.routers[0], controller: 'https://dmtr-europe-west1-controller-abc-ew.a.run.app', version: '0.40.0-dev.1' };
+    const res = await api(viaIam('PUT', '/iam/discovery/google', { ...record, scopes: ['organizations/123456789', 'folders/42', 'projects/dormeto-dev'], routers: [dev] }));
+    expect(res.statusCode).toBe(200);
+    expect(store.get('dormeto-dev#europe-west1')).toMatchObject({ controller: dev.controller, version: '0.40.0-dev.1' });
+  });
+
   it('unregisters the routers a later PUT drops, and never an AWS one', async () => {
     const { api, store } = connected();
     await api(viaIam('PUT', '/iam/discovery/google', record));
