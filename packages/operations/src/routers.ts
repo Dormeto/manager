@@ -1,5 +1,5 @@
 // Routers known to the manager: registered in Terraform (ROUTERS: name, region, controller, account, optional onboarder)
-// and installed by the manager (registry items).
+// and installed by the manager or registered for a Google Cloud project (registry items).
 import type { RouterRef } from './engine.js';
 import type { Records } from './records.js';
 
@@ -26,6 +26,8 @@ export async function routersOf(terraform: TerraformRouter[], records: Pick<Reco
     listed.push({
       name: r.name, account: r.account, region: r.region, controller: r.controller, onboarder: r.onboarder, source: 'manager', version: r.version, build: r.build,
       ...(r.uninstalling ? { uninstalling: true } : {}),
+      // A Google Cloud router (registered for its project): its controller URL is called through the Google transport.
+      ...(r.cloud === 'gcp' ? { cloud: 'gcp' as const } : {}),
     });
   }
   return listed;

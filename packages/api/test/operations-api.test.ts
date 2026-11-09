@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { Candidate } from '@dormeto/discovery';
 import type { RouterSummary } from '@dormeto/fleet';
 import type { InstalledRouter, Operation } from '@dormeto/operations';
 import { createApi, RouterError, type ApiEvent, type AuditEntry, type OperationsApi } from '../src/api.js';
@@ -196,6 +197,164 @@ describe('operations', () => {
       ['dmt-dev', 'eu-west-1', 'terraform'], ['dmt-dev-eu-west-3', 'eu-west-3', 'manager'], ['dmt-dev-038606077307-eu-west-3', 'eu-west-3', 'manager'],
     ]);
     expect(calls.map(([name]) => name).sort()).toEqual(['dmt-dev', 'dmt-dev-038606077307-eu-west-3', 'dmt-dev-eu-west-3']);
+  });
+});
+
+describe('onboarding on Google Cloud', () => {
+  const PROJECT = 'dormeto-dev';
+  const NUMBER = '1034397096264';
+  const SERVICE = `projects/${PROJECT}/global/backendServices/dmt-demo-app`;
+  const MAP = `projects/${PROJECT}/global/urlMaps/dmt-dev`;
+  const INTERNAL = `projects/${PROJECT}/regions/europe-west2/backendServices/dmt-int-app`;
+  const INTERNAL_MAP = `projects/${PROJECT}/regions/europe-west2/urlMaps/dmt-int`;
+  const READ = `https://cloudresourcemanager.googleapis.com/v3/projects/${PROJECT}`;
+  const registered = (region: string, version = '0.40.0'): InstalledRouter => ({
+    name: `dmtr-${region}`, account: PROJECT, region, controller: `https://dmtr-${region}-controller-abc123-nw.a.run.app`, onboarder: '', version, build: '', installedBy: 'cli', cloud: 'gcp',
+    installedAt: '2026-11-09T10:00:00.000Z',
+  });
+  const google = (over: Partial<Candidate>): Partial<Candidate> => ({ account: PROJECT, targetGroupArn: null, loadBalancerArn: '', listener: '', priority: '', rules: [], ...over });
+
+  // The operations engine creates the operation (its target), as the API's handler wires it; the project's number answered
+  // by Resource Manager, or `refused`.
+  async function googleSetup({ installed = [registered('europe-west2'), registered('us-central1')], refused = null as Error | null } = {}) {
+    const { createEngine, createRecords } = await import('@dormeto/operations');
+    const { fakeDynamo } = await import('../../operations/test/dynamo-fake.js');
+    const store = memoryStore([
+      candidate(SERVICE, google({ region: 'global', loadBalancer: 'dmt-dev', targetGroup: 'dmt-demo-app', backendService: SERVICE, urlMap: MAP, lb: { kind: 'global' } })),
+      candidate(INTERNAL, google({ region: 'europe-west2', loadBalancer: 'dmt-int', targetGroup: 'dmt-int-app', backendService: INTERNAL, urlMap: INTERNAL_MAP, lb: { kind: 'internal' } })),
+      candidate(TG, { targetGroupArn: TG, region: 'eu-west-3' }),
+    ]);
+    let ids = 0;
+    const engine = createEngine({
+      records: createRecords({ dynamo: fakeDynamo(), table: 't', now: () => NOW }), discovery: store, routers: async () => [],
+      target: async () => { throw new Error('no AWS call at creation'); }, bundle: async () => { throw new Error('no bundle at creation'); },
+      settings: { env: 'dev', principals: [], routerSettings: { checkSchedule: '', ipLists: '', ipListsCatalog: '', ipListsBucket: '', noWakeRules: '', metrics: '', managerBus: '', commandRole: '' } },
+      start: async (op) => `arn:execution:${op.id}`, now: () => NOW, newId: () => `op${++ids}`, log: { info() {}, warn() {}, error() {} },
+    });
+    const created: [string, Record<string, unknown>][] = [];
+    const reads: string[][] = [];
+    const calls: string[] = [];
+    const audit: AuditEntry[] = [];
+    const api = createApi({
+      routers: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: MANAGER }],
+      managerAccount: MANAGER,
+      invoke: async (router) => { calls.push(router.name); throw new RouterError('unexpected'); },
+      audit: { write: async (e) => { audit.push(e); }, list: async () => audit },
+      now: () => NOW, newId: () => 'id-1', version: '0.2.0', routerVersion: '0.40.0',
+      discovery: { store, run: async () => {} },
+      google: {
+        get: async () => null, put: async () => {}, delete: async () => {}, routers: { list: async () => installed, put: async () => {}, delete: async () => {} },
+        call: async <T>(sa: string, method: string, url: string) => {
+          reads.push([sa, method, url]);
+          if (refused) throw refused;
+          return { name: `projects/${NUMBER}`, projectId: PROJECT } as T;
+        },
+      },
+      operations: {
+        create: async (type, input, by) => { created.push([type, input]); return engine.create(type, input, by); },
+        list: async () => [], get: async () => null, installedRouters: async () => installed,
+      },
+    });
+    return { api, created, reads, calls, audit };
+  }
+  const onboard = (body: Record<string, unknown>) => event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', ...body });
+
+  it('a global candidate of a project with two routers is onboarded on the router the body names, its target the project\'s, the router\'s region and the project number', async () => {
+    const s = await googleSetup();
+    const unnamed = await s.api(onboard({ candidateId: SERVICE }));
+    expect([unnamed.statusCode, json(unnamed)]).toEqual([400, {
+      error: 'bad_request', message: `project ${PROJECT} has 2 routers: name the one to onboard on in router (dmtr-${PROJECT}-europe-west2, dmtr-${PROJECT}-us-central1)`,
+    }]);
+    const body = {
+      candidateId: SERVICE, router: `dmtr-${PROJECT}-us-central1`, name: 'Demo', settings: { fallbackInstanceTypes: ['e2-medium', 'n2-standard-2'], hibernate: true },
+      databases: [{ kind: 'cloudsql-instance', id: 'db-1' }], tags: { team: 'web' },
+    };
+    // Tags at onboarding are the administrators'.
+    const operator = await s.api(onboard(body));
+    expect([operator.statusCode, json(operator).message]).toEqual([403, 'admin role required to set tags at onboarding']);
+    const res = await s.api(event('POST', '/api/operations', 'dmt-admin', { type: 'onboard', ...body }));
+    expect(res.statusCode).toBe(202);
+    expect(s.created).toEqual([['onboard', {
+      candidateId: SERVICE, router: `dmtr-${PROJECT}-us-central1`, region: 'us-central1', projectNumber: NUMBER, name: 'Demo',
+      settings: { fallbackInstanceTypes: ['e2-medium', 'n2-standard-2'], hibernate: true }, databases: [{ kind: 'cloudsql-instance', id: 'db-1' }], tags: { team: 'web' },
+    }]]);
+    const { operation } = json(res);
+    expect(operation.target).toEqual({ account: PROJECT, region: 'us-central1', router: `dmtr-${PROJECT}-us-central1`, backendService: SERVICE, urlMap: MAP, projectNumber: NUMBER });
+    expect(operation.activeKey).toBe(`TG#${SERVICE}`);
+    expect(operation.steps.map((x: { name: string }) => x.name)).toEqual(['find router', 'slot', 'lock load balancer', 'preview', 'tag', 'onboard', 'verify', 'candidate']);
+    // The project's number read once, as the discovery account; no router called (Hibernate needs no version check there).
+    expect(s.reads).toEqual([['discovery', 'GET', READ]]);
+    expect(s.calls).toEqual([]);
+    expect(s.audit.at(-1)).toMatchObject({ action: 'operation-onboard', target: `${SERVICE} as Demo`, result: 'started op1' });
+  });
+
+  it('a project\'s only router takes its global candidates, and a regional candidate goes to the router of its region', async () => {
+    const one = await googleSetup({ installed: [registered('us-central1')] });
+    expect((await one.api(onboard({ candidateId: SERVICE }))).statusCode).toBe(202);
+    expect(one.created.at(-1)![1]).toMatchObject({ router: `dmtr-${PROJECT}-us-central1`, region: 'us-central1' });
+    const two = await googleSetup();
+    expect((await two.api(onboard({ candidateId: INTERNAL }))).statusCode).toBe(202);
+    expect(two.created.at(-1)![1]).toMatchObject({ router: `dmtr-${PROJECT}-europe-west2`, region: 'europe-west2' });
+    const elsewhere = await two.api(onboard({ candidateId: INTERNAL, router: `dmtr-${PROJECT}-us-central1` }));
+    expect([elsewhere.statusCode, json(elsewhere).message]).toEqual([400, 'router: a regional load balancer is onboarded on the router of its region, europe-west2']);
+    const unknown = await two.api(onboard({ candidateId: SERVICE, router: 'dmt-dev' }));
+    expect([unknown.statusCode, json(unknown).message]).toEqual([400, `router: "dmt-dev" is not a router of project ${PROJECT} (dmtr-${PROJECT}-europe-west2, dmtr-${PROJECT}-us-central1)`]);
+    expect(two.created).toHaveLength(1);
+  });
+
+  it('a project without a router there answers 400 with the command that installs one; a router before 0.40.0, 409 with the router-too-old text', async () => {
+    const none = await googleSetup({ installed: [] });
+    const global = await none.api(onboard({ candidateId: SERVICE }));
+    expect([global.statusCode, json(global)]).toEqual([400, { error: 'bad_request', message: `no router in project ${PROJECT}: dormeto gcp install --project ${PROJECT} --region <region> --version 0.40.0` }]);
+    const other = await googleSetup({ installed: [registered('us-central1')] });
+    const regional = await other.api(onboard({ candidateId: INTERNAL }));
+    expect([regional.statusCode, json(regional).message]).toEqual([400, `no router in project ${PROJECT}, region europe-west2: dormeto gcp install --project ${PROJECT} --region europe-west2 --version 0.40.0`]);
+    const old = await googleSetup({ installed: [registered('europe-west2', '0.39.2')] });
+    const tooOld = await old.api(onboard({ candidateId: INTERNAL }));
+    expect([tooOld.statusCode, json(tooOld)]).toEqual([409, { error: 'router-too-old', message: `router 0.39.2 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west2 --version 0.40.0` }]);
+    expect([...none.created, ...other.created, ...old.created, ...none.reads, ...other.reads, ...old.reads]).toEqual([]);
+  });
+
+  it('takes Compute Engine machine types as fallback types and Cloud SQL instances as databases, refusing an EC2 type and another database', async () => {
+    const s = await googleSetup({ installed: [registered('europe-west2')] });
+    for (const [body, message] of [
+      [{ settings: { fallbackInstanceTypes: ['t3a.medium'] } }, 'settings: fallbackInstanceTypes must be at most 5 Compute Engine machine types, each named once (for example e2-medium)'],
+      [{ settings: { fallbackInstanceTypes: ['e2-small', 'e2-medium', 'e2-standard-2', 'n2-standard-2', 'n2d-standard-2', 'c3-standard-4'] } }, /at most 5 Compute Engine machine types/],
+      [{ settings: { fallbackInstanceTypes: ['e2-medium', 'e2-medium'] } }, /each named once/],
+      [{ databases: [{ kind: 'rds-instance', id: 'db-1' }] }, 'databases: {"kind":"rds-instance","id":"db-1"} is not a Cloud SQL instance: give {"kind": "cloudsql-instance", "id": "<instance name>"}'],
+      [{ databases: ['db-1'] }, /is not a Cloud SQL instance/],
+      [{ databases: [{ kind: 'cloudsql-instance', id: 'DB_1' }] }, /is not a Cloud SQL instance/],
+      [{ databases: [{ kind: 'cloudsql-instance', id: 'db-1' }, { kind: 'cloudsql-instance', id: 'db-1' }] }, 'databases: Cloud SQL instance db-1 is named twice'],
+    ] as const) {
+      const res = await s.api(onboard({ candidateId: SERVICE, ...body }));
+      expect(res.statusCode).toBe(400);
+      expect(json(res).message).toMatch(message);
+    }
+    expect(s.created).toEqual([]);
+    expect((await s.api(onboard({ candidateId: SERVICE, settings: { fallbackInstanceTypes: ['e2-medium'] }, databases: [{ kind: 'cloudsql-instance', id: 'db-1' }] }))).statusCode).toBe(202);
+  });
+
+  it('a project number Google refuses to read answers 502 with Google\'s words, and starts nothing', async () => {
+    const { GoogleError } = await import('@dormeto/google');
+    const s = await googleSetup({ refused: new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', host: 'cloudresourcemanager.googleapis.com', message: 'Permission \'resourcemanager.projects.get\' denied' }) });
+    const res = await s.api(onboard({ candidateId: INTERNAL }));
+    expect([res.statusCode, json(res)]).toEqual([502, {
+      error: 'google_error',
+      message: `project ${PROJECT}: its number can't be read as the discovery account (Google: cloudresourcemanager.googleapis.com 403 IAM_PERMISSION_DENIED: Permission 'resourcemanager.projects.get' denied)`,
+    }]);
+    expect(s.created).toEqual([]);
+  });
+
+  it('an AWS onboarding beside Google Cloud routers keeps its body and its target', async () => {
+    const s = await googleSetup();
+    const res = await s.api(onboard({ candidateId: TG, router: `dmtr-${PROJECT}-europe-west2`, settings: { fallbackInstanceTypes: ['t3a.medium'] } }));
+    expect(res.statusCode).toBe(202);
+    expect(s.created).toEqual([['onboard', { candidateId: TG, settings: { fallbackInstanceTypes: ['t3a.medium'] }, databases: [] }]]);
+    expect(json(res).operation.target).toEqual({ account: MANAGER, region: 'eu-west-3', targetGroupArn: TG, loadBalancerArn: 'lb' });
+    expect(json(res).operation.steps.map((x: { name: string }) => x.name)).toContain('install roles');
+    expect(s.reads).toEqual([]);
+    const ec2 = await s.api(onboard({ candidateId: TG, settings: { fallbackInstanceTypes: ['e2-medium'] } }));
+    expect([ec2.statusCode, json(ec2).message]).toEqual([400, 'settings: fallbackInstanceTypes must be at most 5 EC2 instance types (for example t3a.medium)']);
   });
 });
 

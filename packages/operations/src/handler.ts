@@ -36,6 +36,8 @@ const engine = createEngine({
     env,
     // The manager's version (VERSION), in what to apply where an account's organization access is older.
     ...(process.env.VERSION ? { version: process.env.VERSION } : {}),
+    // The router version it installs (ROUTER_VERSION), in the command a Google Cloud router gone or too old needs.
+    ...(process.env.ROUTER_VERSION ? { routerVersion: process.env.ROUTER_VERSION } : {}),
     principals: JSON.parse(process.env.MANAGER_PRINCIPALS ?? '[]'),
     routerSettings: {
       checkSchedule: CHECK_SCHEDULE, ipLists: process.env.ROUTER_IP_LISTS ?? '[]', noWakeRules: '[]', metrics: 'false', managerBus: process.env.MANAGER_BUS ?? '',

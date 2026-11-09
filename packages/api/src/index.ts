@@ -19,7 +19,7 @@ import { createFleetStore, createPriceBook } from '@dormeto/fleet';
 import { createSpotPort } from './spot.js';
 import { baselineOf } from './baseline.js';
 import { createEngine, createRecords, type InstalledRouter } from '@dormeto/operations';
-import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
+import { createGoogle, createGoogleSource, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
 import { createApi, routerInvoker, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
@@ -147,6 +147,12 @@ const google = {
     await dynamo.send(new DeleteItemCommand({ TableName: table, Key: googleKey }));
   },
   routers: { list: () => records.listRouters(), put: (r: InstalledRouter) => records.putRouter(r), delete: (account: string, region: string) => records.deleteRouter(account, region) },
+  // A Google API call as one of the connection's accounts, with the instance of the record as read now.
+  async call<T = unknown>(sa: ServiceAccount, method: string, url: string): Promise<T> {
+    const current = await googleSource.current();
+    if (!current) throw new Error('no Google Cloud connection');
+    return current.google.call<T>(sa, method, url);
+  },
 };
 // One Google instance per execution environment for that record, so its tokens are kept between invocations.
 const googleSource = createGoogleSource({ read: () => google.get(), create: (connection) => createGoogle({ connection }) });

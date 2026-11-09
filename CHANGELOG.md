@@ -44,6 +44,18 @@ permissions of `dormetoCommand` on the project, `run.routes.invoke` on each rout
 reading `DISC#GOOGLE`, so it needs the table). The Organization access panel lists projects as accounts, and onboarding a candidate of a
 project that misses access is refused with 409 and the `dormeto gcp connect` command that fixes it. A Google failure that is no
 refusal keeps the last verdict. AWS accounts behave as before.
+- **Onboarding on Google Cloud:** `POST /api/operations` `{type: 'onboard'}` takes a candidate of a project, on the router of its
+region for a regional load balancer, on the project's router for a global one (`router` names it when the project has several,
+else 400 listing them); no router there is a 400 with `dormeto gcp install --project <p> --region <region> --version <pinned>`, one
+before 0.40.0 a 409 `router-too-old`. Its `settings.fallbackInstanceTypes` are Compute Engine machine types (at most 5, each once) and
+its `databases` Cloud SQL instances, `{kind: 'cloudsql-instance', id: <name>}`; the project's number is read as the discovery
+account (a refusal: 502 with Google's words). The operation runs `find router`, `slot` (the project's and the router's region),
+`lock load balancer` (the URL map), `preview`, `tag`, `onboard`, `verify`, `candidate`: the router's dry run and onboarding in
+AWS's onboarder payload (the URL map's and backend service's names, the load balancer's kind), the tag `dormeto/managed` bound as
+the command account to the VMs and managed instance groups the preview names and to the Cloud SQL instances given, one per run of
+the step (one bound already is left alone). A refused onboarding removes the bindings the operation made and says so; one whose
+answer was lost (a timeout, a failure) removes none and names them. The workload is verified by the router's status (its backend
+service, no issue, not `FAILED`). AWS onboardings are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
 `silent`); one the poll is refused at says that refusal with its command (`manager-access-missing`, `router-unknown`) instead of

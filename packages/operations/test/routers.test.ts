@@ -16,4 +16,14 @@ describe('routers', () => {
       { name: 'dmt-dev', account: '1', region: 'eu-west-3', controller: 'arn:c3', onboarder: 'arn:o3', source: 'manager', version: '0.18.0', build: 'b' },
     ]);
   });
+
+  it('keeps a Google Cloud registration\'s cloud, its controller URL and its version', async () => {
+    const controller = 'https://dmtr-europe-west2-controller-abc123-nw.a.run.app';
+    const installed = [{
+      name: 'dmtr-europe-west2', account: 'dormeto-dev', region: 'europe-west2', controller, onboarder: '', version: '0.40.0', build: '', installedBy: 'cli', cloud: 'gcp' as const, installedAt: 'y',
+    }];
+    expect(await routersOf([], { listRouters: async () => installed })).toEqual([
+      { name: 'dmtr-europe-west2', account: 'dormeto-dev', region: 'europe-west2', controller, onboarder: '', source: 'manager', version: '0.40.0', build: '', cloud: 'gcp' },
+    ]);
+  });
 });

@@ -6,10 +6,10 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import type { Google, GoogleConnection } from '@dormeto/google';
+import { GoogleError, type Google, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
 // The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
-import { actOnRouter, installCommand, RouterCallError, routerTooOld, type Refusal } from '@dormeto/google/router';
-import { cloudOf, googlePath, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
+import { actOnRouter, installCommand, RouterCallError, routerTooOld, tooOldText, type Refusal } from '@dormeto/google/router';
+import { cloudOf, googlePath, isAccount, isCandidateRegion, isProject, isRegion, type Cloud } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
@@ -38,6 +38,9 @@ export interface GoogleApi {
   put(connection: GoogleConnection): Promise<void>;
   delete(): Promise<void>;
   routers: { list(): Promise<InstalledRouter[]>; put(router: InstalledRouter): Promise<void>; delete(account: string, region: string): Promise<void> };
+  // A Google API's JSON answer as one of the connection's accounts, through the connection's Google instance (a Google
+  // Cloud onboarding reads its project's number); a GoogleError when Google refuses.
+  call?<T = unknown>(sa: ServiceAccount, method: string, url: string): Promise<T>;
 }
 
 export interface ApiEvent {
@@ -495,11 +498,18 @@ function nameOf(value: unknown, { required }: { required: boolean }): string | u
 const cloudField = (account: string | undefined) => { const cloud = account ? cloudOf(account) : null; return cloud ? { cloud } : {}; };
 
 
-// What a failed wake does (R7a), checked before the operation starts (the router checks it again at its preview).
+// What a failed wake does (R7a), checked before the operation starts (the router checks it again at its preview). On Google
+// Cloud the fallback types are Compute Engine machine types, each named once, as the router checks them (router
+// gcp/src/onboarding.mjs:79, :180-187).
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
-function settingsOfFailures(settings: Record<string, unknown> | undefined) {
+const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
+function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud: Cloud = 'aws') {
   const types = settings?.fallbackInstanceTypes;
-  if (types !== undefined && (!Array.isArray(types) || types.length > 5 || !types.every((t) => typeof t === 'string' && INSTANCE_TYPE.test(t)))) {
+  const listed = (pattern: RegExp) => Array.isArray(types) && types.length <= 5 && types.every((t) => typeof t === 'string' && pattern.test(t));
+  if (types !== undefined && cloud === 'gcp' && !(listed(MACHINE_TYPE) && new Set(types as string[]).size === (types as string[]).length)) {
+    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes must be at most 5 Compute Engine machine types, each named once (for example e2-medium)');
+  }
+  if (types !== undefined && cloud === 'aws' && !listed(INSTANCE_TYPE)) {
     throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes must be at most 5 EC2 instance types (for example t3a.medium)');
   }
   const retry = settings?.failedRetrySeconds;
@@ -507,6 +517,20 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined) {
     throw new HttpError(400, 'bad_request', 'settings: failedRetrySeconds must be a whole number from 10 to 600');
   }
   if (settings?.hibernate !== undefined && typeof settings.hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'settings: hibernate must be true or false');
+}
+// A Google Cloud onboarding's databases: Cloud SQL instances as AWS's entries, by their names (router gcp/src/actions.mjs's
+// databaseNames, cloudsql.mjs:19), each named once.
+const CLOUD_SQL_NAME = /^[a-z]([-a-z0-9]{0,96}[a-z0-9])?$/;
+function cloudSqlFailures(databases: unknown[]) {
+  for (const d of databases) {
+    const { kind, id } = (d && typeof d === 'object' ? d : {}) as { kind?: unknown; id?: unknown };
+    if (kind !== 'cloudsql-instance' || typeof id !== 'string' || !CLOUD_SQL_NAME.test(id)) {
+      throw new HttpError(400, 'bad_request', `databases: ${JSON.stringify(d)} is not a Cloud SQL instance: give {"kind": "cloudsql-instance", "id": "<instance name>"}`);
+    }
+  }
+  const ids = databases.map((d) => (d as { id: string }).id);
+  const twice = ids.find((id, i) => ids.indexOf(id) !== i);
+  if (twice) throw new HttpError(400, 'bad_request', `databases: Cloud SQL instance ${twice} is named twice`);
 }
 // The body of a hibernation setting of a router or a workload: true, false, or null to inherit.
 function hibernateOf(body: Record<string, unknown>): boolean | null {
@@ -2547,10 +2571,14 @@ export function createApi({
       await needCommandRole(c.account);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
-      settingsOfFailures(body.settings as Record<string, unknown> | undefined);
+      const onGoogle = isProject(c.account);
+      settingsOfFailures(body.settings as Record<string, unknown> | undefined, onGoogle ? 'gcp' : 'aws');
+      if (onGoogle) cloudSqlFailures((body.databases ?? []) as unknown[]);
+      // A Google Cloud router is 0.40.0 or later (checked with its choice): it takes Hibernate.
+      const router = onGoogle ? googleRouterOf(c, body.router, identity) : null;
       // A router before 0.32.0 would refuse the setting at the preview ("unknown setting hibernate"): refused here, with the
       // upgrade it needs. Without a router there, the onboarding installs the manager's own.
-      if ((body.settings as Record<string, unknown> | undefined)?.hibernate !== undefined) {
+      if (!onGoogle && (body.settings as Record<string, unknown> | undefined)?.hibernate !== undefined) {
         const router = routers.find((r) => accountOfRouter(r) === c.account && r.region === c.region);
         const running = router ? await versionOfRouter(router) : null;
         if (router && running && !atLeastCore(running, '0.32.0')) throw new HttpError(409, 'conflict', `router ${router.name} is older than 0.32.0: upgrade it to onboard with Hibernate`);
@@ -2562,7 +2590,9 @@ export function createApi({
           await refuse(identity, 'onboard', name ? `${candidateId} as ${name}` : candidateId, 'admin role required to set tags at onboarding');
         }
       }
-      input = { candidateId, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [], ...(body.tags !== undefined ? { tags: body.tags } : {}) };
+      // On Google Cloud, the router chosen (its name and region) and the project's number, which the tag bindings name.
+      const onRouter = router ? { router: router.name, region: router.region, projectNumber: await projectNumberOf(c.account) } : {};
+      input = { candidateId, ...onRouter, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [], ...(body.tags !== undefined ? { tags: body.tags } : {}) };
       target = name ? `${candidateId} as ${name}` : candidateId;
     } else if (type === 'install-router') {
       const account = String(body.account ?? '');
@@ -2616,6 +2646,48 @@ export function createApi({
     if (summary && reporting(summary, now())) return (router.installed && Date.parse(router.installed.at) > Date.parse(summary.checkedAt) ? router.installed : summary).version;
     const answer = await invoke(router, { action: 'router' }).catch(() => null) as { router?: { version?: unknown } } | null;
     return typeof answer?.router?.version === 'string' ? answer.router.version : null;
+  }
+
+  // A Google Cloud candidate's router (Google Cloud manager design §8): a regional load balancer's is the router of its
+  // region; a global one's the project's router, the one the body names when the project has several. None there: the CLI
+  // installs one; one before 0.40.0 has no /v1/actions.
+  function googleRouterOf(c: Candidate, asked: unknown, identity: Identity): Router {
+    const ofProject = routers.filter((r) => r.cloud === 'gcp' && r.account === c.account && sees(identity, r.account, r.region));
+    const names = ofProject.map((r) => r.name).join(', ');
+    let router: Router | undefined;
+    if (asked !== undefined) {
+      router = ofProject.find((r) => r.name === asked);
+      if (!router) throw new HttpError(400, 'bad_request', `router: ${JSON.stringify(asked)} is not a router of project ${c.account}${names ? ` (${names})` : ''}`);
+      if (c.region !== 'global' && router.region !== c.region) throw new HttpError(400, 'bad_request', `router: a regional load balancer is onboarded on the router of its region, ${c.region}`);
+    } else if (c.region !== 'global') {
+      router = ofProject.find((r) => r.region === c.region);
+    } else if (ofProject.length > 1) {
+      throw new HttpError(400, 'bad_request', `project ${c.account} has ${ofProject.length} routers: name the one to onboard on in router (${names})`);
+    } else {
+      router = ofProject[0];
+    }
+    const where = c.region === 'global' ? `project ${c.account}` : `project ${c.account}, region ${c.region}`;
+    if (!router) throw new HttpError(400, 'bad_request', `no router in ${where}: ${installCommand(c.account, c.region === 'global' ? '<region>' : c.region, routerVersion)}`);
+    const version = router.installed?.version ?? '';
+    if (routerTooOld(version)) throw new HttpError(409, 'router-too-old', tooOldText(version, c.account, router.region, routerVersion));
+    return router;
+  }
+
+  // A project's number (Resource Manager's `name: projects/<number>`), read as the discovery account: a Google Cloud
+  // onboarding's tag bindings name the project by it. What Google refuses is a 502 with Google's words.
+  async function projectNumberOf(project: string): Promise<string> {
+    const unread = (why: string) => new HttpError(502, 'google_error', `project ${project}: its number can't be read as the discovery account (${why})`);
+    let answer: { name?: unknown };
+    try {
+      if (!google?.call) throw new Error('no Google Cloud connection');
+      answer = await google.call<{ name?: unknown }>('discovery', 'GET', `https://cloudresourcemanager.googleapis.com/v3/projects/${project}`);
+    } catch (err) {
+      if (!(err instanceof GoogleError)) throw unread((err as Error).message);
+      throw unread(`Google: ${[err.host, err.status, err.reason].filter((part) => part !== '').join(' ')}: ${err.message}`);
+    }
+    const number = typeof answer?.name === 'string' ? /^projects\/(\d{1,20})$/.exec(answer.name)?.[1] : undefined;
+    if (!number) throw unread(`Resource Manager answered the name ${JSON.stringify(answer?.name ?? null)}`);
+    return number;
   }
 
   // Refused before an operation starts where the last discovery run found the account's command role missing (packaging
