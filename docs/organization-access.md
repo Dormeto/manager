@@ -72,6 +72,25 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   adds, updates or removes the registrations (the version is the service's `DMT_VERSION`: the discovery account never
   calls a router). The [poll](operations.md#google-cloud-routers) removes a router whose controller no longer exists, and
   reads the version of a router too old to poll from its health, every 10 minutes.
+- **Discovery of projects:** with a connection, each run lists the projects at the scopes as the discovery account
+  (`projects.search`) and scans each one: its URL maps, backend services, target proxies, forwarding rules, instance
+  groups, VMs and zonal network endpoint groups (Compute Engine's aggregated lists, 10 reads at once), then the 7 days of
+  its load balancers' request counts from Cloud Monitoring. A candidate is a backend service a URL map names. It is
+  eligible, ineligible with the router's own onboarding reason (the first one; a GKE workload's is `a GKE workload is
+  onboarded with dormeto gcp workloads onboard, after dormeto gcp workloads access grant`), or managed when a router's
+  workload names it, a napped one too (its URL map names the waker's backend service). The router's preview, at the onboarding, has the last word.
+  The idle share is estimated: Google samples the load balancer's metrics, and a project whose Monitoring is turned off
+  has none. A project whose Compute Engine is turned off has nothing to find; one that fails (an unreachable region,
+  a failed read, `projects.search` itself) is recorded in the run and no candidate of it becomes `gone`. The AWS run is
+  untouched. The Region filter takes `global`; Exclude offers the backend service, the URL map and the project.
+- **The Organization access panel** lists each project beside the AWS accounts, with its cloud mark: whether the
+  discovery account could read it and, in a project that has a router, whether the command account holds what the manager
+  does there. The access check function (it reads `DISC#GOOGLE`, so it needs the table) tests, as the command account,
+  the 10 permissions of `dormetoCommand` on the project (Compute Engine's and Cloud SQL's tag bindings and
+  `cloudsql.instances.get`), `run.routes.invoke` on each router's controller and
+  `resourcemanager.tagValueBindings.create` on the tag value `<project>/dormeto/managed`. A missing one is listed
+  in the reason with `dormeto gcp connect --project <host> --profile <profile> --env <env>`, which grants it; the onboarding of a
+  candidate of that project is refused with 409 and the same command. A Google failure that is no refusal keeps the last verdict.
 - **A router installed later**, in a project the command account does not reach yet, is reached after
   `dormeto gcp connect` is run again; `dormeto gcp install` changes nothing about the manager. Until then, a call to that
   router is refused with the command (`manager-access-missing`).

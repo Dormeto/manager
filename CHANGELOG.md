@@ -103,7 +103,7 @@ Cloud router, answer 400 with the `dormeto gcp install` or `uninstall` command: 
 Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PUT` and `DELETE /settings/waiting-page`) is pushed to
 every Google Cloud router with a controller, but one below 0.40.0, as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
-onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
+onboarded is renamed, tagged and set through the manager, and offboarded unless it is a GKE workload or its onboarding turned request logs on (the CLI's). AWS routers are called as before.
 - **The poll:** the manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
 function with `{ task: 'poll' }`, never retried), 10 at once for at most 50 s a run, the least recently polled first, each
 router at 0.40.0 or later (by major.minor.patch) or of an unknown version. Its journal (`events`), read again from 5 minutes before the newest event already
@@ -144,8 +144,8 @@ onboarded is renamed, tagged and set from the dashboard, which offers Offboard f
 `dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
-  project, the two service accounts, the pool and provider, the scopes, and what a disconnect leaves) and `docs/operations.md`
-  (the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).
+  project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`
+  (onboarding, offboarding and exclusions on Google Cloud, the tag, the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).
 
 ## 0.22.0 — 2026-11-05
 

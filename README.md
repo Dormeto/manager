@@ -55,8 +55,11 @@ flowchart TB
 **On Google Cloud** the same three steps run in a Cloud Run router, behind a Google Cloud Application Load Balancer, for
 Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs, upgrades and uninstalls the routers and sets
 `--request-logs` and GKE access (`dormeto gcp install`, `dormeto gcp workloads access grant`), because those change IAM
-policies, backend services or clusters, which the manager never does. Onboarding and offboarding are the CLI's today
-(`dormeto gcp workloads onboard`, `offboard`); through the manager they come with the discovery of Google Cloud candidates. The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
+policies, backend services or clusters, which the manager never does. A GKE workload's onboarding and offboarding, and the offboarding of a workload whose onboarding turned request logs
+on, stay with the CLI too (`dormeto gcp workloads onboard`, `offboard`). The manager discovers the candidates of your Google Cloud projects (backend
+services a URL map names, with the router's own reasons when one can't be onboarded and an idle share estimated from Cloud Monitoring),
+onboards and offboards Compute Engine and Cloud SQL workloads after the router's preview, and excludes
+them, binding and removing only the tag `dormeto/managed` ([Operations](docs/operations.md#onboarding-and-offboarding-on-google-cloud)). The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
 identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
 ([Organization access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
 reads the router's journal of state changes and its check summary, which feed the same history, health and alerts
@@ -79,7 +82,8 @@ flowchart LR
   <img src="https://dormeto.com/img/discovery-light.webp" alt="Discovery: the last run, the Organization access panel, and the candidates by status with their idle share">
 </picture>
 <p><b>Finds what could nap.</b> Discovery reads the load balancer rules of every account and region of your
-organization with a read-only role, and shows each candidate with its idle share over the last 7 days.</p>
+organization with a read-only role, and shows each candidate with its idle share over the last 7 days. On Google Cloud it reads the
+backend services your URL maps name, in the projects at the scopes of the connection.</p>
 </td>
 <td width="50%" valign="top">
 <picture>
@@ -120,7 +124,8 @@ account, one change per load balancer at a time.</p>
   you set, net of Dormeto's own cost. Each workload's idle window card replays its last 14 days of requests to choose
   the window.
 - **Both clouds, one dashboard.** A cloud mark before each account or project, Google Cloud regions and backend kinds
-  (VM, managed instance group, GKE workload, Cloud SQL instance) and console links. An alert carries its `cloud` for filter policies.
+  (VM, managed instance group, GKE workload, Cloud SQL instance) and console links. Discovery, onboarding, offboarding and exclusions
+  work on both; an alert carries its `cloud` for filter policies.
 - **Alerts where you work.** Failed wakes and router health reach your email and chat channels (Amazon Q Developer in
   Slack or Microsoft Teams) within 5 minutes.
 - **Runs in your account.** The manager and the routers run in your AWS accounts, through least-privilege roles you

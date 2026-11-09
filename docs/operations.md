@@ -15,6 +15,42 @@ roles under `/dormeto/router/`), and the role may only create roles there carryi
 `DmtRouterBoundary`, and change or delete only `dmtr-*` resources, never a router written in Terraform nor the manager. In the manager's account both are created by the `access` module (see below); one operation at a
 time per target group, router or workload, one per load balancer (lock), three per account and region.
 
+## Onboarding and offboarding on Google Cloud
+
+The same operations, on the routers the CLI installed (0.40.0 or later; an older one is a 409 `router-too-old` with the
+`dormeto gcp install` command), through the [connection](organization-access.md#google-cloud). The manager never changes a Google
+IAM policy, a backend service, a URL map or a cluster: it calls the router, which changes the load balancer, and binds and
+removes one resource tag, `dormeto/managed`, as the command account.
+
+- **Onboarding** a candidate (a backend service a URL map names) runs `find router`, `slot` (the project's and the router's
+  region), `lock load balancer` (the URL map), `preview`, `tag`, `onboard`, `verify` and `candidate`. The router is that of the
+  candidate's region for a regional load balancer, the project's for a global one (`router` names it when the project has
+  several). `preview` is the router's dry run, in AWS's onboarder payload (the URL map's and backend service's names, the
+  load balancer's kind): it has the last word on eligibility, and it names the VMs and managed instance groups the router
+  would stop and start. `tag` binds `dormeto/managed` to them and to the Cloud SQL instances given (`databases`), one per
+  run of the step; one bound already is left alone. `verify` reads the router's status: the workload names the backend
+  service, has no issue and isn't `FAILED`. The fallback machine types are Compute Engine's (at most 5, each once).
+- **The router refuses, or the answer is lost:** a refusal (or a router the manager can't reach: the request never got to
+  one that acted) removes exactly the bindings this operation made, never one that was there before; the operation says so. A
+  timeout, a 5xx or any lost answer removes none and names the bindings kept, because the router may have onboarded the
+  workload. A step run again after a lost answer, which the router refuses as onboarded already, is done when its status
+  shows the workload on the candidate's backend service; nothing is removed.
+- **Offboarding** runs `locate` (the router's status), `slot`, `lock load balancer`, `pause`, `wait awake`, `offboard`
+  (the router's, within 300 s), `untag` and `candidate`. `untag` removes the tag as the command account from the VMs and
+  managed instance groups by the ids the onboarding stored, and from the Cloud SQL instances: one not tagged is said, a
+  failure that passes (429, 5xx, no answer) is tried again, another fails the step naming what stays tagged. A VM or group
+  an older onboarding stored no id for is named: its tag is removed by hand. A workload already gone from the router counts as
+  offboarded.
+- **What `locate` refuses,** before anything changes: a GKE workload and one whose onboarding turned request logs on (the router's
+  `cli-only` words, with `dormeto gcp workloads offboard <id> --project <p> --region <r>`), a tag value or a Cloud SQL
+  instance's region that can't be read (with the connect command). A VM or managed instance group workload the CLI onboarded
+  offboards through the manager and loses its tag.
+- **Exclusions:** an exclusion of a backend service (its path), a URL map or a project pauses its managed workloads through
+  every router of the project, the next router when one has no such workload; its lift resumes them by the exclusion's id. A
+  router's operator pause and an exclusion's are separate: lifting an exclusion leaves the operator's pause, and resuming
+  the operator's leaves the exclusion's. A router below 0.40.0, or one that failed in the run, is not called; the errors are said
+  for a workload no router paused.
+
 ## Google Cloud routers
 
 A Google Cloud router (`dmtr-<project>-<region>` in the manager, `cloud: 'gcp'`, installed by the CLI) pushes nothing:
@@ -63,8 +99,8 @@ doesn't); the registry keeps the version as the router reports it.
   and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp install` or
   `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
   uninstall, `--request-logs` and a GKE workload's Kubernetes access are CLI commands (`dormeto gcp`). A workload the CLI
-  onboarded is renamed, tagged, set and offboarded through the manager as any other, but a GKE workload and one whose
-  onboarding turned request logs on: their offboarding fails at `locate`, before anything changes, with `dormeto gcp
+  onboarded is renamed, tagged and set through the manager and, a VM or managed instance group one, offboarded; a GKE workload and one whose
+  onboarding turned request logs on are not: their offboarding fails at `locate`, before anything changes, with `dormeto gcp
   workloads offboard <id> --project <p> --region <r>`. The offboarding removes the tag `dormeto/managed` the onboarding
   bound, as the command account. The workload view still shows that command instead of its Offboard action.
 - **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
