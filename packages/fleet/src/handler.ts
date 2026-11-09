@@ -1,11 +1,12 @@
 // Router events queue → summaries (vision scale design §4), and every minute the poll of the Google Cloud routers, which
 // push nothing (Google Cloud manager design §6.3): the schedule invokes the function with `{ task: 'poll' }`.
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
-import { GetObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import { createIngest, processRecords } from './ingest.js';
 import { createPoll } from './poll.js';
 import { createRegistry } from './registry.js';
+import { createSettingsJson, S3_OPTIONS } from './settings-json.js';
 import { createFleetStore } from './store.js';
 
 const table = process.env.TABLE ?? '';
@@ -28,33 +29,8 @@ const googleSource = createGoogleSource({
   create: (connection) => createGoogle({ connection }),
 });
 
-// The organization's settings.json in the lists bucket (written by the API), with its ETag as S3 gives it: read at most
-// once a run by the poll. 3 s to connect, 10 s of silence.
-const s3 = new S3Client({ maxAttempts: 2, requestHandler: { connectionTimeout: 3_000, requestTimeout: 10_000 } });
-const bucket = process.env.LISTS_BUCKET;
-const SETTINGS = 'settings.json';
-const absent = (err: unknown) => ['NotFound', 'NoSuchKey'].includes((err as Error).name);
-const settings = {
-  async etag() {
-    if (!bucket) return null;
-    try {
-      return (await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: SETTINGS }))).ETag ?? null;
-    } catch (err) {
-      if (absent(err)) return null;
-      throw err;
-    }
-  },
-  async read() {
-    if (!bucket) return null;
-    try {
-      const out = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: SETTINGS }));
-      return { etag: out.ETag ?? '', text: await out.Body!.transformToString() };
-    } catch (err) {
-      if (absent(err)) return null;
-      throw err;
-    }
-  },
-};
+// The organization's settings.json in the lists bucket, read at most once a run by the poll.
+const settings = createSettingsJson({ s3: new S3Client(S3_OPTIONS), bucket: process.env.LISTS_BUCKET });
 
 const poll = createPoll({
   store, ingest, registry: createRegistry({ dynamo, table }), google: googleSource, settings, env: process.env.ENV ?? 'dev', routerVersion: process.env.ROUTER_VERSION, log,
