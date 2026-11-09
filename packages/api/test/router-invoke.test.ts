@@ -59,11 +59,13 @@ describe('a Google Cloud router\'s controller, from the manager', () => {
     expect([err instanceof RouterError, err.message, err.code, err.refusal]).toEqual([true, 'Firestore unavailable', undefined, undefined]);
   });
 
-  it('sends an asynchronous call without asking for refusals, and reads nothing of its answer', async () => {
+  // Without refusals, a 0.40.0 router answers a workload it doesn't know with its REST JSON 404, which reads as a router
+  // too old: every Google Cloud call asks for them.
+  it('sends an asynchronous call asking for refusals too, and reads nothing of its answer', async () => {
     const sent: unknown[] = [];
-    const request = async (...args: unknown[]) => { sent.push(args[4]); return { status: 200, text: '{"refused":{"code":"conflict","message":"x"}}' }; };
+    const request = async (...args: unknown[]) => { sent.push(args[4]); return { status: 200, text: '{"refused":{"code":"not_found","message":"workload not configured: demo"}}' }; };
     const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev' });
     expect(await invoke(GCP, { action: 'nap', workloadId: 'demo' }, { async: true })).toBeNull();
-    expect(sent).toEqual([{ action: 'nap', workloadId: 'demo' }]);
+    expect(sent).toEqual([{ action: 'nap', workloadId: 'demo', refusals: true }]);
   });
 });

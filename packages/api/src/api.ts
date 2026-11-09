@@ -171,8 +171,9 @@ function refusalOf(answer: unknown): unknown {
 
 // A Google Cloud router: the payload to its controller's /v1/actions with the command account's ID token, which answers
 // as the AWS controller does. A router the manager can't use is refused before any call: a version before 0.40.0, no
-// connection, or no controller known yet. Google has no asynchronous call: an asynchronous one is sent as it is and its
-// answer not read.
+// connection, or no controller known yet. Every call asks for refusals (without them a router answers a workload it doesn't
+// know with its REST JSON 404, which reads as a router too old). Google has no asynchronous call: an asynchronous one is
+// sent the same way and its answer not read.
 async function googleInvoke(calls: GoogleCalls | undefined, router: Router, payload: Record<string, unknown>, options: { async?: boolean }): Promise<unknown> {
   const env = calls?.env ?? '';
   const [project, region, version] = [router.account ?? '', router.region, router.installed?.version ?? ''];
@@ -183,7 +184,7 @@ async function googleInvoke(calls: GoogleCalls | undefined, router: Router, payl
   if (!current) throw new RouterError(accessMissingText(host, env), undefined, 'manager-access-missing');
   let answer: unknown;
   try {
-    answer = await callRouter(current.google, router, options.async ? payload : { ...payload, refusals: true }, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS });
+    answer = await callRouter(current.google, router, { ...payload, refusals: true }, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS });
   } catch (err) {
     if (!(err instanceof RouterCallError)) throw err;
     if (err.refusal === 'manager-access-missing') throw new RouterError(accessMissingText(host, env), undefined, err.refusal);
