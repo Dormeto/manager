@@ -4,6 +4,7 @@
 // Functions runs the account steps in a Distributed Map; runDiscovery runs the three in process.
 import { defaultConfig } from './config.js';
 import { withExclusions } from './exclusions.js';
+import { discoverGoogleRouters, type GooglePort } from './google.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
 import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
@@ -46,6 +47,8 @@ export interface RunDeps {
   concurrency?: number; // regions of an account scanned at once (8)
   runLimitMs?: number; // a run not finished after this is abandoned (3 hours: the state machine's limit)
   synthetic?: { accounts: number }; // dev only: a synthetic organization added to the real one (acceptance at scale)
+  // The Google Cloud connection and registry: with a connection, finalize lists the routers of its projects (Google Cloud manager design §6.1).
+  google?: GooglePort;
   log?: Logger;
 }
 
@@ -520,10 +523,16 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const status = errors === 0 ? 'ok' : errors === targets.length + emptyPairs ? 'failed' : 'partial';
     const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
     const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory, now());
+    // Google Cloud's routers: a failure here is recorded, never the run's.
+    const google = deps.google ? await discoverGoogleRouters(deps.google, { now, log }).catch((err) => {
+      log.error('GoogleRoutersFailed', { error: errorText(err) });
+      return { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [{ project: '*', error: errorText(err) }] };
+    }) : null;
     const record: RunRecord = {
       startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,
       counts: await deps.store.countCandidates(), lint: lint(config, inventory, { counters: sumCounters(counters) }),
       ...(plan.delegation ? { delegation: plan.delegation } : {}),
+      ...(google ? { google } : {}),
       ...(connections.connect.length || connections.disconnect.length || config.eventRefresh ? { connections } : {}),
     };
     await deps.store.putRun(record);

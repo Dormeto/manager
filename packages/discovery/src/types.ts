@@ -269,4 +269,6 @@ export interface RunRecord {
   // Event refresh (packaging design §5): the accounts to connect (with their regions) and to disconnect; the state machine
   // passes them to the operations.
   connections?: { connect: { account: string; regions: string[] }[]; disconnect: string[] };
+  // Google Cloud (design §6.1), present when a connection exists: projects listed, routers found, registry changes, failures per project.
+  google?: { projects: number; routers: number; added: number; updated: number; removed: number; errors: { project: string; error: string }[] };
 }

@@ -2,7 +2,7 @@
 // { step: 'account', runId, account } (one per account, in a Distributed Map), { step: 'finalize', plan }, and
 // { step: 'abandon', plan, error } when finalize failed. Without a step, a whole run in process (the accounts one after
 // another).
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { OrganizationsClient } from '@aws-sdk/client-organizations';
 import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
@@ -11,6 +11,8 @@ import { abandonRun, finalizeRun, planRun, refreshAccounts, runDiscovery, runSum
 import { scanRegion } from './scan.js';
 import { createRecords } from '../../operations/src/records.js';
 import { createFleetStore } from '../../fleet/src/store.js';
+import { createGoogle, type GoogleConnection } from '@dormeto/google';
+import { createGoogleSource } from './google.js';
 import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestMinutes } from './requests.js';
 import { routeOf } from './route.js';
@@ -42,6 +44,15 @@ const records = createRecords({ dynamo, table: process.env.TABLE ?? '' });
 const fleet = createFleetStore({ dynamo, table: process.env.TABLE ?? '' });
 const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof createProxyPrefixes>[0]['terraform'];
 const proxyPrefix = createProxyPrefixes({ terraform: terraformRouters, records, fleet, log });
+// The Google Cloud connection (`DISC#GOOGLE`, written by `dormeto gcp connect`), read at each finalize; one Google instance
+// per execution environment keeps its tokens between invocations.
+const googleSource = createGoogleSource({
+  async read() {
+    const item = (await dynamo.send(new GetItemCommand({ TableName: process.env.TABLE ?? '', Key: { pk: { S: 'T#default' }, sk: { S: 'DISC#GOOGLE' } }, ConsistentRead: true }))).Item;
+    return item?.data?.S ? (JSON.parse(item.data.S) as GoogleConnection) : null;
+  },
+  create: (connection) => createGoogle({ connection }),
+});
 // Dev only: a synthetic organization of this many accounts added to the real one (acceptance at scale).
 const synthetic = Number(process.env.SYNTHETIC_ACCOUNTS ?? 0);
 let managerAccount: string | undefined;
@@ -86,6 +97,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),
+    google: { connection: googleSource.connection, call: googleSource.call, registry: { list: () => records.listRouters(), put: (r) => records.putRouter(r), delete: (a, r) => records.deleteRouter(a, r) } },
     log,
   };
   if (event.step === 'plan') {
