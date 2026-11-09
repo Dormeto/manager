@@ -94,9 +94,11 @@ const INSTANCE_ID = /^i-[0-9a-f]{8,17}$/;
 const VM_NAME = /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\.[a-z0-9]+$/;
 export interface Fallback { instance: string; from: string; to: string }
-const fallbacksOf = (v: unknown): Fallback[] | undefined => (Array.isArray(v)
-  ? v.filter((f): f is Fallback => isObject(f) && typeof f.instance === 'string' && INSTANCE_ID.test(f.instance)
-    && typeof f.from === 'string' && INSTANCE_TYPE.test(f.from) && typeof f.to === 'string' && INSTANCE_TYPE.test(f.to))
+// A Google Cloud machine type: e2-medium, n2d-standard-2, e2-custom-4-8192.
+const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
+const fallbacksOf = (v: unknown, cloud: Cloud | null = 'aws'): Fallback[] | undefined => (Array.isArray(v)
+  ? v.filter((f): f is Fallback => isObject(f) && typeof f.instance === 'string' && (cloud === 'gcp' ? VM_NAME : INSTANCE_ID).test(f.instance)
+    && typeof f.from === 'string' && (cloud === 'gcp' ? MACHINE_TYPE : INSTANCE_TYPE).test(f.from) && typeof f.to === 'string' && (cloud === 'gcp' ? MACHINE_TYPE : INSTANCE_TYPE).test(f.to))
     .slice(0, 20).map(({ instance, from, to }) => ({ instance, from, to }))
   : undefined);
 
@@ -183,7 +185,7 @@ export function workloadOf(w: unknown, cloud: Cloud | null = 'aws'): Json | null
     failure: failureOf(w.failure),
     consecutiveFailures: count(w.consecutiveFailures),
     nextAttemptAt: time(w.nextAttemptAt) ?? undefined,
-    fallbacks: fallbacksOf(w.fallbacks),
+    fallbacks: fallbacksOf(w.fallbacks, cloud),
     updatedAt: time(w.updatedAt),
     pendingWake: w.pendingWake === true,
     // A schedule is set (routers 0.31.0).

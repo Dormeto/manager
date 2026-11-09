@@ -201,6 +201,18 @@ describe('fleet', () => {
     expect([w!.targetGroupArn, w!.source, w!.backendService, w!.lb]).toEqual(['arn:tg/a', 'manager', undefined, undefined]);
   });
 
+  it('keeps the fallbacks of a Google Cloud row (VM names, machine types) and of an AWS row (instance ids, instance types), each of its own cloud', async () => {
+    const s = setup();
+    const gcpFallback = { instance: 'web-1', from: 'e2-small', to: 'e2-medium' };
+    const awsFallback = { instance: 'i-0123456789abcdef0', from: 't3.micro', to: 't3.small' };
+    const custom = { instance: 'web-2', from: 'n2d-standard-2', to: 'e2-custom-4-8192' };
+    await s.ingest({ account: 'dormeto-dev', region: 'europe-west2', 'detail-type': 'Router checked', detail: { ...checked(T1, []).detail, workloads: [workload('g', 'AWAKE', { fallbacks: [gcpFallback, custom, awsFallback, { instance: 'Bad_Name', from: 'e2-small', to: 'e2-medium' }] })] } });
+    await s.ingest(checked(T1, [workload('a', 'AWAKE', { fallbacks: [awsFallback, gcpFallback] })]));
+    const all = await s.store.listWorkloads();
+    expect(all.find((w) => w.workloadId === 'g')!.fallbacks).toEqual([gcpFallback, custom]);
+    expect(all.find((w) => w.workloadId === 'a')!.fallbacks).toEqual([awsFallback]);
+  });
+
   it('refuses a check or a state change dated ahead of the manager\'s clock, or not dated: one event never pins a summary', async () => {
     const s = setup();
     // Any principal of the organization may publish: a check dated in 2099 would win over every later one.
