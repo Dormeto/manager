@@ -1,6 +1,7 @@
 // Operations engine (vision docs/specs/2026-10-05-onboarding-design.md, R4b): an operation is a list of steps run one at a
 // time by the Step Functions workflow (`next` until done, waiting as asked), each step idempotent; `fail` releases what the
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
+import type { Tags } from '@dormeto/google';
 import { isAccount, isRegion } from '@dormeto/fleet/clouds';
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
@@ -75,6 +76,9 @@ export interface EngineDeps {
   // discoveryRole: the discovery role's name (DmtDiscoveryRole by default), given the view policy in the clusters.
   // version: the manager's own (VERSION), named in the organization access to apply; unknown without it.
   settings: { env: string; version?: string; principals: string[]; discoveryRole?: string; routerSettings: { checkSchedule: string; ipLists: string; ipListsCatalog: string; ipListsBucket: string; noWakeRules: string; metrics: string; managerBus: string; commandRole: string } };
+  // Google Cloud: a router's controller (`invoke`, refusals thrown with their `code`) and the tag bindings, both through the
+  // connection's Google instance; absent where the manager has no Google Cloud wiring.
+  google?: { invoke(router: RouterRef, payload: Record<string, unknown>, options: { timeoutMs: number }): Promise<any>; tags: Tags };
   start(op: Operation): Promise<string>; // starts the workflow execution, returns its ARN
   now?: () => number;
   newId?: () => string;

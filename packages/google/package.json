@@ -15,6 +15,7 @@
     "@smithy/signature-v4": "^5.7.4"
   },
   "devDependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1146.0",
     "@aws-sdk/credential-providers": "^3.1146.0",
     "@types/node": "^24.19.1",
     "typescript": "^5.9.3",

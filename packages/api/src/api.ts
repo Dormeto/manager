@@ -8,7 +8,7 @@ import {
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import type { Google, GoogleConnection } from '@dormeto/google';
 // The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
-import { accessMissingText, callRouter, controllerUnknownText, installCommand, RouterCallError, routerTooOld, tooOldText, type Refusal } from '@dormeto/google/router';
+import { actOnRouter, installCommand, RouterCallError, routerTooOld, type Refusal } from '@dormeto/google/router';
 import { cloudOf, googlePath, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
@@ -173,21 +173,12 @@ function refusalOf(answer: unknown): unknown {
 // know with its REST JSON 404, which reads as a router too old). Google has no asynchronous call: an asynchronous one is
 // sent the same way and its answer not read.
 async function googleInvoke(calls: GoogleCalls | undefined, router: Router, payload: Record<string, unknown>, options: { async?: boolean }): Promise<unknown> {
-  const env = calls?.env ?? '';
-  const [project, region, version] = [router.account ?? '', router.region, router.installed?.version ?? ''];
-  if (routerTooOld(version)) throw new RouterError(tooOldText(version, project, region, calls?.routerVersion), undefined, 'router-too-old');
-  const current = (await calls?.current()) ?? null;
-  const host = current?.connection.project ?? '<host>';
-  if (!router.controller) throw new RouterError(controllerUnknownText(host, env), undefined, 'router-unknown');
-  if (!current) throw new RouterError(accessMissingText(host, env), undefined, 'manager-access-missing');
   let answer: unknown;
   try {
-    answer = await callRouter(current.google, router, { ...payload, refusals: true }, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS });
+    answer = await actOnRouter((await calls?.current()) ?? null, { ...router, version: router.installed?.version ?? '' }, payload, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS, env: calls?.env ?? '', routerVersion: calls?.routerVersion });
   } catch (err) {
     if (!(err instanceof RouterCallError)) throw err;
-    if (err.refusal === 'manager-access-missing') throw new RouterError(accessMissingText(host, env, err.said), undefined, err.refusal);
-    if (err.refusal === 'router-too-old') throw new RouterError(tooOldText('', project, region, calls?.routerVersion), undefined, err.refusal);
-    throw new RouterError(err.message);
+    throw new RouterError(err.message, undefined, err.refusal);
   }
   return options.async ? null : refusalOf(answer);
 }

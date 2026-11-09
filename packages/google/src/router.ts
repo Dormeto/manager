@@ -7,7 +7,7 @@
 // The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
 // health (GET /v1/health, which every router version answers), the same way.
 import { errorOf, GoogleError, redacted } from './errors.js';
-import type { Google } from './google.js';
+import type { Google, GoogleConnection } from './google.js';
 
 // The router version the manager needs (/v1/actions, the journal, the check summary).
 export const ROUTER_MINIMUM = '0.40.0';
@@ -35,12 +35,12 @@ export class RouterCallError extends Error {
   readonly status: number;
   readonly google: boolean;
   readonly token: boolean;
-  readonly refusal?: RouterRefusal;
+  readonly refusal?: Refusal;
   // Google's own words when Google refused or failed (`Google: <host> <status> <reason>: <message>`), from the token's stage
   // or the controller URL's; never a token or a signature.
   readonly said?: string;
 
-  constructor(message: string, { status = 0, google = false, token = false, refusal, said }: { status?: number; google?: boolean; token?: boolean; refusal?: RouterRefusal; said?: string } = {}) {
+  constructor(message: string, { status = 0, google = false, token = false, refusal, said }: { status?: number; google?: boolean; token?: boolean; refusal?: Refusal; said?: string } = {}) {
     super(redacted(message, Infinity)); // whatever Google echoed never carries a credential
     if (said) this.said = said;
     this.name = 'RouterCallError';
@@ -169,4 +169,31 @@ export async function callRouter(google: Pick<Google, 'request'>, router: { cont
 export async function routerHealth(google: Pick<Google, 'request'>, router: { controller: string }, { timeoutMs }: { timeoutMs: number }): Promise<RouterHealth> {
   const origin = new URL(router.controller).origin;
   return bounded(timeoutMs, () => healthOf(google, origin));
+}
+
+// A router the manager acts on (Google Cloud manager design §6.2): the connection and its Google instance as read now
+// (null while there is none), the router as the registry holds it (version: as the router reports it, '' when unknown).
+// A router the manager can't use is refused before any call: a version before 0.40.0, no controller known yet, no
+// connection. The payload is sent with `refusals: true` (without it a router answers a workload it doesn't know with its
+// REST JSON 404, which reads as a router too old). The answer is the router's body, a `{refused}` answer as it is: each
+// caller maps it. A failure is a RouterCallError, its `refusal` set when the manager's side can fix it.
+export async function actOnRouter(
+  current: { connection: GoogleConnection; google: Pick<Google, 'request'> } | null,
+  router: { controller?: string; account?: string; region: string; version?: string },
+  payload: Record<string, unknown>,
+  { timeoutMs, env, routerVersion }: { timeoutMs: number; env: string; routerVersion?: string | undefined },
+): Promise<unknown> {
+  const [project, region, version] = [router.account ?? '', router.region, router.version ?? ''];
+  if (routerTooOld(version)) throw new RouterCallError(tooOldText(version, project, region, routerVersion), { refusal: 'router-too-old' });
+  const host = current?.connection.project ?? '<host>';
+  if (!router.controller) throw new RouterCallError(controllerUnknownText(host, env), { refusal: 'router-unknown' });
+  if (!current) throw new RouterCallError(accessMissingText(host, env), { refusal: 'manager-access-missing' });
+  try {
+    return await callRouter(current.google, { controller: router.controller }, { ...payload, refusals: true }, { timeoutMs });
+  } catch (err) {
+    if (!(err instanceof RouterCallError)) throw err;
+    if (err.refusal === 'manager-access-missing') throw new RouterCallError(accessMissingText(host, env, err.said), { refusal: err.refusal });
+    if (err.refusal === 'router-too-old') throw new RouterCallError(tooOldText('', project, region, routerVersion), { refusal: err.refusal });
+    throw err;
+  }
 }

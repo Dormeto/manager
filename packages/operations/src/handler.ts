@@ -5,9 +5,11 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import { STSClient } from '@aws-sdk/client-sts';
 import { createStore } from '@dormeto/discovery';
+import { createGoogle, createGoogleSource, readConnection } from '@dormeto/google';
 import { createBundle, createTargets } from './aws.js';
 import { runConnections } from './connections.js';
 import { createEngine } from './engine.js';
+import { googleInvoker, googleTags } from './google.js';
 import { createRecords } from './records.js';
 import { CHECK_SCHEDULE, routersOf } from './routers.js';
 
@@ -21,12 +23,15 @@ const sfn = new SFNClient({});
 const commandRole = process.env.COMMAND_ROLE ?? 'DmtCommandRole';
 
 const discovery = createStore({ dynamo, table });
+// The Google Cloud connection (`DISC#GOOGLE`); one Google instance per execution environment keeps its tokens.
+const googleSource = createGoogleSource({ read: readConnection({ dynamo, table }), create: (connection) => createGoogle({ connection }) });
 const engine = createEngine({
   records,
   discovery,
   routers: () => routersOf(JSON.parse(process.env.ROUTERS ?? '[]'), records),
   target: createTargets({ sts: new STSClient({}), roleName: commandRole, sessionName: `dmt-${env}-operations` }),
   bundle: createBundle({ s3: new S3Client({}), bucket: process.env.ARTIFACTS_BUCKET ?? '', version: process.env.ROUTER_VERSION ?? '' }),
+  google: { invoke: googleInvoker(googleSource, { env, routerVersion: process.env.ROUTER_VERSION }), tags: googleTags(googleSource) },
   settings: {
     env,
     // The manager's version (VERSION), in what to apply where an account's organization access is older.
