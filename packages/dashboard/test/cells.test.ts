@@ -88,6 +88,15 @@ describe('discovery cells', () => {
     expect(tip).toContain('CloudWatch');
   });
 
+  it('says in the tooltip that a Google Cloud idle share is estimated from Cloud Monitoring\'s sampled metrics', async () => {
+    const w = render(IdleBar, { idleHours7d: 154, requests7d: 1234, cloud: 'gcp' });
+    const tip = await tooltipOf(w, '.idle-bar');
+    expect(tip).toContain('154 of 168 hours without any request to its backend service');
+    expect(tip).toContain('Cloud Monitoring');
+    expect(tip).toContain('estimate');
+    expect(tip).not.toContain('CloudWatch');
+  });
+
   it('shows a status by its short name, its meaning and transitions in the tooltip', async () => {
     const w = render(StatusChip, { status: 'pending-onboarding' });
     expect(w.text()).toBe('To onboard');

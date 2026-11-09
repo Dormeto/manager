@@ -87,6 +87,28 @@ describe('demo scenario', () => {
     vi.useRealTimers();
   });
 
+  it('adds the Google Cloud project\'s candidates to any scenario: managed, to onboard, a GKE workload and a two-map refusal, apart from the generated ones', async () => {
+    sessionStorage.setItem('dormeto.demo', 'tiny,people=1,accounts=1,routers=1,workloads=2,candidates=1');
+    const { mockApi } = await import('../src/mock');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const call = <T>(path: string) => {
+      const answer = mockApi(path) as Promise<T>;
+      vi.runAllTimers();
+      return answer;
+    };
+    type Row = { id: string; account: string; region: string; cloud?: string; status: string; statusReason: string; targetGroup: string; backend: { kind: string } | null };
+    const all: Row[] = [];
+    for (const status of ['pending-onboarding', 'managed', 'ineligible']) all.push(...(await call<{ candidates: Row[] }>(`/discovery/candidates?status=${status}&limit=200`)).candidates);
+    const google = all.filter((c) => c.cloud === 'gcp');
+    expect(google.every((c) => c.account === 'dormeto-dev')).toBe(true);
+    expect(google.map((c) => [c.targetGroup, c.status, c.region, c.backend?.kind]).sort()).toEqual([
+      ['catalog-bs', 'ineligible', 'global', 'k8s'], ['mig-demo', 'managed', 'europe-west2', 'asg'], ['shared-bs', 'ineligible', 'global', 'instance'],
+      ['shop-bs', 'pending-onboarding', 'global', 'asg'], ['vm-demo', 'managed', 'europe-west2', 'instance'],
+    ]);
+    expect(all.filter((c) => c.cloud !== 'gcp').every((c) => /^\d{12}$/.test(c.account))).toBe(true);
+    vi.useRealTimers();
+  });
+
   // R11: the demo answers the tags, groups and member routes as the API does.
   it('answers the tag filter, a retag, groups and a member invitation as the API does', async () => {
     sessionStorage.setItem('dormeto.demo', 'initech,workloads=30,routers=3');

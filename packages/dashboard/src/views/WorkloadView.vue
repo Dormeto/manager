@@ -10,7 +10,7 @@ import { backendIcon, backendMdi } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendArn, backendKinds, backendLabel, backendService, googleBackendService, duration, listSourceHref, targetInfo, usd, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText, rowCloud } from '../format';
-import { backendConsoleUrl, resourceName, urlMapConsoleUrl } from '../google';
+import { backendConsoleUrl, googleResourcePath, lbText, resourceName, urlMapConsoleUrl } from '../google';
 import { equivalents, rounded } from '../energy';
 import { useSession } from '../stores/session';
 import { pauseLine, type TargetOption } from '../pause';
@@ -274,9 +274,9 @@ const costNote = computed(() => {
 // page is the URL map's: they are named in it).
 const project = computed(() => status.value?.account ?? '');
 const backendLink = (b: Backend) => (gcp.value ? backendConsoleUrl(b, project.value) : null);
-const LB_KINDS: Record<string, string> = { global: 'global external Application Load Balancer', classic: 'classic Application Load Balancer', regional: 'regional Application Load Balancer' };
-const lbText = (lb: { kind: string; region?: string }) => `${LB_KINDS[lb.kind] ?? lb.kind}${lb.region ? ` in ${lb.region}` : ''}`;
-const urlMapLink = computed(() => (status.value?.urlMap ? urlMapConsoleUrl(status.value.urlMap, status.value.lb, project.value) : null));
+// The router's row names its backend services and URL map; their paths are built from the project, the load balancer's kind and the region.
+const googlePath = (collection: 'backendServices' | 'urlMaps', name: string) => googleResourcePath(project.value, collection, name, status.value?.lb, status.value?.region ?? '');
+const urlMapLink = computed(() => (status.value?.urlMap ? urlMapConsoleUrl(googlePath('urlMaps', status.value.urlMap), status.value.lb, project.value) : null));
 // Where the workload is: the ARNs of its backends and targets.
 const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
 const excludeOptions = computed<TargetOption[]>(() => (status.value?.targetGroupArn
@@ -575,9 +575,9 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <v-card v-if="gcp && status.backendService" data-test="load-balancing" title="Load balancing">
         <v-table density="compact" class="dm-summary">
           <tbody>
-            <tr><th class="text-medium-emphasis font-weight-regular">Backend service</th><td class="mono"><component :is="urlMapLink ? 'a' : 'span'" :href="urlMapLink ?? undefined" target="_blank" rel="noopener" :title="status.backendService">{{ resourceName(status.backendService) }}</component></td></tr>
-            <tr v-if="status.wakerBackendService"><th class="text-medium-emphasis font-weight-regular">Waker backend service</th><td class="mono"><component :is="urlMapLink ? 'a' : 'span'" :href="urlMapLink ?? undefined" target="_blank" rel="noopener" :title="status.wakerBackendService">{{ resourceName(status.wakerBackendService) }}</component></td></tr>
-            <tr v-if="status.urlMap"><th class="text-medium-emphasis font-weight-regular">URL map</th><td class="mono"><component :is="urlMapLink ? 'a' : 'span'" :href="urlMapLink ?? undefined" target="_blank" rel="noopener" :title="status.urlMap">{{ resourceName(status.urlMap) }}</component></td></tr>
+            <tr><th class="text-medium-emphasis font-weight-regular">Backend service</th><td class="mono"><component :is="urlMapLink ? 'a' : 'span'" :href="urlMapLink ?? undefined" target="_blank" rel="noopener" :title="googlePath('backendServices', status.backendService)">{{ resourceName(status.backendService) }}</component></td></tr>
+            <tr v-if="status.wakerBackendService"><th class="text-medium-emphasis font-weight-regular">Waker backend service</th><td class="mono"><component :is="urlMapLink ? 'a' : 'span'" :href="urlMapLink ?? undefined" target="_blank" rel="noopener" :title="googlePath('backendServices', status.wakerBackendService)">{{ resourceName(status.wakerBackendService) }}</component></td></tr>
+            <tr v-if="status.urlMap"><th class="text-medium-emphasis font-weight-regular">URL map</th><td class="mono"><component :is="urlMapLink ? 'a' : 'span'" :href="urlMapLink ?? undefined" target="_blank" rel="noopener" :title="googlePath('urlMaps', status.urlMap)">{{ resourceName(status.urlMap) }}</component></td></tr>
             <tr v-if="status.lb"><th class="text-medium-emphasis font-weight-regular">Load balancer</th><td>{{ lbText(status.lb) }}</td></tr>
           </tbody>
         </v-table>

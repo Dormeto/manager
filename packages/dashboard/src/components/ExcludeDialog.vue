@@ -1,11 +1,11 @@
 <script setup lang="ts">
-// Exclude a target group, a load balancer or an account from Dormeto: reason and expiry.
+// Exclude a target group (a backend service), a load balancer (a URL map) or an account (a project) from Dormeto: reason and expiry.
 import { ref, watch } from 'vue';
 import { mdiCancel, mdiInformationOutline } from '@mdi/js';
 import { UNTIL_CHOICES, untilFrom, type TargetOption, type UntilChoice } from '../pause';
 
 const props = defineProps<{ modelValue: boolean; options: TargetOption[] }>();
-const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ target: { kind: string; arn?: string; account?: string }; reason: string; expiresAt?: string }] }>();
+const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [{ target: { kind: string; arn?: string; path?: string; account?: string }; reason: string; expiresAt?: string }] }>();
 const selected = ref(0);
 const reason = ref('');
 const choice = ref<UntilChoice>('none');
@@ -21,7 +21,7 @@ watch(() => props.modelValue, (open) => {
 function submit() {
   const option = props.options[selected.value]!;
   const expiresAt = untilFrom(choice.value, Date.now(), date.value);
-  const target = option.kind === 'account' ? { kind: option.kind, account: option.account } : { kind: option.kind, arn: option.arn };
+  const target = option.kind === 'account' ? { kind: option.kind, account: option.account } : option.path ? { kind: option.kind, path: option.path } : { kind: option.kind, arn: option.arn };
   emit('submit', { target, reason: reason.value.trim(), ...(expiresAt ? { expiresAt } : {}) });
 }
 </script>

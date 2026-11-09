@@ -8,6 +8,14 @@ const withProject = (project: string) => `?project=${part(project)}`;
 // The last segment of a resource path: the name Google Cloud shows.
 export const resourceName = (path: string): string => path.split('/').at(-1) ?? path;
 
+// The path of a backend service or a URL map a workload's row names by name (the router's row holds names, discovery's candidate
+// paths): the global scope for a missing, `global`, `classic` or `cross-region-internal` load balancer, the load balancer's region
+// (else the row's) for a `regional` or `internal` one. A path is kept as it is.
+export function googleResourcePath(project: string, collection: 'backendServices' | 'urlMaps', value: string, lb: { kind: string; region?: string } | undefined, region: string): string {
+  if (value.startsWith('projects/')) return value;
+  return lb?.kind === 'regional' || lb?.kind === 'internal' ? `projects/${project}/regions/${lb.region ?? region}/${collection}/${value}` : `projects/${project}/global/${collection}/${value}`;
+}
+
 // `projects/<project>/(zones|regions|global)/<location>/<collection>/<name>`, or `projects/<project>/<collection>/<name>`
 // (Cloud SQL's). Null for anything else.
 function resourceOf(path: string): { project: string; scope: 'zones' | 'regions' | 'global' | null; location: string | null; collection: string; name: string } | null {
@@ -43,3 +51,10 @@ export const controllerConsoleUrl = (project: string, region: string): string =>
 export const installCommand = (project: string, region: string, version?: string | null): string =>
   `dormeto gcp install --project ${project} --region ${region}${version ? ` --version ${version}` : ''}`;
 export const uninstallCommand = (project: string, region: string): string => `dormeto gcp uninstall --project ${project} --region ${region}`;
+
+const LB_KINDS: Record<string, string> = {
+  global: 'global external Application Load Balancer', classic: 'classic Application Load Balancer', regional: 'regional Application Load Balancer',
+  internal: 'regional internal Application Load Balancer', 'cross-region-internal': 'cross-region internal Application Load Balancer',
+};
+// A load balancer's kind in words, with its region when it has one.
+export const lbText = (lb: { kind: string; region?: string }): string => `${LB_KINDS[lb.kind] ?? lb.kind}${lb.region ? ` in ${lb.region}` : ''}`;

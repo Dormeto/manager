@@ -338,7 +338,8 @@ export type ExclusionKind = 'target-group' | 'load-balancer' | 'account';
 
 export interface ExclusionTarget {
   kind: ExclusionKind;
-  arn?: string;
+  arn?: string; // AWS
+  path?: string; // Google Cloud: a backend service's or a URL map's
   account: string;
   region?: string;
   name: string;

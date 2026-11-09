@@ -40,4 +40,16 @@ describe('Organization access panel', () => {
     expect(wrapper.text()).toContain('How to set up the roles');
     wrapper.unmount();
   });
+
+  it('lists a Google Cloud project with its cloud mark and the reason, which names the connect command', () => {
+    const command = 'dormeto gcp connect --project dormeto-dev --profile dormeto --env dev';
+    const wrapper = mountPanel({ ...ready, counts: { ready: 1, discoveryMissing: 0, commandMissing: 1, unchecked: 0 },
+      accounts: [{ account: 'shop-prod', name: 'shop-prod', discovery: { ok: true }, command: { ok: false, reason: `the command service account cannot act in shop-prod: ${command}` } }] });
+    const row = wrapper.find('.dm-access__row');
+    expect(row.text()).toContain('shop-prod');
+    expect(row.text()).toContain(command);
+    expect(row.text()).not.toContain('no command role');
+    expect(row.find('[data-cloud="gcp"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
 });

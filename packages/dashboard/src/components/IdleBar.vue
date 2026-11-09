@@ -2,10 +2,11 @@
 // The idle share of the last 7 days as a bar colored from red (busy) to green (idle); the figures and their source in a
 // tooltip.
 import { computed } from 'vue';
+import type { Cloud } from '@dormeto/fleet/clouds';
 import { idleColor, idleText } from '../discovery';
 
-const props = defineProps<{ idleHours7d: number; requests7d: number | null }>();
-const text = computed(() => idleText(props));
+const props = defineProps<{ idleHours7d: number; requests7d: number | null; cloud?: Cloud }>();
+const text = computed(() => idleText(props, props.cloud));
 const share = computed(() => Math.min(100, Math.max(0, (100 * props.idleHours7d) / 168)));
 </script>
 
@@ -18,7 +19,9 @@ const share = computed(() => Math.min(100, Math.max(0, (100 * props.idleHours7d)
     </template>
     <div class="font-weight-bold">{{ text.title }}</div>
     <div>{{ text.detail }}</div>
-    <div class="mt-1 note">From the load balancer's CloudWatch metric RequestCount for this target group, hour by hour, read by
+    <div v-if="cloud === 'gcp'" class="mt-1 note">From Cloud Monitoring's request count of the load balancer for this backend service, hour by hour, read by discovery:
+      no onboarding needed. Google samples these metrics, and every request counts, bots and scanners included: an estimate of how long it could sleep.</div>
+    <div v-else class="mt-1 note">From the load balancer's CloudWatch metric RequestCount for this target group, hour by hour, read by
       discovery: no onboarding needed. Every request counts, bots and scanners included: an estimate of how long it could sleep.</div>
   </v-tooltip>
 </template>

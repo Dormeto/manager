@@ -49,6 +49,24 @@ describe('exclusions', () => {
     expect(exclusionText({ kind: 'target-group', arn: TG, account: '121014831971', region: 'eu-west-1', name: 'dmt-dev-asg-app' })).toBe('target group dmt-dev-asg-app · 121014831971 · eu-west-1');
     expect(exclusionText({ kind: 'account', account: '038606077307', name: 'ligoj' })).toBe('account ligoj · 038606077307');
   });
+
+  it('offers the backend service, the URL map and the project of a Google Cloud candidate, by their paths', () => {
+    const c = {
+      targetGroupArn: null, targetGroup: 'shop-bs', loadBalancerArn: '', loadBalancer: 'shop-lb', account: 'dormeto-dev', accountName: 'dormeto-dev',
+      id: 'projects/dormeto-dev/global/backendServices/shop-bs', backendService: 'projects/dormeto-dev/global/backendServices/shop-bs', urlMap: 'projects/dormeto-dev/global/urlMaps/shop-lb',
+    };
+    expect(exclusionTargets(c)).toEqual([
+      { kind: 'target-group', path: 'projects/dormeto-dev/global/backendServices/shop-bs', label: 'Backend service shop-bs' },
+      { kind: 'load-balancer', path: 'projects/dormeto-dev/global/urlMaps/shop-lb', label: 'URL map shop-lb (every backend service it names)' },
+      { kind: 'account', account: 'dormeto-dev', label: 'Project dormeto-dev (never read again)' },
+    ]);
+  });
+
+  it('describes a Google Cloud exclusion target in its own words', () => {
+    expect(exclusionText({ kind: 'target-group', path: 'projects/dormeto-dev/global/backendServices/shop-bs', account: 'dormeto-dev', region: 'global', name: 'shop-bs' })).toBe('backend service shop-bs · dormeto-dev · global');
+    expect(exclusionText({ kind: 'load-balancer', path: 'projects/dormeto-dev/global/urlMaps/shop-lb', account: 'dormeto-dev', region: 'global', name: 'shop-lb' })).toBe('URL map shop-lb · dormeto-dev · global');
+    expect(exclusionText({ kind: 'account', account: 'dormeto-dev', name: 'dormeto-dev' })).toBe('project dormeto-dev · dormeto-dev');
+  });
 });
 
 describe('routerStatus', () => {

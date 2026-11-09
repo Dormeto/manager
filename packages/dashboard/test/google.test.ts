@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backendConsoleUrl, controllerConsoleUrl, installCommand, resourceName, uninstallCommand, urlMapConsoleUrl } from '../src/google';
+import { backendConsoleUrl, controllerConsoleUrl, googleResourcePath, installCommand, resourceName, uninstallCommand, urlMapConsoleUrl } from '../src/google';
 
 describe('Google Cloud console links and commands', () => {
   it('links a VM, a managed group and a Cloud SQL instance from their resource paths, with the project', () => {
@@ -36,5 +36,21 @@ describe('Google Cloud console links and commands', () => {
     expect(installCommand('dormeto-dev', 'europe-west2', '0.40.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
     expect(uninstallCommand('dormeto-dev', 'europe-west2')).toBe('dormeto gcp uninstall --project dormeto-dev --region europe-west2');
     expect(resourceName('projects/p/regions/r/backendServices/web-waker')).toBe('web-waker');
+  });
+});
+
+describe('a Google Cloud resource\'s path from a workload\'s row', () => {
+  it('builds it in the global scope for a missing or a global, classic or cross-region internal load balancer', () => {
+    expect(googleResourcePath('dormeto-dev', 'backendServices', 'shop', undefined, 'global')).toBe('projects/dormeto-dev/global/backendServices/shop');
+    for (const kind of ['global', 'classic', 'cross-region-internal']) expect(googleResourcePath('dormeto-dev', 'urlMaps', 'lb', { kind }, 'europe-west2')).toBe('projects/dormeto-dev/global/urlMaps/lb');
+  });
+
+  it('builds it in the load balancer\'s region, else the row\'s, for a regional or an internal one', () => {
+    expect(googleResourcePath('dormeto-dev', 'urlMaps', 'lb', { kind: 'regional', region: 'europe-west1' }, 'europe-west2')).toBe('projects/dormeto-dev/regions/europe-west1/urlMaps/lb');
+    expect(googleResourcePath('dormeto-dev', 'backendServices', 'shop', { kind: 'internal' }, 'europe-west2')).toBe('projects/dormeto-dev/regions/europe-west2/backendServices/shop');
+  });
+
+  it('keeps a path it is given', () => {
+    expect(googleResourcePath('dormeto-dev', 'urlMaps', 'projects/dormeto-dev/global/urlMaps/lb', { kind: 'global' }, 'global')).toBe('projects/dormeto-dev/global/urlMaps/lb');
   });
 });

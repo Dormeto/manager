@@ -1,4 +1,7 @@
-// Organization access (packaging design §3): what an account misses, why, and the procedure that fixes it.
+import { cloudOf } from '@dormeto/fleet/clouds';
+
+// Organization access (packaging design §3): what an account misses, why, and the procedure that fixes it. A Google Cloud
+// project is a row too: its reasons name what is missing and the `dormeto gcp connect` command that fixes it.
 export type AccessState = { ok: true } | { ok: false; reason: string; discoveryOnly?: true };
 
 export interface AccessRow {
@@ -45,7 +48,8 @@ export function onboardRefusal(report: AccessReport | null, account: string | un
   if (!report || !account) return null;
   if (report.discoveryOnly?.includes(account)) return 'Its account is set up for discovery only (no command role): onboarding is not possible there.';
   const row = report.accounts.find((a) => a.account === account && !a.command.ok);
-  return row && !row.command.ok ? `Its account has no command role: ${row.command.reason}. See Organization access.` : null;
+  if (!row || row.command.ok) return null;
+  return cloudOf(account) === 'gcp' ? `Its project cannot be acted in: ${row.command.reason}. See Organization access.` : `Its account has no command role: ${row.command.reason}. See Organization access.`;
 }
 
 export function countsLine(c: AccessReport['counts']): string {
@@ -68,7 +72,8 @@ export function accessHelp(report: AccessReport): [string, string] {
   const refresh = forwardersLine(report.forwarders);
   return [
     `${countsLine(report.counts)} An account is ready when the manager assumed both roles there at the last discovery run: the discovery `
-      + 'role to read it, the command role to install its router and onboard its workloads; each discovery run checks them again.',
+      + 'role to read it, the command role to install its router and onboard its workloads; each discovery run checks them again. A Google Cloud project is ready '
+      + 'when the manager\'s service accounts can read it and act in it (dormeto gcp connect gives them that).',
     refresh
       ? `${refresh} A connected account sends its load balancer changes to the manager, which shows them within about 5 minutes; the `
         + 'others are refreshed by the scheduled discovery run.'
@@ -77,6 +82,8 @@ export function accessHelp(report: AccessReport): [string, string] {
 }
 
 export function accessLine(row: AccessRow): string {
+  // A project: the reasons as the API gives them (they say what is missing and the connect command), each once.
+  if (cloudOf(row.account) === 'gcp') return [...new Set([!row.discovery.ok && row.discovery.reason, !row.command.ok && row.command.reason].filter(Boolean))].join(' ');
   const missing = [!row.discovery.ok && 'no discovery role', !row.command.ok && 'no command role'].filter(Boolean).join(', ');
   const reason = (!row.discovery.ok && row.discovery.reason) || (!row.command.ok && row.command.reason) || '';
   const stops = [!row.discovery.ok && 'the account is not scanned', !row.command.ok && 'onboarding and router installs are refused'].filter(Boolean).join(', ');

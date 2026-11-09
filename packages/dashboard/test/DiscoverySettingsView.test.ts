@@ -108,3 +108,18 @@ describe('Discovery settings: the Google Cloud connection', () => {
     wrapper.unmount();
   });
 });
+
+describe('Discovery settings: the perimeter\'s regions', () => {
+  beforeEach(() => { connection = CONNECTION; answer = undefined; failure = ''; calls.length = 0; });
+
+  it('names a region of each cloud and Google Cloud\'s global, and says every region enabled in each account or project', async () => {
+    const wrapper = await mountView();
+    expect(wrapper.text()).toContain('Every region enabled in each account or project');
+    await wrapper.find('input[type="checkbox"]').setValue(false);
+    await flushPromises();
+    expect(wrapper.text()).toContain('eu-west-1');
+    expect(wrapper.text()).toContain('europe-west2');
+    expect(wrapper.text()).toContain('global');
+    wrapper.unmount();
+  });
+});

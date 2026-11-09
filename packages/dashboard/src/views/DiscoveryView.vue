@@ -6,7 +6,7 @@ import { useDisplay } from 'vuetify';
 import { mdiAlertCircleOutline, mdiCancel, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
   mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
-import { cloudOf, isRegion } from '@dormeto/fleet/clouds';
+import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
 import CloudMark from '../components/CloudMark.vue';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
@@ -23,7 +23,9 @@ import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
 import { cursorPages, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
 import { relative, rowCloud } from '../format';
+import { lbText, urlMapConsoleUrl } from '../google';
 import { useCountUp } from '../count-up';
+import BackendKinds from '../components/BackendKinds.vue';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
 import DmLoader from '../components/DmLoader.vue';
@@ -101,10 +103,15 @@ function follow() {
     following = undefined;
   }, 10_000);
 }
+// A Google Cloud candidate is a backend service named in a URL map (its id is the service's path); its console pages are the map's.
+const isGoogle = (c: Listed) => rowCloud(c) === 'gcp';
+const mapLink = (c: Listed) => (c.urlMap ? urlMapConsoleUrl(c.urlMap, c.lb, c.account) : null);
 const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
 // The filter takes an AWS account or a Google Cloud project; the region within it is that cloud's.
 const accountCloud = computed(() => cloudOf(account.value));
 const filtered = computed(() => accountCloud.value !== null);
+// The region typed within a project is Google Cloud's (or `global`), within an account AWS's.
+const regionHint = computed(() => (accountCloud.value === 'gcp' ? 'europe-west2 or global' : 'eu-west-1'));
 
 // One page of the shown status, within the account (and region) when given; a refresh keeps what is selected.
 async function loadPage({ keep = false } = {}) {
@@ -112,7 +119,7 @@ async function loadPage({ keep = false } = {}) {
   const query = new URLSearchParams({ status: status.value, limit: String(PAGE) });
   if (filtered.value) {
     query.set('account', account.value);
-    if (accountCloud.value && isRegion(accountCloud.value, region.value)) query.set('region', region.value);
+    if (accountCloud.value && isCandidateRegion(accountCloud.value, region.value)) query.set('region', region.value);
   }
   const at = page.value;
   const cursor = pages.cursor(at);
@@ -212,7 +219,7 @@ async function changeDismissal(action: 'dismiss' | 'restore') {
   }
 }
 
-// Manual exclusions: a target group, load balancer or account kept away from Dormeto (operators).
+// Manual exclusions: a target group (a backend service), load balancer (a URL map) or account (a project) kept away from Dormeto (operators).
 const excludeOptions = computed(() => {
   const c = selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined;
   return c ? exclusionTargets(c) : [];
@@ -270,13 +277,15 @@ async function onboard(form: { name?: string; settings: Record<string, unknown>;
 
 async function offboard() {
   const c = single.value!;
-  const routers = (await api<{ routers: RouterInfo[] }>('/routers')).routers;
-  const router = routers.find((r) => r.account === c.account && r.region === c.region);
+  // The router the workload is on, as the candidate names it: a global Google Cloud load balancer has no region to find it by.
+  const named = c.workload?.router;
+  const routers = named ? [] : (await api<{ routers: RouterInfo[] }>('/routers')).routers;
+  const router = named ?? routers.find((r) => r.account === c.account && r.region === c.region)?.name;
   if (!router) {
     notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
     return;
   }
-  await startOperation({ type: 'offboard', router: router.name, workloadId: c.workloadId }, c, subjectOf(c));
+  await startOperation({ type: 'offboard', router, workloadId: c.workloadId }, c, subjectOf(c));
 }
 
 onMounted(load);
@@ -330,7 +339,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
     <PageTitle eyebrow="Organization" title="Discovery">
       <template #after>
         <InfoTip label="What discovery reads" test="discovery" :max-width="440">Load balancer rules of every account and region of the perimeter, read with the read-only
-          <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.</InfoTip>
+          <code>DmtDiscoveryRole</code>. Discovery runs on a schedule and on demand; idle shares are the hours without any request over the last 7 days.
+          A Google Cloud project is read with the discovery service account of <code>dormeto gcp connect</code>; its idle share is estimated, as Google samples its load balancer metrics.</InfoTip>
       </template>
     </PageTitle>
     <v-spacer />
@@ -399,7 +409,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
     <v-divider v-if="status" />
     <div class="dm-candidates__tools">
       <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
-      <v-text-field v-model="region" label="Region" placeholder="eu-west-1" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
+      <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
       <v-spacer />
       <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
         <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
@@ -433,7 +443,12 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template #[`item.conditions`]="{ item }">
         <div class="dm-rule">
           <div class="dm-rule__host">{{ item.conditions }}</div>
-          <div class="dm-rule__where">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
+          <div v-if="isGoogle(item)" class="dm-rule__where" data-test="google-rule">
+            backend service <component :is="mapLink(item) ? 'a' : 'span'" :href="mapLink(item) ?? undefined" target="_blank" rel="noopener" class="mono">{{ item.targetGroup }}</component>
+            · URL map <component :is="mapLink(item) ? 'a' : 'span'" :href="mapLink(item) ?? undefined" target="_blank" rel="noopener" class="mono">{{ item.loadBalancer }}</component>
+            <template v-if="item.lb"> · {{ lbText(item.lb) }}</template>
+          </div>
+          <div v-else class="dm-rule__where">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
             <v-tooltip v-if="item.rules?.length > 1" location="top" max-width="520">
               <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" class="ml-1" tabindex="0">{{ item.rules.length }} rules</v-chip></template>
               <div v-for="line in ruleLines(item.rules)" :key="line">{{ line }}</div>
@@ -447,13 +462,15 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       </template>
       <template #[`item.region`]="{ item }"><RegionLabel :region="item.region" /></template>
       <template #[`item.backend`]="{ item }">
-        <BackendLabel v-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
+        <span v-if="item.backend && isGoogle(item)" class="d-inline-flex align-center ga-2"><BackendKinds :kinds="[item.backend.kind]" cloud="gcp" /><span class="mono nowrap">{{ item.backend.id }}</span></span>
+        <BackendLabel v-else-if="item.backend" :backend="item.backend" :account="item.account" :region="item.region" />
         <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ item.workload?.name ?? item.workloadId }}</span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
         <div v-if="item.idleHours7d !== null" class="dm-idle">
-          <span class="dm-idle__share" aria-hidden="true">{{ idleShare(item) }}</span>
-          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" />
+          <span class="dm-idle__share" aria-hidden="true">{{ isGoogle(item) ? '~' : '' }}{{ idleShare(item) }}</span>
+          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :cloud="rowCloud(item)" />
+          <span v-if="isGoogle(item)" class="dm-idle__estimate">estimated</span>
         </div>
       </template>
       <template #[`item.statusReason`]="{ item }">
@@ -484,8 +501,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <v-card id="exclusions" class="mt-4" title="Exclusions">
-    <v-card-subtitle class="text-wrap">Target groups, load balancers and accounts kept away from Dormeto: discovery never proposes them, whatever
-      the perimeter includes, and the managed workloads they match stay awake until offboarded.</v-card-subtitle>
+    <v-card-subtitle class="text-wrap">Target groups and backend services, load balancers and URL maps, accounts and projects kept away from Dormeto: discovery never
+      proposes them, whatever the perimeter includes, and the managed workloads they match stay awake until offboarded.</v-card-subtitle>
     <v-list v-if="exclusions.length" lines="three" class="bg-transparent">
       <v-list-item v-for="e in exclusions" :key="e.id" :title="exclusionText(e.target)">
         <template #prepend>
@@ -506,7 +523,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
     </v-list>
     <v-card-text v-else class="dm-calm">
       <DmLogo state="sleep" :size="40" />
-      <span class="text-medium-emphasis">No exclusion. Select a candidate and choose Exclude to keep it, its load balancer or its account away from Dormeto.</span>
+      <span class="text-medium-emphasis">No exclusion. Select a candidate and choose Exclude to keep it, its load balancer or its account or project away from Dormeto.</span>
     </v-card-text>
   </v-card>
 
@@ -584,6 +601,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 .dm-rule__where { margin-top: 2px; font-size: 0.78rem; opacity: 0.62; }
 .dm-reason { min-width: 90px; max-width: 260px; }
 .dm-idle { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.dm-idle__estimate { font-size: 0.7rem; opacity: 0.6; }
 .dm-idle__share { min-width: 3.4em; text-align: right; font: 500 0.74rem/1 var(--dm-mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
 .dm-idle :deep(.idle-bar) { width: 60px; margin-left: 0; }
 .dm-idle :deep(.v-progress-linear) { border-radius: 999px; }

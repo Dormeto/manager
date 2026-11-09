@@ -156,10 +156,10 @@ onMounted(() => { void load(); void loadConnection(); });
               </v-col>
               <v-col cols="12" class="pt-0">
                 <div class="dm-field">
-                  <v-switch v-model="allRegions" label="Every region enabled in each account" color="primary" hide-details inset density="compact" />
+                  <v-switch v-model="allRegions" label="Every region enabled in each account or project" color="primary" hide-details inset density="compact" />
                   <v-expand-transition>
                     <div v-if="!allRegions" class="pt-3">
-                      <v-text-field v-model="regionsText" label="Regions" hint="for example eu-west-1, eu-west-3" persistent-hint />
+                      <v-text-field v-model="regionsText" label="Regions" hint="for example eu-west-1, eu-west-3 on AWS, europe-west2 on Google Cloud, or global for its global load balancers" persistent-hint />
                     </div>
                   </v-expand-transition>
                 </div>

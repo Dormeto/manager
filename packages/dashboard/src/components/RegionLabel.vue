@@ -7,6 +7,8 @@ import { regionInfo, regionKind } from '../regions';
 const props = defineProps<{ region: string }>();
 const info = computed(() => regionInfo(props.region));
 const kind = computed(() => (info.value.location ? regionKind(props.region) : null));
+// A Google Cloud candidate of a global load balancer has no region: `global`, said in words beside the earth.
+const global = computed(() => props.region === 'global');
 </script>
 
 <template>
@@ -15,11 +17,19 @@ const kind = computed(() => (info.value.location ? regionKind(props.region) : nu
       <span v-bind="tip" class="region-label d-inline-flex align-center" tabindex="0" :aria-label="[region, info.location].filter(Boolean).join(', ')">
         <img v-if="info.flag" :src="info.flag" alt="" class="flag">
         <v-icon v-else :icon="mdiEarth" size="1.2em" />
+        <span v-if="global" class="ml-1">global</span>
       </span>
     </template>
-    <div v-if="kind" class="text-caption text-medium-emphasis">{{ kind }}</div>
-    <div v-if="info.location" class="font-weight-bold">{{ info.location }}</div>
-    <div>{{ info.country ? `${info.country} · ${region}` : `${region}: a region Dormeto does not know yet` }}</div>
+    <template v-if="global">
+      <div class="text-caption text-medium-emphasis">Google Cloud</div>
+      <div class="font-weight-bold">A global load balancer</div>
+      <div>It serves every region, so its candidates have none.</div>
+    </template>
+    <template v-else>
+      <div v-if="kind" class="text-caption text-medium-emphasis">{{ kind }}</div>
+      <div v-if="info.location" class="font-weight-bold">{{ info.location }}</div>
+      <div>{{ info.country ? `${info.country} · ${region}` : `${region}: a region Dormeto does not know yet` }}</div>
+    </template>
   </v-tooltip>
 </template>
 

@@ -1001,6 +1001,18 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
+  it('builds the paths of the names the router\'s row gives: a global load balancer\'s map is linked by its page', async () => {
+    current = { ...google, backendService: 'vm-demo', wakerBackendService: 'vm-demo-waker', urlMap: 'dormeto-lb' };
+    delete current.lb;
+    const wrapper = await mountView('operator');
+    const card = wrapper.find('[data-test="load-balancing"]');
+    expect(card.text()).toContain('vm-demo-waker');
+    const lb = 'https://console.cloud.google.com/net-services/loadbalancing/details/http/dormeto-lb?project=dormeto-dev';
+    expect(card.findAll('a').map((a) => a.attributes('href'))).toEqual([lb, lb, lb]);
+    expect(card.find('a').attributes('title')).toBe(`${PROJECT}/global/backendServices/vm-demo`);
+    wrapper.unmount();
+  });
+
   it('has no target group, no targets, no ARN and no Terraform text, and says suspended, not hibernated', async () => {
     current = google;
     const wrapper = await mountView('operator');

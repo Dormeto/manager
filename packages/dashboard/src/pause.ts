@@ -1,5 +1,7 @@
 // Router management display helpers: pauses, router health, manual exclusions.
+import { cloudOf } from '@dormeto/fleet/clouds';
 import { checkHealth, relative } from './format';
+import { resourceName } from './google';
 import type { ExclusionKind, ExclusionTarget, Pause } from './types';
 
 export function pauseLabel(pauses: Pause[] | undefined): 'excluded' | 'paused' | null {
@@ -47,12 +49,22 @@ export function routerStatus(r: { error?: string; reporting?: boolean; health?: 
 export interface TargetOption {
   kind: ExclusionKind;
   arn?: string;
+  path?: string; // Google Cloud's
   account?: string;
   label: string;
 }
 
-// What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account.
-export function exclusionTargets(c: { targetGroupArn: string | null; targetGroup: string | null; loadBalancerArn: string; loadBalancer: string; account: string; accountName: string }): TargetOption[] {
+// What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account. On Google
+// Cloud: its backend service, its URL map (by their paths) and its project.
+export function exclusionTargets(c: { targetGroupArn: string | null; targetGroup: string | null; loadBalancerArn: string; loadBalancer: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string }): TargetOption[] {
+  if (cloudOf(c.account) === 'gcp') {
+    const service = c.backendService ?? c.id;
+    return [
+      ...(service ? [{ kind: 'target-group' as const, path: service, label: `Backend service ${c.targetGroup ?? resourceName(service)}` }] : []),
+      ...(c.urlMap ? [{ kind: 'load-balancer' as const, path: c.urlMap, label: `URL map ${c.loadBalancer || resourceName(c.urlMap)} (every backend service it names)` }] : []),
+      { kind: 'account' as const, account: c.account, label: `Project ${c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`} (never read again)` },
+    ];
+  }
   return [
     ...(c.targetGroupArn ? [{ kind: 'target-group' as const, arn: c.targetGroupArn, label: `Target group ${c.targetGroup ?? c.targetGroupArn}` }] : []),
     ...(c.loadBalancerArn.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: `Load balancer ${c.loadBalancer} (every rule on it)` }] : []),
@@ -61,4 +73,5 @@ export function exclusionTargets(c: { targetGroupArn: string | null; targetGroup
 }
 
 const KINDS: Record<ExclusionKind, string> = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' };
-export const exclusionText = (t: ExclusionTarget): string => [`${KINDS[t.kind]} ${t.name}`, t.account, ...(t.region ? [t.region] : [])].join(' · ');
+const GOOGLE_KINDS: Record<ExclusionKind, string> = { 'target-group': 'backend service', 'load-balancer': 'URL map', account: 'project' };
+export const exclusionText = (t: ExclusionTarget): string => [`${(cloudOf(t.account) === 'gcp' ? GOOGLE_KINDS : KINDS)[t.kind]} ${t.name}`, t.account, ...(t.region ? [t.region] : [])].join(' · ');

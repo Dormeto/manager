@@ -55,8 +55,9 @@ export interface DemoRouter {
   page: StoredWaitingPage | null; // its waiting page (router 0.35.0)
 }
 
-// What a Google Cloud workload's row holds instead of an AWS target group: its backend services, URL map and load balancer.
-export interface GoogleWorkload { backendService: string; wakerBackendService: string; urlMap: string; lb: { kind: 'global' | 'classic' | 'regional'; region?: string } }
+// What a Google Cloud workload's row holds instead of an AWS target group, as the router's row has it: its backend services and
+// URL map by name, and its load balancer's kind (absent for a global one).
+export interface GoogleWorkload { backendService: string; wakerBackendService: string; urlMap: string; lb?: { kind: 'classic' | 'regional' | 'internal' | 'cross-region-internal'; region?: string } }
 
 export interface DemoWorkload {
   workloadId: string;
@@ -565,8 +566,10 @@ export function restatus(d: Demo, now: number): number {
 }
 
 export const activeExclusions = (d: Demo, now: number) => d.exclusions.filter((e) => !e.liftedAt && !(e.expiresAt && Date.parse(e.expiresAt) <= now));
-export function matches(e: StoredExclusion, c: { account: string; targetGroupArn: string | null; loadBalancerArn: string }): boolean {
+export function matches(e: StoredExclusion, c: { account: string; targetGroupArn: string | null; loadBalancerArn: string; backendService?: string; urlMap?: string }): boolean {
   if (e.target.kind === 'account') return c.account === e.target.account;
+  // Google Cloud: a backend service's or a URL map's path.
+  if (e.target.path) return e.target.kind === 'load-balancer' ? c.urlMap === e.target.path : c.backendService === e.target.path;
   if (e.target.kind === 'load-balancer') return c.loadBalancerArn === e.target.arn;
   return c.targetGroupArn === e.target.arn;
 }
@@ -684,10 +687,40 @@ function build(now: number): Demo {
 }
 
 // The demo's Google Cloud router (installed by the CLI in the project dormeto-dev) and its two workloads, a VM and a managed
-// instance group. They are apart from the generated organization (they change none of its counts), have no discovery
-// candidate (discovery of Google Cloud projects comes later), and are not priced (savings at Google's prices come later).
+// instance group. They are apart from the generated organization (they change none of its workloads or routers), and are not
+// priced (savings at Google's prices come later). The project's discovery candidates are theirs and a few more: one to onboard,
+// a GKE workload and a backend service named in two URL maps, which the router refuses.
 const GOOGLE_PROJECT = 'dormeto-dev';
 const GOOGLE_REGION = 'europe-west2';
+const GOOGLE_MAP = `${GOOGLE_PROJECT}-lb`;
+// What the router's own onboarding says (and discovery repeats): router gcp/src/gke.mjs and onboarding.mjs.
+const GKE_REASON = 'a GKE workload is onboarded with dormeto gcp workloads onboard, after dormeto gcp workloads access grant';
+const TWICE_REASON = (service: string, other: string) => `backend service ${service} is also named in URL map ${other}: that load balancer would lose its backends during a nap; give it a backend service of its own`;
+// The path of a Google Cloud workload's backend service or URL map, from its row's names (`lb` absent: a global load balancer).
+export const googlePathsOf = (w: DemoWorkload): { backendService: string; urlMap: string } | null => {
+  if (!w.google) return null;
+  const scope = w.google.lb?.kind === 'regional' || w.google.lb?.kind === 'internal' ? `regions/${w.google.lb.region ?? w.region}` : 'global';
+  return { backendService: `projects/${w.account}/${scope}/backendServices/${w.google.backendService}`, urlMap: `projects/${w.account}/${scope}/urlMaps/${w.google.urlMap}` };
+};
+interface GoogleCandidateSpec {
+  name: string; urlMap: string; region: string; lb: NonNullable<Candidate['lb']>['kind']; host: string; backend: { kind: 'instance' | 'asg' | 'k8s'; id: string };
+  eligibility: Candidate['eligibility']; reason?: string; workloadId?: string; idleHours7d: number; requests7d: number; firstSeenDays: number;
+}
+// A Google Cloud candidate as discovery records it: the backend service's path as its id, its name, the URL map's, the region the
+// map is in or `global`, and AWS's fields empty.
+function googleCandidate(c: GoogleCandidateSpec, now: number, lastSeen: number): Candidate {
+  const scope = c.region === 'global' ? 'global' : `regions/${c.region}`;
+  const path = (collection: string, name: string) => `projects/${GOOGLE_PROJECT}/${scope}/${collection}/${name}`;
+  const service = path('backendServices', c.name);
+  return {
+    id: service, account: GOOGLE_PROJECT, region: c.region, loadBalancer: c.urlMap, loadBalancerArn: '', listener: '', priority: '', conditions: `host ${c.host}, path /*`, hosts: [c.host],
+    targetGroup: c.name, targetGroupArn: null, backend: { kind: c.backend.kind, id: c.backend.id }, tags: {}, rules: [], eligibility: c.eligibility,
+    ...(c.reason ? { reason: c.reason } : {}), ...(c.workloadId ? { workloadId: c.workloadId } : {}), idleHours7d: c.idleHours7d, requests7d: c.requests7d,
+    backendService: service, urlMap: path('urlMaps', c.urlMap), lb: { kind: c.lb },
+    accountName: GOOGLE_PROJECT, ouPath: [], scope: 'in', scopeReason: IN_SCOPE, status: 'pending-onboarding', statusReason: 'eligible',
+    firstSeenAt: iso(now - c.firstSeenDays * DAY - 5 * HOUR), lastSeenAt: iso(lastSeen), history: [],
+  };
+}
 function addGoogleCloud(d: Demo, now: number): void {
   const router: DemoRouter = {
     ...makeRouter({
@@ -697,14 +730,9 @@ function addGoogleCloud(d: Demo, now: number): void {
     // The manager pushes the organization's level to it (it reads no URL); its IP lists are its own (views.ts).
     cloud: 'gcp', source: 'cli', readsManager: true,
   };
-  const google = (name: string): GoogleWorkload => ({
-    backendService: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/backendServices/${name}`,
-    wakerBackendService: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/backendServices/${name}-waker`,
-    urlMap: `projects/${GOOGLE_PROJECT}/regions/${GOOGLE_REGION}/urlMaps/${GOOGLE_PROJECT}-lb`,
-    lb: { kind: 'regional', region: GOOGLE_REGION },
-  });
+  const google = (name: string): GoogleWorkload => ({ backendService: name, wakerBackendService: `${name}-waker`, urlMap: GOOGLE_MAP, lb: { kind: 'regional', region: GOOGLE_REGION } });
   const specs: { id: string; name: string; spec: WorkloadSpec; tags?: Record<string, string> }[] = [
-    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-medium' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
+    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-medium' }], idleMinutes: 15, wakeMode: 'browser', source: 'terraform', awakeFor: 0 } },
     { id: 'mig-demo', name: 'mig-demo', spec: { name: 'mig-demo', router: router.name, state: 'AWAKE', profile: 'busy', backends: [{ kind: 'asg', type: 'e2-standard-2', count: 2 }], idleMinutes: 30, wakeMode: 'any', source: 'manager', awakeFor: 70 } },
   ];
   for (const { id, name, spec, tags } of specs) {
@@ -716,6 +744,30 @@ function addGoogleCloud(d: Demo, now: number): void {
     d.workloads.push(w);
   }
   d.routers.push(router);
+  addGoogleCandidates(d, now);
+}
+
+// The project's candidates: the workloads' two, one to onboard, a GKE workload and a backend service two URL maps name.
+function addGoogleCandidates(d: Demo, now: number): void {
+  const lastSeen = Date.parse(d.runs.at(-1)!.record.finishedAt);
+  const specs: GoogleCandidateSpec[] = [
+    ...d.workloads.filter((w) => w.google).map((w): GoogleCandidateSpec => ({
+      name: w.google!.backendService, urlMap: w.google!.urlMap, region: w.region, lb: w.google!.lb?.kind ?? 'regional', host: `${w.workloadId}.dev.example.com`,
+      backend: { kind: w.backends[0]!.kind === 'asg' ? 'asg' : 'instance', id: w.workloadId }, eligibility: 'managed', workloadId: w.workloadId,
+      idleHours7d: w.idleHours7d ?? 0, requests7d: w.requests7d ?? 0, firstSeenDays: 11,
+    })),
+    { name: 'shop-bs', urlMap: 'shop-lb', region: 'global', lb: 'global', host: 'shop.dev.example.com', backend: { kind: 'asg', id: 'shop-mig' }, eligibility: 'eligible', idleHours7d: 132, requests7d: 8_420, firstSeenDays: 6 },
+    { name: 'catalog-bs', urlMap: 'gke-catalog-lb', region: 'global', lb: 'global', host: 'catalog.dev.example.com', backend: { kind: 'k8s', id: 'k8s1-3f2a9c1d-catalog-80-5b7e0a12' }, eligibility: 'ineligible', reason: GKE_REASON, idleHours7d: 96, requests7d: 51_300, firstSeenDays: 9 },
+    { name: 'shared-bs', urlMap: 'portal-lb', region: 'global', lb: 'global', host: 'portal.dev.example.com', backend: { kind: 'instance', id: 'portal-vm' }, eligibility: 'ineligible', reason: TWICE_REASON('shared-bs', 'shop-lb'), idleHours7d: 40, requests7d: 120_000, firstSeenDays: 14 },
+  ];
+  const candidates = specs.map((c) => googleCandidate(c, now, lastSeen));
+  for (const c of candidates) {
+    const next = decide(d, c, now);
+    Object.assign(c, next);
+    c.history = [{ at: c.firstSeenAt, status: c.eligibility === 'ineligible' ? 'ineligible' : 'pending-onboarding', reason: c.eligibility === 'ineligible' ? c.reason ?? '' : 'eligible' }];
+    if (next.status !== c.history[0]!.status) c.history.push({ at: iso(now - 2 * DAY), status: next.status, reason: next.statusReason });
+  }
+  d.candidates = [...d.candidates, ...candidates].sort((a, b) => a.account.localeCompare(b.account) || a.region.localeCompare(b.region) || a.id.localeCompare(b.id));
 }
 
 function specCandidate(c: CandidateSpec, now: number, lastRun: number): Candidate {

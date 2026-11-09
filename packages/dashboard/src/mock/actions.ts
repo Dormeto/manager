@@ -8,9 +8,10 @@ import { descriptionProblem } from '@dormeto/fleet/description';
 import { groupNameProblem, tagsProblem } from '../tags';
 import { grantRowsProblem } from '../groups';
 import { rowsOf } from '../tags';
+import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { ACCOUNTS, ME, accountName } from './org';
 import {
-  addOperation, audited, change, fail, hasHibernation, hibernationOf, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
+  addOperation, audited, change, fail, hasHibernation, hibernationOf, googlePathsOf, matches, onboardEffect, plan, operationStatus, restatus, routerIn, routerOf, runRecord, workloadOf,
   type Demo, type DemoGroup, type DemoOperation, type DemoRouter, type DemoWorkload, type WorkflowType,
   knowsRecurrences, routerSettingsView,
 } from './state';
@@ -160,6 +161,8 @@ export function startOperation(d: Demo, body: Body, now: number) {
     if (name && name.length > 64) fail(400, 'bad_request', 'name: at most 64 characters');
     const tagsError = body.tags === undefined ? null : tagsProblem(body.tags as Record<string, string>);
     if (tagsError) fail(400, 'bad_request', tagsError);
+    // The demo's Google Cloud has no onboarding to run: the CLI's command does it there.
+    if (cloudOf(c.account) === 'gcp') fail(409, 'conflict', 'the demo does not onboard on Google Cloud: dormeto gcp workloads onboard');
     commandRole(c.account);
     if (c.status !== 'pending-onboarding') fail(409, 'conflict', `${c.targetGroup ?? c.id} is not to onboard (${c.status})`);
     conflict(d, now, (o) => o.target.targetGroupArn === c.targetGroupArn);
@@ -253,14 +256,24 @@ const ARNS = {
   'target-group': /^arn:aws[\w-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):targetgroup\/([^/]+)\/[0-9a-f]+$/,
   'load-balancer': /^arn:aws[\w-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):loadbalancer\/app\/([^/]+)\/[0-9a-f]+$/,
 };
+// Google Cloud's: `projects/<project>/(global|regions/<region>)/(backendServices|urlMaps)/<name>`.
+const PATHS = {
+  'target-group': /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/(global|regions\/[a-z]+-[a-z]+\d+)\/backendServices\/([a-z]([-a-z0-9]{0,61}[a-z0-9])?)$/,
+  'load-balancer': /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/(global|regions\/[a-z]+-[a-z]+\d+)\/urlMaps\/([a-z]([-a-z0-9]{0,61}[a-z0-9])?)$/,
+};
 const KIND_TEXT = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' } as const;
 
 export function createExclusion(d: Demo, body: Body, now: number) {
-  const t = (body.target ?? {}) as { kind?: string; arn?: string; account?: string };
+  const t = (body.target ?? {}) as { kind?: string; arn?: string; path?: string; account?: string };
   let target: Demo['exclusions'][number]['target'];
   if (t.kind === 'account') {
-    if (!ACCOUNT.test(String(t.account ?? ''))) fail(400, 'bad_request', 'target.account must be a 12-digit account ID');
-    target = { kind: 'account', account: t.account!, name: accountName(t.account!) };
+    if (!ACCOUNT.test(String(t.account ?? '')) && cloudOf(String(t.account ?? '')) !== 'gcp') fail(400, 'bad_request', 'target.account must be a 12-digit account ID or a project ID');
+    target = { kind: 'account', account: t.account!, name: cloudOf(t.account!) === 'gcp' ? t.account! : accountName(t.account!) };
+  } else if ((t.kind === 'target-group' || t.kind === 'load-balancer') && t.path !== undefined) {
+    const parsed = PATHS[t.kind].exec(t.path) ?? fail(400, 'bad_request', `target.path must be the path of a ${t.kind === 'target-group' ? 'backend service' : 'URL map'}`);
+    const region = parsed[2]!.startsWith('regions/') ? parsed[2]!.slice('regions/'.length) : 'global';
+    if (cloudOf(parsed[1]!) !== 'gcp' || !isCandidateRegion('gcp', region)) fail(400, 'bad_request', 'target.path must name a Google Cloud project and region');
+    target = { kind: t.kind, path: t.path, account: parsed[1]!, region, name: parsed[3]! };
   } else if (t.kind === 'target-group' || t.kind === 'load-balancer') {
     const parsed = ARNS[t.kind].exec(String(t.arn ?? '')) ?? fail(400, 'bad_request', `target.arn must be the ARN of an application ${KIND_TEXT[t.kind]}`);
     target = { kind: t.kind, arn: t.arn!, account: parsed[2]!, region: parsed[1]!, name: parsed[3]! };
@@ -274,7 +287,7 @@ export function createExclusion(d: Demo, body: Body, now: number) {
     const exclusion: Demo['exclusions'][number] = { id: crypto.randomUUID(), target, reason, by: ME, at: iso(now), ...(expiresAt ? { expiresAt } : {}) };
     d.exclusions.push(exclusion);
     // Its managed workloads are woken and never napped until offboarded.
-    const paused = d.workloads.filter((w) => matches(exclusion, w));
+    const paused = d.workloads.filter((w) => matches(exclusion, { ...w, ...googlePathsOf(w) }));
     for (const w of paused) {
       const pause: Pause = { scope: 'workload', by: ME, at: iso(now), reason: `excluded: ${reason}`, until: expiresAt ?? null, keepAsleep: false, exclusionId: exclusion.id };
       w.pauses.push(pause);

@@ -3,6 +3,8 @@
 // reason and the procedure. Run now checks again.
 import { computed, ref } from 'vue';
 import { mdiAlertCircle, mdiCheck, mdiCheckCircle, mdiChevronDown, mdiClose, mdiCloseCircle, mdiFlashOffOutline, mdiOpenInNew, mdiShieldAlertOutline } from '@mdi/js';
+import CloudMark from './CloudMark.vue';
+import { rowCloud } from '../format';
 import { accessHelp, accessLine, accessStatus, procedureLink, type AccessReport } from '../access';
 
 const props = defineProps<{ report: AccessReport; roles?: { discoveryRole: string; commandRole: string } | null }>();
@@ -48,7 +50,7 @@ const impossible = computed(() => (allImpossible.value ? notConnected.value : no
         <li v-for="a in shown" :key="a.account" class="dm-access__row">
           <v-avatar :color="a.discovery.ok ? 'warning' : 'error'" variant="tonal" rounded="lg" size="36" class="dm-access__flag"><v-icon :icon="mdiShieldAlertOutline" size="20" /></v-avatar>
           <div class="dm-access__who">
-            <div class="text-body-medium"><span class="font-weight-medium">{{ a.name }}</span> <span class="mono text-medium-emphasis">({{ a.account }})</span><span class="dm-sr">: </span></div>
+            <div class="text-body-medium"><span class="font-weight-medium">{{ a.name }}</span> <span class="mono text-medium-emphasis"><CloudMark :cloud="rowCloud(a)" class="mr-1" />({{ a.account }})</span><span class="dm-sr">: </span></div>
             <div class="text-body-small text-medium-emphasis">{{ accessLine(a) }}</div>
           </div>
           <div class="dm-access__roles">

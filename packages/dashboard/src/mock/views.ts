@@ -1,6 +1,7 @@
 import { knowsLevels, resolvedOf } from './levels';
 // The manager API's answers, computed from the demo model at each request (npm run dev:mock).
 import type { Candidate } from '@dormeto/discovery/types';
+import { cloudOf } from '@dormeto/fleet/clouds';
 import { summaryOf } from '@dormeto/fleet/description';
 import { addEnergy, savedEnergy } from '@dormeto/fleet/energy';
 import type { AccessReport } from '../access';
@@ -426,11 +427,19 @@ export function savingsSummary(d: Demo): SavingsSummary {
 export function accessReport(d: Demo, limit: number): AccessReport {
   const missing = ACCOUNTS.filter((a) => !a.command);
   const run = d.runs.at(-1)!.record;
+  // A Google Cloud project the connection's command account cannot act in yet: its reason is the check's, with the connect command.
+  const projects = d.routers.some((r) => r.cloud === 'gcp') ? [{
+    account: 'shop-prod', name: 'shop-prod', discovery: { ok: true as const },
+    command: { ok: false as const, reason: `the command account dmt-dev-command@dormeto-dev.iam.gserviceaccount.com is missing compute.instances.createTagBinding, compute.instances.deleteTagBinding on the project shop-prod: dormeto gcp connect --project dormeto-dev --profile <profile> --env dev` },
+  }] : [];
   return {
-    counts: { ready: ACCOUNTS.length - missing.length, discoveryMissing: 0, commandMissing: missing.length, unchecked: 0 },
-    accounts: missing.slice(0, limit).map((a) => ({
-      account: a.id, name: a.name, discovery: { ok: true }, command: { ok: false, reason: 'AccessDenied: the role DmtCommandRole does not exist or does not trust the manager' }, forwarder: 'impossible',
-    })),
+    counts: { ready: ACCOUNTS.length - missing.length, discoveryMissing: 0, commandMissing: missing.length + projects.length, unchecked: 0 },
+    accounts: [
+      ...missing.map((a) => ({
+        account: a.id, name: a.name, discovery: { ok: true as const }, command: { ok: false as const, reason: 'AccessDenied: the role DmtCommandRole does not exist or does not trust the manager' }, forwarder: 'impossible' as const,
+      })),
+      ...projects,
+    ].slice(0, limit),
     cursor: null, delegation: 'ok', checkedAt: run.status === 'running' ? d.runs.at(-2)?.record.finishedAt ?? run.startedAt : run.finishedAt,
     ...(d.config.config.eventRefresh?.enabled ? {
       forwarders: { connected: 4, connecting: 0, impossible: missing.map((a) => ({ account: a.id, name: a.name, reason: 'no command role: the forwarder is installed through it' })) },
@@ -444,7 +453,7 @@ export function candidateView(d: Demo, c: Candidate, now: number) {
   const op = d.operations.find((o) => operationStatus(o, now) === 'running' && o.target.account === c.account && o.target.region === c.region
     && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : o.type === 'offboard' && Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
   return {
-    ...c, ...(c.workloadId && (w || router) ? { workload: { router: router?.name ?? w!.router, workloadId: c.workloadId, name: w?.name ?? c.workloadId } } : {}),
+    ...c, ...(cloudOf(c.account) === 'gcp' ? { cloud: 'gcp' as const } : {}), ...(c.workloadId && (w || router) ? { workload: { router: router?.name ?? w!.router, workloadId: c.workloadId, name: w?.name ?? c.workloadId } } : {}),
     ...(op ? { operation: { id: op.id, type: op.type as 'onboard' | 'offboard' } } : {}),
   };
 }

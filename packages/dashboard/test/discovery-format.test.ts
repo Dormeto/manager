@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STATUSES, visibleStatuses, cursorPages, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
+import { BACKEND_KINDS, DIMENSIONS, STATUSES, visibleStatuses, cursorPages, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -98,5 +98,24 @@ describe('Discovery status filters', () => {
       .toEqual(['pending-onboarding', 'managed', 'ineligible', 'gone']);
     expect(visibleStatuses({ managed: 6 }, 'dismissed')).toEqual(['managed', 'dismissed']);
     expect(visibleStatuses({}, null)).toEqual([]);
+  });
+
+  it('takes every backend kind of the discovery package, Kubernetes included', () => {
+    expect(BACKEND_KINDS).toEqual(['instance', 'asg', 'ecs', 'k8s']);
+    expect(DIMENSIONS.find((d) => d.key === 'backendKinds')!.hint).toContain('k8s');
+  });
+
+  it('words the criteria\'s hints for both clouds', () => {
+    const hint = (key: string) => DIMENSIONS.find((d) => d.key === key)!.hint;
+    expect(hint('accountIds')).toContain('project');
+    expect(hint('regions')).toContain('europe-west2');
+    expect(hint('regions')).toContain('global');
+    expect(hint('loadBalancers')).toContain('projects/');
+    expect(hint('resourceTags')).toContain('backend service');
+  });
+
+  it('says a Google Cloud candidate\'s idle share is of its backend service, estimated from sampled metrics', () => {
+    const text = idleText({ idleHours7d: 154, requests7d: 1234 }, 'gcp');
+    expect(text.detail).toBe('154 of 168 hours without any request to its backend service (1,234 requests in 7 days).');
   });
 });

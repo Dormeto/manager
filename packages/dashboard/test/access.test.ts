@@ -76,3 +76,23 @@ describe('organization access status', () => {
     expect(accessHelp(report({ forwarders: undefined }))[1]).toMatch(/Event-driven refresh is off/);
   });
 });
+
+describe('organization access of a Google Cloud project', () => {
+  const COMMAND = 'dormeto gcp connect --project dormeto-dev --profile dormeto --env dev';
+  const project = (discovery: boolean, command: boolean) => ({
+    account: 'shop-prod', name: 'shop-prod',
+    discovery: discovery ? { ok: true as const } : { ok: false as const, reason: `the discovery service account cannot read shop-prod: ${COMMAND}` },
+    command: command ? { ok: true as const } : { ok: false as const, reason: `the command service account cannot act in shop-prod: ${COMMAND}` },
+  });
+
+  it('shows the verdict\'s reason as the API gives it, which names the connect command, without an AWS role\'s words', () => {
+    expect(accessLine(project(false, true))).toBe(`the discovery service account cannot read shop-prod: ${COMMAND}`);
+    expect(accessLine(project(true, false))).toBe(`the command service account cannot act in shop-prod: ${COMMAND}`);
+    expect(accessLine(project(false, false))).toBe(`the discovery service account cannot read shop-prod: ${COMMAND} the command service account cannot act in shop-prod: ${COMMAND}`);
+  });
+
+  it('says why onboarding is not possible in a project before trying', () => {
+    const report = { counts: { ready: 0, discoveryMissing: 0, commandMissing: 1, unchecked: 0 }, accounts: [project(true, false)], cursor: null, delegation: 'ok' as const, checkedAt: null };
+    expect(onboardRefusal(report, 'shop-prod')).toBe(`Its project cannot be acted in: the command service account cannot act in shop-prod: ${COMMAND}. See Organization access.`);
+  });
+});

@@ -17,14 +17,13 @@ import { organizationDefaults, putOrganizationDefaults, putTypes, reach, typesAn
 import { ME } from './org';
 import { updateChanges, updateRequest, updateState } from './update';
 import { MockError, advance, fail, lintOf, pausesOf, routerOf, state, workloadOf, type Demo } from './state';
+import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import {
   accessReport, alerts, candidateView, exclusionView, fleetStates, idleAdvice, ipLists, operationView, googleConnection, routerDetails, routerRow, savingsSummary, workloadHistory,
   workloadRow, workloadStatus,
 } from './views';
 
 type Body = Record<string, unknown>;
-const ACCOUNT = /^\d{12}$/;
-const REGION = /^[a-z]{2}(-[a-z]+)+-\d$/;
 
 // A network's delay, so that loading states show.
 const latency = (min = 150, max = 450) => new Promise((resolve) => setTimeout(resolve, min + Math.random() * (max - min)));
@@ -202,7 +201,9 @@ function discovery(d: Demo, method: string, sub: string | undefined, q: URLSearc
     if (!STATUSES.includes(status)) fail(400, 'bad_request', `status must be one of ${STATUSES.join(', ')}`);
     const account = q.get('account');
     const region = q.get('region');
-    if ((account && !ACCOUNT.test(account)) || (region && (!account || !REGION.test(region)))) fail(400, 'bad_request', 'account must be 12 digits; a region needs its account');
+    // An account is 12 digits, a project its ID; a region is its cloud's (a project's also `global`), and needs its account.
+    const cloud = account ? cloudOf(account) : null;
+    if ((account && !cloud) || (region && (!cloud || !isCandidateRegion(cloud, region)))) fail(400, 'bad_request', 'account must be 12 digits or a project ID; a region of its cloud needs its account');
     const limit = Number(q.get('limit') ?? 50);
     if (!Number.isInteger(limit) || limit < 1) fail(400, 'bad_request', 'limit must be a positive integer');
     const start = q.get('cursor') ? Number(atob(q.get('cursor')!)) : 0;

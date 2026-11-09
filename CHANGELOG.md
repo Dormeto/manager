@@ -117,6 +117,12 @@ ETag it holds, when its version was read) is kept on its `RS#` item, beside the 
 and a workload, "Account or project" columns, the Google Cloud regions (every region Google lists, with the location Google names) in the region labels, which say
 "AWS location" or "Google Cloud location", the Google Cloud backend kinds (Compute Engine VM, managed instance group, Kubernetes workload, Cloud SQL instance) as
 Material Design icons, and Discovery's filter taking a project ID. `npm run dev:mock` gains a Google Cloud router `dmtr-dormeto-dev-europe-west2` (0.40.0) and two workloads.
+- **Discovery shows Google Cloud candidates:** a candidate's row names its backend service and URL map, linked to the Google Cloud console, with its load balancer's
+kind, `global` for a global load balancer, its backend's name and a Google Cloud icon; its idle share is marked estimated (Google samples its load balancer metrics).
+Exclude offers the backend service, the URL map and the project, sent by their paths; the Region filter takes `global`; an offboarding uses the router the candidate's workload
+names; Organization access lists a project with its cloud mark and the API's reason, which names the `dormeto gcp connect` command. Discovery settings words its regions
+for both clouds and takes Kubernetes workloads as a backend type. A workload's backend services and URL map, named by the router's row, are linked from their built paths.
+`npm run dev:mock` gains the project's candidates (managed, to onboard, a GKE workload and a backend service two URL maps name) and a project in the access report.
 - **The dashboard's Google Cloud router and workload views:** a router installed by the CLI (`source: 'cli'`) shows its version, health (a `too-old`
 router, its version known or not, with the `dormeto gcp install ... --version <pinned>` command), pauses, settings (its hibernate
 setting as suspension, inherited from the organization's level the manager pushed, and no Lambda or failure queue figure),

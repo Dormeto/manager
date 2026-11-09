@@ -1,5 +1,6 @@
 // Organization discovery in the dashboard: statuses, run targets, and criterion editing (dimension values as text).
-import type { BackendKind, Criterion, LintFinding, RuleRef, RunTarget, Status } from '@dormeto/discovery/types';
+import { BACKEND_KINDS as DISCOVERY_BACKEND_KINDS, type BackendKind, type Criterion, type LintFinding, type RuleRef, type RunTarget, type Status } from '@dormeto/discovery/types';
+import type { Cloud } from '@dormeto/fleet/clouds';
 import { percent } from './format';
 
 export const STATUSES: Status[] = ['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible', 'dismissed', 'excluded', 'out-of-scope', 'gone'];
@@ -71,12 +72,13 @@ export function targetText(t: RunTarget): string {
 
 export const idleShare = (c: { idleHours7d: number | null }): string | null => (c.idleHours7d === null ? null : percent(c.idleHours7d, 168));
 
-// The idle share in words: hours of the last 7 days (168) without any request to the target group.
-export function idleText(c: { idleHours7d: number; requests7d: number | null }): { title: string; detail: string } {
+// The idle share in words: hours of the last 7 days (168) without any request to the target group, or the backend service on
+// Google Cloud.
+export function idleText(c: { idleHours7d: number; requests7d: number | null }, cloud: Cloud = 'aws'): { title: string; detail: string } {
   const requests = !c.requests7d ? 'no request' : `${c.requests7d.toLocaleString('en-US')} request${c.requests7d === 1 ? '' : 's'}`;
   return {
     title: `Idle ${percent(c.idleHours7d, 168)} of the last 7 days`,
-    detail: `${c.idleHours7d} of 168 hours without any request to its target group (${requests} in 7 days).`,
+    detail: `${c.idleHours7d} of 168 hours without any request to its ${cloud === 'gcp' ? 'backend service' : 'target group'} (${requests} in 7 days).`,
   };
 }
 
@@ -116,17 +118,18 @@ export function cursorPages() {
 }
 
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;
-export const BACKEND_KINDS: BackendKind[] = ['instance', 'asg', 'ecs'];
+// The discovery package's own list (Kubernetes workloads included): a criterion takes any kind it finds.
+export const BACKEND_KINDS: BackendKind[] = [...DISCOVERY_BACKEND_KINDS];
 
 export const DIMENSIONS: { key: DimensionKey; label: string; kind: 'list' | 'tags'; hint: string }[] = [
-  { key: 'accountIds', label: 'Accounts', kind: 'list', hint: '12-digit account IDs' },
-  { key: 'ouIds', label: 'OUs', kind: 'list', hint: 'ou-… or the root r-…, sub-OUs included' },
+  { key: 'accountIds', label: 'Accounts or projects', kind: 'list', hint: '12-digit AWS account IDs, Google Cloud project IDs' },
+  { key: 'ouIds', label: 'OUs', kind: 'list', hint: 'AWS: ou-… or the root r-…, sub-OUs included' },
   { key: 'accountTags', label: 'Account tags', kind: 'tags', hint: 'key=value, key= for any value' },
-  { key: 'regions', label: 'Regions', kind: 'list', hint: 'for example eu-west-1' },
-  { key: 'loadBalancers', label: 'Load balancers', kind: 'list', hint: 'names with *, or ARNs' },
+  { key: 'regions', label: 'Regions', kind: 'list', hint: 'eu-west-1 on AWS, europe-west2 or global on Google Cloud' },
+  { key: 'loadBalancers', label: 'Load balancers', kind: 'list', hint: 'names with *, AWS ARNs, or Google Cloud paths (projects/…/urlMaps/… or …/backendServices/…)' },
   { key: 'hosts', label: 'Hosts', kind: 'list', hint: 'host names with *, for example *.example.com' },
-  { key: 'resourceTags', label: 'Resource tags', kind: 'tags', hint: 'tags of the load balancer, rule or target group: key=value' },
-  { key: 'backendKinds', label: 'Backend types', kind: 'list', hint: 'instance, asg, ecs' },
+  { key: 'resourceTags', label: 'Resource tags', kind: 'tags', hint: 'tags of the load balancer, rule or target group, or labels of the VMs behind a backend service: key=value' },
+  { key: 'backendKinds', label: 'Backend types', kind: 'list', hint: 'instance, asg, ecs, k8s' },
 ];
 
 export const dimensionOf = (key: DimensionKey) => DIMENSIONS.find((d) => d.key === key)!;
