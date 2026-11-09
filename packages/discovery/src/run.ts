@@ -456,7 +456,7 @@ async function connectionsOf(deps: RunDeps, config: DiscoveryConfig, plan: RunPl
   let connectedCount = 0;
   for (const s of [...scans].sort((a, b) => a.account.localeCompare(b.account))) {
     // An account set up for discovery only has no forwarder, on purpose.
-    if (s.synthetic || !wanted(s.account) || (s.access && !s.access.command.ok && s.access.command.discoveryOnly)) continue;
+    if (s.synthetic || isProject(s.account) || !wanted(s.account) || (s.access && !s.access.command.ok && s.access.command.discoveryOnly)) continue;
     const name = inventory.accounts.find((a) => a.id === s.account)?.name ?? s.account;
     const regions = Object.entries(s.access?.trails ?? {}).filter(([, on]) => on).map(([r]) => r).sort();
     const current = connected.get(s.account);

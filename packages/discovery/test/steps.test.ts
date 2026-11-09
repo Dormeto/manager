@@ -201,6 +201,18 @@ describe('lint from the accounts of a run', () => {
       expect(plan.accounts).toEqual([B.id, 'dev-project']);
     });
 
+    it('gives a project no event forwarder: neither connected nor listed as impossible', async () => {
+      const s = setup({ cfg: { ...both, eventRefresh: { enabled: true } } });
+      await s.ready;
+      s.deps.google = google(() => ({ projects: [{ projectId: 'dev-project' }] }));
+      const plan = await planRun(s.deps, { source: 'manual' });
+      for (const account of plan.accounts) await scanAccount(s.deps, { runId: plan.runId, account });
+      const record = await finalizeRun(s.deps, plan);
+      const forwarders = (await s.store.getAccess())!.forwarders!;
+      expect(forwarders.impossible.map((x) => x.account)).toEqual([A.id]);
+      expect(record.connections!.connect.map((x) => x.account)).not.toContain('dev-project');
+    });
+
     it('ends the account step of a project at once, without AWS, its candidates unchanged', async () => {
       const s = setup({ cfg: both });
       await s.ready;
