@@ -2237,7 +2237,10 @@ export function createApi({
     if (cloudOf(c.account) === 'gcp') {
       const row = await googleRow(c, rows);
       if (!row) return c;
-      return { ...c, workload: { router: routers.find((r) => r.name === row.router)?.name ?? row.router, workloadId: c.workloadId, name: (row.name as string | undefined) ?? c.workloadId } };
+      // The row names its router as the router calls itself (dmtr-<region>); the manager's name for it is by its project and
+      // region (dmtr-<project>-<region>, routers.ts).
+      const router = routers.find((r) => r.cloud === 'gcp' && r.account === row.account && r.region === row.region);
+      return { ...c, workload: { router: router?.name ?? row.router, workloadId: c.workloadId, name: (row.name as string | undefined) ?? c.workloadId } };
     }
     const router = routers.find((r) => accountOfRouter(r) === c.account && r.region === c.region);
     const summary = fleet ? await fleet.getWorkload(c.account, c.region, c.workloadId).catch(() => null) : null;

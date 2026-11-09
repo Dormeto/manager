@@ -117,7 +117,15 @@ describe('discovery routes', () => {
     const gcp = (name: string, region: string, over: Partial<Candidate> = {}) => candidate(`${P}/${region === 'global' ? 'global' : `regions/${region}`}/backendServices/${name}`, {
       account: 'dormeto-dev', region, targetGroup: name, targetGroupArn: null, ...over,
     } as never);
-    const row = (over: Record<string, unknown>) => ({ account: 'dormeto-dev', cloud: 'gcp', region: 'europe-west2', router: 'dmtr-dormeto-dev-europe-west2', ...over });
+    // A row as the poll writes it: under the router's own name, dmtr-<region> (the API lists it as dmtr-<project>-<region>).
+    const row = (over: Record<string, unknown>) => ({ account: 'dormeto-dev', cloud: 'gcp', region: 'europe-west2', router: 'dmtr-europe-west2', ...over });
+    // The project's routers as the registry holds them.
+    const installed = (region: string) => ({
+      name: `dmtr-${region}`, account: 'dormeto-dev', region, controller: `https://dmtr-${region}-controller-abc.a.run.app`, onboarder: '', version: '0.40.0', build: '', installedBy: 'cli', cloud: 'gcp', installedAt: NOW_ISO,
+    });
+    const registered: OperationsApi = {
+      create: async () => { throw new Error('unused'); }, list: async () => [], get: async () => null, installedRouters: async () => [installed('europe-west2'), installed('us-east1')] as never,
+    };
     const op = (id: string, type: string, target: Record<string, string>) => ({
       id, type, status: 'running', target: { account: 'dormeto-dev', region: 'europe-west2', ...target }, input: {}, steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: '',
       context: {}, by: 'ops@example.com', createdAt: NOW_ISO, updatedAt: NOW_ISO,
@@ -127,10 +135,10 @@ describe('discovery routes', () => {
     it('finds the workload of a global candidate on its project\'s router of any region, by the backend service\'s name and scope', async () => {
       const shop = gcp('shop-bs', 'global', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'shop-bs' });
       const { api } = setup([shop], {
-        listAll: true,
+        listAll: true, operations: registered,
         workloads: [
           row({ workloadId: 'other', name: 'Regional twin', backendService: 'shop-bs', lb: { kind: 'regional', region: 'europe-west2' } }),
-          row({ workloadId: 'shop-bs', name: 'Shop', region: 'us-east1', router: 'dmtr-dormeto-dev-us-east1', backendService: 'shop-bs', urlMap: 'shop-lb' }),
+          row({ workloadId: 'shop-bs', name: 'Shop', region: 'us-east1', router: 'dmtr-us-east1', backendService: 'shop-bs', urlMap: 'shop-lb' }),
         ],
       });
       expect((await ask(api))[0]!.workload).toEqual({ router: 'dmtr-dormeto-dev-us-east1', workloadId: 'shop-bs', name: 'Shop' });
@@ -140,7 +148,7 @@ describe('discovery routes', () => {
       const regional = gcp('app-bs', 'europe-west2', { status: 'managed', eligibility: 'managed', workloadId: 'app' });
       const classic = gcp('old-bs', 'global', { status: 'managed', eligibility: 'managed', workloadId: 'old' });
       const { api } = setup([regional, classic], {
-        listAll: true,
+        listAll: true, operations: registered,
         workloads: [
           row({ workloadId: 'app', name: 'App', region: 'europe-west2', backendService: 'app-bs', lb: { kind: 'regional' } }),
           row({ workloadId: 'old', name: 'Old', region: 'europe-west2', backendService: 'old-bs', lb: { kind: 'classic' } }),
@@ -149,6 +157,15 @@ describe('discovery routes', () => {
       });
       const byId = Object.fromEntries((await ask(api)).map((c) => [c.targetGroup, c.workload]));
       expect(byId).toEqual({ 'app-bs': { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'app', name: 'App' }, 'old-bs': { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'old', name: 'Old' } });
+    });
+
+    it('names the manager\'s router by the row\'s project and region, the link the dashboard follows, not the router\'s own name', async () => {
+      const shop = gcp('shop-bs', 'global', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'shop-bs' });
+      const { api } = setup([shop], { operations: registered, workloads: [row({ workloadId: 'shop-bs', name: 'Shop', backendService: 'shop-bs' })] });
+      const [c] = await ask(api);
+      expect(c!.workload).toEqual({ router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'shop-bs', name: 'Shop' });
+      expect((await api(event('GET', `/api/workloads/${(c!.workload as { router: string }).router}/shop-bs/description`))).statusCode).not.toBe(404);
+      expect((await api(event('GET', '/api/workloads/dmtr-europe-west2/shop-bs/description'))).statusCode).toBe(404);
     });
 
     it('gives a candidate without a workload row none, lists the fleet once per request, and an AWS candidate never lists it', async () => {
