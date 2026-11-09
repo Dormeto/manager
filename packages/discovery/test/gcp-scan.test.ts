@@ -2,6 +2,7 @@
 // per backend service a URL map names, eligible, ineligible in the router's words (router gcp/src/onboarding.mjs, gke.mjs,
 // urlmaps.mjs), or managed by a router's workload.
 import { describe, expect, it } from 'vitest';
+import { GoogleError } from '@dormeto/google';
 import type { WorkloadSummary } from '@dormeto/fleet';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
 import { scanProject } from '../src/gcp-scan.js';
@@ -46,8 +47,8 @@ describe('a Google Cloud project\'s scan', () => {
       tags: { env: ['dev'], app: ['demo-mig'] },
       rules: [],
       eligibility: 'eligible',
-      idleHours7d: null,
-      requests7d: null,
+      idleHours7d: 168,
+      requests7d: 0,
       backendService: 'projects/dormeto-dev/global/backendServices/dmt-demo-mig-app',
       urlMap: 'projects/dormeto-dev/global/urlMaps/dmt-dev',
       lb: { kind: 'global' },
@@ -65,7 +66,7 @@ describe('a Google Cloud project\'s scan', () => {
     expect(aggregated.map((c) => c.replace(/^GET .*\/aggregated\//, '')).sort()).toEqual(
       ['backendServices', 'forwardingRules', 'instanceGroupManagers', 'instances', 'targetHttpProxies', 'targetHttpsProxies', 'urlMaps'].map((r) => `${r}?returnPartialSuccess=true`),
     );
-    expect(w.calls.filter((c) => !c.includes('/aggregated/')).sort()).toEqual([
+    expect(w.calls.filter((c) => !c.includes('/aggregated/') && !c.includes('monitoring.googleapis.com')).sort()).toEqual([
       'POST https://compute.googleapis.com/compute/v1/projects/dormeto-dev/zones/europe-west1-b/instanceGroups/dmt-demo-mig/listInstances',
       'POST https://compute.googleapis.com/compute/v1/projects/dormeto-dev/zones/europe-west1-b/instanceGroups/dmt-demo/listInstances',
     ]);
@@ -393,5 +394,99 @@ describe('a Google Cloud project\'s account step', () => {
       { region: 'europe-west2', ok: false, error: 'Compute Engine listed regions/europe-west2 as unreachable', rules: 0, ms: 0 },
       { region: 'global', ok: true, rules: 1, ms: 0 },
     ]);
+  });
+});
+
+// §7.3: the idle share over the 168 hours ending at the floored hour, from Cloud Monitoring's request counts.
+describe('a Google Cloud candidate\'s idle share', () => {
+  const GLOBAL = 'loadbalancing.googleapis.com/https/request_count';
+  const REGIONAL = 'loadbalancing.googleapis.com/https/external/regional/request_count';
+  const scanWith = (w: ComputeWorld, log = { warn: (_e: string, _d?: object) => {} }) => scanProject(w, { project: w.project, managed: ONBOARDED, now: NOW, log });
+  const share = (r: ScannedRule | undefined) => [r?.idleHours7d, r?.requests7d];
+
+  it('points in 3 of 168 hours: 165 idle hours and the rounded sum; the same service name under another URL map is not counted', async () => {
+    const w = devProject();
+    w.series.push(
+      { type: GLOBAL, backend: 'dmt-demo-mig-app', urlMap: 'dmt-dev', hours: { 1: '12', 40: '3', 168: '5', 169: '99' } },
+      { type: GLOBAL, backend: 'dmt-demo-mig-app', urlMap: 'another-map', hours: { 2: '1000', 3: '1000' } },
+    );
+    const { rules } = await scanWith(w);
+    // Hour 169 is before the window; a zero hour is idle.
+    expect(share(named(rules, 'dmt-demo-mig-app'))).toEqual([165, 20]);
+    // A managed candidate with no series is idle all week.
+    expect(share(named(rules, 'dmt-demo-app'))).toEqual([168, 0]);
+    expect(w.queries).toHaveLength(1);
+    const q = w.queries[0]!.searchParams;
+    expect([q.get('interval.startTime'), q.get('interval.endTime')]).toEqual(['2026-11-02T12:00:00.000Z', '2026-11-09T12:00:00.000Z']);
+    expect(q.getAll('aggregation.groupByFields')).toEqual(['resource.label.backend_target_name', 'resource.label.url_map_name']);
+  });
+
+  it('every page of the answer is read, and a zero count is an idle hour', async () => {
+    const w = devProject();
+    w.pageSeries = 1;
+    w.series.push(
+      { type: GLOBAL, backend: 'dmt-demo-app', urlMap: 'dmt-dev', hours: { 1: '0', 2: '4' } },
+      { type: GLOBAL, backend: 'dmt-demo-mig-app', urlMap: 'dmt-dev', hours: { 5: '7' } },
+    );
+    const { rules } = await scanWith(w);
+    expect(share(named(rules, 'dmt-demo-app'))).toEqual([167, 4]);
+    expect(share(named(rules, 'dmt-demo-mig-app'))).toEqual([167, 7]);
+    expect(w.queries).toHaveLength(2);
+  });
+
+  it('a regional candidate is read by its region, from its own metric, grouped by region too', async () => {
+    const w = devProject();
+    w.vm('dmt-demo-regional', 'europe-west2-b');
+    const group = w.group('dmt-demo-regional', 'europe-west2-b', ['dmt-demo-regional']);
+    w.backendService('dmt-demo-regional-app', [group], { region: 'europe-west2' });
+    w.urlMap('dmt-dev-regional', { defaultService: w.service('dmt-demo-regional-app', 'europe-west2') }, { region: 'europe-west2' });
+    w.front('dmt-dev-regional', { region: 'europe-west2', proxy: 'http' });
+    w.series.push(
+      { type: REGIONAL, backend: 'dmt-demo-regional-app', urlMap: 'dmt-dev-regional', region: 'europe-west2', hours: { 1: '2', 2: '2' } },
+      { type: REGIONAL, backend: 'dmt-demo-regional-app', urlMap: 'dmt-dev-regional', region: 'europe-west3', hours: { 3: '500' } },
+      { type: GLOBAL, backend: 'dmt-demo-regional-app', urlMap: 'dmt-dev-regional', hours: { 4: '500' } },
+    );
+    const { rules } = await scanWith(w);
+    expect(share(named(rules, 'dmt-demo-regional-app'))).toEqual([166, 4]);
+    const regional = w.queries.find((u) => u.searchParams.get('filter')!.includes(REGIONAL))!;
+    expect(regional.searchParams.getAll('aggregation.groupByFields')).toContain('resource.label.region');
+    // The global candidates are read from the global metric only.
+    expect(share(named(rules, 'dmt-demo-mig-app'))).toEqual([168, 0]);
+  });
+
+  it('a candidate ineligible reads nothing, and no query is made when none is left', async () => {
+    const w = devProject();
+    w.neg('k8s1-abc', 'europe-west1-b', { vms: ['dmt-demo'] });
+    const { rules } = await scanWith(w);
+    expect(rules.filter((r) => r.eligibility === 'ineligible').every((r) => r.idleHours7d === null && r.requests7d === null)).toBe(true);
+  });
+
+  it('Monitoring turned off: nulls, the candidates written, one warning for the project and type', async () => {
+    const w = devProject();
+    w.monitoringError = new GoogleError({ status: 403, reason: 'SERVICE_DISABLED', host: 'monitoring.googleapis.com', message: 'Cloud Monitoring API has not been used in project dormeto-dev before or it is disabled.' });
+    const warnings: [string, object?][] = [];
+    const { rules, regions } = await scanWith(w, { warn: (e, d) => void warnings.push([e, d]) });
+    expect(rules.map((r) => [r.targetGroup, r.idleHours7d, r.requests7d])).toEqual([['dmt-demo-app', null, null], ['dmt-demo-mig-app', null, null]]);
+    expect(regions.every((r) => r.ok)).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]![0]).toBe('GoogleIdleFailed');
+    expect(warnings[0]![1]).toMatchObject({ project: 'dormeto-dev', metric: GLOBAL });
+  });
+
+  it('a failing query gives nulls for its metric type only', async () => {
+    const w = devProject();
+    w.vm('dmt-demo-regional', 'europe-west2-b');
+    w.backendService('dmt-demo-regional-app', [w.group('dmt-demo-regional', 'europe-west2-b', ['dmt-demo-regional'])], { region: 'europe-west2' });
+    w.urlMap('dmt-dev-regional', { defaultService: w.service('dmt-demo-regional-app', 'europe-west2') }, { region: 'europe-west2' });
+    w.front('dmt-dev-regional', { region: 'europe-west2', proxy: 'http' });
+    w.series.push({ type: GLOBAL, backend: 'dmt-demo-mig-app', urlMap: 'dmt-dev', hours: { 1: '1' } });
+    const call = w.call.bind(w);
+    const flaky = Object.assign(Object.create(w), { call: async (m: string, url: string, b?: unknown) => {
+      if (url.includes(encodeURIComponent(REGIONAL)) || url.includes(REGIONAL)) throw new Error('timeout');
+      return call(m, url, b);
+    } });
+    const { rules } = await scanProject(flaky, { project: w.project, managed: ONBOARDED, now: NOW, log: { warn() {} } });
+    expect(share(named(rules, 'dmt-demo-mig-app'))).toEqual([167, 1]);
+    expect(share(named(rules, 'dmt-demo-regional-app'))).toEqual([null, null]);
   });
 });

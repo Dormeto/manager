@@ -388,7 +388,7 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
     if (!google || !(await google.connection())) throw new Error(NO_CONNECTION);
     const routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
     const managed = (await Promise.all(routers.map((r) => google.routerWorkloads(account, r.region)))).flat();
-    scan = await scanProject(google, { project: account, managed, now });
+    scan = await scanProject(google, { project: account, managed, now, log: deps.log });
   } catch (err) {
     error = errorText(err);
     (deps.log ?? silent).warn('DiscoveryProjectFailed', { account, error });

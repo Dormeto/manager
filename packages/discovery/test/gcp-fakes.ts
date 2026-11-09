@@ -10,6 +10,7 @@ import type { WorkloadSummary } from '@dormeto/fleet';
 export const PROJECT = 'dormeto-dev';
 // The URLs Google writes in its answers (selfLink, references); the scan calls compute.googleapis.com.
 const V1 = 'https://www.googleapis.com/compute/v1';
+const MONITORING = 'https://monitoring.googleapis.com/v3';
 const API = 'https://compute.googleapis.com/compute/v1';
 const RESOURCES = ['urlMaps', 'backendServices', 'targetHttpProxies', 'targetHttpsProxies', 'forwardingRules', 'instanceGroupManagers', 'instances'] as const;
 type Resource = (typeof RESOURCES)[number];
@@ -46,6 +47,12 @@ export function compute(project = PROJECT) {
     disabled: false,
     delayMs: 0,
     maxInFlight: 0,
+    // Cloud Monitoring's request counts (a series per backend service and URL map, per hour, as the query groups them), the
+    // queries made, a refusal to answer with, and series per page (absent: one page).
+    series: [] as { type: string; backend: string; urlMap: string; region?: string; hours: Record<number, string> }[],
+    queries: [] as URL[],
+    monitoringError: undefined as GoogleError | undefined,
+    pageSeries: undefined as number | undefined,
     service: (name: string, region?: string) => link(`${scopeOf(region)}/backendServices/${name}`),
     vm(name: string, zone: string, labels: Record<string, string> = {}) {
       add('instances', `zones/${zone}`, {
@@ -116,6 +123,7 @@ export function compute(project = PROJECT) {
       world.maxInFlight = Math.max(world.maxInFlight, inFlight);
       try {
         await new Promise((resolve) => setTimeout(resolve, world.delayMs));
+        if (url.startsWith(MONITORING)) return timeSeries(url) as T;
         return answer(method, url, body) as T;
       } finally {
         inFlight -= 1;
@@ -123,6 +131,34 @@ export function compute(project = PROJECT) {
     },
   };
 
+  // timeSeries.list: the series of the metric type asked for, as the query's aggregation groups them. A series' hours are given
+  // as hours before the window's end (1 = the last hour).
+  function timeSeries(url: string) {
+    const u = new URL(url);
+    world.queries.push(u);
+    if (world.monitoringError) throw world.monitoringError;
+    if (u.pathname !== `/v3/projects/${project}/timeSeries`) throw new Error(`unexpected call ${url}`);
+    const q = u.searchParams;
+    const type = /^metric\.type = "([^"]+)"$/.exec(q.get('filter') ?? '')?.[1];
+    if (!type) throw new Error(`${url}: a metric.type filter expected`);
+    for (const [key, value] of Object.entries({ 'aggregation.alignmentPeriod': '3600s', 'aggregation.perSeriesAligner': 'ALIGN_SUM', 'aggregation.crossSeriesReducer': 'REDUCE_SUM' })) {
+      if (q.get(key) !== value) throw new Error(`${url}: ${key}=${value} expected`);
+    }
+    const end = Date.parse(q.get('interval.endTime')!);
+    const found = world.series.filter((s) => s.type === type);
+    const size = world.pageSeries ?? found.length;
+    const at = Number(q.get('pageToken') ?? 0);
+    return {
+      timeSeries: found.slice(at, at + size).map((s) => ({
+        metric: { type }, resource: { type: 'https_lb_rule', labels: { backend_target_name: s.backend, url_map_name: s.urlMap, ...(s.region ? { region: s.region } : {}) } },
+        points: Object.entries(s.hours).map(([ago, count]) => ({
+          interval: { startTime: new Date(end - Number(ago) * 3_600_000).toISOString(), endTime: new Date(end - (Number(ago) - 1) * 3_600_000).toISOString() },
+          value: { int64Value: count },
+        })),
+      })),
+      ...(at + size < found.length ? { nextPageToken: String(at + size) } : {}),
+    };
+  }
   const notFound = (url: string) => new GoogleError({ status: 404, reason: 'notFound', message: `The resource '${url.slice(url.indexOf('projects/'))}' was not found`, host: 'compute.googleapis.com' });
   function answer(method: string, url: string, body: unknown): unknown {
     if (world.disabled) {

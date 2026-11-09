@@ -14,6 +14,7 @@
 // (SERVICE_DISABLED) is a project with nothing to find.
 import type { WorkloadSummary } from '@dormeto/fleet';
 import { GoogleError } from '@dormeto/google';
+import { idleOfProject } from './gcp-idle.js';
 import type { GooglePort } from './google.js';
 import type { BackendKind, ScannedRule } from './types.js';
 
@@ -229,7 +230,7 @@ class RegionFailed extends Error {}
 const errorText = (err: unknown) => (err instanceof RegionFailed ? err.message : `${(err as Error).name ?? 'Error'}: ${(err as Error).message ?? String(err)}`);
 
 // `managed`: the rows of the project's routers. `now`: the clock of the idle share (§7.3).
-export async function scanProject(port: Pick<GooglePort, 'call'>, { project, managed }: { project: string; managed: ManagedRow[]; now: () => number }): Promise<ProjectScan> {
+export async function scanProject(port: Pick<GooglePort, 'call'>, { project, managed, now, log }: { project: string; managed: ManagedRow[]; now: () => number; log?: { warn(event: string, data?: object): void } }): Promise<ProjectScan> {
   const call = limited(port.call.bind(port), AT_ONCE);
   const seen = new Set<string>(['global']);
   const unlisted = new Map<string, string>(); // region -> why the lists miss part of it
@@ -460,8 +461,14 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
       fail(region, errorText(err));
     }
   }));
+  const kept = rules.filter((r) => !failed.has(r.region)).sort((a, b) => a.id.localeCompare(b.id));
+  // The idle share of the candidates not ineligible, a Monitoring that fails leaving it null (§7.3).
+  const idle = await idleOfProject(port, {
+    project, now, log,
+    candidates: kept.filter((r) => r.eligibility !== 'ineligible').map((r) => ({ id: r.id, backendService: r.targetGroup ?? '', urlMap: r.loadBalancer, region: r.region, kind: r.lb?.kind })),
+  });
   return {
-    rules: rules.filter((r) => !failed.has(r.region)).sort((a, b) => a.id.localeCompare(b.id)),
+    rules: kept.map((r) => ({ ...r, ...idle.get(r.id) })),
     regions: [...seen].sort().map((region) => (failed.has(region) ? { region, ok: false, error: failed.get(region)! } : { region, ok: true })),
   };
 }
