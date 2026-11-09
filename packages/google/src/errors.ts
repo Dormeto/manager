@@ -43,5 +43,25 @@ export function errorOf(status: number, text: string, url?: string): GoogleError
     const info = e.details?.find((d) => d['@type']?.endsWith('google.rpc.ErrorInfo'));
     return new GoogleError({ host, status, reason: info?.reason ?? e.errors?.[0]?.reason ?? e.status ?? '', message: said(e.message) ? e.message : `HTTP ${status}` });
   }
-  return new GoogleError({ host, status, reason: '', message: text.trim().slice(0, 300) || `HTTP ${status}` });
+  return new GoogleError({ host, status, reason: '', message: plainWords(text, 300) || `HTTP ${status}` });
+}
+
+// Google's words as one plain line, cut to `max` characters: an HTML page as its title (else its text, without style, script
+// or tags), a credential its answer echoes replaced by `[redacted]`.
+const SECRETS = [/eyJ[\w-]+\.[\w-]+\.[\w-]*/g, /ya29\.[\w.-]+/g, /Bearer\s+\S+/gi, /x-amz-[\w-]+\s*[=:]\s*\S*/gi, /Signature=[\w%/+=]+/g, /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g];
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#x27': "'" };
+export function plainWords(text: string, max = 200): string {
+  let words = text;
+  if (/<\/?[a-z!][^>]*>/i.test(words)) {
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(words)?.[1]?.trim();
+    words = title || words.replace(/<(style|script)[\s\S]*?<\/\1\s*>/gi, ' ').replace(/<[^>]*>/g, ' ');
+    words = words.replace(/&(#?\w+);/g, (all, name: string) => ENTITIES[name] ?? all);
+  }
+  return redacted(words, max);
+}
+// A line without a credential, cut to `max` characters (a message that is already plain).
+export function redacted(text: string, max = 200): string {
+  let words = text;
+  for (const secret of SECRETS) words = words.replace(secret, '[redacted]');
+  return words.replace(/\s+/g, ' ').trim().slice(0, max);
 }

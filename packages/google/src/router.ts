@@ -6,7 +6,7 @@
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
 // The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
 // health (GET /v1/health, which every router version answers), the same way.
-import { errorOf, GoogleError } from './errors.js';
+import { errorOf, GoogleError, redacted } from './errors.js';
 import type { Google } from './google.js';
 
 // The router version the manager needs (/v1/actions, the journal, the check summary).
@@ -70,7 +70,7 @@ const BROKEN_EXCHANGE = new Set(['invalid_grant', 'invalid_target', 'unauthorize
 const brokenConnection = (err: GoogleError) => denied(err.status) || err.status === 404 || (err.status === 400 && BROKEN_EXCHANGE.has(err.reason));
 // What Google answered, in one line: its host, status, reason (when it gives one) and message cut to 200 characters.
 const googleSaid = (host: string, status: number, reason: string, message: string) =>
-  `Google: ${[host, status, reason].filter((part) => part !== '').join(' ')}: ${message.replace(/\s+/g, ' ').trim().slice(0, 200)}`;
+  `Google: ${[host, status, reason].filter((part) => part !== '').join(' ')}: ${redacted(message)}`;
 // Google's JSON error ({error: {code, message, status}}); the controller's own errors hold a string.
 const googleShaped = (body: unknown) => typeof (body as { error?: unknown } | null)?.error === 'object' && (body as { error: unknown }).error !== null;
 

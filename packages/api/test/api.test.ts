@@ -445,9 +445,9 @@ describe('Google Cloud routers', () => {
     const m = manager({ controller: () => new Response('<html><title>403 Forbidden</title></html>', { status: 403, headers: { 'content-type': 'text/html' } }) });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/nap`, 'dmt-operator'));
     expect([res.statusCode, json(res)]).toEqual([502, {
-      error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: <html><title>403 Forbidden</title></html>)',
+      error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: 403 Forbidden)',
     }]);
-    expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: <html><title>403 Forbidden</title></html>)');
+    expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: 403 Forbidden)');
   });
 
   it('answers a connection broken at the token (STS invalid_target, iamcredentials 404) as manager-access-missing; STS\'s 503 stays a router error', async () => {
@@ -553,7 +553,7 @@ describe('Google Cloud routers', () => {
     expect([res.statusCode, json(res).hibernate]).toEqual([200, false]);
     expect(m.audit.at(-1)).toMatchObject({ action: 'settings', target: 'workloads', result: 'hibernate off' });
     const logged = warn.mock.calls.map(([line]) => JSON.parse(String(line)));
-    expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: <html>Forbidden</html>)' }]);
+    expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: Forbidden)' }]);
   });
 
   // A router below 0.40.0 can't take them (its refusal would be logged at every write, forever): the poll pushes them once

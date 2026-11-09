@@ -457,7 +457,7 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
     expect(await w.pollOf('europe-west2')).toMatchObject({
-      versionAt: iso(T0), lastError: 'version: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: <html><title>403 Forbidden</title></html>)',
+      versionAt: iso(T0), lastError: 'version: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: 403 Forbidden)',
     });
     w.clock.t += 9 * 60 * S;
     await w.poll();
@@ -519,7 +519,7 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect(await w.pollOf('europe-west2')).toEqual({
       newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'manager-access-missing',
-      lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: <html><title>403 Forbidden</title></html>)',
+      lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: 403 Forbidden)',
     });
     r.answer = undefined;
     w.clock.t += 60 * S;

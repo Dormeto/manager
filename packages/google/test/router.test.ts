@@ -128,11 +128,29 @@ describe('callRouter', () => {
 
   it('keeps what Google answered in front of the controller: its host, status and page, cut to 200 characters', async () => {
     const page = await failure(callRouter(fakeGoogle(() => html(403, 'Forbidden')).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
-    expect(page.said).toMatch(/^Google: dmtr-europe-west2-controller-abc123-nw\.a\.run\.app 403: <html>/);
+    expect(page.said).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: 403 Forbidden');
     const long = await failure(callRouter(fakeGoogle(() => json(403, { error: { code: 403, message: 'x'.repeat(500), status: 'PERMISSION_DENIED' } })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
     expect(long.said).toBe(`Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403 PERMISSION_DENIED: ${'x'.repeat(200)}`);
     const empty = await failure(callRouter(fakeGoogle(() => new Response('', { status: 401 })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
     expect(empty.said).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 401: HTTP 401');
+  });
+
+  it('says Google\'s HTML page as its readable words, not its markup', async () => {
+    const page = '<!DOCTYPE html><html lang=en><meta charset=utf-8><meta name=viewport content="initial-scale=1"><title>Error 403 (Forbidden)!!1</title><style>*{margin:0}body{color:#222}</style><a href=//www.google.com/><span id=logo></span></a><p><b>403.</b> <ins>That\u2019s an error.</ins><p>Your client does not have permission to get URL <code>/v1/actions</code> from this server.';
+    const err = await failure(callRouter(fakeGoogle(() => new Response(page, { status: 403, headers: { 'content-type': 'text/html' } })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+    expect(err.said).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: Error 403 (Forbidden)!!1');
+    const untitled = await failure(callRouter(fakeGoogle(() => new Response('<html><style>p{x:y}</style><body><p>Your client &amp; you <code>/v1/actions</code> &lt;none&gt;</p></body></html>', { status: 403 })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+    expect(untitled.said).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: Your client & you /v1/actions <none>');
+  });
+
+  it('says nothing of a credential Google\'s answer echoes', async () => {
+    const secrets = ['eyJhbGciOi.eyJhdWQiOiJ4In0.c2lnbmF0dXJl', 'ya29.a0AfH6SMB-x_y.z', 'Bearer abc123def', 'x-amz-security-token=FwoGZXIvYXdz', 'X-Amz-Signature=0123abcd', 'Signature=ab%2Fc+d=', 'AKIAIOSFODNN7EXAMPLE', 'ASIAIOSFODNN7EXAMPLE'];
+    for (const secret of secrets) {
+      const json403 = await failure(callRouter(fakeGoogle(() => json(403, { error: { code: 403, message: `bad ${secret} here`, status: 'PERMISSION_DENIED' } })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+      expect(json403.said, secret).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403 PERMISSION_DENIED: bad [redacted] here');
+      const text = await failure(callRouter(fakeGoogle(() => new Response(`denied ${secret}`, { status: 403 })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
+      expect(text.said, secret).toBe('Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: denied [redacted]');
+    }
   });
 
   it('keeps STS\'s 5xx a failure of the call, not the manager\'s access', async () => {
