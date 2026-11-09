@@ -971,12 +971,12 @@ describe('a Google Cloud workload', () => {
     wrapper.unmount();
   });
 
-  it('lets an operator rename, tag, set and offboard it: the CLI onboarded it, unlike a Terraform workload', async () => {
+  it('lets an operator rename, tag and set it: the CLI onboarded it, unlike a Terraform workload', async () => {
     current = google;
     const admin = await mountView('admin');
     expect(admin.find('[data-test="edit-tags"]').exists()).toBe(true);
     expect(admin.find('[data-test="tags-terraform"]').exists()).toBe(false);
-    expect(await openActions(admin)).toEqual(['Wake', 'Nap', 'Pause', 'Rename', 'Offboard']);
+    expect(await openActions(admin)).toEqual(['Wake', 'Nap', 'Pause', 'Rename']);
     admin.unmount();
     current = { ...google, settingsFrom: { idleMinutes: 'workload' } };
     const operator = await mountView('operator');
@@ -984,14 +984,17 @@ describe('a Google Cloud workload', () => {
     operator.unmount();
   });
 
-  it('says what offboarding removes in Google Cloud words', async () => {
+  // The manager's operations are AWS's until it onboards on Google Cloud (design §8, plan 2).
+  it('offers no Offboard: an operator is given the CLI\'s command, a viewer nothing', async () => {
     current = google;
-    const wrapper = await mountView('operator');
-    await openActions(wrapper);
-    ([...document.querySelectorAll<HTMLElement>('[data-test="action"]')].find((i) => i.textContent?.trim() === 'Offboard'))!.click();
-    await flushPromises();
-    expect(document.body.textContent).toContain('waker backend service');
-    expect(document.body.textContent).not.toContain('waker target group');
-    wrapper.unmount();
+    // The menus an earlier test left open in the document (unmounted with them open).
+    document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());
+    const operator = await mountView('operator');
+    expect(await openActions(operator)).toEqual(['Wake', 'Nap', 'Pause', 'Rename']);
+    expect(operator.find('[data-test="gcp-offboard"]').text()).toContain('dormeto gcp workloads offboard 5cdfbf844b925bf8 --project dormeto-dev --region europe-west2');
+    operator.unmount();
+    const viewer = await mountView('viewer');
+    expect(viewer.find('[data-test="gcp-offboard"]').exists()).toBe(false);
+    viewer.unmount();
   });
 });

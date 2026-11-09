@@ -542,7 +542,7 @@ describe('Google Cloud routers', () => {
     expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' }]);
   });
 
-  it('renames, tags, sets and offboards a workload the CLI onboarded (source cli): nothing refuses it as a Terraform one is', async () => {
+  it('renames, tags and sets a workload the CLI onboarded (source cli): nothing refuses it as a Terraform one is', async () => {
     const m = manager({
       controller: (_req, payload) => answer(200, payload.action === 'rename' ? { workloadId: 'demo', name: payload.name }
         : payload.action === 'tag' ? { workloadId: 'demo', tags: payload.tags } : { workloadId: 'demo', settings: payload.settings, source: 'cli' }),
@@ -554,9 +554,19 @@ describe('Google Cloud routers', () => {
     const settings = await m.api(event('PUT', `/api/workloads/${NAME}/demo/settings`, 'dmt-operator', { idleMinutes: 30 }));
     expect(settings.statusCode).toBe(200);
     expect(m.actions().map((a) => a.payload.action)).toEqual(['rename', 'tag', 'settings']);
+  });
+
+  // The operations engine is AWS's until the manager onboards on Google Cloud (design §8, plan 2).
+  it('refuses to offboard a Google Cloud workload with 400 and the CLI\'s command, starting no operation; an AWS one\'s as before', async () => {
+    const m = manager();
     const offboard = await m.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: NAME, workloadId: 'demo' }));
-    expect(offboard.statusCode).toBe(202);
-    expect(m.created).toEqual([['offboard', { router: NAME, account: 'dormeto-dev', region: 'europe-west2', workloadId: 'demo' }]]);
+    expect([offboard.statusCode, json(offboard)]).toEqual([400, {
+      error: 'bad_request', message: 'a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard demo --project dormeto-dev --region europe-west2',
+    }]);
+    expect(m.created).toEqual([]);
+    expect(m.actions()).toEqual([]);
+    expect((await m.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: 'dmt-dev', workloadId: 'demo' }))).statusCode).toBe(202);
+    expect(m.created).toEqual([['offboard', { router: 'dmt-dev', account: '121014831971', region: 'eu-west-1', workloadId: 'demo' }]]);
   });
 
   it('gives a Google Cloud router 10 s to answer a list, an AWS one 5 s', async () => {

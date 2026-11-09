@@ -34,6 +34,7 @@ import ScheduleCard from '../components/ScheduleCard.vue';
 import ScheduleDialog from '../components/ScheduleDialog.vue';
 import type { Schedule } from '../schedule';
 import DmLogo from '../components/DmLogo.vue';
+import CommandBlock from '../components/CommandBlock.vue';
 import DmLoader from '../components/DmLoader.vue';
 import { stateSince } from '../state';
 import { backendCost, barSavings, discountText } from '../costs';
@@ -69,9 +70,11 @@ const tags = computed(() => tagsList(status.value?.tags));
 // The cloud it runs on. A Google Cloud workload has backend services and a URL map where an AWS one has a target group, and is
 // "suspended" where AWS's is hibernated.
 const gcp = computed(() => (status.value ? rowCloud(status.value) : 'aws') === 'gcp');
-// Who can change it: what the manager onboarded, and a Google Cloud workload the CLI onboarded (both renamed, tagged, set and
-// offboarded from here); a Terraform workload is written in Terraform.
+// Who can change it: what the manager onboarded, and a Google Cloud workload the CLI onboarded (both renamed, tagged and set
+// from here); a Terraform workload is written in Terraform.
 const managed = computed(() => status.value?.source === 'manager' || status.value?.source === 'cli');
+// A Google Cloud workload is offboarded with the CLI until the manager onboards there (Google Cloud manager design §8).
+const offboardCommand = computed(() => `dormeto gcp workloads offboard ${props.id} --project ${status.value?.account ?? '<project>'} --region ${status.value?.region ?? '<region>'}`);
 // The name people gave the workload (routers 0.20.0 and later), else its id.
 const title = computed(() => status.value?.name ?? props.id);
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
@@ -432,7 +435,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
             </template>
             <v-list-item v-if="session.canOperate && managed" data-test="action" :prepend-icon="mdiPencilOutline" title="Rename" @click="renameOpen = true" />
             <v-list-item v-if="session.canOperate && !excluded && excludeOptions.length" data-test="action" :prepend-icon="mdiCancel" title="Exclude" @click="excludeOpen = true" />
-            <template v-if="session.canOperate && status.source !== 'terraform'">
+            <!-- A Google Cloud workload's offboarding is the CLI's for now: its Offboarding card gives the command. -->
+            <template v-if="session.canOperate && status.source !== 'terraform' && !gcp">
               <v-divider class="my-1" />
               <v-list-item data-test="action" :prepend-icon="mdiLogoutVariant" title="Offboard" base-color="error" @click="confirm = 'offboard'" />
             </template>
@@ -654,6 +658,12 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <div v-if="!gcp && freshBootLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ freshBootLine(status.hibernation) }}</div>
         </v-card-text>
       </v-card>
+      <v-card v-if="gcp && session.canOperate && status.source !== 'terraform'" data-test="gcp-offboard" title="Offboarding">
+        <v-card-text class="text-body-medium">
+          <div class="mb-2">A Google Cloud workload is offboarded with the Dormeto CLI, in a terminal signed in to its project: it is woken, then its waker backend service, its routing in the URL map and its tags are removed.</div>
+          <CommandBlock :command="offboardCommand" />
+        </v-card-text>
+      </v-card>
     </div>
   </div>
 
@@ -671,9 +681,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
         : confirm === 'offboard'
-          ? (gcp
-            ? 'The workload is woken, then Dormeto removes what onboarding added: the waker backend service and its routing in the URL map, the tags.'
-            : 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.')
+          ? 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
           : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />

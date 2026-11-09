@@ -200,6 +200,8 @@ export function startOperation(d: Demo, body: Body, now: number) {
     conflict(d, now, (o) => o.target.account === router.account && o.target.region === router.region && (o.type.endsWith('-router') || (body.workloadId !== undefined && o.target.workloadId === body.workloadId)));
     if (type === 'offboard') {
       const w = workloadOf(d, router.name, String(body.workloadId ?? ''));
+      // As the API: a Google Cloud workload is offboarded with the CLI until the manager onboards there.
+      if (router.cloud === 'gcp') fail(400, 'bad_request', `a Google Cloud workload is offboarded with the CLI: dormeto gcp workloads offboard ${w.workloadId} --project ${router.account} --region ${router.region}`);
       // The workload is woken first (paused), then its instrumentation removed.
       wake(w, 'pause', now);
       op = {

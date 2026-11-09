@@ -45,7 +45,9 @@ Cloud router, answer 400 with the `dormeto gcp install` or `uninstall` command: 
 Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PUT` and `DELETE /settings/waiting-page`) is pushed to
 every Google Cloud router with a controller as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
-onboarded is renamed, tagged, set and offboarded through the manager as any other. AWS routers are called as before.
+onboarded is renamed, tagged and set through the manager as any other; it is offboarded with the CLI until the manager onboards on
+Google Cloud: `offboard` for a Google Cloud workload answers 400 with `dormeto gcp workloads offboard <id> --project <p> --region <r>`.
+AWS routers are called as before.
 - **The poll:** the manager polls its Google Cloud routers, which push nothing: every minute (the schedule `<name>-poll` invokes the fleet
 function with `{ task: 'poll' }`, never retried), 10 at once for at most 50 s a run, the least recently polled first, each
 router at 0.40.0 or of an unknown version. Its journal (`events`), read again from 5 minutes before the newest event already
@@ -69,7 +71,7 @@ uninstall or Terraform control: the `dormeto gcp install` and `uninstall` comman
 the Routers install form stays AWS's with one line naming `dormeto gcp install`. A Google Cloud workload shows its backend service, waker backend
 service and URL map with the console link (a regional URL map links the project's list of load balancers), its VM, group and Cloud SQL
 instance with theirs, "suspended" where AWS says "hibernated", Google Cloud list prices, and no target group, targets or ARN; the workload the CLI
-onboarded is renamed, tagged, set and offboarded from the dashboard. Discovery settings shows the Google Cloud connection read-only
+onboarded is renamed, tagged and set from the dashboard, which offers no Offboard for it but the `dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, and what a disconnect leaves) and `docs/operations.md`

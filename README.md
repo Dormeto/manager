@@ -55,8 +55,8 @@ flowchart TB
 **On Google Cloud** the same three steps run in a Cloud Run router, behind a Google Cloud Application Load Balancer, for
 Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs, upgrades and uninstalls the routers and sets
 `--request-logs` and GKE access (`dormeto gcp install`, `dormeto gcp workloads access grant`), because those change IAM
-policies, backend services or clusters, which the manager never does. Onboarding is the CLI's today
-(`dormeto gcp workloads onboard`); onboarding through the manager comes with the discovery of Google Cloud candidates. The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
+policies, backend services or clusters, which the manager never does. Onboarding and offboarding are the CLI's today
+(`dormeto gcp workloads onboard`, `offboard`); through the manager they come with the discovery of Google Cloud candidates. The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
 identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
 ([Organization access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
 reads the router's journal of state changes and its check summary, which feed the same history, health and alerts

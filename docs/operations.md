@@ -55,7 +55,9 @@ after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 
   and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp install` or
   `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
   uninstall, `--request-logs` and a GKE workload's Kubernetes access are CLI commands (`dormeto gcp`). A workload the CLI
-  onboarded is renamed, tagged, set and offboarded from the manager as any other.
+  onboarded is renamed, tagged and set from the manager as any other. Until the manager onboards on Google Cloud, it is
+  offboarded with the CLI too: `offboard` for a Google Cloud workload answers 400 with `dormeto gcp workloads offboard <id>
+  --project <p> --region <r>`, which the workload view shows instead of its Offboard action.
 - **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
   the cloud its alarms share, and none when they mix.
 
