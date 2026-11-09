@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFleetStore, createIngest, type RouterSummary } from '@dormeto/fleet';
+import { createFleetStore, createIngest, type RouterPoll, type RouterSummary } from '@dormeto/fleet';
 import { createRegistry } from '@dormeto/fleet/registry';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
@@ -46,7 +46,7 @@ function memoryAlarms(): AlarmStore & { items: Map<string, { alarm: Alarm; versi
   return store;
 }
 
-function setup({ summaries = [] as RouterSummary[], registry = [] as InstalledRouter[], polls = [] as { account: string; region: string; checkedAt: string | null; poll: { tooOld?: string } | null }[], terraform = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller' }], failPublish = false } = {}) {
+function setup({ summaries = [] as RouterSummary[], registry = [] as InstalledRouter[], polls = [] as { account: string; region: string; checkedAt: string | null; poll: Partial<RouterPoll> | null }[], terraform = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller' }], failPublish = false } = {}) {
   let now = NOW;
   const sent: Notification[] = [];
   const state = { summaries, registry, polls, failPublish };
@@ -104,6 +104,41 @@ describe('watchdog: Google Cloud routers', () => {
       expect(text).not.toContain('Lambda');
     }
     expect(s.sent[0]!.attributes.cloud).toBe('gcp');
+  });
+
+  // The poll's refusal says what to run; a silent router's advice would send the operator to Cloud Run's logs instead.
+  it('says the refusal the poll met, with its command, instead of silent: the manager\'s access missing, a controller not found yet', async () => {
+    const access = 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev';
+    const refused = setup({
+      terraform: [], registry: [gcp()],
+      summaries: [summary(PROJECT, 'europe-west1', 40 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.40.0' })],
+      polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: iso(NOW - 40 * MIN), poll: { lastRefusal: 'manager-access-missing', lastError: `events: ${access}` } }],
+    });
+    await refused.watchdog.run();
+    expect(refused.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => [p.code, p.level, p.text])).toEqual([['manager-access-missing', 'error', access]]);
+    expect(refused.sent).toHaveLength(1);
+    expect(refused.sent[0]!.message).toContain(access);
+    expect(refused.sent[0]!.message).not.toContain('Cloud Scheduler');
+    const unknown = 'discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again';
+    const undiscovered = setup({
+      terraform: [], registry: [gcp(10 * HOUR, { controller: '' })],
+      polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: null, poll: { lastRefusal: 'router-unknown', lastError: `controller: ${unknown}` } }],
+    });
+    await undiscovered.watchdog.run();
+    expect(undiscovered.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => [p.code, p.text])).toEqual([['router-unknown', unknown]]);
+  });
+
+  it('gives a refused router installed lately the grace of a silent one, and a reporting one its own report', async () => {
+    const poll = { lastRefusal: 'manager-access-missing' as const, lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' };
+    const fresh = setup({ terraform: [], registry: [gcp(5 * MIN)], polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: null, poll }] });
+    await fresh.watchdog.run();
+    expect(fresh.sent).toEqual([]);
+    const reporting = setup({
+      terraform: [], registry: [gcp()], summaries: [summary(PROJECT, 'europe-west1', 2 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.40.0' })],
+      polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: iso(NOW - 2 * MIN), poll }],
+    });
+    await reporting.watchdog.run();
+    expect(reporting.sent).toEqual([]);
   });
 
   it('keeps an AWS router\'s advice as it was', async () => {

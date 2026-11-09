@@ -12,14 +12,18 @@ import type { Google } from './google.js';
 // The router version the manager needs (/v1/actions, the journal, the check summary).
 export const ROUTER_MINIMUM = '0.40.0';
 
-// The manager's accounts can't reach the router, or the router has no /v1/actions.
+// A call's refusal: the manager's accounts can't reach the router, or the router has no /v1/actions.
 export type RouterRefusal = 'manager-access-missing' | 'router-too-old';
+// What the manager can't do with a Google Cloud router, a call's refusal or, before any call, a controller discovery
+// hasn't found yet: the API answers each as a 502, the poll records it, the watchdog says it.
+export type Refusal = RouterRefusal | 'router-unknown';
 
 // The commands that fix what the manager can't do on Google Cloud, as the API answers them and the fleet's poll records
 // them. The operator's AWS profile is theirs to fill in.
 export const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
 export const installCommand = (project: string, region: string, pinned: string | undefined) => `dormeto gcp install --project ${project} --region ${region}${pinned ? ` --version ${pinned}` : ''}`;
 export const accessMissingText = (host: string, env: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}`;
+export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
 // version: '' when it is unknown (the router answered that it has no /v1/actions).
 export const tooOldText = (version: string, project: string, region: string, pinned: string | undefined) =>
   `router ${version || `older than ${ROUTER_MINIMUM}`} can't report to the manager: ${installCommand(project, region, pinned)}`;

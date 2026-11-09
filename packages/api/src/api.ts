@@ -7,7 +7,8 @@ import {
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import type { Google, GoogleConnection } from '@dormeto/google';
-import { accessMissingText, callRouter, connectCommand, installCommand, RouterCallError, routerTooOld, tooOldText } from '@dormeto/google/router';
+// The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
+import { accessMissingText, callRouter, controllerUnknownText, installCommand, RouterCallError, routerTooOld, tooOldText, type Refusal } from '@dormeto/google/router';
 import { cloudOf, isAccount, isCandidateRegion, isProject, isRegion } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
@@ -133,7 +134,7 @@ export interface DiscoveryApi {
 // the manager can't use is a 502 with its own code (Google Cloud manager design §6.2): the manager's accounts can't reach
 // it, it predates /v1/actions, or discovery hasn't found its controller yet.
 export type RefusalCode = 'invalid' | 'not_found' | 'conflict' | 'unsupported';
-export type CallRefusal = 'manager-access-missing' | 'router-too-old' | 'router-unknown';
+export type CallRefusal = Refusal;
 export class RouterError extends Error {
   constructor(message: string, readonly code?: RefusalCode, readonly refusal?: CallRefusal) {
     super(message);
@@ -158,9 +159,6 @@ export interface GoogleCalls {
 }
 export const GOOGLE_CALL_MS = 10_000;
 
-// The commands that fix what the manager can't do on Google Cloud: @dormeto/google/router's texts (the fleet's poll records
-// them too), and this one.
-export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
 
 // A refusal answered (refusals: true), as a router error with its code; any other answer as it is.
 function refusalOf(answer: unknown): unknown {

@@ -3,6 +3,7 @@
 // workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time. A Google Cloud
 // router's poll (Google Cloud manager design §6.3) on its RS# item, beside the summary.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+import type { Refusal } from '@dormeto/google/router';
 import type { Discounts, StoppedItem } from './prices.js';
 import { checkMinutesOf, type IdleWindowAdvice } from './idle.js';
 
@@ -43,6 +44,8 @@ export interface RouterPoll {
   misses: number; // Google's own 404s in a row at the controller URL: at 2 the router is unregistered
   polledAt: string; // when its last poll started: the least recently polled go first
   lastError?: string; // what its last poll could not do, and why
+  // The refusal its last poll met (lastError says it with its command): the watchdog says it instead of silent.
+  lastRefusal?: Refusal;
   etag?: string; // the ETag of the settings.json the router holds, as it last answered (or as pushed); none: it holds none
   tooOld?: string; // its version when it answered it has no /v1/actions: not polled again until its version changes
   versionAt?: string; // when its version was last read from its health (a router too old to poll: every 10 minutes)

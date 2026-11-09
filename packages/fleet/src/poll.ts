@@ -10,7 +10,7 @@
 // in the registry, so that the advised `dormeto gcp install` clears too-old within 10 minutes. What a poll did not do, and
 // where the journal was read up to, is its RS# item's poll.
 import type { Google, GoogleConnection } from '@dormeto/google';
-import { accessMissingText, callRouter, RouterCallError, routerHealth, routerTooOld, tooOldText } from '@dormeto/google/router';
+import { accessMissingText, callRouter, controllerUnknownText, RouterCallError, routerHealth, routerTooOld, tooOldText } from '@dormeto/google/router';
 import { CHUNK_WORKLOADS_MAX, timely } from './clean.js';
 import { eachAtOnce, type RouterEvent } from './ingest.js';
 import type { InstalledRouter, Registry } from './registry.js';
@@ -159,6 +159,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     } catch (err) {
       if (gone) poll.misses += 1;
       if (err instanceof RouterCallError && err.refusal === 'router-too-old') poll.tooOld = router.version;
+      if (err instanceof RouterCallError && err.refusal) poll.lastRefusal = err.refusal;
       poll.lastError = `${step}: ${textOf(err, router, run)}`;
       log?.warn('RouterPollFailed', { router: router.name, account: router.account, region: router.region, step, error: poll.lastError });
     }
@@ -189,8 +190,12 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
         await registry.put({ ...router, version });
         log?.info('RouterVersionRead', { router: router.name, account: router.account, region: router.region, from: router.version, version });
       }
-      if (routerTooOld(version) || poll.tooOld === version) poll.lastError = `version: ${tooOldText(version, router.account, router.region, routerVersion)}`;
+      if (routerTooOld(version) || poll.tooOld === version) {
+        poll.lastRefusal = 'router-too-old';
+        poll.lastError = `version: ${tooOldText(version, router.account, router.region, routerVersion)}`;
+      }
     } catch (err) {
+      if (err instanceof RouterCallError && err.refusal) poll.lastRefusal = err.refusal;
       poll.lastError = `version: ${textOf(err, router, run)}`;
       log?.warn('RouterVersionNotRead', { router: router.name, account: router.account, region: router.region, error: poll.lastError });
     }
@@ -199,8 +204,9 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
 
   return async function poll(): Promise<{ routers: number; polled: number; left: number }> {
     const started = now();
-    const routers = (await registry.list()).filter((r) => r.cloud === 'gcp' && r.controller);
-    if (!routers.length) return { routers: 0, polled: 0, left: 0 };
+    const registered = (await registry.list()).filter((r) => r.cloud === 'gcp');
+    if (!registered.length) return { routers: 0, polled: 0, left: 0 };
+    const routers = registered.filter((r) => r.controller);
     const current = await google.current();
     if (!current) {
       log?.warn('RoutersNotPolled', { routers: routers.length, reason: 'no Google Cloud connection' });
@@ -208,6 +214,14 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     }
     const known = new Map((await store.routerPolls()).map((p) => [keyOf(p), p]));
     const pollOf = (r: InstalledRouter) => known.get(keyOf(r))?.poll ?? null;
+    // A router whose controller discovery hasn't found yet can't be called: its poll says so, once.
+    for (const router of registered.filter((r) => !r.controller && pollOf(r)?.lastRefusal !== 'router-unknown')) {
+      const was = pollOf(router);
+      await store.putPoll(router.account, router.region, {
+        newestAt: was?.newestAt ?? null, misses: was?.misses ?? 0, polledAt: was?.polledAt ?? new Date(now()).toISOString(),
+        lastRefusal: 'router-unknown', lastError: `controller: ${controllerUnknownText(current.connection.project, env)}`,
+      });
+    }
     // Too old to poll: a known version below 0.40.0, or the one it had when it answered it has no /v1/actions.
     const tooOld = (r: InstalledRouter) => routerTooOld(r.version) || pollOf(r)?.tooOld === r.version;
     const versionDue = (r: InstalledRouter) => {

@@ -389,7 +389,7 @@ describe('the poll of Google Cloud routers', () => {
     r.version = '0.39.0';
     await w.poll();
     expect(await w.pollOf('europe-west2')).toEqual({
-      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '',
+      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', lastRefusal: 'router-too-old',
       lastError: 'events: router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Not called again: its version is read from its health instead, and kept in the registry.
@@ -398,7 +398,7 @@ describe('the poll of Google Cloud routers', () => {
     expect([r.calls.length, r.healthReads]).toEqual([1, 1]);
     expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
     expect(await w.pollOf('europe-west2')).toEqual({
-      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', versionAt: iso(T0 + 60 * S),
+      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', versionAt: iso(T0 + 60 * S), lastRefusal: 'router-too-old',
       lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Upgraded: discovery reads its new version.
@@ -489,6 +489,36 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect([current, unknown, old, undiscovered].map((r) => r.calls.length)).toEqual([1, 1, 0, 0]);
     expect(await w.pollOf('eu-west-3', '121014831971')).toBeNull();
+  });
+
+  // The watchdog says the refusal, with its command, instead of silent.
+  it('keeps the code of the refusal its poll met, and clears it at a poll the router answers', async () => {
+    const w = world();
+    const r = await w.add('europe-west2');
+    r.answer = () => ({ status: 403, text: '<html><title>403 Forbidden</title></html>' });
+    await w.poll();
+    expect(await w.pollOf('europe-west2')).toEqual({
+      newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'manager-access-missing',
+      lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev',
+    });
+    r.answer = undefined;
+    w.clock.t += 60 * S;
+    await w.poll();
+    expect(await w.pollOf('europe-west2')).toEqual({ newestAt: null, misses: 0, polledAt: iso(T0 + 60 * S) });
+  });
+
+  it('records router-unknown once for a registered router whose controller discovery hasn\'t found yet, without calling it', async () => {
+    const w = world();
+    const r = await w.add('europe-west2', { controller: '' });
+    await w.poll();
+    expect([r.calls.length, r.healthReads]).toEqual([0, 0]);
+    expect(await w.pollOf('europe-west2')).toEqual({
+      newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'router-unknown',
+      lastError: 'controller: discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again',
+    });
+    w.clock.t += 60 * S;
+    await w.poll();
+    expect((await w.pollOf('europe-west2'))!.polledAt).toBe(iso(T0));
   });
 
   it('polls nothing without a Google Cloud connection, and says so', async () => {
