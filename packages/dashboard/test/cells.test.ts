@@ -6,6 +6,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import BackendLabel from '../src/components/BackendLabel.vue';
 import IdleBar from '../src/components/IdleBar.vue';
+import BackendKinds from '../src/components/BackendKinds.vue';
 import RegionLabel from '../src/components/RegionLabel.vue';
 import StatusChip from '../src/components/DiscoveryStatusChip.vue';
 
@@ -52,6 +53,13 @@ describe('discovery cells', () => {
     expect(tip).not.toContain('AWS location');
     wrapper?.unmount();
     expect(await tooltipOf(render(RegionLabel, { region: 'eu-west-1' }), '.region-label')).toContain('AWS location');
+  });
+
+  it('names a plain Google Cloud kind to screen readers (its icon is not aria-hidden)', () => {
+    const w = render(BackendKinds, { kinds: ['instance'], cloud: 'gcp', plain: true });
+    const icon = w.find('[aria-label="Compute Engine VM"]');
+    expect(icon.exists()).toBe(true);
+    expect(icon.attributes('aria-hidden')).not.toBe('true');
   });
 
   it('shows an unknown region as a globe, its code in the tooltip', async () => {

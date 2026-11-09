@@ -17,7 +17,7 @@ const mdi = (kind: string) => (props.cloud === 'gcp' ? backendMdi(kind) : null);
       <template #activator="{ props }">
         <span v-bind="plain ? {} : props" class="dm-kinds__kind" :tabindex="plain ? undefined : 0" :aria-label="plain ? undefined : backendLabel(kind, cloud)">
           <img v-if="icon(kind)" :src="icon(kind)!" :alt="backendLabel(kind, cloud)" width="22" height="22" class="backend-icon">
-          <v-icon v-else-if="mdi(kind)" :icon="mdi(kind)!" size="22" class="backend-icon backend-icon--mdi" :aria-label="plain ? backendLabel(kind, cloud) : undefined" />
+          <v-icon v-else-if="mdi(kind)" :icon="mdi(kind)!" size="22" class="backend-icon backend-icon--mdi" :aria-hidden="plain ? false : undefined" :aria-label="plain ? backendLabel(kind, cloud) : undefined" />
           <v-chip v-else size="x-small" variant="tonal" label>{{ backendLabel(kind, cloud) }}</v-chip>
         </span>
       </template>

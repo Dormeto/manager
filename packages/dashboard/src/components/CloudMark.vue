@@ -11,7 +11,7 @@ const text = computed(() => `${mark.value.label} ${ownerLabel(props.cloud).toLow
 </script>
 
 <template>
-  <v-icon data-test="cloud-mark" :data-cloud="cloud" :icon="mark.icon" size="1.25em" class="dm-cloud-mark" role="img" :aria-label="text" :title="text" />
+  <v-icon data-test="cloud-mark" :data-cloud="cloud" :icon="mark.icon" size="1.25em" class="dm-cloud-mark" role="img" aria-hidden="false" :aria-label="text" :title="text" />
 </template>
 
 <style scoped>

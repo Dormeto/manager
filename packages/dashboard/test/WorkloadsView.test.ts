@@ -50,6 +50,8 @@ describe('Workloads view, both clouds', () => {
     expect(aws!.find('[data-test="cloud-mark"]').attributes('aria-label')).toBe('AWS account');
     expect(gcp!.find('[data-test="cloud-mark"]').attributes('aria-label')).toBe('Google Cloud project');
     expect(gcp!.find('[data-test="cloud-mark"]').attributes('data-cloud')).toBe('gcp');
+    // Vuetify hides an icon from screen readers unless told otherwise: the mark must be read.
+    for (const cell of [aws!, gcp!]) expect(cell.find('[data-test="cloud-mark"]').attributes('aria-hidden')).not.toBe('true');
     expect([aws!.text(), gcp!.text()]).toEqual(['111122223333', 'dormeto-dev']);
     // The Google Cloud kinds are Material Design icons with the Google Cloud names; AWS's keep their product icons.
     const backend = wrapper.findAll('tbody tr')[1]!.findAll('td')[headers.indexOf('Backend')]!;
