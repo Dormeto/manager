@@ -91,7 +91,7 @@ describe('StateBar', () => {
     const text = await hover(wrapper);
     expect(text).toContain('Windows licenses are not counted');
     expect(text).toContain('a suspended VM\'s memory, which Google still bills, is subtracted');
-    expect(text).toContain('Cloud SQL is priced for custom, shared-core and Enterprise Plus N tiers (others not priced)');
+    expect(text).toContain('Cloud SQL (MySQL and PostgreSQL) is priced for custom, shared-core and Enterprise Plus N tiers (others not priced)');
     wrapper.unmount();
     const aws = render({ states: STATES, savings: { saved: { usd: 3.2, hours: 600, unpricedHours: 0 }, hourly: 0.02, monthly: 13, discounts: null } });
     expect(await hover(aws)).not.toContain('Windows licenses');

@@ -57,7 +57,7 @@ export function monthlySaving(costs: Costs | undefined | null): number | null {
 }
 
 // What a Google Cloud workload's prices leave out or estimate (the design's §9.2): the tooltips' sentences.
-export const GOOGLE_PRICE_NOTES = 'Windows licenses are not counted; a suspended VM\'s memory, which Google still bills, is subtracted; Cloud SQL is priced for custom, shared-core and Enterprise Plus N tiers (others not priced).';
+export const GOOGLE_PRICE_NOTES = 'Windows licenses are not counted; a suspended VM\'s memory, which Google still bills, is subtracted; Cloud SQL (MySQL and PostgreSQL) is priced for custom, shared-core and Enterprise Plus N tiers (others not priced).';
 
 // The discounts for commitments in a few words (R9.5).
 export const discountText = (d: Discounts) => `compute ${d.compute}%, databases ${d.databases}%`;

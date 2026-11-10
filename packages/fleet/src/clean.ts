@@ -134,7 +134,7 @@ function stoppedItemOf(v: unknown): Json | null {
   // A Google Cloud router's (routers 0.40.0, Google Cloud design §9.1): VMs of one machine type in a zone, a Cloud SQL
   // instance in a region. A Cloud SQL shape out of its bounds is dropped, the instance kept (not priced, its hours kept).
   if (v.kind === 'gce' && typeof v.machineType === 'string' && MACHINE_TYPE.test(v.machineType) && typeof v.family === 'string' && FAMILY.test(v.family)
-    && between(v.vcpus, 0.1, 1024) && between(v.memoryGb, 0.1, 12_288) && between(v.count, 1, 10_000) && (v.os === 'linux' || v.os === 'windows') && typeof v.zone === 'string' && ZONE.test(v.zone)) {
+    && between(v.vcpus, 0.1, 1024) && between(v.memoryGb, 0.1, 12_288) && between(v.count, 1, 10_000) && (v.os === 'Linux' || v.os === 'Windows') && typeof v.zone === 'string' && ZONE.test(v.zone)) {
     return { kind: 'gce', machineType: v.machineType, family: v.family, vcpus: v.vcpus, memoryGb: v.memoryGb, count: v.count, os: v.os, ...spotOf(v), ...(v.suspended === true ? { suspended: true } : {}), zone: v.zone };
   }
   if (v.kind === 'cloudsql' && typeof v.tier === 'string' && SQL_TIER.test(v.tier) && SQL_ENGINES.has(v.engine as string) && SQL_EDITIONS.has(v.edition as string) && isRegion('gcp', v.region)) {

@@ -3,21 +3,21 @@
 import { describe, expect, it } from 'vitest';
 import { stoppedOf } from '../src/clean.js';
 
-const gce = { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, count: 2, os: 'linux', spot: true, suspended: true, zone: 'europe-west2-b' };
+const gce = { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, count: 2, os: 'Linux', spot: true, suspended: true, zone: 'europe-west2-b' };
 const sql = { kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: true, region: 'europe-west2', vcpus: 2, memoryGb: 7.5 };
 
 describe('stopped items', () => {
   it('keeps a Google Cloud VM and a Cloud SQL instance, their known fields only', () => {
     expect(stoppedOf([
       { ...gce, extra: 'dropped' },
-      { kind: 'gce', machineType: 'n2d-custom-4-8192', family: 'n2d', vcpus: 4, memoryGb: 8, count: 1, os: 'windows', spot: 'yes', suspended: false, zone: 'us-central1-a' },
+      { kind: 'gce', machineType: 'n2d-custom-4-8192', family: 'n2d', vcpus: 4, memoryGb: 8, count: 1, os: 'Windows', spot: 'yes', suspended: false, zone: 'us-central1-a' },
       sql,
       { kind: 'cloudsql', tier: 'db-f1-micro', engine: 'mysql', edition: 'enterprise', ha: 'yes', region: 'europe-west1' },
       { kind: 'cloudsql', tier: 'db-perf-optimized-N-4', engine: 'postgres', edition: 'enterprise-plus', ha: false, region: 'europe-west1', vcpus: 4, memoryGb: 32 },
       { kind: 'unknown', backend: 'cloudsql-instance:orders', reason: 'Cloud SQL could not be read' },
     ])).toEqual([
       gce,
-      { kind: 'gce', machineType: 'n2d-custom-4-8192', family: 'n2d', vcpus: 4, memoryGb: 8, count: 1, os: 'windows', zone: 'us-central1-a' },
+      { kind: 'gce', machineType: 'n2d-custom-4-8192', family: 'n2d', vcpus: 4, memoryGb: 8, count: 1, os: 'Windows', zone: 'us-central1-a' },
       sql,
       { kind: 'cloudsql', tier: 'db-f1-micro', engine: 'mysql', edition: 'enterprise', ha: false, region: 'europe-west1' },
       { kind: 'cloudsql', tier: 'db-perf-optimized-N-4', engine: 'postgres', edition: 'enterprise-plus', ha: false, region: 'europe-west1', vcpus: 4, memoryGb: 32 },
@@ -31,7 +31,7 @@ describe('stopped items', () => {
       { ...gce, vcpus: 1025 },
       { ...gce, memoryGb: 12_289 },
       { ...gce, count: 0 },
-      { ...gce, os: 'Linux' },
+      { ...gce, os: 'linux' },
       { ...gce, zone: 'europe-west2' },
       { ...gce, machineType: 'e2.small' },
       { ...gce, family: 'E2' },

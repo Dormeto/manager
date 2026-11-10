@@ -305,7 +305,7 @@ export interface ApiOptions {
   };
   // The idle window advisor (R10): a workload's requests per minute, read by the discovery function.
   idleRequests?: IdleRequests;
-  // A period's savings (R9): AWS's list prices of what the naps stopped, within the baseline; Spot prices and the
+  // A period's savings (R9): AWS's and Google's list prices of what the naps stopped, within the baseline; Spot prices and the
   // discounts (R9.5).
   savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem, discounts?: Discounts): Promise<number | null> };
   // What the caller may see in listings (everything for now; R11 scopes it by tags).

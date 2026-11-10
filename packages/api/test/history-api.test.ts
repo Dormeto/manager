@@ -90,7 +90,7 @@ describe('workload history (R8)', () => {
   });
 
   it('prices a Google Cloud nap from the table\'s cached prices only: a missing one is not priced and never read from the Catalog (G2 plan 3)', async () => {
-    const vm = (machineType: string, family: string) => ({ kind: 'gce', machineType, family, vcpus: 2, memoryGb: 8, count: 1, os: 'linux', zone: 'europe-west1-b' });
+    const vm = (machineType: string, family: string) => ({ kind: 'gce', machineType, family, vcpus: 2, memoryGb: 8, count: 1, os: 'Linux', zone: 'europe-west1-b' });
     const cache = new Map<string, number | null>([['europe-west1#gce#e2#core#ondemand', 0.02], ['europe-west1#gce#e2#ram#ondemand', 0.003]]);
     const puts: string[] = [];
     // The API builds its price book as index.ts does: no Catalog (a request would wait for 45 MB of SKUs).

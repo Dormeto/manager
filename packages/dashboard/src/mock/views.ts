@@ -206,8 +206,9 @@ function countsOf(w: DemoWorkload, from: number, to: number): Counts {
 const sum = (r: Record<string, number>) => Object.values(r).reduce((n, v) => n + v, 0);
 
 function kinds(w: DemoWorkload): string[] {
-  const all = w.backends.map((b) => (b.kind === 'rds' ? 'rds-instance' : b.kind));
-  return [...new Set([...all.filter((k) => k !== 'rds-instance'), ...all.filter((k) => k === 'rds-instance')])];
+  const database = w.google ? 'cloudsql-instance' : 'rds-instance';
+  const all = w.backends.map((b) => (b.kind === 'rds' ? database : b.kind));
+  return [...new Set([...all.filter((k) => k !== database), ...all.filter((k) => k === database)])];
 }
 
 export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = false, states = false } = {}): WorkloadSummary & { region: string; targetGroupArn?: string } {
@@ -246,6 +247,8 @@ function backendsOf(w: DemoWorkload): { backends: Backend[]; targets: { id: stri
       backends.push({ kind: 'instance', id: `projects/${w.account}/zones/${w.region}-a/instances/${w.workloadId}`, status });
     } else if (w.google && b.kind === 'asg') {
       backends.push({ kind: 'asg', id: `projects/${w.account}/regions/${w.region}/instanceGroupManagers/${w.workloadId}`, status, min: running ? b.count : 0, desired: running ? b.count : 0, max: b.count, warmPool: null });
+    } else if (w.google && b.kind === 'rds') {
+      backends.push({ kind: 'cloudsql-instance', id: `projects/${w.account}/instances/${b.id}`, status });
     } else if (b.kind === 'instance') {
       backends.push({ kind: 'instance', id: w.instanceId, status });
       targets.push({ id: w.instanceId, state: targetState(w.state) });
@@ -331,7 +334,7 @@ export function idleAdvice(d: Demo, w: DemoWorkload, now: number): IdleWindowAdv
   return {
     computedAt: iso(computedAt), from: iso(from), to: iso(to), current: w.settings.idleMinutes, recommended, checkMinutes: 5,
     wakeSeconds: median === null ? null : Math.round(median / SECOND), priced: hourly !== null, windows: rows,
-    actual: { wakes: actual, replayedWakes, noisy: replayedWakes > actual * 1.2 + 2 }, wakerTargetGroup: true, hours: requestHours(list, from, to),
+    actual: { wakes: actual, replayedWakes, noisy: replayedWakes > actual * 1.2 + 2 }, wakerTargetGroup: true, hours: requestHours(list, from, to), ...(w.google ? { estimated: true as const } : {}),
   };
 }
 

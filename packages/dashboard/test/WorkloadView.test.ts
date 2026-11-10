@@ -1002,7 +1002,7 @@ describe('a Google Cloud workload', () => {
     expect(note).toContain('Google Cloud list prices of what its last nap stopped, Spot VMs at Spot prices');
     expect(note).toContain('Windows licenses are not counted');
     expect(note).toContain('a suspended VM\'s memory, which Google still bills, is subtracted');
-    expect(note).toContain('Cloud SQL is priced for custom, shared-core and Enterprise Plus N tiers (others not priced)');
+    expect(note).toContain('Cloud SQL (MySQL and PostgreSQL) is priced for custom, shared-core and Enterprise Plus N tiers (others not priced)');
     wrapper.unmount();
   });
 

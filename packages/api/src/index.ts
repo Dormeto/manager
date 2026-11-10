@@ -297,7 +297,7 @@ export const handler = createApi({
   // Routers and workloads as the routers report them (scale design §4).
   fleet,
   idleRequests,
-  // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1), cached in the table;
+  // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1) and Google's, cached in the table;
   // Spot prices and the discounts (R9.5).
   savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item, discounts) => prices.hourly(region, item, discounts) },
   // The bar of all workloads: each workload's figures kept states_cache_minutes (an hour by default).

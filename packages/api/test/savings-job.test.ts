@@ -109,7 +109,7 @@ describe('savings job', () => {
     const summary = (account: string, region: string, router: string, id: string) => ({ account, region, router, workloadId: id, name: id, state: 'ASLEEP', checkedAt: at(23) });
     await fleet.writeWorkload(summary(ACCOUNT, 'eu-west-1', 'dmt-dev', 'aws') as never, 0);
     await fleet.writeWorkload(summary('dormeto-dev', 'europe-west1', 'dmt-dev-gcp', 'gcp') as never, 0);
-    const GCE = { kind: 'gce', machineType: 'e2-standard-2', family: 'e2', vcpus: 2, memoryGb: 8, count: 1, os: 'linux', zone: 'europe-west1-b' };
+    const GCE = { kind: 'gce', machineType: 'e2-standard-2', family: 'e2', vcpus: 2, memoryGb: 8, count: 1, os: 'Linux', zone: 'europe-west1-b' };
     await fleet.putHistory({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'aws', from: null, to: 'ASLEEP', at: '2026-10-06T20:00:00.000Z', stopped: [T3] } as never);
     await fleet.putHistory({ account: 'dormeto-dev', region: 'europe-west1', router: 'dmt-dev-gcp', workloadId: 'gcp', from: null, to: 'ASLEEP', at: '2026-10-06T20:00:00.000Z', stopped: [GCE] } as never);
     const sku = (description: string, usageUnit: string, nanos: number) => ({
@@ -120,7 +120,7 @@ describe('savings job', () => {
     const catalog = { async skus(service: string) { asked.push(service); if (catalogFails) throw new Error('The Cloud Billing API refused the discovery account'); return { skus: [sku('E2 Instance Core running in EMEA', 'h', 20_000_000), sku('E2 Instance Ram running in EMEA', 'GiBy.h', 3_000_000)] }; } };
     const pricing = { async getProducts() { return { PriceList: [JSON.stringify({ terms: { OnDemand: { a: { priceDimensions: { b: { pricePerUnit: { USD: '0.0456000000' } } } } } } })] }; } };
     const logged: { event: string; data?: object }[] = [];
-    const prices = createPriceBook({ pricing, store: fleet, catalog, onCatalogRead: (read) => logged.push({ event: 'GooglePricesRead', data: read }), now: () => NOW });
+    const prices = createPriceBook({ pricing, store: fleet, catalog, onCatalogRead: (read) => logged.push({ event: 'GooglePricesRead', data: read }), onCatalogFailed: (failure) => logged.push({ event: 'GooglePricesFailed', data: failure }), now: () => NOW });
     const job = createSavingsJob({ fleet, prices, baseline: { kind: 'always' }, now: () => NOW, log: { info: (event, data) => logged.push({ event, data }), warn: () => {}, error: () => {} } });
     return { fleet, job, asked, logged };
   }
@@ -148,5 +148,6 @@ describe('savings job', () => {
     expect([summary.failed, summary.unpriced, summary.last30.usd]).toEqual([0, { workloads: 1, hours: 24 }, expect.closeTo(1.0944, 4)]);
     expect(await s.fleet.getPrice('europe-west1#gce#e2#core#ondemand')).toBeNull();
     expect(s.logged.some((l) => l.event === 'GooglePricesRead')).toBe(false);
+    expect(s.logged.filter((l) => l.event === 'GooglePricesFailed').map((l) => l.data)).toEqual([{ service: '6F81-5844-456A', error: 'The Cloud Billing API refused the discovery account' }]);
   });
 });

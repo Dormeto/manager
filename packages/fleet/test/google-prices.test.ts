@@ -85,7 +85,7 @@ function setup(pages: Record<string, CatalogSku[][]> = { [COMPUTE]: [COMPUTE_SKU
 type Gce = Extract<StoppedItem, { kind: 'gce' }>;
 type CloudSql = Extract<StoppedItem, { kind: 'cloudsql' }>;
 const vm = (machineType: string, family: string, vcpus: number, memoryGb: number, extra: Partial<Gce> = {}): Gce => ({
-  kind: 'gce', machineType, family, vcpus, memoryGb, count: 1, os: 'linux', zone: 'europe-west1-b', ...extra,
+  kind: 'gce', machineType, family, vcpus, memoryGb, count: 1, os: 'Linux', zone: 'europe-west1-b', ...extra,
 });
 const E2_SMALL = vm('e2-small', 'e2', 0.5, 2);
 const db = (tier: string, extra: Partial<CloudSql> = {}): CloudSql => ({ kind: 'cloudsql', tier, engine: 'postgres', edition: 'enterprise', ha: false, region: 'europe-west1', ...extra });
@@ -123,7 +123,7 @@ describe('Google\'s list prices', () => {
 
   it('prices Windows as Linux (its license not counted); takes the compute discount off on demand, never off Spot', async () => {
     const s = setup();
-    expect(await s.book.hourly('europe-west1', { ...E2_SMALL, os: 'windows' })).toBeCloseTo(0.0184285, 6);
+    expect(await s.book.hourly('europe-west1', { ...E2_SMALL, os: 'Windows' })).toBeCloseTo(0.0184285, 6);
     const discounts = { compute: 20, databases: 50 };
     expect(await s.book.hourly('europe-west1', E2_SMALL, discounts)).toBeCloseTo(0.0147428, 6);
     expect(await s.book.hourly('europe-west1', { ...E2_SMALL, spot: true }, discounts)).toBeCloseTo(0.008953, 6);
@@ -243,5 +243,27 @@ describe('Google\'s list prices', () => {
     const other = createPriceBook({ pricing: { async getProducts() { return {}; } }, store, catalog, onCatalogRead: (read) => reads.push(read), now: () => t });
     expect(await other.hourly('europe-west1', E2_SMALL)).toBeNull();
     expect(reads).toHaveLength(1);
+  });
+
+  it('says each failed service load once (onCatalogFailed): the service and the error, not again while the failure is remembered', async () => {
+    const failed: { service: string; error: string }[] = [];
+    const catalog = { async skus() { throw new Error('The Cloud Billing API refused the discovery account'); } };
+    const book = createPriceBook({ pricing: { async getProducts() { return {}; } }, store: { getPrice: async () => null, putPrice: async () => {} }, catalog, onCatalogFailed: (f) => failed.push(f), now: () => 1_000 });
+    expect(await book.hourly('europe-west1', E2_SMALL)).toBeNull();
+    expect(await book.hourly('europe-west1', vm('n2d-standard-2', 'n2d', 2, 8))).toBeNull();
+    expect(failed).toEqual([{ service: COMPUTE, error: 'The Cloud Billing API refused the discovery account' }]);
+  });
+
+  it('bounds a whole service\'s read at 300 seconds across its pages: the end fails the load like a page failing', async () => {
+    let t = 1_000;
+    const asked: number[] = [];
+    const failed: { service: string; error: string }[] = [];
+    // Each page takes 100 seconds and there are always more: the fourth is never asked.
+    const catalog = { async skus(_service: string, token?: string) { const page = Number(token ?? 0); asked.push(page); t += 100_000; return { skus: COMPUTE_SKUS, nextPageToken: String(page + 1) }; } };
+    const book = createPriceBook({ pricing: { async getProducts() { return {}; } }, store: { getPrice: async () => null, putPrice: async () => { throw new Error('nothing is cached'); } }, catalog, onCatalogFailed: (f) => failed.push(f), now: () => t });
+    expect(await book.hourly('europe-west1', E2_SMALL)).toBeNull();
+    expect(asked).toEqual([0, 1, 2]);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.error).toContain('300 seconds');
   });
 });

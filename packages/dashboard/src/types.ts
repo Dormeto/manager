@@ -100,7 +100,7 @@ export type StoppedItem =
   // Pods on EC2 nodes (router 0.29.0, R10.5).
   | { kind: 'k8s-pods'; count: number; cpu: number; memoryGb: number; nodeType: string | null; os: string; spot?: true; autoscaled: boolean; allocatable: { cpu: number; memoryGb: number } }
   // Google Cloud (router 0.40.0): VMs of one machine type in a zone, a Cloud SQL instance in a region.
-  | { kind: 'gce'; machineType: string; family: string; vcpus: number; memoryGb: number; count: number; os: 'linux' | 'windows'; spot?: true; suspended?: true; zone: string }
+  | { kind: 'gce'; machineType: string; family: string; vcpus: number; memoryGb: number; count: number; os: 'Linux' | 'Windows'; spot?: true; suspended?: true; zone: string }
   | { kind: 'cloudsql'; tier: string; engine: 'postgres' | 'mysql' | 'sqlserver'; edition: 'enterprise' | 'enterprise-plus'; ha: boolean; region: string; vcpus?: number; memoryGb?: number }
   | { kind: 'unknown'; backend: string; reason: string };
 

@@ -5,7 +5,7 @@
 // R9.5b): the net price of an item, its list price cached as it is. Google Cloud's items (Google Cloud design §9.2):
 // Google's list prices from the Cloud Billing Catalog (google-prices.ts), the same discounts.
 
-import { createGooglePrices, type CatalogRead } from './google-prices.js';
+import { createGooglePrices, type CatalogFailure, type CatalogRead } from './google-prices.js';
 
 export type StoppedItem =
   | { kind: 'ec2'; type: string; count: number; os: string; spot?: true }
@@ -18,7 +18,7 @@ export type StoppedItem =
   // A Google Cloud router's (routers 0.40.0, Google Cloud design §9.1): VMs of one machine type, zone, OS, Spot and
   // suspension, priced in their zone's region; a Cloud SQL instance in its region (a global load balancer's backends may
   // run in another region than the router). `vcpus` billed (a shared core's fraction), `memoryGb` in GiB.
-  | { kind: 'gce'; machineType: string; family: string; vcpus: number; memoryGb: number; count: number; os: 'linux' | 'windows'; spot?: true; suspended?: true; zone: string }
+  | { kind: 'gce'; machineType: string; family: string; vcpus: number; memoryGb: number; count: number; os: 'Linux' | 'Windows'; spot?: true; suspended?: true; zone: string }
   | { kind: 'cloudsql'; tier: string; engine: 'postgres' | 'mysql' | 'sqlserver'; edition: 'enterprise' | 'enterprise-plus'; ha: boolean; region: string; vcpus?: number; memoryGb?: number }
   | { kind: 'unknown'; backend: string; reason: string };
 
@@ -93,9 +93,9 @@ const MEMORY_MS = 3_600_000;
 const FAILURE_MS = 300_000;
 
 // Without `catalog` (the API), Google Cloud's items are read from the table only.
-// `onCatalogRead` hears each service's index once it is read (the savings job logs it).
-export function createPriceBook({ pricing, spot, store, catalog, onCatalogRead, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; catalog?: GoogleCatalogPort; onCatalogRead?: (read: CatalogRead) => void; now?: () => number }) {
-  const google = createGooglePrices({ catalog, store, now, ...(onCatalogRead ? { onCatalogRead } : {}) });
+// `onCatalogRead` hears each service's index once it is read, `onCatalogFailed` each load that failed (the savings job logs both).
+export function createPriceBook({ pricing, spot, store, catalog, onCatalogRead, onCatalogFailed, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; catalog?: GoogleCatalogPort; onCatalogRead?: (read: CatalogRead) => void; onCatalogFailed?: (failure: CatalogFailure) => void; now?: () => number }) {
+  const google = createGooglePrices({ catalog, store, now, ...(onCatalogRead ? { onCatalogRead } : {}), ...(onCatalogFailed ? { onCatalogFailed } : {}) });
   const memory = new Map<string, { usd: number | null; until: number }>();
   const pending = new Map<string, Promise<number | null>>();
   // One price: from memory, the table, else the API; a failed call prices nothing, caches nothing in the table, and is not

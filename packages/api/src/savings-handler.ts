@@ -23,10 +23,11 @@ const googleSource = createGoogleSource({
   },
   create: (connection) => createGoogle({ connection }),
 });
-// Spot prices from the manager's account, in each workload's region (R9.5). Each Google Cloud service's Catalog read is said once.
+// Spot prices from the manager's account, in each workload's region (R9.5). Each Google Cloud service's Catalog read is said once, a failed one at `warn`.
 const prices = createPriceBook({
   pricing: { getProducts: (input) => pricing.send(new GetProductsCommand(input as GetProductsCommandInput)) }, spot: createSpotPort(), store: fleet,
   catalog: catalogPort(googleSource), onCatalogRead: (read) => log('info')('GooglePricesRead', read),
+  onCatalogFailed: (failure) => log('warn')('GooglePricesFailed', failure),
 });
 const job = createSavingsJob({
   fleet, prices, baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE),

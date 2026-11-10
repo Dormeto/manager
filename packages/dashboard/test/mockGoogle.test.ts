@@ -15,7 +15,7 @@ describe('the demo\'s Google Cloud router', () => {
     const { workloads } = await mockApi(`/workloads?router=${ROUTER}`) as { workloads: (WorkloadSummary & { region: string })[] };
     const byName = Object.fromEntries(workloads.map((w) => [w.workloadId, w]));
     expect(Object.keys(byName).sort()).toEqual(['mig-demo', 'vm-demo']);
-    expect(byName['vm-demo']).toMatchObject({ name: 'Demo VM', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', tags: { team: 'payments' }, backends: ['instance'] });
+    expect(byName['vm-demo']).toMatchObject({ name: 'Demo VM', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', tags: { team: 'payments' }, backends: ['instance', 'cloudsql-instance'] });
     expect(byName['mig-demo']).toMatchObject({ cloud: 'gcp', backends: ['asg'] });
     expect(byName['mig-demo']!.name).toBeUndefined();
     expect(JSON.stringify(workloads)).not.toContain('targetGroupArn');
@@ -109,6 +109,16 @@ describe('the demo\'s Google Cloud router', () => {
     expect(status.source).toBe('cli');
     expect(status.targets).toEqual([]);
     expect(status.backends[0]!.id).toBe('projects/dormeto-dev/zones/europe-west2-a/instances/vm-demo');
+    // The Cloud SQL item of its last nap has its backend.
+    expect(status.backends.map((b) => b.id)).toContain('projects/dormeto-dev/instances/orders-db');
+  });
+
+  it('gives its workloads\' idle window advice as estimated (Cloud Monitoring\'s counts), and an AWS one not', async () => {
+    const google = await mockApi(`/workloads/${ROUTER}/vm-demo/idle-window`) as { estimated?: true };
+    expect(google.estimated).toBe(true);
+    const { workloads } = await mockApi('/workloads') as { workloads: WorkloadSummary[] };
+    const aws = workloads.find((w) => w.cloud === 'aws')!;
+    expect(((await mockApi(`/workloads/${aws.router}/${aws.workloadId}/idle-window`)) as { estimated?: true }).estimated).toBeUndefined();
   });
 
   it('answers its router\'s organization level as a Google Cloud router does: pushed (a readAt), no URL', async () => {

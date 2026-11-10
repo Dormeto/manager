@@ -739,18 +739,19 @@ function addGoogleCloud(d: Demo, now: number): void {
   };
   const google = (name: string): GoogleWorkload => ({ backendService: name, wakerBackendService: `${name}-waker`, urlMap: GOOGLE_MAP, lb: { kind: 'regional', region: GOOGLE_REGION } });
   const specs: { id: string; name: string; spec: WorkloadSpec; tags?: Record<string, string> }[] = [
-    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-small' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
+    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-small' }, { kind: 'rds', id: 'orders-db', class: 'db-custom-2-7680' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
     { id: 'mig-demo', name: 'mig-demo', spec: { name: 'mig-demo', router: router.name, state: 'AWAKE', profile: 'busy', backends: [{ kind: 'asg', type: 'e2-small', count: 2 }], idleMinutes: 30, wakeMode: 'any', source: 'manager', awakeFor: 70 } },
   ];
-  // What their last nap stopped, priced: an e2-small (0.5 vCPU, 2 GiB) on demand an hour, suspended (its memory, which Google
-  // still bills, subtracted), a PostgreSQL db-custom-2-7680 zonal.
-  const E2_SMALL = { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, os: 'linux', zone: 'europe-west1-b' } as const;
+  // What their last nap stopped, priced in europe-west2 (the load balancer's region; the Catalog's prices on 2026-11-10): an
+  // e2-small (0.5 vCPU, 2 GiB) on demand an hour (0.5 x 0.0281037 + 2 x 0.00376602), suspended (its memory, 0.000279452 a
+  // GiB-hour, which Google still bills, subtracted), a PostgreSQL db-custom-2-7680 zonal (2 x 0.0496 + 7.5 x 0.0084).
+  const E2_SMALL = { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, os: 'Linux', zone: `${GOOGLE_REGION}-b` } as const;
   const items: Record<string, DemoWorkload['items']> = {
     'vm-demo': [
-      { item: { ...E2_SMALL, count: 1, suspended: true }, hourly: 0.017962748 },
-      { item: { kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: false, region: 'europe-west1', vcpus: 2, memoryGb: 7.5 }, hourly: 0.1351 },
+      { item: { ...E2_SMALL, count: 1, suspended: true }, hourly: 0.021024986 },
+      { item: { kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: false, region: GOOGLE_REGION, vcpus: 2, memoryGb: 7.5 }, hourly: 0.1622 },
     ],
-    'mig-demo': [{ item: { ...E2_SMALL, count: 2 }, hourly: 0.036857 }],
+    'mig-demo': [{ item: { ...E2_SMALL, count: 2 }, hourly: 0.04316778 }],
   };
   for (const { id, name, spec, tags } of specs) {
     const w = buildWorkload({ ...spec, source: 'terraform' }, router, now);

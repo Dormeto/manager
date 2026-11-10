@@ -74,14 +74,14 @@ describe('costs', () => {
 
   it('matches a Google Cloud workload\'s items to its backends: VMs to instances and groups, Cloud SQL to its instances', () => {
     const google: Costs = { ...costs, items: [
-      { item: { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, count: 2, os: 'linux', spot: true, suspended: true, zone: 'europe-west1-b' }, hourly: 0.03 },
+      { item: { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, count: 2, os: 'Linux', spot: true, suspended: true, zone: 'europe-west1-b' }, hourly: 0.03 },
       { item: { kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: true, region: 'europe-west1', vcpus: 2, memoryGb: 7.5 }, hourly: 0.27 },
-      { item: { kind: 'gce', machineType: 'c2-standard-4', family: 'c2', vcpus: 4, memoryGb: 16, count: 1, os: 'windows', zone: 'europe-west1-b' }, hourly: null },
+      { item: { kind: 'gce', machineType: 'c2-standard-4', family: 'c2', vcpus: 4, memoryGb: 16, count: 1, os: 'Windows', zone: 'europe-west1-b' }, hourly: null },
       { item: { kind: 'unknown', backend: 'k8s:cluster/ns/Deployment/web', reason: 'GKE pods are not priced' }, hourly: null },
     ] };
     const gbackends = [{ kind: 'asg', id: 'mig' }, { kind: 'cloudsql-instance', id: 'db' }, { kind: 'k8s', id: 'cluster/ns/Deployment/web' }];
     const group = backendCost(gbackends[0]!, gbackends, google)!;
-    expect([group.hourly, group.unpriced]).toEqual([0.03, ['1 × c2-standard-4 (windows)']]);
+    expect([group.hourly, group.unpriced]).toEqual([0.03, ['1 × c2-standard-4 (Windows)']]);
     const db = backendCost(gbackends[1]!, gbackends, google)!;
     expect([db.hourly, db.unpriced]).toEqual([0.27, []]);
     expect(backendCost(gbackends[2]!, gbackends, google)!.unpriced).toEqual(['GKE pods are not priced']);
@@ -89,8 +89,8 @@ describe('costs', () => {
   });
 
   it('says a Google Cloud item in a few words', () => {
-    expect(itemText({ kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, count: 2, os: 'linux', spot: true, suspended: true, zone: 'europe-west1-b' })).toBe('2 × e2-small (linux, Spot, suspended)');
-    expect(itemText({ kind: 'gce', machineType: 'n2-standard-2', family: 'n2', vcpus: 2, memoryGb: 8, count: 1, os: 'windows', zone: 'europe-west1-b' })).toBe('1 × n2-standard-2 (windows)');
+    expect(itemText({ kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, count: 2, os: 'Linux', spot: true, suspended: true, zone: 'europe-west1-b' })).toBe('2 × e2-small (Linux, Spot, suspended)');
+    expect(itemText({ kind: 'gce', machineType: 'n2-standard-2', family: 'n2', vcpus: 2, memoryGb: 8, count: 1, os: 'Windows', zone: 'europe-west1-b' })).toBe('1 × n2-standard-2 (Windows)');
     expect(itemText({ kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: true, region: 'europe-west1' })).toBe('db-custom-2-7680 postgres, high availability');
     expect(itemText({ kind: 'cloudsql', tier: 'db-f1-micro', engine: 'mysql', edition: 'enterprise', ha: false, region: 'europe-west1' })).toBe('db-f1-micro mysql');
   });

@@ -37,7 +37,7 @@ describe('energy', () => {
 
   it('estimates a Google Cloud VM or database with Cloud Carbon Footprint\'s figures, on its own region\'s grid', () => {
     const vm = (machineType: string, family: string, vcpus: number, memoryGb: number, count = 1) =>
-      ({ kind: 'gce' as const, machineType, family, vcpus, memoryGb, count, os: 'linux' as const, zone: 'europe-west1-b' });
+      ({ kind: 'gce' as const, machineType, family, vcpus, memoryGb, count, os: 'Linux' as const, zone: 'europe-west1-b' });
     // e2-small: 0.5 vCPU at 50% (0.68 + 0.5 × 3.43), 2 GB, PUE 1.1.
     expect(itemWatts(vm('e2-small', 'e2', 0.5, 2))).toBeCloseTo(2.17965, 6);
     expect(itemWatts(vm('e2-small', 'e2', 0.5, 2, 3))).toBeCloseTo(3 * 2.17965, 6);

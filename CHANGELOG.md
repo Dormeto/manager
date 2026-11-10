@@ -168,7 +168,7 @@ onboarding turned request logs on stay with the `dormeto gcp workloads offboard`
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
 - **Google Cloud's savings:** a nap's VMs and Cloud SQL companions, as router 0.40.0 names them in its `ASLEEP` event, are priced
 at Google's USD list prices from the Cloud Billing Catalog, read by the daily savings job as the discovery account (no new role;
-60 s a page, each read logged `GooglePricesRead`, a service's pages once a run) and cached as AWS's prices (30 days, a day for
+60 s a page and 300 s a service, each read logged `GooglePricesRead`, a failed one `GooglePricesFailed` at `warn`, a service's pages once a run) and cached as AWS's prices (30 days, a day for
 none; a failed read cached nowhere and asked again after five minutes); the API reads the cache only, so a Google price first met is
 priced by the next daily job. Compute Engine by family (predefined and custom, the shared cores, Spot never discounted), a suspended
 VM less its memory still billed, Windows as Linux, Cloud SQL MySQL and PostgreSQL by custom, Enterprise Plus N and shared-core tier;
@@ -178,10 +178,12 @@ Google Cloud section.
 - **Google Cloud's energy:** Cloud Carbon Footprint's Google Cloud figures (watts by machine family, PUE 1.1, Cloud SQL `ha` twice)
 and its grid factors by region, from each item's own region; AWS's figures are unchanged.
 - **Google Cloud's idle window:** the card and the requests heatmap read Cloud Monitoring's request counts per minute (14 days at most,
-the workload's URL map, its application and waker backend services added up) and say they are estimates.
+the workload's URL map, its application and waker backend services added up) and say they are estimates; the step reads the
+connection's record first, so a cold execution environment answers, and with no connection the 502 names `dormeto gcp connect`,
+not Cloud Monitoring.
 - **The dashboard shows Google Cloud's savings:** the VMs and Cloud SQL databases a nap stopped priced as AWS's items, the tooltips'
 notes (Windows licenses not counted, suspended memory subtracted, Cloud SQL tiers priced), both clouds' words for the discounts, the
-savings and the energy, and the demo's naps priced at europe-west1.
+savings and the energy, and the demo's naps priced at europe-west2.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`
   (onboarding, offboarding and exclusions on Google Cloud, the tag, the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).
