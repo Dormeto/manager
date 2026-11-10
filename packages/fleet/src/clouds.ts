@@ -51,3 +51,10 @@ export function googlePath(s: unknown): GooglePath | null {
   if (tail.length !== 2 || !isProject(project) || (kind !== 'backendServices' && kind !== 'urlMaps') || !GOOGLE_NAME.test(name!)) return null;
   return { project, region, kind, name: name! };
 }
+
+// The scope of a Google Cloud workload's backend services and URL map, from its row's load balancer: a regional or internal
+// one's in its region (else the router's), the others' (global, classic, cross-region internal, or none) global.
+export const googleScopeOf = (lb: { kind?: string; region?: string } | undefined, region: string): string => (lb?.kind === 'regional' || lb?.kind === 'internal' ? `regions/${lb.region ?? region}` : 'global');
+// The path of a backend service or a URL map a row names by name (a path is kept as it is), in the scope of its load balancer.
+export const googleServicePath = (project: string, collection: 'backendServices' | 'urlMaps', value: string, lb: { kind?: string; region?: string } | undefined, region: string): string => (
+  value.startsWith('projects/') ? value : `projects/${project}/${googleScopeOf(lb, region)}/${collection}/${value}`);

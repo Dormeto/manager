@@ -9,7 +9,7 @@ import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operatio
 import { GoogleError, type Google, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
 // The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
 import { actOnRouter, installCommand, RouterCallError, routerTooOld, tooOldText, type Refusal } from '@dormeto/google/router';
-import { cloudOf, googlePath, isAccount, isCandidateRegion, isProject, isRegion, type Cloud } from '@dormeto/fleet/clouds';
+import { cloudOf, googlePath, googleScopeOf, googleServicePath, isAccount, isCandidateRegion, isProject, isRegion, type Cloud } from '@dormeto/fleet/clouds';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
@@ -1814,7 +1814,13 @@ export function createApi({
         // The target its requests are read from: AWS's target group, or a Google Cloud row's services, URL map and load balancer.
         const target = !summary ? null : cloudOf(account) === 'gcp'
           ? (typeof summary.backendService === 'string' && typeof summary.wakerBackendService === 'string' && typeof summary.urlMap === 'string' && summary.lb
-            ? { backendService: summary.backendService, wakerBackendService: summary.wakerBackendService, urlMap: summary.urlMap, lb: summary.lb } : null)
+            ? {
+              // The row names them, as the router does: their paths are built in the scope of the workload's load balancer (the
+              // waker's service is created beside the workload's, in the same URL map); a path is kept as it is.
+              backendService: googleServicePath(account, 'backendServices', summary.backendService, summary.lb, summary.region),
+              wakerBackendService: googleServicePath(account, 'backendServices', summary.wakerBackendService, summary.lb, summary.region),
+              urlMap: googleServicePath(account, 'urlMaps', summary.urlMap, summary.lb, summary.region), lb: summary.lb,
+            } : null)
           : typeof summary.targetGroupArn === 'string' ? { targetGroupArn: summary.targetGroupArn } : null;
         if (!summary || !target) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
         const idle = (summary.settings as { idleMinutes?: unknown } | undefined)?.idleMinutes;
@@ -2227,7 +2233,7 @@ export function createApi({
       return [] as WorkloadSummary[];
     }) : Promise.resolve([]));
   };
-  const serviceScope = (row: WorkloadSummary) => (row.lb?.kind === 'regional' || row.lb?.kind === 'internal' ? `regions/${row.lb.region ?? row.region}` : 'global');
+  const serviceScope = (row: WorkloadSummary) => googleScopeOf(row.lb, row.region);
   const googleKey = (c: Candidate) => {
     const m = /^projects\/[^/]+\/(global|regions\/[^/]+)\/backendServices\/([^/]+)$/.exec(c.backendService ?? c.id);
     return m ? `${m[1]}#${m[2]}` : null;

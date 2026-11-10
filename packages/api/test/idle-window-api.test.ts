@@ -142,6 +142,27 @@ describe('a Google Cloud workload\'s idle window advice (§9.4)', () => {
     expect(json(res)).toMatchObject({ estimated: true, wakerTargetGroup: true, current: 15 });
   });
 
+  it('a row naming its services and URL map, as the router\'s do: asks for their paths, global for a global load balancer', async () => {
+    const named = { ...ROW, backendService: 'dmt-demo-app', wakerBackendService: 'dmtr-europe-west2-vm-demo', urlMap: 'dmt-dev', lb: { kind: 'global' } };
+    const s = setup({ summary: named, requests: COUNTS });
+    expect((await s.api(event(GOOGLE))).statusCode).toBe(200);
+    expect(s.asked.requests).toEqual([['dormeto-dev', 'europe-west2', {
+      backendService: 'projects/dormeto-dev/global/backendServices/dmt-demo-app', wakerBackendService: 'projects/dormeto-dev/global/backendServices/dmtr-europe-west2-vm-demo',
+      urlMap: 'projects/dormeto-dev/global/urlMaps/dmt-dev', lb: { kind: 'global' },
+    }, 14]]);
+  });
+
+  it('a regional workload\'s names are paths in its load balancer\'s region, else the router\'s; a classic one\'s are global', async () => {
+    for (const [lb, scope] of [[{ kind: 'regional', region: 'europe-west1' }, 'regions/europe-west1'], [{ kind: 'internal' }, 'regions/europe-west2'], [{ kind: 'classic' }, 'global']] as const) {
+      const s = setup({ summary: { ...ROW, backendService: 'app', wakerBackendService: 'waker', urlMap: 'map', lb }, requests: COUNTS });
+      expect((await s.api(event(GOOGLE))).statusCode).toBe(200);
+      expect(s.asked.requests[0]![2]).toEqual({
+        backendService: `projects/dormeto-dev/${scope}/backendServices/app`, wakerBackendService: `projects/dormeto-dev/${scope}/backendServices/waker`,
+        urlMap: `projects/dormeto-dev/${scope}/urlMaps/map`, lb,
+      });
+    }
+  });
+
   it('a row without its backend service, waker, URL map or load balancer: 404, nothing asked', async () => {
     for (const missing of ['backendService', 'wakerBackendService', 'urlMap', 'lb']) {
       const s = setup({ summary: { ...ROW, [missing]: undefined } });
