@@ -701,7 +701,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card-actions>
     </v-card>
   </v-dialog>
-  <RenameDialog v-model="renameOpen" :name="title" @submit="rename" />
+  <RenameDialog v-model="renameOpen" :name="title" :cloud="gcp ? 'gcp' : 'aws'" @submit="rename" />
   <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :join="status" :name="title" :kinds="backendKinds(status?.backends ?? [])" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
   <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" :cloud="gcp ? 'gcp' : 'aws'" @submit="setTags" />
 </template>

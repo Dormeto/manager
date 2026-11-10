@@ -93,10 +93,10 @@ describe('operations', () => {
     expect(ok.statusCode).toBe(202);
     expect(created.at(-1)![1]).toMatchObject({ settings: { fallbackInstanceTypes: ['t3a.medium', 'm6i.large'], failedRetrySeconds: 120 } });
     for (const [settings, message] of [
-      [{ fallbackInstanceTypes: ['t3a medium'] }, /fallbackInstanceTypes must be at most 5 EC2 instance types/],
+      [{ fallbackInstanceTypes: ['t3a medium'] }, /fallbackInstanceTypes: must be a list of at most 5 EC2 instance types/],
       [{ fallbackInstanceTypes: ['t3.small', 't3.medium', 't3.large', 't3a.small', 't3a.medium', 't3a.large'] }, /at most 5/],
       [{ fallbackInstanceTypes: 't3.small' }, /fallbackInstanceTypes/],
-      [{ failedRetrySeconds: 5 }, /failedRetrySeconds must be a whole number from 10 to 600/],
+      [{ failedRetrySeconds: 5 }, /failedRetrySeconds: must be a whole number from 10 to 600/],
       [{ failedRetrySeconds: '60' }, /failedRetrySeconds/],
     ] as const) {
       const res = await api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, settings }));
@@ -353,9 +353,9 @@ describe('onboarding on Google Cloud', () => {
   it('takes Compute Engine machine types as fallback types and Cloud SQL instances as databases, refusing an EC2 type and another database', async () => {
     const s = await googleSetup({ installed: [registered('europe-west2')] });
     for (const [body, message] of [
-      [{ settings: { fallbackInstanceTypes: ['t3a.medium'] } }, 'settings: fallbackInstanceTypes must be at most 5 Compute Engine machine types, each named once (for example e2-medium)'],
-      [{ settings: { fallbackInstanceTypes: ['e2-small', 'e2-medium', 'e2-standard-2', 'n2-standard-2', 'n2d-standard-2', 'c3-standard-4'] } }, /at most 5 Compute Engine machine types/],
-      [{ settings: { fallbackInstanceTypes: ['e2-medium', 'e2-medium'] } }, /each named once/],
+      [{ settings: { fallbackInstanceTypes: ['t3a.medium'] } }, 'settings: fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium'],
+      [{ settings: { fallbackInstanceTypes: ['e2-small', 'e2-medium', 'e2-standard-2', 'n2-standard-2', 'n2d-standard-2', 'c3-standard-4'] } }, /fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium/],
+      [{ settings: { fallbackInstanceTypes: ['e2-medium', 'e2-medium'] } }, /fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium/],
       [{ databases: [{ kind: 'rds-instance', id: 'db-1' }] }, 'databases: {"kind":"rds-instance","id":"db-1"} is not a Cloud SQL instance: give {"kind": "cloudsql-instance", "id": "<instance name>"}'],
       [{ databases: ['db-1'] }, /is not a Cloud SQL instance/],
       [{ databases: [{ kind: 'cloudsql-instance', id: 'DB_1' }] }, /is not a Cloud SQL instance/],
@@ -410,7 +410,7 @@ describe('onboarding on Google Cloud', () => {
     expect(json(res).operation.steps.map((x: { name: string }) => x.name)).toContain('install roles');
     expect(s.reads).toEqual([]);
     const ec2 = await s.api(onboard({ candidateId: TG, settings: { fallbackInstanceTypes: ['e2-medium'] } }));
-    expect([ec2.statusCode, json(ec2).message]).toEqual([400, 'settings: fallbackInstanceTypes must be at most 5 EC2 instance types (for example t3a.medium)']);
+    expect([ec2.statusCode, json(ec2).message]).toEqual([400, 'settings: fallbackInstanceTypes: must be a list of at most 5 EC2 instance types, such as t3a.medium']);
   });
 });
 

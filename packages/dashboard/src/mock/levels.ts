@@ -82,9 +82,9 @@ function checked(defaults: unknown, workload = false): Record<string, unknown> {
     if (value === null) continue;
     if (RANGES[key]) {
       const [min, max] = RANGES[key]!;
-      if (!Number.isInteger(value) || value < min || value > max) fail(400, 'bad_request', `${key} must be a whole number from ${min} to ${max}`);
+      if (!Number.isInteger(value) || value < min || value > max) fail(400, 'bad_request', `${key}: must be a whole number from ${min} to ${max}`);
     } else if (key === 'wakeMode') {
-      if (value !== 'any' && value !== 'browser') fail(400, 'bad_request', 'wakeMode must be any or browser');
+      if (value !== 'any' && value !== 'browser') fail(400, 'bad_request', 'wakeMode: must be any or browser');
     } else if ((RULE_KEYS as readonly string[]).includes(key)) {
       if (!Array.isArray(value) || value.length > 20 || !value.every((r) => r && typeof r === 'object' && typeof (r as { name?: unknown }).name === 'string')) fail(400, 'bad_request', `${key} must be a list of at most 20 named rules`);
     } else if (!(workload && key === 'type')) fail(400, 'bad_request', `unknown setting ${key}`);

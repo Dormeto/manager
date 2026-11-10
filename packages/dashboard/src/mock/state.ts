@@ -550,7 +550,7 @@ export function decide(d: Demo, c: Candidate, now: number): { status: Status; st
   const scopeReason = exclusion ? `excluded: manual exclusion by ${exclusion.by}: ${exclusion.reason}` : IN_SCOPE;
   const managed = c.eligibility === 'managed';
   const out = (status: Status, statusReason: string) => ({ status, statusReason, scope, scopeReason });
-  if (c.goneAt) return out('gone', managed ? 'managed rule not found in the last scan: offboard it' : 'not found in the last scan');
+  if (c.goneAt) return out('gone', managed ? `managed ${c.cloud === 'gcp' ? 'backend service' : 'rule'} not found in the last scan: offboard it` : 'not found in the last scan');
   if (managed) return scope === 'in' ? out('managed', 'managed') : out('pending-offboarding', scopeReason);
   if (c.dismissed) return out('dismissed', `dismissed by ${c.dismissed.by}${c.dismissed.note ? `: ${c.dismissed.note}` : ''}`);
   if (scope === 'excluded') return out('excluded', scopeReason);

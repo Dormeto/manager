@@ -22,7 +22,7 @@ candidates and workloads in the Google Cloud steps. The API finds a `global` Goo
 operation by its backend service, not by a region, and names the router as the manager lists it (`dmtr-<project>-<region>`, by
 the workload row's project and region).
 - **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 502 and the watchdog's problem for
-`manager-access-missing` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
+`no_access` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
 controller's, the message cut to 200 characters; never a token or a signature.
 - **One model for both clouds:** an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
 and a region is checked against its account's cloud (`@dormeto/fleet/clouds`). The manager accepts a Google Cloud router's
@@ -75,7 +75,7 @@ refusal keeps the last verdict. AWS accounts behave as before.
 - **Onboarding on Google Cloud:** `POST /api/operations` `{type: 'onboard'}` takes a candidate of a project, on the router of its
 region for a regional load balancer, on the project's router for a global one (`router` names it when the project has several,
 else 400 listing them); no router there is a 400 with `dormeto gcp install --project <p> --region <region> --version <pinned>`, one
-before 0.40.0 a 409 `router-too-old`. Its `settings.fallbackInstanceTypes` are Compute Engine machine types (at most 5, each once) and
+before 0.40.0 a 409 `router_too_old`. Its `settings.fallbackInstanceTypes` are Compute Engine machine types (at most 5, each once) and
 its `databases` Cloud SQL instances, `{kind: 'cloudsql-instance', id: <name>}`; the project's number is read as the discovery
 account (a refusal: 502 with Google's words). The operation runs `find router`, `slot` (the project's and the router's region),
 `lock load balancer` (the URL map), `preview`, `tag`, `onboard`, `verify`, `candidate`: the router's dry run and onboarding in
@@ -104,7 +104,7 @@ than `not_found`, a timeout) is not called again in that run of the step; their 
 and a lift keeps the pauses on them. AWS offboardings and exclusions are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
-`silent`); one the poll is refused at says that refusal with its command (`manager-access-missing`, `router-unknown`) instead of
+`silent`); one the poll is refused at says that refusal with its command (`no_access`, `router_unknown`) instead of
 `silent`, once its 15 minutes of grace are over; a silent one gets the advice for Cloud Run, its Scheduler job
 `dmtr-<region>-check` and the controller's logs. A Google Cloud workload's failed wake is advised in Google Cloud's words for its
 kind (Compute Engine's zone capacity and fallback machine types, its quotas, the router's service account and `dormeto gcp
@@ -115,10 +115,10 @@ subscription filter on either cloud receives it).
 `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, 10 s per call (a cold Cloud Run
 start; an AWS router keeps its 5 s), 10 at once and 20 s per request as before, each asking for refusals (an asynchronous one too),
 read as the AWS controller answers them; an empty failure at the controller URL is Google's, as its pages are.
-A Google Cloud router the manager can't use answers 502 with the command that fixes it: `manager-access-missing` when Google
+A Google Cloud router the manager can't use answers 409 `{ error, message }` with the command that fixes it: `no_access` when Google
 refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked), with `the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`,
-`router-too-old` for a router below 0.40.0 (by major.minor.patch), without calling it, or one whose controller has no `/v1/actions`
-(`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router-unknown`
+`router_too_old` for a router below 0.40.0 (by major.minor.patch), without calling it, or one whose controller has no `/v1/actions`
+(`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router_unknown`
 while discovery hasn't found its controller; `GET /routers` lists such a router with its `refusal` and the version the registry
 knows. `install-router` for a project, and `upgrade-router` and `uninstall-router` for a Google
 Cloud router, answer 400 with the `dormeto gcp install` or `uninstall` command: they change IAM policies, which stays with the CLI.
@@ -138,7 +138,7 @@ connection never counts as a router gone. A router too old to poll (below 0.40.0
 kept and not polled until its version changes, nor pushed to: its version is read from its health (`GET /v1/health`, as the
 command account) at most every 10 minutes and kept in the registry (`RouterVersionRead`), so the advised `dormeto gcp install`
 clears `too-old` within 10 minutes. Each router's poll (where its journal was read up to, its 404s in a row, its last error with
-the command that fixes it and the refusal it met, `router-unknown` for one whose controller discovery hasn't found yet, the
+the command that fixes it and the refusal it met, `router_unknown` for one whose controller discovery hasn't found yet, the
 ETag it holds, when its version was read) is kept on its `RS#` item, beside the summary. The fleet function reads
 `settings.json` (`s3:GetObject`; `s3:ListBucket` on the lists bucket for that object's name alone, so a missing one answers
 404), updates its table's items (`dynamodb:UpdateItem`) and writes a registration's new version. A Google Cloud row's Cloud SQL backend is kept as `cloudsql-instance`.
@@ -188,6 +188,39 @@ savings and the energy, and the demo's naps priced at europe-west2.
 and its URL map, built from the names its row holds in the scope of its load balancer, where the advice failed with `requests_unreadable`.
 - **Fixed, what a router's newer than the manager writes:** a nap's item the manager can't read (a kind it doesn't know, a shape out
 of its bounds) is kept as an unknown item, so its hours show as not priced, never as $0 saved.
+- **The Google Cloud refusals in snake_case, one answer on every route:** a router the manager can't use is a 409
+`{ "error": "no_access" | "router_too_old" | "router_unknown", "message" }` on every route that calls one, the message carrying the command that fixes it; 502 stays for `router_error` and `google_error`. The router
+row's `refusal` and the poll record hold the same codes; a record an earlier build stored (`manager-access-missing`, `router-too-old`,
+`router-unknown`) is read as the new one. The router floor is one constant (0.40.0), read by the manager and the dashboard.
+- **A Google Cloud candidate and an operation say their cloud:** a Google Cloud candidate has no `targetGroupArn`, `loadBalancerArn`,
+`listener` or `priority` (absent, not empty or `null`; an AWS reader can no longer mistake it) and `cloud: 'gcp'`; its `targetGroup`
+and `loadBalancer` are the backend service's and the URL map's names. Operations (the 202 answers too), exclusions, and the savings'
+top and history rows carry `cloud`; an AWS answer's idle window advice says `estimated: false`; an AWS onboarding given a
+`cloudsql-instance` database and a Google Cloud one given an `rds-instance` are refused 400 in one message form. A candidate or
+operation an earlier build stored reads as before.
+- **A Google Cloud project's candidates in their own words:** a managed candidate of a project the connection no longer reaches
+is "out of scope: the Google Cloud connection was removed" (no offboarding proposed, as the manager can't offboard without
+it) or, out of a connected perimeter, "out of scope: project no longer at the connection's scopes" (pending offboarding); a failed
+listing leaves its candidates as they were; a managed backend service gone reads "managed backend service not found in the last scan:
+offboard it" (AWS's keeps "rule"). One rule, `brokenConnection`, tells a revoked federation in the router calls, the access check
+and the scan; the workloads list joins a workload to its candidate by its backend service; an operation's title and step detail
+read right for Google Cloud.
+- **The dashboard and the documents name both clouds:** the rename dialog, the groups' grants, the Operations and Routers views
+word their Google Cloud case (a Google Cloud workload's rename says nothing changes in Google Cloud). The README lists the actions
+the manager sends the routers and names Google Cloud beside AWS; `docs/operations.md` says the organization's hibernation default
+suspends Google Cloud VMs, `docs/access-control.md` the labels copied on Google Cloud, and the development organization stack
+moved from `docs/organization-access.md` to `docs/development.md`.
+- **The settings problem texts in one form:** an invalid setting is `<key>: must be a whole number from <min> to <max>` (or the
+key's own rule: `wakeMode: must be any or browser`, `type: must be a type's name …`, `settings: fallbackInstanceTypes: must be a
+list of at most 5 EC2 instance types, such as t3a.medium`), where some had no colon. `hibernate must be …` and `unknown setting <key>`
+are as they were, which released CLIs match.
+- **Router 0.40.0, what changes in its API:** an action a router doesn't know answers AWS's `unsupported` refusal on a Google Cloud
+router, as AWS's does. Its REST workload answer has `workloadId` and `pauses` beside `id` and `paused`, and its onboarding takes
+`databases` and `settings.fallbackInstanceTypes` beside `cloudSql` and the top-level `fallbackInstanceTypes`. Its waiting page
+answers `x-dormeto-failure` and `x-dormeto-retry-at` as AWS's does, and its status has AWS's six settings keys. **AWS's router
+now refuses a `keepAsleep` that is not true or false** (a change to a released action: a value such as `"false"` or `1`, once taken
+as it was, is a refusal now; the manager always sends a boolean). The router's own settings problem texts take the same
+`<key>: must be …` form, and the Google Cloud wake timeout says 60 to 1700 in one text.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`
   (onboarding, offboarding and exclusions on Google Cloud, the tag, the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).

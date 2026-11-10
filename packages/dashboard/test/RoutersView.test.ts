@@ -313,13 +313,13 @@ describe('Routers view', () => {
 
   it('says what a router is in a tooltip beside the page\'s title, not under it (the user, 2026-11-02)', async () => {
     const wrapper = await mountView();
-    expect(wrapper.text()).not.toContain('One router per account and region');
+    expect(wrapper.text()).not.toContain('One router per AWS account and region');
     const more = wrapper.find('[data-test="page-title"] [data-test="routers-more"]');
     expect(more.attributes('tabindex')).toBe('0');
     expect(more.attributes('aria-label')).toBe('What a router does');
     await hover(more);
     const tip = document.querySelector('.v-overlay--active [data-test="routers-tip"]')!;
-    expect(tip.textContent!.replace(/\s+/g, ' ').trim()).toBe('One router per account and region naps and wakes its workloads. A paused router never naps any of them (requests still wake); health comes from its idle check, its Lambda functions and its failure queues.');
+    expect(tip.textContent!.replace(/\s+/g, ' ').trim()).toBe('One router per AWS account and region, or per Google Cloud project and region, naps and wakes its workloads. A paused router never naps any of them (requests still wake); health comes from its idle check and, on AWS, its Lambda functions and its failure queues.');
     wrapper.unmount();
   });
 

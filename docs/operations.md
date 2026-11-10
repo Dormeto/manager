@@ -124,8 +124,9 @@ doesn't); the registry keeps the version as the router reports it.
   `status.json`. Routers 0.24.0 read them (installed routers get the catalog in their blueprint, routers written in
   Terraform `ip_lists_catalog`); the Routers view shows them (`GET /api/ip-lists`), the watchdog alarms on a list that
   failed or grew old.
-- **Workload defaults:** the same bucket holds `settings.json`, the administrators' defaults for every router (EC2
-  hibernation, joined windows and ended windows: `{"workloads": {"hibernate": …, "joinMinutes": …, "endedWindowDays": …},
+- **Workload defaults:** the same bucket holds `settings.json`, the administrators' defaults for every router
+  (hibernation, joined windows and ended windows; the `hibernate` default hibernates EC2 instances and suspends Google Cloud VMs
+  instead of stopping them: `{"workloads": {"hibernate": …, "joinMinutes": …, "endedWindowDays": …},
   "updatedAt", "updatedBy"}`; a write sends any of them, the others stay; `joinMinutes` or `endedWindowDays` null removes it,
   and a router reads an absent or invalid one as unset: joined up to 15 minutes, ended windows removed after 365 days, 0
   keeping them), written

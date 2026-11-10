@@ -70,6 +70,22 @@ tfenv exec init -backend-config=env/dev.backend.hcl
 tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
 ```
 
+## The organization stack
+
+The dev org stack applies `organization` in the management account and `access` in `command_account_id`
+(038606077307), through that account's administrator profile `command_profile` (an account invited into the
+organization has no `OrganizationAccountAccessRole`):
+
+```bash
+cd infra/terraform/org                         # acts in the management account (kloudy-master) and command_account_id
+tfenv exec init -backend-config=env/dev.backend.hcl
+tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
+tfenv exec apply dev.tfplan
+```
+
+Apply it again after a router version that changes `dist/router-boundary.json`. The modules' tests run offline with a
+mocked provider: `cd infra/terraform/modules/<module> && tfenv exec init -backend=false && tfenv exec test`.
+
 ## Release
 
 A release is built from a commit whose `package.json` names the new version (and `dormeto.router` the router it

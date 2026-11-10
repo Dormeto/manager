@@ -89,13 +89,13 @@ export function defaultsProblems(defaults: unknown, { workload = false } = {}): 
     if (value === null && (SCALAR_KEYS.includes(key) || RULE_KEYS.includes(key) || (workload && key === 'type'))) continue;
     const range = SETTING_RANGES[key];
     if (range) {
-      if (!Number.isInteger(value) || (value as number) < range[0] || (value as number) > range[1]) problems.push(`${key} must be a whole number from ${range[0]} to ${range[1]}`);
+      if (!Number.isInteger(value) || (value as number) < range[0] || (value as number) > range[1]) problems.push(`${key}: must be a whole number from ${range[0]} to ${range[1]}`);
     } else if (key === 'wakeMode') {
-      if (value !== 'any' && value !== 'browser') problems.push('wakeMode must be any or browser');
+      if (value !== 'any' && value !== 'browser') problems.push('wakeMode: must be any or browser');
     } else if (RULE_KEYS.includes(key)) {
       problems.push(...rulesProblems(key, value));
     } else if (key === 'type' && workload) {
-      if (typeof value !== 'string' || !(TYPE_NAME.test(value) || BUILT_IN_TYPES.includes(value))) problems.push('type must be a type\'s name (lower-case letters, digits and hyphens) or null');
+      if (typeof value !== 'string' || !(TYPE_NAME.test(value) || BUILT_IN_TYPES.includes(value))) problems.push('type: must be a type\'s name (lower-case letters, digits and hyphens) or null');
     } else problems.push(`unknown setting ${key}`);
   }
   return problems;

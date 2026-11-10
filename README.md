@@ -4,18 +4,19 @@
 
 # Dormeto manager
 
-**Find, onboard and operate idle web workloads across your AWS organization, from one dashboard.**
+**Find, onboard and operate idle web workloads across your AWS organization and Google Cloud projects, from one dashboard.**
 
 [Website](https://dormeto.com) · [Get started](https://dormeto.com/get-started.html) · [Product](https://dormeto.com/product.html) · [Security](https://dormeto.com/security.html) · [Releases](https://dormeto.com/releases.html) · [Router](https://github.com/Dormeto/router)
 
 [![Release](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Freleases.dormeto.com%2Fmanager%2Flatest.json&query=%24.version&label=release&color=3546c4)](https://dormeto.com/releases.html)
 [![Router](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Freleases.dormeto.com%2Fmanager%2Flatest.json&query=%24.router&label=router&color=3546c4)](https://github.com/Dormeto/router)
 ![AWS](https://img.shields.io/badge/AWS-Application_Load_Balancer-FF9900?logo=amazonwebservices&logoColor=white)
+![Google Cloud](https://img.shields.io/badge/Google_Cloud-Application_Load_Balancer-4285F4?logo=googlecloud&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-no_CloudFormation-7B42BC?logo=terraform&logoColor=white)
 
 </div>
 
-Dormeto stops the workloads behind your Application Load Balancer when nobody uses them, and starts them again when a
+Dormeto stops the workloads behind your AWS or Google Cloud Application Load Balancer when nobody uses them, and starts them again when a
 real visitor arrives. Awake, traffic goes straight to your application: Dormeto is out of the request path.
 
 This repository is the **manager**, which runs in one account of your organization: a dashboard, an API, and the
@@ -100,8 +101,9 @@ quotas. Your rules and your infrastructure as code stay untouched.</p>
   <source media="(prefers-color-scheme: dark)" srcset="https://dormeto.com/img/routers-dark.webp">
   <img src="https://dormeto.com/img/routers-light.webp" alt="Routers: version, health, last idle check, workloads, an upgrade offered, pause and uninstall">
 </picture>
-<p><b>Installs and upgrades the routers.</b> By AWS API calls, through the command role you created. Each router
-reports its health, and failed wakes say why.</p>
+<p><b>Installs and upgrades the routers.</b> AWS's by API calls, through the command role you created; Google Cloud's with
+the CLI (<code>dormeto gcp install</code>), which the manager then reads. Each router reports its health, and failed wakes
+say why.</p>
 </td>
 <td width="50%" valign="top">
 <picture>
@@ -118,8 +120,9 @@ account, one change per load balancer at a time.</p>
 
 - **Only real visitors wake it.** Bots, crawlers, monitors and internet scanners get a waiting page, never a wake. In
   browser wake mode, only a page that runs its script wakes the workload.
-- **EC2, Auto Scaling, ECS, EKS, RDS.** Instances stop; Auto Scaling groups, ECS services and Kubernetes Deployments
-  scale to zero; databases stop after their application and start before it.
+- **EC2, Auto Scaling, ECS, EKS, RDS; Compute Engine, GKE, Cloud SQL.** Instances stop (or, on request, are suspended on Google Cloud);
+  Auto Scaling groups, ECS services and Kubernetes Deployments scale to zero; databases stop after their application and
+  start before it.
 - **Savings you can check.** AWS and Google Cloud list prices of what each nap stopped (Google's from the Cloud Billing
   Catalog), Spot capacity at Spot prices, less the discounts you set, net of Dormeto's own cost. Each workload's idle
   window card replays its last 14 days of requests to choose the window (estimated on Google Cloud, whose request counts
@@ -129,8 +132,9 @@ account, one change per load balancer at a time.</p>
   work on both; an alert carries its `cloud` for filter policies.
 - **Alerts where you work.** Failed wakes and router health reach your email and chat channels (Amazon Q Developer in
   Slack or Microsoft Teams) within 5 minutes.
-- **Runs in your account.** The manager and the routers run in your AWS accounts, through least-privilege roles you
-  create. Nothing is sent to Dormeto, and there is no CloudFormation anywhere.
+- **Runs in your account.** The manager runs in one of your AWS accounts and the routers in your AWS accounts and Google
+  Cloud projects, through least-privilege roles you create (on Google Cloud, with no key). Nothing is sent to Dormeto, and
+  there is no CloudFormation anywhere.
 - **People and audit.** Viewers, operators and administrators, Amazon Cognito sign-in with MFA, and every change
   recorded with its author, its target and its result.
 - **Delegation by tags.** Tag workloads, group users, and give a group the right to see, wake or nap the workloads
@@ -161,7 +165,7 @@ It writes a summary and a Markdown and JSON report; the options, phases, reports
 
 ```hcl
 module "dormeto" {
-  source          = "https://releases.dormeto.com/manager/0.10.0/terraform-aws-dormeto-0.10.0.zip//modules/manager"
+  source          = "https://releases.dormeto.com/manager/0.22.0/terraform-aws-dormeto-0.22.0.zip//modules/manager"
   env             = "prod"
   organization_id = "o-exampleorgid"
   admin_emails    = ["you@example.com"]
@@ -192,8 +196,8 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, Google Cloud routers (the poll, `too-old`, the refusals), health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced on AWS and Google Cloud, Spot, discounts, the daily job, the idle window advisor |
 | [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto aws estimate`: accounts, filters, uptime, companion databases, cache, permissions |
-| [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |
-| [Development](docs/development.md) | Build, test, a development environment, screenshots, releases |
+| [Organization access](docs/organization-access.md) | The AWS discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |
+| [Development](docs/development.md) | Build, test, a development environment, the dev organization stack, screenshots, releases |
 
 ## Repository layout
 
@@ -210,8 +214,10 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | `infra/terraform/platform` | Dev's certificate and its DNS validation (the dev manager itself is a CLI install) |
 | `scripts` | `smoke.mjs` (API checks as the smoke user), `screenshots.mjs` (signed-in dashboard screenshots), `release/` (the module's artifacts from the builds, a release and its publication) |
 
-The manager never reads the router tables or the workload resources itself: each router controller answers the `list`,
-`status`, `force-wake`, `nap` and `discover` actions.
+The manager never reads the router tables or the workload resources itself: each router controller answers the actions
+the API and the operations send it: `list`, `status`, `router`, `events`, `force-wake`, `nap`, `request-nap`, `pause`, `resume`,
+`rename`, `tag`, `schedule`, `clear-schedule`, `settings`, `waiting-page`, `manager-settings`, `preview`, `onboard`, `offboard`
+and `report`.
 
 ```bash
 npm ci

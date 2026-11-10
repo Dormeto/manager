@@ -83,7 +83,7 @@ async function remove() {
             hint="Lower-case letters, digits and hyphens, up to 48; dmt- is reserved for the built-in roles." persistent-hint class="mb-3" />
           <v-text-field v-model="editing.description" label="Description" :counter="DESCRIPTION_MAX" class="mb-3" />
           <div class="dm-eyebrow mb-2">Grants (at most {{ GRANTS_MAX }})</div>
-          <p class="text-body-small text-medium-emphasis mb-3">A workload is seen when a grant of one of the user's groups has all its tags on it; wake and nap include read. Tags are set on the workloads, not in AWS.</p>
+          <p class="text-body-small text-medium-emphasis mb-3">A workload is seen when a grant of one of the user's groups has all its tags on it; wake and nap include read. Tags are set on the workloads, not in AWS or Google Cloud.</p>
           <GrantEditor v-model="editing.grants" />
           <v-alert v-if="problem" type="error" variant="tonal" density="compact" class="mt-3" :text="problem" />
         </v-card-text>

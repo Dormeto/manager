@@ -507,14 +507,14 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud
   const types = settings?.fallbackInstanceTypes;
   const listed = (pattern: RegExp) => Array.isArray(types) && types.length <= 5 && types.every((t) => typeof t === 'string' && pattern.test(t));
   if (types !== undefined && cloud === 'gcp' && !(listed(MACHINE_TYPE) && new Set(types as string[]).size === (types as string[]).length)) {
-    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes must be at most 5 Compute Engine machine types, each named once (for example e2-medium)');
+    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium');
   }
   if (types !== undefined && cloud === 'aws' && !listed(INSTANCE_TYPE)) {
-    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes must be at most 5 EC2 instance types (for example t3a.medium)');
+    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes: must be a list of at most 5 EC2 instance types, such as t3a.medium');
   }
   const retry = settings?.failedRetrySeconds;
   if (retry !== undefined && (!Number.isInteger(retry) || (retry as number) < 10 || (retry as number) > 600)) {
-    throw new HttpError(400, 'bad_request', 'settings: failedRetrySeconds must be a whole number from 10 to 600');
+    throw new HttpError(400, 'bad_request', 'settings: failedRetrySeconds: must be a whole number from 10 to 600');
   }
   if (settings?.hibernate !== undefined && typeof settings.hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'settings: hibernate must be true or false');
 }

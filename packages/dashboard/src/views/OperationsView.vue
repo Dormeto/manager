@@ -67,8 +67,8 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
       <v-spacer />
       <RefreshIndicator :next-at="nextAt" :loading="loading" @refresh="run" />
     </div>
-    <p class="dm-lead text-medium-emphasis mt-n2 mb-6">Onboardings, offboardings and router installations, run step by step in the target account and region by
-      AWS API calls. A step waits for a lock, a slot or a resource being created; a failed onboarding is undone.</p>
+    <p class="dm-lead text-medium-emphasis mt-n2 mb-6">Onboardings, offboardings and router installations, run step by step in the target account or project and region by
+      AWS or Google Cloud API calls. A step waits for a lock, a slot or a resource being created; a failed onboarding is undone.</p>
     <v-alert v-if="error" type="error" class="mb-4" :text="error" />
 
     <div v-if="operations.length" class="dm-ops-tools">

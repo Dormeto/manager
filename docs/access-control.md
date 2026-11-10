@@ -62,13 +62,13 @@ entries in the dashboard, and the API refuses them).
 
 ## Workload tags
 
-Dormeto's own labels on a workload (`team=payments`, `env=staging`), never AWS tags. They live in the workload's
+Dormeto's own labels on a workload (`team=payments`, `env=staging`), never AWS tags or Google Cloud labels. They live in the workload's
 configuration in its router, beside its name.
 
 - At most 50 tags; a key of 1 to 128 characters and a value of at most 256, in letters, digits, spaces and
   `_ . : / = + - @`; keys are case-sensitive; the prefix `dormeto:` is reserved.
 - A workload the manager onboarded has its tags set by administrators: in the onboarding dialog (nothing is copied from AWS
-  unless you press "Copy the target group's AWS tags", which takes the first value of each key, for you to edit), then
+  unless you press "Copy the target group's AWS tags" (on Google Cloud, "Copy the VMs' labels"), which takes the first value of each key, for you to edit), then
   from the workload's page (Edit tags), `PUT /api/workloads/:router/:id/tags`. A retag takes effect at once. An operator cannot set tags at onboarding: the API refuses (403, audited) an onboarding with
   tags from anyone but an administrator, and the dialog shows them the Tags section only to administrators.
 - A Terraform workload's tags are the `tags` of its `workload` module; the manager shows them and says "set in Terraform".

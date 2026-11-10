@@ -18,20 +18,6 @@ Each release also publishes `dormeto-access-commands-<version>.sh`, the same wit
 `dmt-<env>-manager-access-check`, which only assumes it) and the Discovery view's Organization access panel lists what is
 missing: onboarding and router installs are refused where the command role is missing.
 
-Dev: the org stack applies `organization` in the management account and `access` in `command_account_id`
-(038606077307), through that account's administrator profile `command_profile` (an account invited into the
-organization has no `OrganizationAccountAccessRole`):
-
-```bash
-cd infra/terraform/org                         # acts in the management account (kloudy-master) and command_account_id
-tfenv exec init -backend-config=env/dev.backend.hcl
-tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
-tfenv exec apply dev.tfplan
-```
-
-Apply it again after a router version that changes `dist/router-boundary.json`. The modules' tests run offline with a
-mocked provider: `cd infra/terraform/modules/<module> && tfenv exec init -backend=false && tfenv exec test`.
-
 ## Google Cloud
 
 A manager reaches Google Cloud without a key or a secret: its Lambda roles act as two service accounts of one **host

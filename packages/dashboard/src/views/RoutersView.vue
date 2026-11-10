@@ -77,8 +77,8 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
   <div class="d-flex flex-wrap align-center ga-4 mb-4">
     <PageTitle eyebrow="Fleet" title="Routers">
       <template #after>
-        <InfoTip label="What a router does" test="routers" :max-width="440">One router per account and region naps and wakes its workloads. A paused router never naps any of
-          them (requests still wake); health comes from its idle check, its Lambda functions and its failure queues.</InfoTip>
+        <InfoTip label="What a router does" test="routers" :max-width="440">One router per AWS account and region, or per Google Cloud project and region, naps and wakes its workloads. A paused router
+          never naps any of them (requests still wake); health comes from its idle check and, on AWS, its Lambda functions and its failure queues.</InfoTip>
       </template>
     </PageTitle>
     <v-spacer />

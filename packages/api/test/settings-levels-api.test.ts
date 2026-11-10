@@ -61,7 +61,7 @@ describe('the organization\'s defaults in /api/settings/workloads', () => {
   it('refuses defaults the router would refuse, nothing written, and anyone but an administrator', async () => {
     const s = setup();
     const bad = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleMinutes: 4, wakeMode: 'never' } }));
-    expect([bad.statusCode, json(bad).message]).toEqual([400, 'idleMinutes must be a whole number from 5 to 1440; wakeMode must be any or browser']);
+    expect([bad.statusCode, json(bad).message]).toEqual([400, 'idleMinutes: must be a whole number from 5 to 1440; wakeMode: must be any or browser']);
     expect((await s.api(event('PUT', '/api/settings/workloads', 'dmt-operator', { defaults: { idleMinutes: 30 } }))).statusCode).toBe(403);
     expect(s.store.writes).toEqual([]);
   });
