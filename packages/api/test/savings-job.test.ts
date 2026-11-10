@@ -2,7 +2,7 @@
 // summary the Overview reads; idempotent.
 import { describe, expect, it } from 'vitest';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
-import { createFleetStore } from '@dormeto/fleet';
+import { createFleetStore, createPriceBook } from '@dormeto/fleet';
 import { createSavingsJob } from '../src/savings-job.js';
 
 const ACCOUNT = '121014831971';
@@ -99,5 +99,54 @@ describe('savings job', () => {
     await s.fleet.putSavingsSettings({ compute: 50, databases: 50 }, 'admin@example.com');
     await job.run({ day: '2026-10-06' });
     expect((await s.fleet.getSavingsSummary())!.discounts).toEqual({ compute: 20, databases: 30 });
+  });
+
+  // One AWS workload (t3.medium, a fake Price List at $0.0456) and one on Google Cloud (an e2-standard-2 asleep all day in
+  // europe-west1, a fake Catalog: $0.02 a core, $0.003 a GiB), both through the job's real price book.
+  async function mixed(catalogFails: boolean) {
+    const dynamo = fakeDynamo();
+    const fleet = createFleetStore({ dynamo, table: 'dmt-dev-manager', now: () => NOW });
+    const summary = (account: string, region: string, router: string, id: string) => ({ account, region, router, workloadId: id, name: id, state: 'ASLEEP', checkedAt: at(23) });
+    await fleet.writeWorkload(summary(ACCOUNT, 'eu-west-1', 'dmt-dev', 'aws') as never, 0);
+    await fleet.writeWorkload(summary('dormeto-dev', 'europe-west1', 'dmt-dev-gcp', 'gcp') as never, 0);
+    const GCE = { kind: 'gce', machineType: 'e2-standard-2', family: 'e2', vcpus: 2, memoryGb: 8, count: 1, os: 'linux', zone: 'europe-west1-b' };
+    await fleet.putHistory({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'aws', from: null, to: 'ASLEEP', at: '2026-10-06T20:00:00.000Z', stopped: [T3] } as never);
+    await fleet.putHistory({ account: 'dormeto-dev', region: 'europe-west1', router: 'dmt-dev-gcp', workloadId: 'gcp', from: null, to: 'ASLEEP', at: '2026-10-06T20:00:00.000Z', stopped: [GCE] } as never);
+    const sku = (description: string, usageUnit: string, nanos: number) => ({
+      description, category: { resourceFamily: 'Compute', usageType: 'OnDemand' }, serviceRegions: ['europe-west1'],
+      pricingInfo: [{ pricingExpression: { usageUnit, tieredRates: [{ unitPrice: { units: '0', nanos } }] } }],
+    });
+    const asked: string[] = [];
+    const catalog = { async skus(service: string) { asked.push(service); if (catalogFails) throw new Error('The Cloud Billing API refused the discovery account'); return { skus: [sku('E2 Instance Core running in EMEA', 'h', 20_000_000), sku('E2 Instance Ram running in EMEA', 'GiBy.h', 3_000_000)] }; } };
+    const pricing = { async getProducts() { return { PriceList: [JSON.stringify({ terms: { OnDemand: { a: { priceDimensions: { b: { pricePerUnit: { USD: '0.0456000000' } } } } } } })] }; } };
+    const logged: { event: string; data?: object }[] = [];
+    const prices = createPriceBook({ pricing, store: fleet, catalog, onCatalogRead: (read) => logged.push({ event: 'GooglePricesRead', data: read }), now: () => NOW });
+    const job = createSavingsJob({ fleet, prices, baseline: { kind: 'always' }, now: () => NOW, log: { info: (event, data) => logged.push({ event, data }), warn: () => {}, error: () => {} } });
+    return { fleet, job, asked, logged };
+  }
+
+  it('prices an AWS workload and a Google Cloud one in one run, the summary adding them', async () => {
+    const s = await mixed(false);
+    await s.job.run();
+    const day = await s.fleet.listSavingsDay(DAY);
+    // 24 hours of 0.0456, and of 2 × 0.02 + 8 × 0.003 = 0.064.
+    expect(day.map((d) => [d.workloadId, Number(d.usd.toFixed(4)), d.unpriced])).toEqual([['aws', 1.0944, []], ['gcp', 1.536, []]]);
+    expect((await s.fleet.getSavingsSummary())!.last30.usd).toBeCloseTo(1.0944 + 1.536, 4);
+    expect((await s.fleet.getSavingsSummary())!.unpriced).toEqual({ workloads: 0, hours: 0 });
+    // Its Catalog read is said once, and cached for the next run (30 days).
+    expect(s.asked).toEqual(['6F81-5844-456A']);
+    expect(s.logged.filter((l) => l.event === 'GooglePricesRead').map((l) => l.data)).toEqual([{ service: '6F81-5844-456A', pages: 1, skus: 2, ms: 0 }]);
+    expect(await s.fleet.getPrice('europe-west1#gce#e2#core#ondemand')).toEqual({ usd: 0.02 });
+  });
+
+  it('a Catalog that fails prices the AWS workload, leaves the Google Cloud one\'s hours not priced, caches nothing, and does not fail the run', async () => {
+    const s = await mixed(true);
+    await s.job.run();
+    const day = await s.fleet.listSavingsDay(DAY);
+    expect(day.map((d) => [d.workloadId, Number(d.usd.toFixed(4)), d.unpriced.map((u) => u.hours)])).toEqual([['aws', 1.0944, []], ['gcp', 0, [24]]]);
+    const summary = (await s.fleet.getSavingsSummary())!;
+    expect([summary.failed, summary.unpriced, summary.last30.usd]).toEqual([0, { workloads: 1, hours: 24 }, expect.closeTo(1.0944, 4)]);
+    expect(await s.fleet.getPrice('europe-west1#gce#e2#core#ondemand')).toBeNull();
+    expect(s.logged.some((l) => l.event === 'GooglePricesRead')).toBe(false);
   });
 });

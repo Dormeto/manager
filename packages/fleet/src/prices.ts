@@ -5,7 +5,7 @@
 // R9.5b): the net price of an item, its list price cached as it is. Google Cloud's items (Google Cloud design §9.2):
 // Google's list prices from the Cloud Billing Catalog (google-prices.ts), the same discounts.
 
-import { createGooglePrices } from './google-prices.js';
+import { createGooglePrices, type CatalogRead } from './google-prices.js';
 
 export type StoppedItem =
   | { kind: 'ec2'; type: string; count: number; os: string; spot?: true }
@@ -93,8 +93,9 @@ const MEMORY_MS = 3_600_000;
 const FAILURE_MS = 300_000;
 
 // Without `catalog` (the API), Google Cloud's items are read from the table only.
-export function createPriceBook({ pricing, spot, store, catalog, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; catalog?: GoogleCatalogPort; now?: () => number }) {
-  const google = createGooglePrices({ catalog, store, now });
+// `onCatalogRead` hears each service's index once it is read (the savings job logs it).
+export function createPriceBook({ pricing, spot, store, catalog, onCatalogRead, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; catalog?: GoogleCatalogPort; onCatalogRead?: (read: CatalogRead) => void; now?: () => number }) {
+  const google = createGooglePrices({ catalog, store, now, ...(onCatalogRead ? { onCatalogRead } : {}) });
   const memory = new Map<string, { usd: number | null; until: number }>();
   const pending = new Map<string, Promise<number | null>>();
   // One price: from memory, the table, else the API; a failed call prices nothing, caches nothing in the table, and is not

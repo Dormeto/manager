@@ -221,9 +221,9 @@ export function createGoogle({ connection, credentials = lambdaCredentials, fetc
   });
 
   // A Google API's JSON answer ({} when empty), as the service account; a refusal, or an answer that isn't JSON, is a
-  // GoogleError.
-  async function call<T = unknown>(sa: ServiceAccount, method: string, url: string, body?: unknown): Promise<T> {
-    const answer = await authorized(`access ${sa}`, () => accessToken(sa), url, method, body);
+  // GoogleError. `bounds` are the call's own (a Catalog page: 60 s), the token's requests keeping Google's 10 s.
+  async function call<T = unknown>(sa: ServiceAccount, method: string, url: string, body?: unknown, bounds?: Bounds): Promise<T> {
+    const answer = await authorized(`access ${sa}`, () => accessToken(sa), url, method, body, bounds);
     if (!ok(answer)) throw errorOf(answer.status, answer.text, url);
     return (answer.text.trim() ? parsed(answer, url) : {}) as T;
   }

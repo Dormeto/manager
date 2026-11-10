@@ -227,4 +227,21 @@ describe('Google\'s list prices', () => {
     s.cache.set('europe-west1#gce#n2d#ram#ondemand', 0.004055);
     expect(await s.book.hourly('europe-west1', vm('n2d-standard-2', 'n2d', 2, 8))).toBeCloseTo(0.092946, 6);
   });
+
+  it('says each service\'s read once it is complete: its pages and SKUs, once per price book, nothing for a read that failed', async () => {
+    const reads: unknown[] = [];
+    let t = 1_000;
+    let failing = false;
+    const pages = [COMPUTE_SKUS, COMPUTE_SKUS_2];
+    const catalog = { async skus(_service: string, token?: string) { t += 40; if (failing) throw new Error('timed out'); const page = Number(token ?? 0); return { skus: pages[page]!, ...(page + 1 < pages.length ? { nextPageToken: String(page + 1) } : {}) }; } };
+    const store = { getPrice: async () => null, putPrice: async () => {} };
+    const book = createPriceBook({ pricing: { async getProducts() { return {}; } }, store, catalog, onCatalogRead: (read) => reads.push(read), now: () => t });
+    await book.hourly('europe-west1', E2_SMALL);
+    await book.hourly('europe-west1', vm('n2d-standard-2', 'n2d', 2, 8));
+    expect(reads).toEqual([{ service: COMPUTE, pages: 2, skus: COMPUTE_SKUS.length + COMPUTE_SKUS_2.length, ms: 80 }]);
+    failing = true;
+    const other = createPriceBook({ pricing: { async getProducts() { return {}; } }, store, catalog, onCatalogRead: (read) => reads.push(read), now: () => t });
+    expect(await other.hourly('europe-west1', E2_SMALL)).toBeNull();
+    expect(reads).toHaveLength(1);
+  });
 });

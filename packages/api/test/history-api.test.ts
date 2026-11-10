@@ -1,5 +1,6 @@
 // A workload's state history (R8): read from the manager's store, never from the router; viewers too.
 import { describe, expect, it } from 'vitest';
+import { createPriceBook } from '@dormeto/fleet';
 import { createApi, type ApiEvent, type Router } from '../src/api.js';
 
 const NOW = Date.parse('2026-10-08T12:00:00.000Z');
@@ -11,7 +12,7 @@ const ROUTERS: Router[] = [
 const iso = (ms: number) => new Date(ms).toISOString();
 const entry = (to: string, ms: number, extra: Record<string, unknown> = {}) => ({ account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', from: null, to, at: iso(ms), ...extra });
 
-function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }), entry('WAKING', NOW - 600_000, { cause: 'normal' }), entry('AWAKE', NOW - 560_000, { durationMs: 40_000 })], truncated = false, before = entry('AWAKE', NOW - 90_000_000) as unknown, summary = null as unknown, savingsSummary = null as unknown, pricesFail = false } = {}) {
+function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }), entry('WAKING', NOW - 600_000, { cause: 'normal' }), entry('AWAKE', NOW - 560_000, { durationMs: 40_000 })], truncated = false, before = entry('AWAKE', NOW - 90_000_000) as unknown, summary = null as unknown, savingsSummary = null as unknown, pricesFail = false, hourly }: { entries?: unknown[]; truncated?: boolean; before?: unknown; summary?: unknown; savingsSummary?: unknown; pricesFail?: boolean; hourly?: (region: string, item: never) => Promise<number | null> } = {}) {
   const asked: unknown[][] = [];
   const calls: string[] = [];
   const api = createApi({
@@ -25,7 +26,7 @@ function setup({ entries = [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle' }),
       historyBefore: async (...args: unknown[]) => { asked.push(['before', ...args]); return before as never; },
       getSavingsSummary: async () => savingsSummary as never,
     },
-    savings: { baseline: { kind: 'always' }, hourly: async (region: string, item: { kind: string }) => { if (pricesFail) throw new Error('DynamoDB unavailable'); return region === 'eu-west-1' && item.kind === 'ec2' ? 0.0456 : null; } },
+    savings: { baseline: { kind: 'always' }, hourly: hourly ?? (async (region: string, item: { kind: string }) => { if (pricesFail) throw new Error('DynamoDB unavailable'); return region === 'eu-west-1' && item.kind === 'ec2' ? 0.0456 : null; }) },
   });
   return { api, asked, calls };
 }
@@ -86,6 +87,23 @@ describe('workload history (R8)', () => {
     expect(body.savings.usd).toBeCloseTo((3_000 / 3_600) * 0.0456, 6);
     expect(body.savings.items[0].hourly).toBe(0.0456);
     expect(body.savings.baseline).toEqual({ kind: 'always' });
+  });
+
+  it('prices a Google Cloud nap from the table\'s cached prices only: a missing one is not priced and never read from the Catalog (G2 plan 3)', async () => {
+    const vm = (machineType: string, family: string) => ({ kind: 'gce', machineType, family, vcpus: 2, memoryGb: 8, count: 1, os: 'linux', zone: 'europe-west1-b' });
+    const cache = new Map<string, number | null>([['europe-west1#gce#e2#core#ondemand', 0.02], ['europe-west1#gce#e2#ram#ondemand', 0.003]]);
+    const puts: string[] = [];
+    // The API builds its price book as index.ts does: no Catalog (a request would wait for 45 MB of SKUs).
+    const book = createPriceBook({
+      pricing: { getProducts: async () => ({}) },
+      store: { getPrice: async (key) => (cache.has(key) ? { usd: cache.get(key)! } : null), putPrice: async (key) => { puts.push(key); } },
+    });
+    const { api } = setup({ entries: [entry('ASLEEP', NOW - 3_600_000, { cause: 'idle', stopped: [vm('e2-standard-2', 'e2'), vm('n2-standard-2', 'n2')] }), entry('WAKING', NOW - 600_000, { cause: 'normal' })], hourly: (region, item) => book.hourly(region, item) });
+    const body = json(await api(event('/api/workloads/dmt-dev/a/history', { days: '1' })));
+    expect(body.savings.items.map((i: { hourly: number }) => i.hourly)).toEqual([0.02 * 2 + 0.003 * 8]);
+    expect(body.savings.unpriced).toEqual([{ reason: 'not priced', item: vm('n2-standard-2', 'n2'), hours: expect.closeTo(3_000 / 3_600, 6) }]);
+    expect(body.savings.usd).toBeCloseTo((3_000 / 3_600) * 0.064, 6);
+    expect(puts).toEqual([]);
   });
 
   it('answers the savings summary the daily job wrote, for viewers; none yet before its first run (R9)', async () => {

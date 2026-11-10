@@ -88,13 +88,18 @@ function skuPrice(sku: CatalogSku, memory: boolean): number | null {
 // highest suspended memory price listed.
 interface Index { prices: Map<string, Set<number>>; suspendedMax: number | null }
 const MAX_PAGES = 100;
-async function loadIndex(catalog: GoogleCatalogPort, service: string): Promise<Index> {
+// What a service's read took, said once it is complete: its pages, its SKUs and its milliseconds.
+export interface CatalogRead { service: string; pages: number; skus: number; ms: number }
+async function loadIndex(catalog: GoogleCatalogPort, service: string, now: () => number, onRead?: (read: CatalogRead) => void): Promise<Index> {
   const keysOf = SERVICES[service]!;
   const index: Index = { prices: new Map(), suspendedMax: null };
+  const started = now();
+  let skus = 0;
   let pageToken: string | undefined;
   for (let page = 0; ; page += 1) {
     if (page === MAX_PAGES) throw new Error(`The Cloud Billing Catalog answered more than ${MAX_PAGES} pages for services/${service}`);
     const answer = await catalog.skus(service, pageToken);
+    skus += answer.skus?.length ?? 0;
     for (const sku of answer.skus ?? []) {
       const named = keysOf(sku);
       const usd = named ? skuPrice(sku, named.memory) : null;
@@ -108,7 +113,10 @@ async function loadIndex(catalog: GoogleCatalogPort, service: string): Promise<I
       }
     }
     pageToken = answer.nextPageToken || undefined;
-    if (!pageToken) return index;
+    if (!pageToken) {
+      onRead?.({ service, pages: page + 1, skus, ms: now() - started });
+      return index;
+    }
   }
 }
 // A key's price: its single price; several prices are none (an ambiguous match is not guessed). A region without the
@@ -129,7 +137,7 @@ type Gce = Extract<StoppedItem, { kind: 'gce' }>;
 type CloudSql = Extract<StoppedItem, { kind: 'cloudsql' }>;
 const off = (usd: number, percent: number) => usd * (1 - percent / 100);
 
-export function createGooglePrices({ catalog, store, now }: { catalog?: GoogleCatalogPort; store: PriceCache; now: () => number }) {
+export function createGooglePrices({ catalog, store, now, onCatalogRead }: { catalog?: GoogleCatalogPort; store: PriceCache; now: () => number; onCatalogRead?: (read: CatalogRead) => void }) {
   const memory = new Map<string, { usd: number | null; until: number }>();
   const pending = new Map<string, Promise<number | null>>();
   const indexes = new Map<string, Promise<Index>>();
@@ -141,7 +149,7 @@ export function createGooglePrices({ catalog, store, now }: { catalog?: GoogleCa
     const known = indexes.get(service);
     if (known) return known;
     if ((failedUntil.get(service) ?? 0) > now()) return Promise.reject(new Error(`The Cloud Billing Catalog failed for services/${service} minutes ago`));
-    const loading = loadIndex(catalog, service).catch((error: unknown) => {
+    const loading = loadIndex(catalog, service, now, onCatalogRead).catch((error: unknown) => {
       indexes.delete(service);
       failedUntil.set(service, now() + FAILURE_MS);
       throw error;
