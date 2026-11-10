@@ -500,7 +500,7 @@ const cloudField = (account: string | undefined) => { const cloud = account ? cl
 
 // What a failed wake does (R7a), checked before the operation starts (the router checks it again at its preview). On Google
 // Cloud the fallback types are Compute Engine machine types, each named once, as the router checks them (router
-// gcp/src/onboarding.mjs:79, :180-187).
+// gcp/src/onboarding.mjs's MACHINE_TYPE and fallbackTypesProblems).
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
 const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
 function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud: Cloud = 'aws') {

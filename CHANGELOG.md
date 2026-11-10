@@ -21,7 +21,7 @@ logs on, which show the CLI's command instead. The demo onboards and offboards G
 candidates and workloads in the Google Cloud steps. The API finds a `global` Google Cloud candidate's workload, router and running
 operation by its backend service, not by a region, and names the router as the manager lists it (`dmtr-<project>-<region>`, by
 the workload row's project and region).
-- **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 502 and the watchdog's problem for
+- **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 409 and the watchdog's problem for
 `no_access` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
 controller's, the message cut to 200 characters; never a token or a signature.
 - **One model for both clouds:** an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
@@ -104,7 +104,7 @@ than `not_found`, a timeout) is not called again in that run of the step; their 
 and a lift keeps the pauses on them. AWS offboardings and exclusions are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
 whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp routers install` command (never
-`silent`); one the poll is refused at says that refusal with its command (`no_access`, `router_unknown`) instead of
+`silent`); one the poll is refused at says that refusal with its command (`no-access`, `router-unknown`) instead of
 `silent`, once its 15 minutes of grace are over; a silent one gets the advice for Cloud Run, its Scheduler job
 `dmtr-<region>-check` and the controller's logs. A Google Cloud workload's failed wake is advised in Google Cloud's words for its
 kind (Compute Engine's zone capacity and fallback machine types, its quotas, the router's service account and `dormeto gcp
@@ -189,9 +189,11 @@ and its URL map, built from the names its row holds in the scope of its load bal
 - **Fixed, what a router's newer than the manager writes:** a nap's item the manager can't read (a kind it doesn't know, a shape out
 of its bounds) is kept as an unknown item, so its hours show as not priced, never as $0 saved.
 - **The Google Cloud refusals in snake_case, one answer on every route:** a router the manager can't use is a 409
-`{ "error": "no_access" | "router_too_old" | "router_unknown", "message" }` on every route that calls one, the message carrying the command that fixes it; 502 stays for `router_error` and `google_error`. The router
-row's `refusal` and the poll record hold the same codes; a record an earlier build stored (`manager-access-missing`, `router-too-old`,
-`router-unknown`) is read as the new one. The router floor is one constant (0.40.0), read by the manager and the dashboard.
+`{ "error": "no_access" | "router_too_old" | "router_unknown", "message" }` on every route that acts on one (the lists,
+`GET /routers` and `GET /workloads`, answer 200 with it), the message carrying the command that fixes it; 502 stays for
+`router_error` and `google_error`. The router row's `refusal` and the poll record hold the same codes; a record an earlier
+build stored (`manager-access-missing`, `router-too-old`, `router-unknown`) is read as the new one. The router floor is one value (0.40.0), declared in two packages and pinned equal
+by a test, read by the manager and the dashboard.
 - **A Google Cloud candidate and an operation say their cloud:** a Google Cloud candidate has no `targetGroupArn`, `loadBalancerArn`,
 `listener` or `priority` (absent, not empty or `null`; an AWS reader can no longer mistake it) and `cloud: 'gcp'`; its `targetGroup`
 and `loadBalancer` are the backend service's and the URL map's names. Operations (the 202 answers too), exclusions, and the savings'

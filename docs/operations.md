@@ -85,14 +85,18 @@ doesn't); the registry keeps the version as the router reports it.
   The poll reads a too-old router's version from its health (`GET /v1/health`, which every router version answers) at most
   every 10 minutes and keeps it in the registry (`RouterVersionRead`): after the advised install, the router is polled at the
   next run and its alarm resolves, within 10 minutes.
-- **The refusals,** as a 409 `{ "error": <code>, "message" }` on every route, with the command that fixes it in the message (a failure of the router or of Google's own stays a 502, `router_error` or `google_error`):
+- **The refusals,** as a 409 `{ "error": <code>, "message" }` on every route that acts on the router (the lists answer
+  200: `GET /routers` with the router's row carrying its `refusal`, `GET /workloads` with the message in its `errors`),
+  with the command that fixes it in the message (a failure of the router or of Google's own stays a 502, `router_error`
+  or `google_error`):
   - `no_access`: Google refuses the manager's token or the connection is broken (pool, provider or
     service account gone, a grant revoked), `the manager's accounts can't reach the router: dormeto gcp connect
     --project <host> --profile <profile> --env <env>`;
   - `router_too_old`, without a call for a router below 0.40.0, or when its controller has no `/v1/actions`:
     `router <v> can't report to the manager: dormeto gcp routers install --project <p> --region <r> --version <pinned>`;
   - `router_unknown`: discovery has not found the router's controller yet, `dormeto gcp connect` again.
-  An action the router does not know (an `unknown-action` answer) is an error that names the action.
+  An action the router does not know is refused `unsupported` by router 0.40.0 (`unknown action: <action>`), which the
+  API answers as a 502 `router_error` with that message.
 - **The organization's settings:** each write of `settings.json` (`PUT /api/settings/workloads`, `/settings/types`,
   `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller, but one below
   0.40.0, as `manager-settings` (the object written and its S3 ETag), 10 at a time. A router that fails is logged (`ManagerSettingsNotPushed`), and the
