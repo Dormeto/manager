@@ -239,6 +239,17 @@ describe('exclusions on Google Cloud', () => {
     expect((await s.records.getOperation(op.id))!.steps[0]!.detail).toBe('paused 1');
   });
 
+  it('a managed Google Cloud candidate without AWS\'s four fields pauses as one that has them stored empty', async () => {
+    const fresh = managedOnGoogle('shop-app', 'shop');
+    for (const key of ['targetGroupArn', 'loadBalancerArn', 'listener', 'priority'] as const) delete (fresh as Partial<Candidate>)[key];
+    const s = setup({ candidates: [{ ...fresh, cloud: 'gcp' }], known: { 'dmtr-us-central1': ['shop'] }, routers: [...ROUTERS, ...GOOGLE] });
+    s.exclusions.set('x1', exclusion({ target: { kind: 'target-group', path: service('shop-app'), account: PROJECT, region: 'global', name: 'shop-app' } }));
+    const op = await s.engine.create('exclude', { exclusionId: 'x1' }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(s.googleCalls.map(([router, call]) => [router, (call as { backendService?: string }).backendService])).toEqual([['dmtr-europe-west2', service('shop-app')], ['dmtr-us-central1', service('shop-app')]]);
+    expect(s.exclusions.get('x1')!.paused).toEqual([{ router: 'dmtr-us-central1', account: PROJECT, region: 'us-central1', workloadId: 'shop' }]);
+  });
+
   it('pauses the workload a Google Cloud exclusion was created from, without a candidate, with the exclusion\'s path', async () => {
     const s = setup({ candidates: [], known: { 'dmtr-europe-west2': ['shop'] }, routers: GOOGLE });
     s.exclusions.set('x1', exclusion({ target: { kind: 'target-group', path: service('shop-app', 'europe-west2'), account: PROJECT, region: 'europe-west2', name: 'shop-app' } }));

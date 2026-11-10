@@ -523,7 +523,8 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud
 function rdsFailures(databases: unknown[]) {
   for (const d of databases) {
     const { kind, id } = (d && typeof d === 'object' ? d : {}) as { kind?: unknown; id?: unknown };
-    if ((kind !== 'rds-instance' && kind !== 'rds-cluster') || typeof id !== 'string' || !id) {
+    // A kind-less entry is an instance for the onboarder (its databasesOf takes anything but rds-cluster as one): kept accepted.
+    if ((kind !== undefined && kind !== 'rds-instance' && kind !== 'rds-cluster') || typeof id !== 'string' || !id) {
       throw new HttpError(400, 'bad_request', `databases: ${JSON.stringify(d)} is not an RDS instance or cluster: give {"kind": "rds-instance" or "rds-cluster", "id": "<identifier>"}`);
     }
   }
@@ -2543,7 +2544,7 @@ export function createApi({
           throw new HttpError(503, 'unavailable', `the operation pausing its workloads could not start (${(err as Error).message}): nothing excluded, try again`);
         }
         const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), `operation ${op.id}`].join('; ');
-        return { result, response: reply(202, { exclusion: { ...exclusion, target: { ...exclusion.target, ...cloudField(exclusion.target.account) } }, candidates, operation: op }) };
+        return { result, response: reply(202, { exclusion: { ...exclusion, target: { ...exclusion.target, ...cloudField(exclusion.target.account) } }, candidates, operation: operationView(op) }) };
       });
     }
     if (method === 'DELETE' && id) {
@@ -2566,7 +2567,7 @@ export function createApi({
         const at = new Date(now()).toISOString();
         await d.store.updateExclusion(exclusion.id, (x) => ({ ...x, liftedAt: x.liftedAt ?? at }));
         const candidates = await rescoped(d, [exclusion.target.account]);
-        return { result: `${exclusion.reason}; operation ${op.id}`, response: reply(202, { candidates, operation: op }) };
+        return { result: `${exclusion.reason}; operation ${op.id}`, response: reply(202, { candidates, operation: operationView(op) }) };
       });
     }
     return null;
@@ -2582,9 +2583,9 @@ export function createApi({
     const id = op.type === 'offboard' ? op.target.workloadId : op.type === 'onboard' ? op.context.workloadId : undefined;
     return typeof id === 'string' ? { account: op.target.account, region: op.target.region, id } : null;
   };
-  // What a member is shown of an operation: who and what, its steps and their errors; not its input, context or holds.
   // An operation as answered: its target says the cloud of its account beside it (a stored record has none).
-  const operationView = (op: Operation) => (op.target.account ? { ...op, target: { ...op.target, ...cloudField(op.target.account) } } : op);
+  const operationView = (op: Operation) => (op.target?.account ? { ...op, target: { ...op.target, ...cloudField(op.target.account) } } : op);
+  // What a member is shown of an operation: who and what, its steps and their errors; not its input, context or holds.
   const memberView = (op: Operation) => {
     const w = workloadOf(op);
     const router = op.type === 'offboard' ? op.target.router : routers.find((r) => accountOfRouter(r) === op.target.account && r.region === op.target.region)?.name;
@@ -2690,7 +2691,7 @@ export function createApi({
     return audited(identity, `operation-${type}`, target, async () => {
       try {
         const op = await ops.create(type, input, identity.email);
-        return { result: `started ${op.id}`, response: reply(202, { operation: op }) };
+        return { result: `started ${op.id}`, response: reply(202, { operation: operationView(op) }) };
       } catch (err) {
         const conflict = conflictOf(err);
         if (conflict) return conflict;

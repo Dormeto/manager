@@ -30,7 +30,7 @@ function setup(candidates: Candidate[] = [managed(TG, 'demo-asg', TG), managed(T
     async create(type: string, input: Record<string, unknown>, by: string) {
       if (operations.busy) throw Object.assign(new Error(`operation ${operations.busy} is running`), { name: 'Conflict', operationId: operations.busy });
       created.push([type, input, by]);
-      return { id: `op${created.length}`, type, input } as never;
+      return { id: `op${created.length}`, type, input, target: { account: ACCOUNT, region: 'eu-west-1' } } as never;
     },
     list: async () => [], get: async () => null, installedRouters: async () => [],
   };
@@ -145,6 +145,14 @@ describe('exclusions', () => {
     const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', path: BS }, reason: 'migration' })));
     expect(res.exclusion.target).toEqual({ kind: 'target-group', path: BS, account: 'dormeto-dev', cloud: 'gcp', region: 'europe-west2', name: 'web' });
     expect(await store.getExclusion('x1')).toMatchObject({ target: { path: BS, account: 'dormeto-dev', region: 'europe-west2' } });
+  });
+
+  it('the 202 answers of an exclusion and of its lifting carry the operation with its target\'s cloud', async () => {
+    const { api } = setup();
+    const made = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' })));
+    expect(made.operation.target).toEqual({ account: ACCOUNT, region: 'eu-west-1', cloud: 'aws' });
+    const lifted = json(await api(event('DELETE', '/api/exclusions/x1', 'dmt-operator')));
+    expect(lifted.operation.target).toEqual({ account: ACCOUNT, region: 'eu-west-1', cloud: 'aws' });
   });
 
   it('lists each exclusion with the cloud of its target\'s account, stored without it', async () => {

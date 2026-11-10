@@ -21,7 +21,8 @@ function setup({ installed = [] as InstalledRouter[], conflict = null as string 
     async create(type, input, by) {
       if (conflict) throw Object.assign(new Error(`another operation is running on this target: ${conflict}`), { operationId: conflict, name: 'Conflict' });
       created.push([type, input, by]);
-      return operation(type, input);
+      // As the engine's: the target names the account and region when the input does.
+      return { ...operation(type, input), target: (typeof input.account === 'string' ? { account: input.account, region: input.region as string } : {}) as Operation['target'] };
     },
     list: async () => listed ?? [operation('onboard', {})],
     get: async (id) => (listed ? listed.find((op) => op.id === id) ?? null : id === 'op1' ? operation('onboard', {}) : null),
@@ -177,19 +178,27 @@ describe('operations', () => {
     expect(json(await s.api(event('GET', '/api/operations/op-gcp', 'dmt-admin'))).target).toMatchObject({ account: 'dormeto-dev', cloud: 'gcp' });
   });
 
+  it('the 202 answer of a started operation says its target\'s cloud, as the list does', async () => {
+    const { api } = setup();
+    const res = await api(event('POST', '/api/operations', 'dmt-admin', { type: 'install-router', account: MANAGER, region: 'eu-west-2' }));
+    expect([res.statusCode, json(res).operation.target]).toEqual([202, { account: MANAGER, region: 'eu-west-2', cloud: 'aws' }]);
+  });
+
   it('refuses an AWS onboarding\'s database of another kind or shape, in one message form, and starts nothing; RDS instances and clusters go through', async () => {
     const s = setup();
     const form = 'is not an RDS instance or cluster: give {"kind": "rds-instance" or "rds-cluster", "id": "<identifier>"}';
-    for (const databases of [[{ kind: 'cloudsql-instance', id: 'db-1' }], ['db-1'], [{ kind: 'rds-instance' }], [{ kind: 'rds-cluster', id: '' }], [{ id: 'db-1' }], [null]]) {
+    for (const databases of [[{ kind: 'cloudsql-instance', id: 'db-1' }], ['db-1'], [{ kind: 'rds-instance' }], [{ kind: 'rds-cluster', id: '' }], [{ kind: 'rds', id: 'db-1' }], [null]]) {
       const res = await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases }));
       expect([res.statusCode, json(res).error], JSON.stringify(databases)).toEqual([400, 'bad_request']);
       expect(json(res).message).toBe(`databases: ${JSON.stringify(databases[0])} ${form}`);
     }
     expect((await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases: 'db-1' }))).statusCode).toBe(400);
     expect(s.created).toEqual([]);
-    const ok = [{ kind: 'rds-instance', id: 'db-1' }, { kind: 'rds-cluster', id: 'aurora-1' }];
-    expect((await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases: ok }))).statusCode).toBe(202);
-    expect(s.created.at(-1)![1]).toMatchObject({ databases: ok });
+    // Each form the onboarder takes (onboarding.mjs databasesOf; the dashboard's and the CLI's {kind, id}; a kind-less entry is an instance).
+    for (const ok of [[{ kind: 'rds-instance', id: 'db-1' }], [{ kind: 'rds-cluster', id: 'aurora-1' }], [{ id: 'db-1' }], [{ kind: 'rds-instance', id: 'db-1' }, { kind: 'rds-cluster', id: 'aurora-1' }]]) {
+      expect((await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases: ok }))).statusCode, JSON.stringify(ok)).toBe(202);
+      expect(s.created.at(-1)![1]).toMatchObject({ databases: ok });
+    }
   });
 
   it('lists and reads the manager\'s update operations for administrators only, whatever the perimeter', async () => {
@@ -305,7 +314,7 @@ describe('onboarding on Google Cloud', () => {
       settings: { fallbackInstanceTypes: ['e2-medium', 'n2-standard-2'], hibernate: true }, databases: [{ kind: 'cloudsql-instance', id: 'db-1' }], tags: { team: 'web' },
     }]]);
     const { operation } = json(res);
-    expect(operation.target).toEqual({ account: PROJECT, region: 'us-central1', router: `dmtr-${PROJECT}-us-central1`, backendService: SERVICE, urlMap: MAP, projectNumber: NUMBER });
+    expect(operation.target).toEqual({ account: PROJECT, cloud: 'gcp', region: 'us-central1', router: `dmtr-${PROJECT}-us-central1`, backendService: SERVICE, urlMap: MAP, projectNumber: NUMBER });
     expect(operation.activeKey).toBe(`TG#${SERVICE}`);
     expect(operation.steps.map((x: { name: string }) => x.name)).toEqual(['find router', 'slot', 'lock load balancer', 'preview', 'tag', 'onboard', 'verify', 'candidate']);
     // The project's number read once, as the discovery account; no router called (Hibernate needs no version check there).
@@ -357,6 +366,9 @@ describe('onboarding on Google Cloud', () => {
       expect(json(res).message).toMatch(message);
     }
     expect(s.created).toEqual([]);
+    // One message form on both clouds: each names the other's kind as wrong and gives its own.
+    const wrong = await s.api(onboard({ candidateId: SERVICE, databases: [{ kind: 'rds-cluster', id: 'aurora-1' }] }));
+    expect([wrong.statusCode, json(wrong).error, json(wrong).message]).toEqual([400, 'bad_request', 'databases: {"kind":"rds-cluster","id":"aurora-1"} is not a Cloud SQL instance: give {"kind": "cloudsql-instance", "id": "<instance name>"}']);
     expect((await s.api(onboard({ candidateId: SERVICE, settings: { fallbackInstanceTypes: ['e2-medium'] }, databases: [{ kind: 'cloudsql-instance', id: 'db-1' }] }))).statusCode).toBe(202);
   });
 
@@ -376,7 +388,7 @@ describe('onboarding on Google Cloud', () => {
     const res = await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'offboard', router: `dmtr-${PROJECT}-europe-west2`, workloadId: 'dmt-demo-app' }));
     expect(res.statusCode).toBe(202);
     const { operation } = json(res);
-    expect(operation.target).toEqual({ account: PROJECT, region: 'europe-west2', router: `dmtr-${PROJECT}-europe-west2`, workloadId: 'dmt-demo-app', projectNumber: NUMBER });
+    expect(operation.target).toEqual({ account: PROJECT, cloud: 'gcp', region: 'europe-west2', router: `dmtr-${PROJECT}-europe-west2`, workloadId: 'dmt-demo-app', projectNumber: NUMBER });
     expect(operation.activeKey).toBe(`WL#${PROJECT}#europe-west2#dmt-demo-app`);
     expect(operation.steps.map((x: { name: string }) => x.name)).toEqual(['locate', 'slot', 'lock load balancer', 'pause', 'wait awake', 'offboard', 'untag', 'candidate']);
     expect(s.reads).toEqual([['discovery', 'GET', READ]]);
@@ -394,7 +406,7 @@ describe('onboarding on Google Cloud', () => {
     const res = await s.api(onboard({ candidateId: TG, router: `dmtr-${PROJECT}-europe-west2`, settings: { fallbackInstanceTypes: ['t3a.medium'] } }));
     expect(res.statusCode).toBe(202);
     expect(s.created).toEqual([['onboard', { candidateId: TG, settings: { fallbackInstanceTypes: ['t3a.medium'] }, databases: [] }]]);
-    expect(json(res).operation.target).toEqual({ account: MANAGER, region: 'eu-west-3', targetGroupArn: TG, loadBalancerArn: 'lb' });
+    expect(json(res).operation.target).toEqual({ account: MANAGER, cloud: 'aws', region: 'eu-west-3', targetGroupArn: TG, loadBalancerArn: 'lb' });
     expect(json(res).operation.steps.map((x: { name: string }) => x.name)).toContain('install roles');
     expect(s.reads).toEqual([]);
     const ec2 = await s.api(onboard({ candidateId: TG, settings: { fallbackInstanceTypes: ['e2-medium'] } }));

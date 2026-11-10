@@ -62,6 +62,13 @@ describe('exclusions', () => {
     ]);
   });
 
+  it('reads a Google Cloud candidate without AWS\'s fields as one stored with them null and empty', () => {
+    const base = { targetGroup: 'shop-bs', loadBalancer: 'shop-lb', account: 'dormeto-dev', accountName: 'dormeto-dev', id: 'projects/dormeto-dev/global/backendServices/shop-bs', backendService: 'projects/dormeto-dev/global/backendServices/shop-bs', urlMap: 'projects/dormeto-dev/global/urlMaps/shop-lb' };
+    const stored = exclusionTargets({ ...base, targetGroupArn: null, loadBalancerArn: '' });
+    expect(stored.map((t) => t.kind)).toEqual(['target-group', 'load-balancer', 'account']);
+    expect(exclusionTargets({ ...base })).toEqual(stored);
+  });
+
   it('describes a Google Cloud exclusion target in its own words', () => {
     expect(exclusionText({ kind: 'target-group', path: 'projects/dormeto-dev/global/backendServices/shop-bs', account: 'dormeto-dev', region: 'global', name: 'shop-bs' })).toBe('backend service shop-bs · dormeto-dev · global');
     expect(exclusionText({ kind: 'load-balancer', path: 'projects/dormeto-dev/global/urlMaps/shop-lb', account: 'dormeto-dev', region: 'global', name: 'shop-lb' })).toBe('URL map shop-lb · dormeto-dev · global');
