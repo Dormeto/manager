@@ -9,7 +9,8 @@ CLI script, of the same release).
 
 The manager reaches Google Cloud routers, installed by the CLI, as it does AWS ones: it reads them every minute and calls them,
 through a connection `dormeto gcp connect` makes, with no key and no change of a Google IAM policy by the manager. An AWS router,
-row, event or call behaves as before.
+row, event or call behaves as before. The CLI commands it names are CLI 0.14.0's (`dormeto gcp connect`, `dormeto gcp routers
+install`, `uninstall` and `show`).
 
 - **Onboarding and offboarding on Google Cloud from the dashboard:** the onboarding dialog of a Google Cloud candidate asks for its
 name, labels (copied from the VMs on request), Cloud SQL companions by name, fallback machine types (at most 5, each once, as the
