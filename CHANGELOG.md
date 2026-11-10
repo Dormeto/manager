@@ -161,7 +161,7 @@ the Routers install form stays AWS's with one line naming `dormeto gcp install`.
 service and URL map with the console link (a regional URL map links the project's list of load balancers), its VM, group and Cloud SQL
 instance with theirs and their Google Cloud icons, "suspended" where AWS says "hibernated", fallback machine types, a failure, a wake,
 its tags and settings in Google Cloud's words (no EC2, target or Lambda; the values Google Cloud fixes said so), no target group,
-targets or ARN, and no idle window advice or requests heatmap yet (they come with Google Cloud's request counts); the workload the CLI
+targets or ARN (its idle window advice and requests heatmap are described below, with Google Cloud's request counts); the workload the CLI
 onboarded is renamed, tagged and set from the dashboard, which offers Offboard for it, but a GKE workload's and that of one whose
 onboarding turned request logs on stay with the `dormeto gcp workloads offboard` command: the workload view shows that command
 (Discovery's Offboard on its candidate fails at `locate`, before any change). Discovery settings shows the Google Cloud connection read-only
