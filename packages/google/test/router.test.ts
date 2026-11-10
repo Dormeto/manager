@@ -2,7 +2,7 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // bounded; Google's refusal of the token is the refusal no_access, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accessMissingText, actOnRouter, callRouter, createGoogle, installCommand, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
+import { accessMissingText, actOnRouter, brokenConnection, callRouter, createGoogle, GoogleError, installCommand, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
 const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
@@ -303,6 +303,26 @@ describe('routerHealth', () => {
     expect([none.refusal, none.status, none.message]).toEqual([undefined, 200, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered its health without a version']);
     const page = await failure(routerHealth(fakeGoogle(() => new Response('<html>sign in</html>', { status: 200 })).google, ROUTER, { timeoutMs: 10_000 }));
     expect([page.status, page.message]).toEqual([200, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered something other than JSON']);
+  });
+});
+
+// One rule for a broken connection (the review's M4): the router calls, the access check and the discovery scan read the
+// token's refusal alike, so a revoked federation is a missing access everywhere, never a failure with no verdict.
+describe('brokenConnection', () => {
+  const STS = 'sts.googleapis.com';
+  const IAM = 'iamcredentials.googleapis.com';
+  const error = (host: string, status: number, reason = '') => new GoogleError({ status, reason, message: 'refused', host });
+
+  it('is the token refused: 401, 403 or 404 at STS or iamcredentials, STS\'s 400 invalid_grant, invalid_target or unauthorized_client', () => {
+    expect([error(IAM, 403, 'IAM_PERMISSION_DENIED'), error(IAM, 404, 'NOT_FOUND'), error(IAM, 401), error(STS, 403, 'PERMISSION_DENIED'), error(STS, 404)].map(brokenConnection)).toEqual([true, true, true, true, true]);
+    expect(['invalid_grant', 'invalid_target', 'unauthorized_client'].map((reason) => brokenConnection(error(STS, 400, reason)))).toEqual([true, true, true]);
+  });
+
+  it('is nothing else: another 400 of STS, a failure at the token, a refusal of another host, no answer, an error that is not Google\'s', () => {
+    expect([error(STS, 400, 'invalid_request'), error(STS, 503), error(IAM, 500), error(IAM, 429)].map(brokenConnection)).toEqual([false, false, false, false]);
+    // A refusal of a Google API itself is a permission the account lacks, not the connection.
+    expect([error('compute.googleapis.com', 403, 'IAM_PERMISSION_DENIED'), error('cloudresourcemanager.googleapis.com', 404), error('', 403)].map(brokenConnection)).toEqual([false, false, false]);
+    expect([error(STS, 0), new Error('timed out'), null, { status: 403, host: IAM }].map(brokenConnection)).toEqual([false, false, false, false]);
   });
 });
 

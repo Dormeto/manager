@@ -333,6 +333,19 @@ describe('operations engine', () => {
     expect((await s.records.getOperation(op.id))!.context.name).toBe('Paris');
   });
 
+  // The review's M19: an offboarding's "wait awake" showed the WAKING it waited on after it ended AWAKE.
+  it('a step done without a detail after waiting keeps none of its wait\'s: wait awake reads WAKING, then AWAKE', async () => {
+    const s = setup({ routers: [DEV_ROUTER], candidates: [candidate({ eligibility: 'managed', workloadId: 'paris', status: 'managed', statusReason: 'managed' })] });
+    s.router.state = 'ASLEEP';
+    const op = await s.engine.create('offboard', { router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-3', workloadId: 'paris' }, 'ops');
+    const wait = async () => (await s.records.getOperation(op.id))!.steps.find((x) => x.name === 'wait awake')!;
+    for (let i = 0; i < 50 && (await wait()).status !== 'running'; i += 1) await s.engine.next(op.id);
+    expect([(await wait()).status, (await wait()).detail]).toEqual(['running', 'WAKING']);
+    s.router.state = 'AWAKE';
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect([(await wait()).status, (await wait()).detail]).toEqual(['done', undefined]);
+  });
+
   it('an onboarding started before the manager learnt ids from the preview finds its id again at the onboard step', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG }, 'ops');

@@ -32,6 +32,16 @@ describe('operations', () => {
     expect(operationTitle(op({ type: 'update-manager', target, input: { action: 'apply', version: '0.13.0', request: 'r', planBuild: 'p' } }))).toBe('Update the manager to 0.13.0');
   });
 
+  // The review's M9: a Google Cloud onboarding's target names its backend service (a path), not a target group.
+  it('titles a Google Cloud onboarding by its backend service\'s name', () => {
+    const target = {
+      account: 'dormeto-dev', region: 'europe-west2', router: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', projectNumber: '1034397096264',
+      backendService: 'projects/dormeto-dev/global/backendServices/dmt-demo-app', urlMap: 'projects/dormeto-dev/global/urlMaps/dmt-demo-lb',
+    };
+    expect(operationTitle(op({ target, input: { name: 'Demo' } }))).toBe('Onboard dmt-demo-app as Demo');
+    expect(operationTitle(op({ target: { ...target, backendService: 'projects/dormeto-dev/regions/europe-west2/backendServices/dmt-demo-internal-app' }, input: {} }))).toBe('Onboard dmt-demo-internal-app');
+  });
+
   it('shows the progress over the steps that ran', () => {
     expect(operationProgress(op())).toEqual({ done: 2, total: 4, current: 'preview: waiting' });
     expect(operationProgress(op({ status: 'succeeded', cursor: 4, steps: op().steps.map((s) => ({ ...s, status: 'done' })) }))).toEqual({ done: 4, total: 4, current: null });

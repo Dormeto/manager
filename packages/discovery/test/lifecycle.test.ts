@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { computeStatus, nextCandidates, restatus } from '../src/lifecycle.js';
-import type { Candidate, PairResult, ScannedRule } from '../src/types.js';
+import { computeStatus, GOOGLE_DISCONNECTED, nextCandidates, rescope, restatus } from '../src/lifecycle.js';
+import type { Account, Candidate, OrgInventory, PairResult, ScannedRule } from '../src/types.js';
 import { A, C, INVENTORY, config, filter, rule } from './fixtures.js';
 
 const T0 = Date.UTC(2026, 9, 4, 12, 0);
@@ -113,6 +113,78 @@ describe('nextCandidates', () => {
     const [now] = run([], [c!], excluded, T1);
     expect([now!.status, now!.statusReason, now!.lastSeenAt]).toEqual(['excluded', `excluded: global exclude 1 (account ${C.id})`, iso(T0)]);
     expect(run([], [now!], excluded, T1 + 1000)).toEqual([]);
+  });
+});
+
+// A Google Cloud project's candidates (the review's §6.4): a project leaves the inventory when it leaves the connection's
+// scopes, or when the connection is removed. Without the connection the manager can't offboard: a managed candidate is out
+// of scope, its workload left on its router; out of the scopes of a connection still there, it waits for its offboarding.
+describe('a Google Cloud project\'s candidates', () => {
+  const PROJECT: Account = { id: 'dormeto-dev', name: 'Dormeto dev', ouPath: [], tags: {} };
+  const SERVICE = 'projects/dormeto-dev/global/backendServices/dmt-demo-app';
+  const OTHER = 'projects/dormeto-dev/global/backendServices/dmt-demo-api';
+  const { loadBalancerArn: _l, listener: _li, priority: _p, targetGroupArn: _t, ...shared } = rule();
+  const backendService = (id: string, over: Partial<ScannedRule> = {}): ScannedRule => ({
+    ...shared, id, account: PROJECT.id, region: 'global', loadBalancer: 'dmt-demo-lb', targetGroup: id.split('/').at(-1)!, cloud: 'gcp', backendService: id,
+    urlMap: 'projects/dormeto-dev/global/urlMaps/dmt-demo-lb', lb: { kind: 'global' }, backend: { kind: 'asg', id: 'dmt-demo-mig' }, ...over,
+  });
+  const managed = backendService(SERVICE, { eligibility: 'managed', workloadId: 'dmt-demo-app' });
+  const eligible = backendService(OTHER);
+  const ALL = config({ regions: ['*'], filters: [filter('a', [{ accountIds: [A.id, PROJECT.id] }])] });
+  const connected: OrgInventory = { ...INVENTORY, accounts: [...INVENTORY.accounts, PROJECT], google: { connected: true } };
+  const decide = (previous: Candidate[], inventory: OrgInventory, results: PairResult[] = [], now = T1) =>
+    nextCandidates({ previous: new Map(previous.map((c) => [c.id, c])), results, inventory, config: ALL, now });
+  const scanned = () => decide([], connected, [ok([managed, eligible], PROJECT.id, 'global')], T0);
+  const view = (list: Candidate[]) => Object.fromEntries(list.map((c) => [c.id, [c.status, c.statusReason]]));
+
+  it('are managed and eligible while the project is at the connection\'s scopes', () => {
+    expect(view(scanned())).toEqual({ [SERVICE]: ['managed', 'managed'], [OTHER]: ['pending-onboarding', 'eligible'] });
+  });
+
+  it('are out of scope after a disconnect, a managed one too: no offboarding proposed without the connection', () => {
+    const after = decide(scanned(), { ...INVENTORY, google: { connected: false } });
+    expect(GOOGLE_DISCONNECTED).toBe('out of scope: the Google Cloud connection was removed');
+    expect(view(after)).toEqual({ [SERVICE]: ['out-of-scope', GOOGLE_DISCONNECTED], [OTHER]: ['out-of-scope', GOOGLE_DISCONNECTED] });
+    // Still managed by its router: its eligibility and workload are kept.
+    expect(after.find((c) => c.id === SERVICE)).toMatchObject({ eligibility: 'managed', workloadId: 'dmt-demo-app', scope: 'out' });
+    // Connected again, the project's next scan makes it managed again.
+    expect(view(decide(after, connected, [ok([managed, eligible], PROJECT.id, 'global')], T1 + 1000))[SERVICE]).toEqual(['managed', 'managed']);
+  });
+
+  it('wait for their offboarding when the project left the scopes of a connection still there, in Google Cloud\'s words', () => {
+    const after = decide(scanned(), { ...INVENTORY, google: { connected: true } });
+    const reason = 'out of scope: project no longer at the connection\'s scopes';
+    expect(view(after)).toEqual({ [SERVICE]: ['pending-offboarding', reason], [OTHER]: ['out-of-scope', reason] });
+  });
+
+  it('are decided again in the same words when an exclusion is created or lifted', () => {
+    const stored = scanned();
+    expect(view(rescope(stored, ALL, { ...INVENTORY, google: { connected: false } }, T1))[SERVICE]).toEqual(['out-of-scope', GOOGLE_DISCONNECTED]);
+    expect(view(rescope(stored, ALL, { ...INVENTORY, google: { connected: true } }, T1))[SERVICE]).toEqual(['pending-offboarding', 'out of scope: project no longer at the connection\'s scopes']);
+  });
+
+  it('keep an AWS account\'s words whatever the connection', () => {
+    const [c] = run([ok([rule({ eligibility: 'managed', workloadId: 'shop', account: '444444444444' })], '444444444444')], [], config({ filters: [filter('x', [{ accountIds: ['444444444444'] }])] }));
+    for (const inventory of [{ ...INVENTORY, google: { connected: false } }, { ...INVENTORY, google: { connected: true } }]) {
+      const [after] = nextCandidates({ previous: new Map([[c!.id, c!]]), results: [], inventory, config: config({ filters: [filter('x', [{ accountIds: ['444444444444'] }])] }), now: T1 });
+      expect([after!.status, after!.statusReason]).toEqual(['pending-offboarding', 'out of scope: account no longer in the organization']);
+    }
+  });
+
+  it('say a managed backend service gone in its own words, not a rule\'s', () => {
+    const [gone] = decide(scanned(), connected, [ok([eligible], PROJECT.id, 'global')]).filter((c) => c.id === SERVICE);
+    expect([gone!.status, gone!.statusReason]).toEqual(['gone', 'managed backend service not found in the last scan: offboard it']);
+    // One stored by an earlier build, without `cloud`, is told by its project.
+    const { cloud: _c, ...earlier } = managed;
+    expect(computeStatus({ ...earlier, scope: 'in', scopeReason: 'in', goneAt: iso(T1) }).statusReason).toBe('managed backend service not found in the last scan: offboard it');
+    expect(computeStatus({ ...eligible, scope: 'in', scopeReason: 'in', goneAt: iso(T1) }).statusReason).toBe('not found in the last scan');
+    // An AWS rule keeps its words.
+    expect(computeStatus({ ...rule({ eligibility: 'managed' }), scope: 'in', scopeReason: 'in', goneAt: iso(T1) }).statusReason).toBe('managed rule not found in the last scan: offboard it');
+  });
+
+  it('keep their statuses when the project\'s scan failed', () => {
+    const stored = scanned();
+    expect(decide(stored, connected, [{ account: PROJECT.id, region: 'global', ok: false, error: 'GoogleError: quota exceeded', rules: [], ms: 1 }])).toEqual([]);
   });
 });
 

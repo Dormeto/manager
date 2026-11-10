@@ -1,7 +1,7 @@
 // A run in steps (scale design §5): plan, one step per account (the Distributed Map), finalize.
 import { describe, expect, it } from 'vitest';
 import { lint, lintCounters, sumCounters } from '../src/lint.js';
-import { restatus } from '../src/lifecycle.js';
+import { GOOGLE_DISCONNECTED, restatus } from '../src/lifecycle.js';
 import { abandonRun, finalizeRun, planRun, runDiscovery, scanAccount } from '../src/run.js';
 import { A, B, C, INVENTORY, config, filter, rule } from './fixtures.js';
 import { GoogleError } from '@dormeto/google';
@@ -222,6 +222,77 @@ describe('lint from the accounts of a run', () => {
       expect((await finalizeRun(s.deps, plan)).google!.errors).toEqual([{ project: '*', error: 'quota exceeded' }]);
     });
 
+    it('records in the inventory whether it read a connection, and keeps the last word when the connection can\'t be read', async () => {
+      const s = setup({ cfg: both });
+      await s.ready;
+      const g = google(() => ({ projects: [{ projectId: 'dev-project' }] }));
+      const once = async () => {
+        s.advance(HOUR);
+        await finalizeRun(s.deps, await planRun(s.deps, { source: 'manual' }));
+        return (await s.store.getInventory())!.google;
+      };
+      s.deps.google = g;
+      expect(await once()).toEqual({ connected: true });
+      // Its projects unlisted: the connection was read all the same.
+      s.deps.google = google(() => { throw new Error('quota exceeded'); });
+      expect(await once()).toEqual({ connected: true });
+      s.deps.google = { ...g, connection: async () => null };
+      expect(await once()).toEqual({ connected: false });
+      s.deps.google = { ...g, connection: async () => { throw new Error('dynamo throttled'); } };
+      expect(await once()).toEqual({ connected: false });
+      // Without a Google Cloud port, the run says nothing of a connection.
+      delete s.deps.google;
+      expect(await once()).toBeUndefined();
+    });
+
+    // A managed project's candidate in the three cases the review names (§6.4): the connection removed, the project out of
+    // the scopes, the projects' listing failed.
+    describe('a managed project\'s candidate', () => {
+      const APP = 'projects/dev-project/global/backendServices/dmt-demo-app';
+      const MIG = 'projects/dev-project/global/backendServices/dmt-demo-mig-app';
+      async function scanned() {
+        const s = setup({ cfg: both });
+        await s.ready;
+        const g = google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
+        s.deps.google = g;
+        const again = async () => {
+          const plan = await planRun(s.deps, { source: 'manual' });
+          for (const account of plan.accounts) await scanAccount(s.deps, { runId: plan.runId, account });
+          await finalizeRun(s.deps, plan);
+          s.advance(HOUR);
+          return plan;
+        };
+        await again();
+        expect(await statuses(s.store)).toEqual({ [APP]: 'managed', [MIG]: 'pending-onboarding' });
+        return { s, g, again };
+      }
+      const reasons = async (store: ReturnType<typeof setup>['store']) => Object.fromEntries((await store.accountCandidates('dev-project')).map((c) => [c.id, [c.status, c.statusReason]]));
+
+      it('after a disconnect: out of scope with the connection\'s removal, a managed one too, no offboarding proposed', async () => {
+        const { s, g, again } = await scanned();
+        s.deps.google = { ...g, connection: async () => null };
+        expect((await again()).accounts).toEqual([A.id]);
+        expect(await reasons(s.store)).toEqual({ [APP]: ['out-of-scope', GOOGLE_DISCONNECTED], [MIG]: ['out-of-scope', GOOGLE_DISCONNECTED] });
+        expect((await s.store.accountCandidates('dev-project')).find((c) => c.id === APP)).toMatchObject({ eligibility: 'managed', workloadId: expect.any(String) });
+      });
+
+      it('out of the scopes of a connection still there: a managed one waits for its offboarding', async () => {
+        const { s, again } = await scanned();
+        s.deps.google = google(() => ({ projects: [] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
+        expect((await again()).accounts).toEqual([A.id]);
+        const reason = 'out of scope: project no longer at the connection\'s scopes';
+        expect(await reasons(s.store)).toEqual({ [APP]: ['pending-offboarding', reason], [MIG]: ['out-of-scope', reason] });
+      });
+
+      it('when the projects can\'t be listed: the project scanned again, its candidates unchanged', async () => {
+        const { s, again } = await scanned();
+        const before = await reasons(s.store);
+        s.deps.google = google(() => { throw new Error('quota exceeded'); }, { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
+        expect((await again()).accounts).toEqual([A.id, 'dev-project']);
+        expect(await reasons(s.store)).toEqual(before);
+      });
+    });
+
     it('selects a project by its labels as account tags', async () => {
       const s = setup({ cfg: config({ regions: ['eu-west-1', 'global'], filters: [filter('dev', [{ accountTags: { env: ['dev'] } }])] }) });
       await s.ready;
@@ -402,6 +473,24 @@ describe('lint from the accounts of a run', () => {
         expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toMatchObject({ ok: false, written: 0 });
         expect((await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort()).toEqual(before);
         expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ discovery: { ok: false, reason: expect.stringContaining(CONNECT) } });
+      });
+
+      // A revoked federation (the review's M4): the discovery account's token refused at STS or iamcredentials is a missing
+      // access, as the router calls and the access check read it, never a failure that keeps the last verdict.
+      it.each([
+        ['STS\'s invalid_grant', new GoogleError({ status: 400, reason: 'invalid_grant', message: 'The audience in ID Token does not match the expected audience.', host: 'sts.googleapis.com' })],
+        ['iamcredentials\' 404', new GoogleError({ status: 404, reason: 'NOT_FOUND', message: 'Not found; Gaia id not found for email d@x', host: 'iamcredentials.googleapis.com' })],
+      ])('a project whose discovery token is refused (%s) is missing its discovery with the connect command, its candidates kept', async (_, refused) => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        let fail: Error | null = null;
+        const plan = await stepOf(s, google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal(), fail: () => fail }));
+        const before = (await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort();
+        fail = refused;
+        s.advance(HOUR);
+        expect(await scanAccount(s.deps, { runId: plan.runId, account: 'dev-project' })).toMatchObject({ ok: false, written: 0 });
+        expect((await s.store.accountCandidates('dev-project')).map((c) => JSON.stringify(c)).sort()).toEqual(before);
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ discovery: { ok: false, reason: `GoogleError: ${refused.message}: ${CONNECT}` } });
       });
 
       it('a registry read that fails is no verdict: the last command verdict stands', async () => {

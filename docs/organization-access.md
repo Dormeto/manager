@@ -86,7 +86,12 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   candidate keeps the idle share it had (none if it never had one). A project whose Compute Engine is turned off has
   nothing to find; one that fails (a failed read, `projects.search` itself) is recorded in the run and no candidate of it
   becomes `gone`. A region Compute Engine answers unreachable fails where a candidate is stored or a candidate's backend
-  is, and is no error elsewhere (some regions answer so on every call). The AWS run is
+  is, and is no error elsewhere (some regions answer so on every call). A project that leaves the scopes has its
+  candidates `out-of-scope` (`project no longer at the connection's scopes`), a managed one `pending-offboarding`; a
+  managed backend service the scan no longer finds is `gone` (`managed backend service not found in the last scan:
+  offboard it`); a listing that fails keeps the projects and their candidates as they were. A refusal of the discovery
+  account's token (STS or IAM Credentials API: the federation or the account's grant gone) is a missing access, as for
+  the command account below. The AWS run is
   untouched. The Region filter takes `global`; Exclude offers the backend service, the URL map and the project.
 - **The Organization access panel** lists each project beside the AWS accounts, with its cloud mark: whether the
   discovery account could read it and, in a project that has a router, whether the command account holds what the manager
@@ -101,7 +106,10 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
 - **A router installed later**, in a project the command account does not reach yet, is reached after
   `dormeto gcp connect` is run again; `dormeto gcp install` changes nothing about the manager. Until then, a call to that
   router is refused with the command (`no_access`).
-- **After a disconnect,** the record is cleared and the manager's Google Cloud routers are unregistered. The disconnect
+- **After a disconnect,** the record is cleared and the manager's Google Cloud routers are unregistered. The next
+  discovery run lists the projects' candidates `out-of-scope` with the reason `the Google Cloud connection was removed`,
+  a managed one too: the manager can't offboard without the connection, and the workload stays on its router, run with
+  the CLI. The disconnect
   removes, under the two accounts' names, every binding at the recorded scopes and router projects and at the host, the
   two custom roles where connect defined them, the accounts, the provider and the pool; the APIs stay. It looks only
   at the scopes and the host: a project that has left the scopes keeps its `dormetoCommand` role, bound to nobody, after a

@@ -70,9 +70,13 @@ export function routerTooOld(version: string): boolean {
 const ok = (status: number) => status >= 200 && status <= 299;
 const denied = (status: number) => status === 401 || status === 403;
 // The connection broken at the token: STS refusing the provider (its pool or provider gone, its condition refusing the
-// role), iamcredentials refusing the impersonation (the grant revoked) or not knowing the account (deleted).
+// role), iamcredentials refusing the impersonation (the grant revoked) or not knowing the account (deleted). One rule for
+// the router calls, the access check and the discovery scan: a revoked federation is a missing access for each of them.
+// A refusal of any other host is a permission the account lacks there, not the connection.
+const TOKEN_HOSTS = new Set(['sts.googleapis.com', 'iamcredentials.googleapis.com']);
 const BROKEN_EXCHANGE = new Set(['invalid_grant', 'invalid_target', 'unauthorized_client']);
-const brokenConnection = (err: GoogleError) => denied(err.status) || err.status === 404 || (err.status === 400 && BROKEN_EXCHANGE.has(err.reason));
+export const brokenConnection = (err: unknown): err is GoogleError => err instanceof GoogleError && TOKEN_HOSTS.has(err.host)
+  && (denied(err.status) || err.status === 404 || (err.status === 400 && BROKEN_EXCHANGE.has(err.reason)));
 // What Google answered, in one line: its host, status, reason (when it gives one) and message cut to 200 characters.
 const googleSaid = (host: string, status: number, reason: string, message: string) =>
   `Google: ${[host, status, reason].filter((part) => part !== '').join(' ')}: ${redacted(message)}`;

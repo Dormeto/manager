@@ -1208,7 +1208,9 @@ export function createEngine(deps: EngineDeps) {
         return { done: false, waitSeconds: outcome.status === 'wait' ? outcome.seconds : 5 };
       }
       step.status = step.changed || outcome.status === 'done' ? 'done' : 'skipped';
+      // A step's detail is what it ended with: one ended without any keeps none of what it waited on ("wait awake: WAKING").
       if (outcome.detail) step.detail = outcome.detail;
+      else delete step.detail;
       step.finishedAt = iso(now());
       op.cursor += 1;
       if (op.cursor >= op.steps.length) {

@@ -3,14 +3,18 @@ import type { Operation, StepStatus } from './types';
 import { consoleLink } from './update';
 
 const tgName = (arn = '') => arn.split(':').at(-1)?.split('/')[1] ?? arn;
+// A Google Cloud onboarding's backend service, by the last part of its path (projects/<project>/<scope>/backendServices/<name>).
+const serviceName = (path: string) => path.split('/').at(-1) ?? path;
 const where = (op: Operation) => `${op.target.account}/${op.target.region}`;
 
 export function operationTitle(op: Operation): string {
   switch (op.type) {
-    // By the names people gave: the workload id is not for them (the router derives it from the target group).
+    // By the names people gave: the workload id is not for them (the router derives it from the target group, or the
+    // backend service on Google Cloud).
     case 'onboard': {
       const name = op.input.name ?? op.context?.name;
-      return `Onboard ${tgName(op.target.targetGroupArn)}${name ? ` as ${String(name)}` : ''}`;
+      const backend = op.target.backendService ? serviceName(op.target.backendService) : tgName(op.target.targetGroupArn);
+      return `Onboard ${backend}${name ? ` as ${String(name)}` : ''}`;
     }
     // The name the workflow read from the router (once located).
     case 'offboard': return `Offboard ${String(op.context?.name ?? op.target.workloadId)} from ${op.target.router}`;

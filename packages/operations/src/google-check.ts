@@ -3,7 +3,7 @@
 // `testIamPermissions` as the command account. A permission an answer does not list is missing. A refusal of the token
 // itself (STS's exchange through the federation, iamcredentials' impersonation through the account's grant) comes before
 // any permission is asked: the manager can't act as the command account at all.
-import { connectCommand, GoogleError, type GoogleConnection } from '@dormeto/google';
+import { brokenConnection, connectCommand, GoogleError, type GoogleConnection } from '@dormeto/google';
 
 // router gcp/access.json, manager.roles.dormetoCommand.permissions (what the CLI's connect grants on the project).
 export const COMMAND_PERMISSIONS = [
@@ -23,9 +23,9 @@ export type CheckAnswer = { ok: true } | { ok: false; name: string; message: str
 
 type Call = (method: string, url: string, body?: unknown) => Promise<any>;
 
-const TOKEN_HOSTS = new Set(['sts.googleapis.com', 'iamcredentials.googleapis.com']);
+// A permission the account lacks on a resource: Google's refusal of the call. A refusal of the token itself (the router calls'
+// rule, `brokenConnection`: STS's or iamcredentials' 401, 403 or 404, STS's exchange refused) is the connection's.
 const refused = (err: unknown): err is GoogleError => err instanceof GoogleError && (err.status === 403 || err.status === 404);
-const atToken = (err: unknown): err is GoogleError => refused(err) && TOKEN_HOSTS.has(err.host);
 
 // `call`: a Google API call as the command account; `connection`: the connection's record, null while there is none.
 export function checkProject({ call, connection, env }: { call: Call; connection(): Promise<GoogleConnection | null>; env: string }) {
@@ -39,7 +39,7 @@ export function checkProject({ call, connection, env }: { call: Call; connection
     // A refusal says it is missing; Google failing otherwise (a 5xx, a timeout) says nothing and is thrown, as a refusal of
     // the token is (said below).
     const refusal = <T>(read: Promise<T>, missing: T) => read.catch((err) => {
-      if (refused(err) && !atToken(err)) return missing;
+      if (refused(err) && !brokenConnection(err)) return missing;
       throw err;
     });
     const held = async (url: string, permissions: string[]) => {
@@ -60,7 +60,7 @@ export function checkProject({ call, connection, env }: { call: Call; connection
       if (typeof value?.name !== 'string') unreadable = true;
       else if ((await held(`https://cloudresourcemanager.googleapis.com/v3/${value.name}:testIamPermissions`, ['resourcemanager.tagValueBindings.create'])).length) missing.push(`resourcemanager.tagValueBindings.create on the tag value ${tag}`);
     } catch (err) {
-      if (!atToken(err)) throw err;
+      if (!brokenConnection(err)) throw err;
       const google = `Google: ${[err.host, err.status, err.reason].filter((part) => part !== '').join(' ')}`;
       return { ok: false, name: 'AccessDenied', message: `the manager can't act as the command account ${account}: the workload identity federation or the account's grant to the manager is missing (${google}): ${connect}` };
     }

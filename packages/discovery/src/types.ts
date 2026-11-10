@@ -66,6 +66,9 @@ export interface Account {
 export interface OrgInventory {
   accounts: Account[];
   ous: Record<string, { name: string; parent: string | null }>; // the root included, with parent null
+  // Whether the run read a Google Cloud connection (absent when it read none: no Google Cloud port, or the read failed and
+  // the last inventory said nothing): a project that left the inventory left the connection's scopes, or the connection.
+  google?: { connected: boolean };
 }
 
 // A listener rule of a candidate.

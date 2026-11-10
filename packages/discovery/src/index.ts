@@ -3,7 +3,7 @@ export { all, lbDimension, scanRegion, tgDimension, type Rule, type ScanPorts } 
 export { DEFAULT_CONFIG, defaultConfig, validateConfig } from './config.js';
 export { decide, describeCriterion, matches, matchesAccount, resourceTagsMatch, scanAccounts, targetPairs } from './filters.js';
 export { covers, lint } from './lint.js';
-export { computeStatus, nextCandidates, rescope, restatus } from './lifecycle.js';
+export { computeStatus, GOOGLE_DISCONNECTED, nextCandidates, rescope, restatus } from './lifecycle.js';
 export { activeExclusions, exclusionCriterion, withExclusions } from './exclusions.js';
 export { loadInventory, type OrganizationsPort } from './org.js';
 export { InvalidCursor, createStore, type DiscoveryStore, type DynamoSender, type StoredConfig } from './store.js';

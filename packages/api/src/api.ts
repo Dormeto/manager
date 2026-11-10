@@ -1742,12 +1742,13 @@ export function createApi({
         const router = routers.find((r) => r.name === w.router);
         return { ...w, ...lineOf(`${String(w.account ?? (router ? accountOfRouter(router) : ''))}#${String(w.region ?? router?.region ?? '')}#${String(w.workloadId)}`) };
       });
-      // A page's idle hours and requests over 7 days, from each workload's discovery candidate (one per target group, found
-      // by its ARN), and its time in each state over 7 days, from its history: when the Workloads view asks.
+      // A page's idle hours and requests over 7 days, from each workload's discovery candidate (its target group's, or its
+      // backend service's on Google Cloud), and its time in each state over 7 days, from its history: when the Workloads view asks.
       const page = q.limit && (q.idle === '1' || q.states === '1') ? await Promise.all(listed.map(async (w) => {
         const router = routers.find((r) => r.name === w.router);
+        const candidateId = q.idle === '1' ? candidateIdOf(w, String(w.account ?? (router ? accountOfRouter(router) : '')), String(w.region ?? router?.region ?? '')) : null;
         const [c, states] = await Promise.all([
-          q.idle === '1' && discovery && typeof w.targetGroupArn === 'string' ? discovery.store.getCandidate(w.targetGroupArn).catch(() => null) : null,
+          discovery && candidateId ? discovery.store.getCandidate(candidateId).catch(() => null) : null,
           q.states === '1' && router ? statesOf(String(w.account ?? accountOfRouter(router)), String(w.region ?? router.region), String(w.workloadId), w) : undefined,
         ]);
         return { ...w, ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}), ...states };
@@ -1874,9 +1875,10 @@ export function createApi({
           fleet ? fleet.getWorkload(accountOfRouter(router), router.region, id).catch(() => null) : null,
         ]);
         // The bar of its header, as on a Workloads row: its time in each state, and its idle hours from discovery.
+        const candidateId = summary ? candidateIdOf(summary, accountOfRouter(router), summary.region) : null;
         const [states, c] = await Promise.all([
           statesOf(accountOfRouter(router), router.region, id, summary),
-          discovery && typeof summary?.targetGroupArn === 'string' ? discovery.store.getCandidate(summary.targetGroupArn).catch(() => null) : null,
+          discovery && candidateId ? discovery.store.getCandidate(candidateId).catch(() => null) : null,
         ]);
         const access = withAccess(identity, (((await reportsNow()) ? summary : status) ?? {}) as object);
         const description = await descriptionOf({ kind: 'workload', account: accountOfRouter(router), region: router.region, id });
@@ -2255,6 +2257,12 @@ export function createApi({
     const key = googleKey(c);
     if (!key) return null;
     return (await rows()).find((w) => w.account === c.account && typeof w.backendService === 'string' && `${serviceScope(w)}#${w.backendService.split('/').at(-1)}` === key) ?? null;
+  }
+  // The other way, a workload's candidate (its idle share): AWS's is its target group, by its ARN; a Google Cloud one's is its
+  // backend service, by the path its row's name gives in the scope of its load balancer (the candidate's id).
+  function candidateIdOf(w: Record<string, unknown>, account: string, region: string): string | null {
+    if (cloudOf(account) !== 'gcp') return typeof w.targetGroupArn === 'string' ? w.targetGroupArn : null;
+    return typeof w.backendService === 'string' ? googleServicePath(account, 'backendServices', w.backendService, w.lb as WorkloadSummary['lb'], region) : null;
   }
   async function withWorkload(c: Candidate, rows: FleetRows = rowsOf()) {
     if (!c.workloadId) return c;

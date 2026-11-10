@@ -1,16 +1,27 @@
 // Candidate statuses (spec section 5): computed from the scope decision, the eligibility, a dismissal and absence from
 // the last successful scan; history of status changes; a failed pair changes nothing.
+import { cloudOf } from '@dormeto/fleet/clouds';
 import { decide } from './filters.js';
 import type { Account, Candidate, DiscoveryConfig, OrgInventory, PairResult, Status } from './types.js';
 
 const HISTORY = 20;
 
-type StatusInput = Pick<Candidate, 'scope' | 'scopeReason' | 'eligibility'> & Partial<Pick<Candidate, 'reason' | 'dismissed' | 'goneAt' | 'workloadId' | 'backend'>>;
+// A Google Cloud project out of the perimeter (the review's §6.4): the connection removed (`dormeto gcp disconnect`), or the
+// project no longer at the scopes of the connection still there.
+export const GOOGLE_DISCONNECTED = 'out of scope: the Google Cloud connection was removed';
+const GOOGLE_SCOPES_LEFT = 'out of scope: project no longer at the connection\'s scopes';
+
+type StatusInput = Pick<Candidate, 'scope' | 'scopeReason' | 'eligibility'> & Partial<Pick<Candidate, 'reason' | 'dismissed' | 'goneAt' | 'workloadId' | 'backend' | 'account' | 'cloud'>>;
+
+// A Google Cloud candidate, by its cloud, or by its project when an earlier build stored it without one.
+const onGoogle = (c: Pick<StatusInput, 'account' | 'cloud'>) => c.cloud === 'gcp' || (c.account !== undefined && cloudOf(c.account) === 'gcp');
 
 export function computeStatus(c: StatusInput): { status: Status; statusReason: string } {
   const managed = c.eligibility === 'managed';
-  if (c.goneAt) return { status: 'gone', statusReason: managed ? 'managed rule not found in the last scan: offboard it' : 'not found in the last scan' };
+  if (c.goneAt) return { status: 'gone', statusReason: managed ? `managed ${onGoogle(c) ? 'backend service' : 'rule'} not found in the last scan: offboard it` : 'not found in the last scan' };
   if (managed) {
+    // Without the Google Cloud connection the manager can't offboard: the workload stays on its router, run by the CLI.
+    if (c.scope === 'out' && c.scopeReason === GOOGLE_DISCONNECTED) return { status: 'out-of-scope', statusReason: c.scopeReason };
     if (c.scope !== 'in') return { status: 'pending-offboarding', statusReason: c.scopeReason };
     // A managed rule with an eligibility issue (its action or target group changed) waits for offboarding too.
     if (c.reason) return { status: 'pending-offboarding', statusReason: `ineligible: ${c.reason}` };
@@ -32,9 +43,11 @@ function settle(next: Omit<Candidate, 'status' | 'statusReason' | 'history'>, pr
   return { ...next, status, statusReason, history: changed ? [...history, { at, status, reason: statusReason }].slice(-HISTORY) : history };
 }
 
-// A candidate that no scan can reach any more: its account left the organization (or the account mode), or its region left
-// an explicit region list. Without this, it would keep its last status forever.
-function outsidePerimeter(c: Candidate, accounts: Map<string, Account>, config: DiscoveryConfig): { scope: 'out'; reason: string } | null {
+// A candidate that no scan can reach any more: its account left the organization (or the account mode), its project the
+// connection's scopes (or the connection was removed), or its region left an explicit region list. Without this, it would
+// keep its last status forever.
+function outsidePerimeter(c: Candidate, accounts: Map<string, Account>, config: DiscoveryConfig, inventory: OrgInventory): { scope: 'out'; reason: string } | null {
+  if (!accounts.has(c.account) && onGoogle(c)) return { scope: 'out', reason: inventory.google?.connected === false ? GOOGLE_DISCONNECTED : GOOGLE_SCOPES_LEFT };
   if (!accounts.has(c.account)) return { scope: 'out', reason: `out of scope: ${config.mode === 'account' ? 'not the account of the account mode' : 'account no longer in the organization'}` };
   if (!config.regions.includes('*') && !config.regions.includes(c.region)) return { scope: 'out', reason: `out of scope: region ${c.region} is no longer in the perimeter` };
   return null;
@@ -89,7 +102,7 @@ export function nextCandidates({ previous, results, inventory, config, now }: {
     } else if (!attempted.has(key)) {
       // Not scanned at all (perimeter change): decide again from what the last scan saw.
       const account = accountOf(prev.account, prev);
-      const decision = outsidePerimeter(prev, accounts, config) ?? decide(config, account, prev, inventory);
+      const decision = outsidePerimeter(prev, accounts, config, inventory) ?? decide(config, account, prev, inventory);
       const { status: _s, statusReason: _r, history: _h, ...rest } = prev;
       const next = settle({ ...rest, scope: decision.scope, scopeReason: decision.reason }, prev, at);
       if (differs(next, prev)) out.push(next);
@@ -105,7 +118,7 @@ export function rescope(candidates: Candidate[], config: DiscoveryConfig, invent
   const accounts = new Map(inventory.accounts.map((a) => [a.id, a]));
   return candidates.flatMap((c) => {
     const account = accounts.get(c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
-    const decision = outsidePerimeter(c, accounts, config) ?? decide(config, account, c, inventory);
+    const decision = outsidePerimeter(c, accounts, config, inventory) ?? decide(config, account, c, inventory);
     const { status: _s, statusReason: _r, history: _h, ...rest } = c;
     const next = settle({ ...rest, scope: decision.scope, scopeReason: decision.reason }, c, at);
     return differs(next, c) ? [next] : [];

@@ -101,6 +101,36 @@ describe('workloads and routers from the summaries', () => {
     expect(s.asked).toEqual(['arn:tg/a', 'arn:tg/b']);
   });
 
+  // The review's M8: a Google Cloud workload's candidate is its backend service, by its path (the candidate's id), which its
+  // row names by name in the scope of its load balancer, as AWS's is its target group by its ARN.
+  it('gives a Google Cloud workload its idle hours and requests over 7 days from its backend service\'s candidate, on a page and in its header', async () => {
+    const PROJECT = 'dormeto-dev';
+    const google = { name: 'dmtr-dormeto-dev-europe-west2', region: 'europe-west2', controller: 'c4', account: PROJECT, cloud: 'gcp' } as Router;
+    const row = (id: string, over: Record<string, unknown>) => {
+      const { targetGroupArn: _t, ...w } = workloadSummary('europe-west2', 'dmtr-europe-west2', id, 'ASLEEP', { account: PROJECT, ...over });
+      return w as ReturnType<typeof workloadSummary>;
+    };
+    const s = setup({
+      routers: [ROUTERS[0]!, google],
+      summaries: [routerSummary('eu-west-1', 'dmt-dev'), routerSummary('europe-west2', 'dmtr-europe-west2', { account: PROJECT })],
+      workloads: [
+        workloadSummary('eu-west-1', 'dmt-dev', 'a', 'AWAKE'),
+        // A global load balancer's backend service, and a regional one's (its scope the load balancer's region).
+        row('g', { backendService: 'dmt-demo-app', wakerBackendService: 'dmtr-europe-west2-waker', urlMap: 'dmt-demo-lb', lb: { kind: 'global' } }),
+        row('r', { backendService: 'dmt-demo-internal-app', wakerBackendService: 'dmtr-europe-west2-waker', urlMap: 'dmt-dev-internal', lb: { kind: 'internal', region: 'europe-west2' } }),
+      ],
+      candidates: {
+        'arn:tg/a': { idleHours7d: 150, requests7d: 12 },
+        [`projects/${PROJECT}/global/backendServices/dmt-demo-app`]: { idleHours7d: 140, requests7d: 30 },
+        [`projects/${PROJECT}/regions/europe-west2/backendServices/dmt-demo-internal-app`]: { idleHours7d: 90, requests7d: 4 },
+      },
+    });
+    const page = json(await s.api(event('/api/workloads', { limit: '25', idle: '1' }))).workloads;
+    expect(page.map((w: Record<string, unknown>) => [w.workloadId, w.idleHours7d ?? 'none', w.requests7d ?? 'none'])).toEqual([['a', 150, 12], ['g', 140, 30], ['r', 90, 4]]);
+    const header = json(await s.api(event(`/api/workloads/${google.name}/g`)));
+    expect([header.idleHours7d, header.requests7d, header.cloud]).toEqual([140, 30, 'gcp']);
+  });
+
   it('calls a router that does not report (no summary, or one older than 3 periods), and only that one', async () => {
     const s = setup({ summaries: [routerSummary('eu-west-1', 'dmt-dev'), routerSummary('eu-west-3', 'dmtr-dev', { checkedAt: '2026-10-05T11:00:00.000Z' })] });
     const workloads = json(await s.api(event('/api/workloads'))).workloads;

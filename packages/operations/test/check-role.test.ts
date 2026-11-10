@@ -108,6 +108,23 @@ describe('command role check', () => {
       expect(calls).toHaveLength(1);
     });
 
+    // A revoked federation: STS refuses the exchange with a 400 (the pool or provider gone, its condition refusing the role),
+    // as the router calls read it: missing access, never a failure that keeps the last verdict.
+    it.each(['invalid_grant', 'invalid_target', 'unauthorized_client'])('says the manager can\'t act as the command account when STS answers %s', async (reason) => {
+      const call = async () => { throw new GoogleError({ status: 400, reason, host: 'sts.googleapis.com', message: 'The audience in ID Token does not match the expected audience.' }); };
+      expect(await checkProject({ call, connection: async () => connection, env: 'dev' })(project, [controller])).toEqual({
+        ok: false, name: 'AccessDenied',
+        message: `the manager can't act as the command account dmt-dev-command@host-project.iam.gserviceaccount.com: the workload identity federation or the account's grant to the manager is missing (Google: sts.googleapis.com 400 ${reason}): dormeto gcp connect --project host-project --profile <profile> --env dev`,
+      });
+    });
+
+    it('lets STS\'s other 400s and its failures through as errors: no verdict', async () => {
+      for (const [status, reason] of [[400, 'invalid_request'], [503, '']] as const) {
+        const call = async () => { throw new GoogleError({ status, reason, host: 'sts.googleapis.com', message: 'try later' }); };
+        await expect(checkProject({ call, connection: async () => connection, env: 'dev' })(project, [controller])).rejects.toThrow('try later');
+      }
+    });
+
     it('checks nothing for a project without a router, and says so without a connection', async () => {
       const g = google({ invoke: false, tag: 'unreadable' });
       expect(await g.check(project, [])).toEqual({ ok: true });

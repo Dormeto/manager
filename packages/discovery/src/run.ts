@@ -6,7 +6,7 @@ import { defaultConfig } from './config.js';
 import { withExclusions } from './exclusions.js';
 import { isProject } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/fleet/registry';
-import { connectCommand, GoogleError, type GoogleConnection } from '@dormeto/google';
+import { brokenConnection, connectCommand, GoogleError, type GoogleConnection } from '@dormeto/google';
 import { scanProject, type ProjectScan } from './gcp-scan.js';
 import { discoverGoogleRouters, listProjects, type GooglePort, type GoogleSummary } from './google.js';
 import { scanAccounts, targetPairs } from './filters.js';
@@ -103,7 +103,9 @@ async function currentConfig(deps: RunDeps, now: () => number): Promise<Discover
 }
 
 // The inventory: AWS's accounts, and with a Google Cloud connection its projects (both modes). A listing that fails keeps
-// the last inventory's projects, planned again with their candidates kept, and says why.
+// the last inventory's projects, planned again with their candidates kept, and says why. Whether it read a connection
+// (`google.connected`) tells a project's candidates why it left: the connection removed, or the project out of its scopes;
+// a connection that can't be read keeps the last inventory's word.
 async function inventoryOf(deps: RunDeps, config: DiscoveryConfig): Promise<{ inventory: OrgInventory; googleErrors: GoogleSummary['errors'] }> {
   let inventory = config.mode === 'organization'
     ? await loadInventory(requireOrganizations(deps), { tags: usesAccountTags(config) })
@@ -114,16 +116,21 @@ async function inventoryOf(deps: RunDeps, config: DiscoveryConfig): Promise<{ in
   }
   const googleErrors: GoogleSummary['errors'] = [];
   if (deps.google) {
+    let google: OrgInventory['google'];
     try {
       const connection = await deps.google.connection();
+      google = { connected: connection !== null };
       if (connection) inventory = { ...inventory, accounts: [...inventory.accounts, ...await listProjects(deps.google, connection)] };
     } catch (err) {
       const message = (err instanceof Error ? err.message : String(err)).slice(0, 300);
       googleErrors.push({ project: '*', error: message });
       (deps.log ?? silent).warn('GoogleProjectsFailed', { error: message });
-      const before = (await deps.store.getInventory())?.accounts.filter((a) => isProject(a.id)) ?? [];
+      const last = await deps.store.getInventory();
+      const before = last?.accounts.filter((a) => isProject(a.id)) ?? [];
       inventory = { ...inventory, accounts: [...inventory.accounts, ...before] };
+      google ??= last?.google;
     }
+    if (google) inventory = { ...inventory, google };
   }
   return { inventory, googleErrors };
 }
@@ -462,7 +469,8 @@ async function projectAccess(deps: RunDeps, { account, at, state, connection, ro
   const last = state?.access;
   if (!connection) return last;
   const connect = connectCommand(connection.project, deps.google?.env ?? 'dev');
-  const refused = cause instanceof GoogleError && cause.status === 403;
+  // Google refusing a list, or the discovery account's token (the router calls' rule: a revoked federation is missing access).
+  const refused = (cause instanceof GoogleError && cause.status === 403) || brokenConnection(cause);
   const discovery: AccessState | undefined = scanned ? { ok: true } : refused ? { ok: false, reason: `${errorText(cause)}: ${connect}` } : last?.discovery;
   let command: AccessState | undefined;
   // A registry that was not read says nothing of the routers: no verdict.
