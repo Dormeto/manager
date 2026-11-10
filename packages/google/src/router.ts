@@ -6,13 +6,14 @@
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
 // The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
 // health (GET /v1/health, which every router version answers), the same way.
-import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
 import { errorOf, GoogleError, redacted } from './errors.js';
 import type { Bounds } from './fetch.js';
 import type { Google, GoogleConnection } from './google.js';
 
 // The router version the manager needs (/v1/actions, the journal, the check summary).
-export const ROUTER_MINIMUM = GOOGLE_ROUTER_MINIMUM;
+// Declared again as GOOGLE_ROUTER_MINIMUM in @dormeto/fleet/clouds (the dashboard reads that one; fleet depends on this
+// package, never the reverse): packages/fleet/test/router-minimum.test.ts pins the two equal.
+export const ROUTER_MINIMUM = '0.40.0';
 
 // A call's refusal: the manager's accounts can't reach the router, or the router has no /v1/actions.
 export type RouterRefusal = 'no_access' | 'router_too_old';

@@ -55,8 +55,8 @@ export interface RouterPoll {
 const OLD_REFUSALS: Record<string, Refusal> = { 'manager-access-missing': 'no_access', 'router-too-old': 'router_too_old', 'router-unknown': 'router_unknown' };
 function pollRead(json: string): RouterPoll {
   const poll = JSON.parse(json) as RouterPoll;
-  const now = poll.lastRefusal && OLD_REFUSALS[poll.lastRefusal];
-  return now ? { ...poll, lastRefusal: now } : poll;
+  const renamed = poll.lastRefusal && OLD_REFUSALS[poll.lastRefusal];
+  return renamed ? { ...poll, lastRefusal: renamed } : poll;
 }
 
 export interface WorkloadSummary {

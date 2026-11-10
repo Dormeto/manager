@@ -3,7 +3,8 @@
 export type Cloud = 'aws' | 'gcp';
 
 // The router version the manager needs on Google Cloud (/v1/actions, the journal, the check summary): the manager's calls and
-// the dashboard's Routers view both read this floor.
+// the dashboard's Routers view both read this floor. Declared again as ROUTER_MINIMUM in @dormeto/google (which can't import
+// this package): packages/fleet/test/router-minimum.test.ts pins the two equal.
 export const GOOGLE_ROUTER_MINIMUM = '0.40.0';
 
 const ACCOUNT = /^\d{12}$/;

@@ -134,7 +134,7 @@ export interface DiscoveryApi {
 
 // A router answered with an error (function error, unknown workload): 502 for the caller. A refusal of a router 0.37.0
 // or later has its code (vision refusals design §1): invalid, not_found, conflict or unsupported. A Google Cloud router
-// the manager can't use is a 502 with its own code (Google Cloud manager design §6.2): the manager's accounts can't reach
+// the manager can't use is a 409 with its own code (Google Cloud manager design §6.2): the manager's accounts can't reach
 // it, it predates /v1/actions, or discovery hasn't found its controller yet.
 export type RefusalCode = 'invalid' | 'not_found' | 'conflict' | 'unsupported';
 export type CallRefusal = Refusal;

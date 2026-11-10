@@ -2,8 +2,7 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // bounded; Google's refusal of the token is the refusal no_access, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
-import { accessMissingText, actOnRouter, callRouter, createGoogle, installCommand, RouterCallError, routerHealth, ROUTER_MINIMUM, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
+import { accessMissingText, actOnRouter, callRouter, createGoogle, installCommand, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
 const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
@@ -370,11 +369,5 @@ describe('actOnRouter', () => {
   it('throws any other failure as it is, without a refusal', async () => {
     const err = await failing(actOnRouter({ connection, google: fakeGoogle(() => json(500, { error: 'boom' })).google }, router, { action: 'status' }, opts));
     expect([err.message, err.refusal]).toEqual(['boom', undefined]);
-  });
-});
-
-describe('the router floor', () => {
-  it('is the one constant the dashboard reads too', () => {
-    expect([ROUTER_MINIMUM, GOOGLE_ROUTER_MINIMUM]).toEqual(['0.40.0', '0.40.0']);
   });
 });

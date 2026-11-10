@@ -12,7 +12,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dormeto/fleet": "*",
     "@smithy/signature-v4": "^5.7.4"
   },
   "devDependencies": {
