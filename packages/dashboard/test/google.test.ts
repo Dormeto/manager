@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { backendConsoleUrl, controllerConsoleUrl, googleResourcePath, installCommand, resourceName, uninstallCommand, urlMapConsoleUrl } from '../src/google';
+import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
+import { backendConsoleUrl, googleRouterTooOld, controllerConsoleUrl, googleResourcePath, installCommand, resourceName, uninstallCommand, urlMapConsoleUrl } from '../src/google';
 
 describe('Google Cloud console links and commands', () => {
   it('links a VM, a managed group and a Cloud SQL instance from their resource paths, with the project', () => {
@@ -54,5 +55,18 @@ describe('a Google Cloud resource\'s path from a workload\'s row', () => {
 
   it('keeps a path it is given', () => {
     expect(googleResourcePath('dormeto-dev', 'urlMaps', 'projects/dormeto-dev/global/urlMaps/lb', { kind: 'global' }, 'global')).toBe('projects/dormeto-dev/global/urlMaps/lb');
+  });
+});
+
+describe('a Google Cloud router too old', () => {
+  it('is one below the floor the manager keeps, by major.minor.patch, or one the API refused as router_too_old', () => {
+    const [major, minor, patch] = GOOGLE_ROUTER_MINIMUM.split('.').map(Number) as [number, number, number];
+    expect(googleRouterTooOld({ version: `${major}.${minor - 1}.${patch + 9}` })).toBe(true);
+    expect(googleRouterTooOld({ version: GOOGLE_ROUTER_MINIMUM })).toBe(false);
+    expect(googleRouterTooOld({ version: `${GOOGLE_ROUTER_MINIMUM}-dev.1` })).toBe(false);
+    expect(googleRouterTooOld({ version: `${major}.${minor}.${patch + 1}` })).toBe(false);
+    expect(googleRouterTooOld({ version: null })).toBe(false);
+    expect(googleRouterTooOld({ version: null, refusal: 'router_too_old' })).toBe(true);
+    expect(googleRouterTooOld({ version: `${major}.${minor}.${patch + 1}`, refusal: 'router_unknown' })).toBe(false);
   });
 });

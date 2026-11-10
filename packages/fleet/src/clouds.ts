@@ -2,6 +2,10 @@
 // every key keeps its shape and the cloud is read from the account, never stored. The patterns of both clouds live here.
 export type Cloud = 'aws' | 'gcp';
 
+// The router version the manager needs on Google Cloud (/v1/actions, the journal, the check summary): the manager's calls and
+// the dashboard's Routers view both read this floor.
+export const GOOGLE_ROUTER_MINIMUM = '0.40.0';
+
 const ACCOUNT = /^\d{12}$/;
 // A project ID: 6 to 30 characters, lowercase letters, digits and hyphens, starting with a letter, not ending with a hyphen.
 const PROJECT = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;

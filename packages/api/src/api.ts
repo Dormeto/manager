@@ -2714,7 +2714,7 @@ export function createApi({
     const where = c.region === 'global' ? `project ${c.account}` : `project ${c.account}, region ${c.region}`;
     if (!router) throw new HttpError(400, 'bad_request', `no router in ${where}: ${installCommand(c.account, c.region === 'global' ? '<region>' : c.region, routerVersion)}`);
     const version = router.installed?.version ?? '';
-    if (routerTooOld(version)) throw new HttpError(409, 'router-too-old', tooOldText(version, c.account, router.region, routerVersion));
+    if (routerTooOld(version)) throw new HttpError(409, 'router_too_old', tooOldText(version, c.account, router.region, routerVersion));
     return router;
   }
 
@@ -2776,7 +2776,7 @@ export function createApi({
     } catch (err) {
       if (err instanceof HttpError) return reply(err.statusCode, { error: err.code, message: err.message });
       if (err instanceof RouterError) {
-        const [status, code] = (err.code && REFUSALS[err.code]) || [502, err.refusal ?? 'router_error'];
+        const [status, code] = (err.code && REFUSALS[err.code]) || (err.refusal ? [409, err.refusal] : [502, 'router_error']);
         return reply(status, { error: code, message: err.message });
       }
       console.error(JSON.stringify({ level: 'error', event: 'ApiError', error: (err as Error).message }));

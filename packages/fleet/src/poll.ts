@@ -70,8 +70,8 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
 
   // What a step could not do, with the command that fixes a refusal, as the API says it.
   const textOf = (err: unknown, router: InstalledRouter, run: Run) => {
-    if (err instanceof RouterCallError && err.refusal === 'manager-access-missing') return accessMissingText(run.connection.project, env, err.said);
-    if (err instanceof RouterCallError && err.refusal === 'router-too-old') return tooOldText('', router.account, router.region, routerVersion);
+    if (err instanceof RouterCallError && err.refusal === 'no_access') return accessMissingText(run.connection.project, env, err.said);
+    if (err instanceof RouterCallError && err.refusal === 'router_too_old') return tooOldText('', router.account, router.region, routerVersion);
     return err instanceof Error ? err.message : String(err);
   };
 
@@ -158,7 +158,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
       }
     } catch (err) {
       if (gone) poll.misses += 1;
-      if (err instanceof RouterCallError && err.refusal === 'router-too-old') poll.tooOld = router.version;
+      if (err instanceof RouterCallError && err.refusal === 'router_too_old') poll.tooOld = router.version;
       if (err instanceof RouterCallError && err.refusal) poll.lastRefusal = err.refusal;
       poll.lastError = `${step}: ${textOf(err, router, run)}`;
       log?.warn('RouterPollFailed', { router: router.name, account: router.account, region: router.region, step, error: poll.lastError });
@@ -199,7 +199,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
         }
       }
       if (routerTooOld(version) || poll.tooOld === version) {
-        poll.lastRefusal = 'router-too-old';
+        poll.lastRefusal = 'router_too_old';
         poll.lastError = `version: ${tooOldText(version, router.account, router.region, routerVersion)}`;
       }
     } catch (err) {
@@ -223,11 +223,11 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     const known = new Map((await store.routerPolls()).map((p) => [keyOf(p), p]));
     const pollOf = (r: InstalledRouter) => known.get(keyOf(r))?.poll ?? null;
     // A router whose controller discovery hasn't found yet can't be called: its poll says so, once.
-    for (const router of registered.filter((r) => !r.controller && pollOf(r)?.lastRefusal !== 'router-unknown')) {
+    for (const router of registered.filter((r) => !r.controller && pollOf(r)?.lastRefusal !== 'router_unknown')) {
       const was = pollOf(router);
       await store.putPoll(router.account, router.region, {
         newestAt: was?.newestAt ?? null, misses: was?.misses ?? 0, polledAt: was?.polledAt ?? new Date(now()).toISOString(),
-        lastRefusal: 'router-unknown', lastError: `controller: ${controllerUnknownText(current.connection.project, env)}`,
+        lastRefusal: 'router_unknown', lastError: `controller: ${controllerUnknownText(current.connection.project, env)}`,
       });
     }
     // Too old to poll: a known version below 0.40.0, or the one it had when it answered it has no /v1/actions.

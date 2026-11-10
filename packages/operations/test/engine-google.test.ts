@@ -233,7 +233,7 @@ describe('onboarding a Google Cloud candidate', () => {
 
   it('a refusal of the manager\'s own (no router acted) removes the bindings too, naming one it could not remove', async () => {
     const s = setup({ failUnbind: [REGIONAL.parent] });
-    s.answers.onboard = () => { throw Object.assign(new Error('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev'), { code: 'manager-access-missing' }); };
+    s.answers.onboard = () => { throw Object.assign(new Error('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev'), { code: 'no_access' }); };
     const op = await s.engine.create('onboard', INPUT, 'ops@example.com');
     await s.drive(op.id);
     const stored = (await s.records.getOperation(op.id))!;

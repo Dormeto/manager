@@ -51,6 +51,14 @@ export interface RouterPoll {
   versionAt?: string; // when its version was last read from its health (a router too old to poll: every 10 minutes)
 }
 
+// What an earlier build stored as a poll's refusal: its codes in kebab-case, read as the snake_case ones.
+const OLD_REFUSALS: Record<string, Refusal> = { 'manager-access-missing': 'no_access', 'router-too-old': 'router_too_old', 'router-unknown': 'router_unknown' };
+function pollRead(json: string): RouterPoll {
+  const poll = JSON.parse(json) as RouterPoll;
+  const now = poll.lastRefusal && OLD_REFUSALS[poll.lastRefusal];
+  return now ? { ...poll, lastRefusal: now } : poll;
+}
+
 export interface WorkloadSummary {
   account: string;
   region: string;
@@ -230,7 +238,7 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
     async routerPolls(): Promise<{ account: string; region: string; checkedAt: string | null; poll: RouterPoll | null }[]> {
       return (await query('RS#')).map((item) => {
         const [account = '', region = ''] = item.sk!.S!.slice('RS#'.length).split('#');
-        return { account, region, checkedAt: data<RouterSummary>(item)?.checkedAt ?? null, poll: item.poll?.S ? (JSON.parse(item.poll.S) as RouterPoll) : null };
+        return { account, region, checkedAt: data<RouterSummary>(item)?.checkedAt ?? null, poll: item.poll?.S ? pollRead(item.poll.S) : null };
       });
     },
     async getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null> {

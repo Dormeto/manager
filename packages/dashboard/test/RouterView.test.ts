@@ -495,7 +495,7 @@ describe('a Google Cloud router', () => {
   // The API lists a router it can't call with its refusal: too old, its version known (registered) or not.
   it('gives the install command with the pinned version for a router too old whose version is unknown', async () => {
     googleRouter = {
-      name: GCP, cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', reporting: false, refusal: 'router-too-old',
+      name: GCP, cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', reporting: false, refusal: 'router_too_old',
       error: `router older than 0.40.0 can't report to the manager: ${GCP_COMMAND}`,
     };
     try {

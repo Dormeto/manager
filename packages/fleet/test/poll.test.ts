@@ -423,7 +423,7 @@ describe('the poll of Google Cloud routers', () => {
     r.version = '0.39.0';
     await w.poll();
     expect(await w.pollOf('europe-west2')).toEqual({
-      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', lastRefusal: 'router-too-old',
+      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', lastRefusal: 'router_too_old',
       lastError: 'events: router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Not called again: its version is read from its health instead, and kept in the registry.
@@ -432,7 +432,7 @@ describe('the poll of Google Cloud routers', () => {
     expect([r.calls.length, r.healthReads]).toEqual([1, 1]);
     expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
     expect(await w.pollOf('europe-west2')).toEqual({
-      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', versionAt: iso(T0 + 60 * S), lastRefusal: 'router-too-old',
+      newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', versionAt: iso(T0 + 60 * S), lastRefusal: 'router_too_old',
       lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Upgraded: discovery reads its new version.
@@ -552,7 +552,7 @@ describe('the poll of Google Cloud routers', () => {
     r.answer = () => ({ status: 403, text: '<html><title>403 Forbidden</title></html>' });
     await w.poll();
     expect(await w.pollOf('europe-west2')).toEqual({
-      newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'manager-access-missing',
+      newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'no_access',
       lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-dormeto-dev.europe-west2.run.app 403: 403 Forbidden)',
     });
     r.answer = undefined;
@@ -561,13 +561,29 @@ describe('the poll of Google Cloud routers', () => {
     expect(await w.pollOf('europe-west2')).toEqual({ newestAt: null, misses: 0, polledAt: iso(T0 + 60 * S) });
   });
 
-  it('records router-unknown once for a registered router whose controller discovery hasn\'t found yet, without calling it', async () => {
+  // A poll written by an earlier build holds the refusal in its old spelling.
+  it('reads a stored refusal in its old spelling as the new one, and does not poll again a router whose controller is unknown', async () => {
+    const w = world();
+    const r = await w.add('europe-west2', { controller: '' });
+    const old = { newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'router-unknown', lastError: 'controller: x' };
+    await w.store.putPoll(PROJECT, 'europe-west2', old as never);
+    expect((await w.pollOf('europe-west2'))!.lastRefusal).toBe('router_unknown');
+    await w.store.putPoll(PROJECT, 'europe-west2', { ...old, lastRefusal: 'manager-access-missing' } as never);
+    expect((await w.pollOf('europe-west2'))!.lastRefusal).toBe('no_access');
+    await w.store.putPoll(PROJECT, 'europe-west2', { ...old, lastRefusal: 'router-too-old' } as never);
+    expect((await w.pollOf('europe-west2'))!.lastRefusal).toBe('router_too_old');
+    await w.store.putPoll(PROJECT, 'europe-west2', old as never);
+    await w.poll();
+    expect([r.calls.length, (await w.pollOf('europe-west2'))!.polledAt]).toEqual([0, iso(T0)]);
+  });
+
+  it('records router_unknown once for a registered router whose controller discovery hasn\'t found yet, without calling it', async () => {
     const w = world();
     const r = await w.add('europe-west2', { controller: '' });
     await w.poll();
     expect([r.calls.length, r.healthReads]).toEqual([0, 0]);
     expect(await w.pollOf('europe-west2')).toEqual({
-      newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'router-unknown',
+      newestAt: null, misses: 0, polledAt: iso(T0), lastRefusal: 'router_unknown',
       lastError: 'controller: discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again',
     });
     w.clock.t += 60 * S;

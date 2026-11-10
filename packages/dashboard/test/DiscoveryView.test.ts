@@ -242,7 +242,7 @@ describe('Discovery view, onboarding a Google Cloud candidate', () => {
     server.routers = [
       { name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', version: '0.39.0' },
       { name: 'dmtr-dormeto-dev-us-east1', cloud: 'gcp', account: 'dormeto-dev', region: 'us-east1', version: '0.40.0-dev.1' },
-      { name: 'dmtr-dormeto-dev-us-west1', cloud: 'gcp', account: 'dormeto-dev', region: 'us-west1', version: null, refusal: 'router-too-old' },
+      { name: 'dmtr-dormeto-dev-us-west1', cloud: 'gcp', account: 'dormeto-dev', region: 'us-west1', version: null, refusal: 'router_too_old' },
     ];
     const wrapper = await open();
     const dialog = wrapper.findComponent(OnboardDialog);

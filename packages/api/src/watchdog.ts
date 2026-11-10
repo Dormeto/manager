@@ -120,7 +120,7 @@ export function routerObservations({ terraformRouters, installed, summaries, man
     // with the command that fixes it (its last error, after the step), instead of silent.
     const refused = cloud === 'gcp' ? polls.find((p) => p.account === account && p.region === router.region)?.poll : null;
     if (refused?.lastRefusal && refused.lastError) {
-      observations.push({ subject, problems: [{ code: refused.lastRefusal, level: 'error', text: refused.lastError.replace(/^[a-z-]+: /, ''), hint: 'The manager\'s poll of the router is refused: once the command has run, the next poll (every minute) reads it again.' }] });
+      observations.push({ subject, problems: [{ code: refused.lastRefusal.replace(/_/g, '-'), level: 'error', text: refused.lastError.replace(/^[a-z-]+: /, ''), hint: 'The manager\'s poll of the router is refused: once the command has run, the next poll (every minute) reads it again.' }] });
       continue;
     }
     const hint = cloud === 'gcp' ? gcpSilentHint(router.region) : AWS_SILENT_HINT;

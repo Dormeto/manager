@@ -302,7 +302,7 @@ describe('onboarding on Google Cloud', () => {
     expect(two.created).toHaveLength(1);
   });
 
-  it('a project without a router there answers 400 with the command that installs one; a router before 0.40.0, 409 with the router-too-old text', async () => {
+  it('a project without a router there answers 400 with the command that installs one; a router before 0.40.0, 409 with the router_too_old text', async () => {
     const none = await googleSetup({ installed: [] });
     const global = await none.api(onboard({ candidateId: SERVICE }));
     expect([global.statusCode, json(global)]).toEqual([400, { error: 'bad_request', message: `no router in project ${PROJECT}: dormeto gcp install --project ${PROJECT} --region <region> --version 0.40.0` }]);
@@ -311,7 +311,7 @@ describe('onboarding on Google Cloud', () => {
     expect([regional.statusCode, json(regional).message]).toEqual([400, `no router in project ${PROJECT}, region europe-west2: dormeto gcp install --project ${PROJECT} --region europe-west2 --version 0.40.0`]);
     const old = await googleSetup({ installed: [registered('europe-west2', '0.39.2')] });
     const tooOld = await old.api(onboard({ candidateId: INTERNAL }));
-    expect([tooOld.statusCode, json(tooOld)]).toEqual([409, { error: 'router-too-old', message: `router 0.39.2 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west2 --version 0.40.0` }]);
+    expect([tooOld.statusCode, json(tooOld)]).toEqual([409, { error: 'router_too_old', message: `router 0.39.2 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west2 --version 0.40.0` }]);
     expect([...none.created, ...other.created, ...old.created, ...none.reads, ...other.reads, ...old.reads]).toEqual([]);
   });
 

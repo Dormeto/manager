@@ -285,7 +285,7 @@ export interface RouterInfo {
   workloads?: number;
   error?: string;
   // A Google Cloud router the manager can't use (manager 0.24.0): why, as the API refused the call; its error says the command.
-  refusal?: 'manager-access-missing' | 'router-too-old' | 'router-unknown';
+  refusal?: 'no_access' | 'router_too_old' | 'router_unknown';
   checkSchedule?: string | null;
   lastScheduledCheckAt?: string | null;
   health?: { status: 'ok' | 'warning' | 'error'; problems: Problem[] };

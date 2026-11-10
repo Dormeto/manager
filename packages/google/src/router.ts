@@ -6,18 +6,19 @@
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
 // The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
 // health (GET /v1/health, which every router version answers), the same way.
+import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
 import { errorOf, GoogleError, redacted } from './errors.js';
 import type { Bounds } from './fetch.js';
 import type { Google, GoogleConnection } from './google.js';
 
 // The router version the manager needs (/v1/actions, the journal, the check summary).
-export const ROUTER_MINIMUM = '0.40.0';
+export const ROUTER_MINIMUM = GOOGLE_ROUTER_MINIMUM;
 
 // A call's refusal: the manager's accounts can't reach the router, or the router has no /v1/actions.
-export type RouterRefusal = 'manager-access-missing' | 'router-too-old';
+export type RouterRefusal = 'no_access' | 'router_too_old';
 // What the manager can't do with a Google Cloud router, a call's refusal or, before any call, a controller discovery
-// hasn't found yet: the API answers each as a 502, the poll records it, the watchdog says it.
-export type Refusal = RouterRefusal | 'router-unknown';
+// hasn't found yet: the API answers each as a 409, the poll records it, the watchdog says it.
+export type Refusal = RouterRefusal | 'router_unknown';
 
 // The commands that fix what the manager can't do on Google Cloud, as the API answers them and the fleet's poll records
 // them. The operator's AWS profile is theirs to fill in.
@@ -91,7 +92,7 @@ async function replyOf(google: Pick<Google, 'request'>, origin: string, method: 
     // request answers whatever the controller URL answers, so a GoogleError with a status is the ID token's (STS or
     // iamcredentials); one without is no answer at all, from either. The bound's own error goes as it is.
     if (err instanceof GoogleError && err.status !== 0) {
-      throw new RouterCallError(err.message, { status: err.status, token: true, said: googleSaid(err.host, err.status, err.reason, err.message), ...(brokenConnection(err) ? { refusal: 'manager-access-missing' as const } : {}) });
+      throw new RouterCallError(err.message, { status: err.status, token: true, said: googleSaid(err.host, err.status, err.reason, err.message), ...(brokenConnection(err) ? { refusal: 'no_access' as const } : {}) });
     }
     if (err instanceof GoogleError) throw new RouterCallError(err.message);
     throw err;
@@ -118,7 +119,7 @@ function googleFailure({ host, status, body, json, text }: Reply): RouterCallErr
   const message = ok(status) ? `${host} answered something other than JSON`
     : json ? String((body as { error: { message?: unknown } }).error.message ?? `${host} answered HTTP ${status}`) : `${host} answered HTTP ${status}`;
   const said = errorOf(status, text);
-  return new RouterCallError(message, { status, google: true, said: googleSaid(host, status, said.reason, said.message), ...(denied(status) ? { refusal: 'manager-access-missing' as const } : {}) });
+  return new RouterCallError(message, { status, google: true, said: googleSaid(host, status, said.reason, said.message), ...(denied(status) ? { refusal: 'no_access' as const } : {}) });
 }
 
 async function answerOf(google: Pick<Google, 'request'>, origin: string, payload: Record<string, unknown>, bounds: Bounds): Promise<unknown> {
@@ -129,7 +130,7 @@ async function answerOf(google: Pick<Google, 'request'>, origin: string, payload
     const own = body as Own;
     // A refusal, as the AWS controller answers it: the caller reads it.
     if (own?.refused) return own;
-    if (status === 404) throw new RouterCallError(`${host} has no /v1/actions: the router is older than ${ROUTER_MINIMUM}`, { status, refusal: 'router-too-old' });
+    if (status === 404) throw new RouterCallError(`${host} has no /v1/actions: the router is older than ${ROUTER_MINIMUM}`, { status, refusal: 'router_too_old' });
     throw ownFailure(reply, own, String(payload.action));
   }
   throw googleFailure(reply);
@@ -190,16 +191,16 @@ export async function actOnRouter(
   { timeoutMs, env, routerVersion }: { timeoutMs: number; env: string; routerVersion?: string | undefined },
 ): Promise<unknown> {
   const [project, region, version] = [router.account ?? '', router.region, router.version ?? ''];
-  if (routerTooOld(version)) throw new RouterCallError(tooOldText(version, project, region, routerVersion), { refusal: 'router-too-old' });
+  if (routerTooOld(version)) throw new RouterCallError(tooOldText(version, project, region, routerVersion), { refusal: 'router_too_old' });
   const host = current?.connection.project ?? '<host>';
-  if (!router.controller) throw new RouterCallError(controllerUnknownText(host, env), { refusal: 'router-unknown' });
-  if (!current) throw new RouterCallError(accessMissingText(host, env), { refusal: 'manager-access-missing' });
+  if (!router.controller) throw new RouterCallError(controllerUnknownText(host, env), { refusal: 'router_unknown' });
+  if (!current) throw new RouterCallError(accessMissingText(host, env), { refusal: 'no_access' });
   try {
     return await callRouter(current.google, { controller: router.controller }, { ...payload, refusals: true }, { timeoutMs });
   } catch (err) {
     if (!(err instanceof RouterCallError)) throw err;
-    if (err.refusal === 'manager-access-missing') throw new RouterCallError(accessMissingText(host, env, err.said), { refusal: err.refusal });
-    if (err.refusal === 'router-too-old') throw new RouterCallError(tooOldText('', project, region, routerVersion), { refusal: err.refusal });
+    if (err.refusal === 'no_access') throw new RouterCallError(accessMissingText(host, env, err.said), { refusal: err.refusal });
+    if (err.refusal === 'router_too_old') throw new RouterCallError(tooOldText('', project, region, routerVersion), { refusal: err.refusal });
     throw err;
   }
 }

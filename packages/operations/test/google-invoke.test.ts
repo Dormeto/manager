@@ -30,14 +30,14 @@ describe('a Google Cloud router, from the operations engine', () => {
     expect(/^workload not configured/.test(err.message)).toBe(true);
   });
 
-  it('throws manager-access-missing with its text and code when there is no connection', async () => {
+  it('throws no_access with its text and code when there is no connection', async () => {
     const err = await failing(googleInvoker(source(200, {}, false).source, { env: 'dev' })(ROUTER, { action: 'status' }, { timeoutMs: 10_000 }));
-    expect([err.code, err.message]).toEqual(['manager-access-missing', expect.stringMatching(/^the manager's accounts can't reach the router: dormeto gcp connect --project <host>.* --env dev/)]);
+    expect([err.code, err.message]).toEqual(['no_access', expect.stringMatching(/^the manager's accounts can't reach the router: dormeto gcp connect --project <host>.* --env dev/)]);
   });
 
-  it('throws router-too-old for a router before 0.40.0, and any other failure with its text and no code', async () => {
+  it('throws router_too_old for a router before 0.40.0, and any other failure with its text and no code', async () => {
     const old = await failing(googleInvoker(source(200, {}).source, { env: 'dev', routerVersion: '0.40.0' })({ ...ROUTER, version: '0.39.0' }, { action: 'status' }, { timeoutMs: 10_000 }));
-    expect([old.code, old.message]).toEqual(['router-too-old', expect.stringContaining('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0')]);
+    expect([old.code, old.message]).toEqual(['router_too_old', expect.stringContaining('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0')]);
     const down = await failing(googleInvoker(source(500, { error: 'boom' }).source, { env: 'dev' })(ROUTER, { action: 'status' }, { timeoutMs: 10_000 }));
     expect([down instanceof RouterCallError, down.message, down.code]).toEqual([false, 'boom', undefined]);
   });

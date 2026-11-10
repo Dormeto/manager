@@ -444,21 +444,21 @@ describe('Google Cloud routers', () => {
     expect([res.statusCode, json(res)]).toEqual([404, { error: 'not_found', message: 'workload not configured: gone' }]);
   });
 
-  it('answers Google\'s 403 with 502 and the refusal manager-access-missing, the connect command in its words', async () => {
+  it('answers Google\'s 403 with 409 and the refusal no_access, the connect command in its words', async () => {
     const m = manager({ controller: () => new Response('<html><title>403 Forbidden</title></html>', { status: 403, headers: { 'content-type': 'text/html' } }) });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/nap`, 'dmt-operator'));
-    expect([res.statusCode, json(res)]).toEqual([502, {
-      error: 'manager-access-missing', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: 403 Forbidden)',
+    expect([res.statusCode, json(res)]).toEqual([409, {
+      error: 'no_access', message: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: 403 Forbidden)',
     }]);
     expect(m.audit.at(-1)?.result).toBe('error: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: 403 Forbidden)');
   });
 
-  it('answers a connection broken at the token (STS invalid_target, iamcredentials 404) as manager-access-missing; STS\'s 503 stays a router error', async () => {
+  it('answers a connection broken at the token (STS invalid_target, iamcredentials 404) as no_access; STS\'s 503 stays a router error', async () => {
     const command = 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev';
-    const access = { error: 'manager-access-missing', message: `${command} (Google: sts.googleapis.com 400 invalid_target: The target service indicated by the "audience" parameters is invalid.)` };
+    const access = { error: 'no_access', message: `${command} (Google: sts.googleapis.com 400 invalid_target: The target service indicated by the "audience" parameters is invalid.)` };
     const gone = manager({ tokens: (req) => (req.url === 'https://sts.googleapis.com/v1/token' ? answer(400, { error: 'invalid_target', error_description: 'The target service indicated by the "audience" parameters is invalid.' }) : undefined) });
     const res = await gone.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
-    expect([res.statusCode, json(res)]).toEqual([502, access]);
+    expect([res.statusCode, json(res)]).toEqual([409, access]);
     const deleted = manager({ tokens: (req) => (req.url.endsWith(':generateIdToken') ? answer(404, { error: { code: 404, message: 'Not found', status: 'NOT_FOUND' } }) : undefined) });
     const listed = json(await deleted.api(event('GET', '/api/workloads', 'dmt-operator')));
     expect(listed.errors).toEqual([{ router: NAME, message: `${command} (Google: iamcredentials.googleapis.com 404 NOT_FOUND: Not found)` }]);
@@ -468,20 +468,20 @@ describe('Google Cloud routers', () => {
     expect([failed.statusCode, json(failed).error]).toEqual([502, 'router_error']);
   });
 
-  it('answers router-too-old for a 0.39.0 router without calling it, the install command with the pinned version', async () => {
+  it('answers router_too_old for a 0.39.0 router without calling it, the install command with the pinned version', async () => {
     const m = manager({ routers: [gcp({ version: '0.39.0' })] });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
-    expect([res.statusCode, json(res)]).toEqual([502, {
-      error: 'router-too-old', message: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    expect([res.statusCode, json(res)]).toEqual([409, {
+      error: 'router_too_old', message: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     }]);
     expect(m.seen).toEqual([]);
   });
 
-  it('calls a router of unknown version, and answers router-too-old when its controller has no /v1/actions (its JSON 404)', async () => {
+  it('calls a router of unknown version, and answers router_too_old when its controller has no /v1/actions (its JSON 404)', async () => {
     const m = manager({ routers: [gcp({ version: '' })], controller: () => answer(404, { error: 'no route for POST /v1/actions', reason: 'not-found' }) });
     const res = await m.api(event('GET', `/api/workloads/${NAME}/demo`, 'dmt-operator'));
-    expect([res.statusCode, json(res)]).toEqual([502, {
-      error: 'router-too-old', message: 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+    expect([res.statusCode, json(res)]).toEqual([409, {
+      error: 'router_too_old', message: 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     }]);
     expect(m.actions()).toHaveLength(1);
   });
@@ -490,19 +490,19 @@ describe('Google Cloud routers', () => {
   it('lists a router too old with its refusal and its registered version, one of unknown version with its refusal', async () => {
     const known = manager({ routers: [gcp({ version: '0.39.0' })] });
     expect(json(await known.api(event('GET', '/api/routers', 'dmt-viewer'))).routers.find((r: { name: string }) => r.name === NAME)).toEqual({
-      name: NAME, region: 'europe-west2', account: 'dormeto-dev', cloud: 'gcp', source: 'cli', version: '0.39.0', refusal: 'router-too-old', reporting: false,
+      name: NAME, region: 'europe-west2', account: 'dormeto-dev', cloud: 'gcp', source: 'cli', version: '0.39.0', refusal: 'router_too_old', reporting: false,
       error: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     const unknown = manager({ routers: [gcp({ version: '' })], controller: () => answer(404, { error: 'no route for POST /v1/actions', reason: 'not-found' }) });
     const row = json(await unknown.api(event('GET', '/api/routers', 'dmt-viewer'))).routers.find((r: { name: string }) => r.name === NAME);
-    expect([row.refusal, row.version, row.error]).toEqual(['router-too-old', undefined, 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0']);
+    expect([row.refusal, row.version, row.error]).toEqual(['router_too_old', undefined, 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0']);
   });
 
-  it('answers router-unknown for a router whose controller discovery hasn\'t found yet, without a call', async () => {
+  it('answers router_unknown for a router whose controller discovery hasn\'t found yet, without a call', async () => {
     const m = manager({ routers: [gcp({ controller: '' })] });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
-    expect([res.statusCode, json(res)]).toEqual([502, {
-      error: 'router-unknown', message: 'discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again',
+    expect([res.statusCode, json(res)]).toEqual([409, {
+      error: 'router_unknown', message: 'discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again',
     }]);
     expect(m.seen).toEqual([]);
   });

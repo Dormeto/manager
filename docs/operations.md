@@ -17,7 +17,7 @@ time per target group, router or workload, one per load balancer (lock), three p
 
 ## Onboarding and offboarding on Google Cloud
 
-The same operations, on the routers the CLI installed (0.40.0 or later; an older one is a 409 `router-too-old` with the
+The same operations, on the routers the CLI installed (0.40.0 or later; an older one is a 409 `router_too_old` with the
 `dormeto gcp install` command), through the [connection](organization-access.md#google-cloud). The manager never changes a Google
 IAM policy, a backend service, a URL map or a cluster: it calls the router, which changes the load balancer, and binds and
 removes one resource tag, `dormeto/managed`, as the command account.
@@ -74,7 +74,7 @@ doesn't); the registry keeps the version as the router reports it.
   which the manager cuts. A router that does not answer gets no new summary, so the watchdog's `silent` rule applies as on
   AWS; one the poll is refused at keeps the refusal on its `RS#` item (`lastRefusal`), and the watchdog says that refusal,
   with its command, instead of `silent`. A registered router whose controller discovery hasn't found yet is not called: its
-  poll records `router-unknown`, once.
+  poll records `router_unknown`, once.
 - **A router removed:** one whose controller URL answers Google's own 404 (not the controller's JSON) **twice in a row**
   is unregistered (`RouterUnregistered`): an uninstalled router leaves within two minutes instead of alarming. A broken
   connection never counts as a router gone.
@@ -84,13 +84,13 @@ doesn't); the registry keeps the version as the router reports it.
   The poll reads a too-old router's version from its health (`GET /v1/health`, which every router version answers) at most
   every 10 minutes and keeps it in the registry (`RouterVersionRead`): after the advised install, the router is polled at the
   next run and its alarm resolves, within 10 minutes.
-- **The refusals,** as a 502 with the command that fixes it:
-  - `manager-access-missing`: Google refuses the manager's token or the connection is broken (pool, provider or
+- **The refusals,** as a 409 `{ "error": <code>, "message" }` on every route, with the command that fixes it in the message (a failure of the router or of Google's own stays a 502, `router_error` or `google_error`):
+  - `no_access`: Google refuses the manager's token or the connection is broken (pool, provider or
     service account gone, a grant revoked), `the manager's accounts can't reach the router: dormeto gcp connect
     --project <host> --profile <profile> --env <env>`;
-  - `router-too-old`, without a call for a router below 0.40.0, or when its controller has no `/v1/actions`:
+  - `router_too_old`, without a call for a router below 0.40.0, or when its controller has no `/v1/actions`:
     `router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`;
-  - `router-unknown`: discovery has not found the router's controller yet, `dormeto gcp connect` again.
+  - `router_unknown`: discovery has not found the router's controller yet, `dormeto gcp connect` again.
   An action the router does not know (an `unknown-action` answer) is an error that names the action.
 - **The organization's settings:** each write of `settings.json` (`PUT /api/settings/workloads`, `/settings/types`,
   `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller, but one below

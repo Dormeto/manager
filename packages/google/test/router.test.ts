@@ -1,8 +1,9 @@
 // The manager's calls to a Google Cloud router (Google Cloud manager design §5.1, §6.2): the AWS controller's payload
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
-// bounded; Google's refusal of the token is the refusal manager-access-missing, a router without /v1/actions is too old.
+// bounded; Google's refusal of the token is the refusal no_access, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accessMissingText, actOnRouter, callRouter, createGoogle, installCommand, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
+import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
+import { accessMissingText, actOnRouter, callRouter, createGoogle, installCommand, RouterCallError, routerHealth, ROUTER_MINIMUM, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
 const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
@@ -72,21 +73,21 @@ describe('callRouter', () => {
     expect(await callRouter(fakeGoogle(() => json(404, refused)).google, ROUTER, { action: 'status' }, { timeoutMs: 10_000 })).toEqual(refused);
   });
 
-  it('answers Google\'s 403 in front of the controller (an HTML page) as the refusal manager-access-missing', async () => {
+  it('answers Google\'s 403 in front of the controller (an HTML page) as the refusal no_access', async () => {
     const err = await failure(callRouter(fakeGoogle(() => html(403, 'Forbidden')).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
     expect(err).toBeInstanceOf(RouterCallError);
-    expect([err.refusal, err.status, err.google, err.token]).toEqual(['manager-access-missing', 403, true, false]);
+    expect([err.refusal, err.status, err.google, err.token]).toEqual(['no_access', 403, true, false]);
   });
 
-  it('answers Google\'s 401 (its JSON) as manager-access-missing once a new token was refused too', async () => {
+  it('answers Google\'s 401 (its JSON) as no_access once a new token was refused too', async () => {
     const g = fakeGoogle(() => json(401, { error: { code: 401, message: 'Request had invalid authentication credentials.', status: 'UNAUTHENTICATED' } }));
     const err = await failure(callRouter(g.google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
-    expect([err.refusal, err.status, err.google, err.message]).toEqual(['manager-access-missing', 401, true, 'Request had invalid authentication credentials.']);
+    expect([err.refusal, err.status, err.google, err.message]).toEqual(['no_access', 401, true, 'Request had invalid authentication credentials.']);
     expect(g.to(ACTIONS)).toHaveLength(2);
   });
 
   // A broken connection fails before the controller is called: the token's failure is marked apart from Google's answer
-  // to the controller URL (never a router gone), and is manager-access-missing.
+  // to the controller URL (never a router gone), and is no_access.
   const tokenRefusal = async (url: string, refusal: Response) => {
     const g = fakeGoogle(() => json(200, {}), (req) => (req.url === url || req.url.endsWith(url) ? refusal : undefined));
     const err = await failure(callRouter(g.google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
@@ -94,23 +95,23 @@ describe('callRouter', () => {
     return err;
   };
 
-  it('answers iamcredentials\' refusal of the ID token (the impersonation grant revoked) as manager-access-missing, marked as the token\'s', async () => {
+  it('answers iamcredentials\' refusal of the ID token (the impersonation grant revoked) as no_access, marked as the token\'s', async () => {
     const err = await tokenRefusal(':generateIdToken', json(403, {
       error: { code: 403, message: 'Permission \'iam.serviceAccounts.getOpenIdToken\' denied on resource (or it may not exist).', status: 'PERMISSION_DENIED' },
     }));
-    expect([err.refusal, err.status, err.google, err.token]).toEqual(['manager-access-missing', 403, false, true]);
+    expect([err.refusal, err.status, err.google, err.token]).toEqual(['no_access', 403, false, true]);
   });
 
-  it('answers iamcredentials\' 404 (the command account deleted) as manager-access-missing, never as Google\'s 404 for the router', async () => {
+  it('answers iamcredentials\' 404 (the command account deleted) as no_access, never as Google\'s 404 for the router', async () => {
     const err = await tokenRefusal(':generateIdToken', json(404, { error: { code: 404, message: 'Not found; Gaia id not found for email dmt-dev-command@dormeto-host.iam.gserviceaccount.com', status: 'NOT_FOUND' } }));
-    expect([err.refusal, err.status, err.google, err.token]).toEqual(['manager-access-missing', 404, false, true]);
+    expect([err.refusal, err.status, err.google, err.token]).toEqual(['no_access', 404, false, true]);
   });
 
-  it('answers STS\'s invalid_target (the pool or provider gone) and invalid_grant (the provider refuses the role) as manager-access-missing', async () => {
+  it('answers STS\'s invalid_target (the pool or provider gone) and invalid_grant (the provider refuses the role) as no_access', async () => {
     const target = await tokenRefusal('https://sts.googleapis.com/v1/token', json(400, { error: 'invalid_target', error_description: 'The target service indicated by the "audience" parameters is invalid.' }));
-    expect([target.refusal, target.status, target.google, target.token]).toEqual(['manager-access-missing', 400, false, true]);
+    expect([target.refusal, target.status, target.google, target.token]).toEqual(['no_access', 400, false, true]);
     const grant = await tokenRefusal('https://sts.googleapis.com/v1/token', json(400, { error: 'invalid_grant', error_description: 'The audience in ID Token does not match the expected audience.' }));
-    expect([grant.refusal, grant.status, grant.google, grant.token]).toEqual(['manager-access-missing', 400, false, true]);
+    expect([grant.refusal, grant.status, grant.google, grant.token]).toEqual(['no_access', 400, false, true]);
   });
 
   // What Google answered is kept, with its host, status, reason and message (cut to 200 characters), so the refusal's cause
@@ -173,9 +174,9 @@ describe('callRouter', () => {
     expect([err.refusal, err.status, err.google, err.message]).toEqual([undefined, 403, false, 'custom pages are off on this router']);
   });
 
-  it('answers the controller\'s JSON 404 (a router older than 0.40.0 has no /v1/actions) as the refusal router-too-old', async () => {
+  it('answers the controller\'s JSON 404 (a router older than 0.40.0 has no /v1/actions) as the refusal router_too_old', async () => {
     const err = await failure(callRouter(fakeGoogle(() => json(404, { error: 'no route for POST /v1/actions', reason: 'not-found' })).google, ROUTER, { action: 'router' }, { timeoutMs: 10_000 }));
-    expect([err.refusal, err.status, err.google]).toEqual(['router-too-old', 404, false]);
+    expect([err.refusal, err.status, err.google]).toEqual(['router_too_old', 404, false]);
   });
 
   it('keeps Google\'s own 404 (an HTML page: no such service) apart, as Google\'s', async () => {
@@ -189,10 +190,10 @@ describe('callRouter', () => {
     expect([err.refusal, err.status, err.google, err.token, err.message]).toEqual([undefined, 404, true, false, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
   });
 
-  it('reads an empty 401 or 403 as Google\'s refusal of the manager\'s token: manager-access-missing', async () => {
+  it('reads an empty 401 or 403 as Google\'s refusal of the manager\'s token: no_access', async () => {
     for (const status of [401, 403]) {
       const err = await failure(callRouter(fakeGoogle(() => new Response('', { status })).google, ROUTER, { action: 'list' }, { timeoutMs: 10_000 }));
-      expect([err.refusal, err.status, err.google], String(status)).toEqual(['manager-access-missing', status, true]);
+      expect([err.refusal, err.status, err.google], String(status)).toEqual(['no_access', status, true]);
     }
   });
 
@@ -289,13 +290,13 @@ describe('routerHealth', () => {
     expect(JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())).toMatchObject({ aud: CONTROLLER });
   });
 
-  it('reads Google\'s answers as callRouter does: its 403 manager-access-missing, its own 404 Google\'s, a token refused the token\'s', async () => {
+  it('reads Google\'s answers as callRouter does: its 403 no_access, its own 404 Google\'s, a token refused the token\'s', async () => {
     const denied = await failure(routerHealth(fakeGoogle(() => html(403, 'Forbidden')).google, ROUTER, { timeoutMs: 10_000 }));
-    expect([denied.refusal, denied.status, denied.google]).toEqual(['manager-access-missing', 403, true]);
+    expect([denied.refusal, denied.status, denied.google]).toEqual(['no_access', 403, true]);
     const gone = await failure(routerHealth(fakeGoogle(() => html(404, 'Page not found')).google, ROUTER, { timeoutMs: 10_000 }));
     expect([gone.refusal, gone.status, gone.google, gone.message]).toEqual([undefined, 404, true, 'dmtr-europe-west2-controller-abc123-nw.a.run.app answered HTTP 404']);
     const token = await failure(routerHealth(fakeGoogle(() => json(200, {}), (req) => (req.url.endsWith(':generateIdToken') ? json(403, { error: { code: 403, message: 'denied', status: 'PERMISSION_DENIED' } }) : undefined)).google, ROUTER, { timeoutMs: 10_000 }));
-    expect([token.refusal, token.token]).toEqual(['manager-access-missing', true]);
+    expect([token.refusal, token.token]).toEqual(['no_access', true]);
   });
 
   it('answers a health without a version, or not JSON, as a failure that says so', async () => {
@@ -346,28 +347,34 @@ describe('actOnRouter', () => {
   it('refuses a router before 0.40.0 without calling it', async () => {
     const g = fakeGoogle(() => json(200, {}));
     const err = await failing(actOnRouter({ connection, google: g.google }, { ...router, version: '0.39.0' }, { action: 'status' }, opts));
-    expect([err.refusal, err.message]).toEqual(['router-too-old', tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')]);
+    expect([err.refusal, err.message]).toEqual(['router_too_old', tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')]);
     expect(g.seen).toEqual([]);
   });
 
   it('refuses a router without a controller as unknown and a missing connection as no access', async () => {
     const g = fakeGoogle(() => json(200, {}));
     const { controller: _, ...unplaced } = router;
-    expect((await failing(actOnRouter({ connection, google: g.google }, unplaced, { action: 'status' }, opts))).refusal).toBe('router-unknown');
+    expect((await failing(actOnRouter({ connection, google: g.google }, unplaced, { action: 'status' }, opts))).refusal).toBe('router_unknown');
     const err = await failing(actOnRouter(null, router, { action: 'status' }, opts));
-    expect([err.refusal, err.message]).toEqual(['manager-access-missing', accessMissingText('<host>', 'dev')]);
+    expect([err.refusal, err.message]).toEqual(['no_access', accessMissingText('<host>', 'dev')]);
   });
 
-  it('turns Google refusing the token into manager-access-missing with its words, and a router without /v1/actions into too old', async () => {
+  it('turns Google refusing the token into no_access with its words, and a router without /v1/actions into too old', async () => {
     const denied = await failing(actOnRouter({ connection, google: fakeGoogle(() => html(403, 'Forbidden')).google }, router, { action: 'status' }, opts));
-    expect(denied.refusal).toBe('manager-access-missing');
+    expect(denied.refusal).toBe('no_access');
     expect(denied.message).toMatch(/^the manager's accounts can't reach the router: dormeto gcp connect --project dormeto-host .* \(Google: /);
     const old = await failing(actOnRouter({ connection, google: fakeGoogle(() => json(404, { error: 'not-found' })).google }, router, { action: 'status' }, opts));
-    expect([old.refusal, old.message]).toEqual(['router-too-old', tooOldText('', 'dormeto-dev', 'europe-west2', '0.40.0')]);
+    expect([old.refusal, old.message]).toEqual(['router_too_old', tooOldText('', 'dormeto-dev', 'europe-west2', '0.40.0')]);
   });
 
   it('throws any other failure as it is, without a refusal', async () => {
     const err = await failing(actOnRouter({ connection, google: fakeGoogle(() => json(500, { error: 'boom' })).google }, router, { action: 'status' }, opts));
     expect([err.message, err.refusal]).toEqual(['boom', undefined]);
+  });
+});
+
+describe('the router floor', () => {
+  it('is the one constant the dashboard reads too', () => {
+    expect([ROUTER_MINIMUM, GOOGLE_ROUTER_MINIMUM]).toEqual(['0.40.0', '0.40.0']);
   });
 });
