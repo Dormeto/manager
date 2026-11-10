@@ -47,6 +47,52 @@ What the manager prices for each nap, how it adds savings up, and how a workload
   the workloads not priced, Dormeto's estimated cost. `GET /api/savings` answers it; a workload's history adds its
   period's `savings`.
 
+## Google Cloud
+
+What a Google Cloud router (0.40.0 and later) stopped is priced as AWS's, by the same job, discounts, baseline, bars and energy
+card; only the prices, the items and the energy figures are Google's. Estimates, as above: no bill is read.
+
+- **What is priced:** the router's `ASLEEP` event names what the nap stopped (`stopped`, at most 50 items): VMs by machine type,
+  zone, system, Spot and suspension, with their count (`gce`), and Cloud SQL companions by tier, engine, edition and
+  availability (`cloudsql`). What the router could not describe (a VM deleted during the nap, a refused read) is an `unknown` item
+  with its reason, listed "not priced" with its hours. GKE pods are not priced yet (`unknown`: "GKE pods are not priced").
+- **Where the prices come from:** Google's USD list prices from the Cloud Billing Catalog API (`cloudbilling.googleapis.com`),
+  read as the discovery service account `dmt-<env>-discovery`, which the savings job and the API already act as: no new role.
+  The Catalog has no filter, so the daily job reads a service's pages once per run (Compute Engine: about 33,600 SKUs in 7
+  pages; Cloud SQL has its own service), at most 60 seconds a page, and logs each complete read (`GooglePricesRead`: the service,
+  its pages, SKUs and milliseconds). Each price priced is cached as `PRICE#<region>#...` for 30 days, a price the rules leave
+  unpriced as `null` for a day, as AWS's; the keys are by region, family and resource (`core` and `ram` for a VM, `vcpu`,
+  `ram`, `micro` and `small` for Cloud SQL). A read that fails (no connection, a refusal, a page failing midway) caches nothing,
+  prices the Google items of that run "not priced", and is asked again after five minutes; AWS items are priced as before.
+- **The API never reads the Catalog**, since a request would wait for 45 MB: it reads the table's cache only. A Google price
+  not cached yet is "not priced" there and is not written; the next daily job prices it. To take a price change at once,
+  delete its `PRICE#` items, as for AWS.
+- **The SKU rules:** a SKU counts in each of its regions, at its single tier's price (a SKU with several tiers counts as none),
+  memory per GiB (a price per GB-hour is multiplied by 1.073741824); two SKUs of one key at different prices make it `null`,
+  never a guess. Compute Engine: the core and memory SKUs of the machine family, on demand or Spot, predefined or custom
+  (`e2`, `n1`, `n2`, `n2d`, `n4`, `n4a`, `n4d`, `t2d`, `c2`, `c2d`, `c3`, `c3d`, `c4`, `c4a`, `c4d`, `h3`, `m1`, `m2`, `m3`, `z3`;
+  custom for `e2`, `n1`, `n2`, `n2d`, `n4`, `n4a` and `n4d`), and the whole-VM hour of `f1-micro` and `g1-small`. A VM's hour is
+  `count × (vCPUs × core + memory × RAM)`; the shared cores bill a fraction of a vCPU (`e2-micro` 0.25, `e2-small` 0.5,
+  `e2-medium` 1). Another family, the GPU series among them, is not priced.
+- **Spot:** a Spot or preemptible VM is priced at Spot prices and never discounted.
+- **Suspended VMs:** a suspended VM still pays for its memory (Google's "VM state: suspended RAM" SKU): the saving is the running
+  price less `memory × that price`, never below 0. A region without that SKU takes the highest suspended memory price the
+  Catalog lists (16 of 48 regions on 2026-11-10): the smallest saving.
+- **Windows:** priced as Linux; the license is not counted (the smallest saving).
+- **Cloud SQL:** MySQL and PostgreSQL, zonal or regional (`ha`), by the instance's region. Enterprise `db-custom-N-M` tiers:
+  `N × vCPU + M/1024 × RAM`; Enterprise Plus `db-perf-optimized-N-K` tiers: `K` vCPUs and 8 GB each (Google's Enterprise Plus
+  N tiers); `db-f1-micro` and `db-g1-small`: the instance's hour. SQL Server, another tier or edition, or a tier without its
+  size is not priced (SQL Server's license is unpriced on AWS too). A Cloud SQL size out of bounds is dropped alone, the
+  instance kept.
+- **Discounts:** the Savings card's `compute` percentage applies to Compute Engine and `databases` to Cloud SQL: enter Google's
+  committed use and sustained use discounts there, as average rates (never off Spot). Google's list prices carry neither.
+- **Energy:** Cloud Carbon Footprint's Google Cloud figures, a separate table from AWS's: watts a vCPU at 0% and 100% by machine
+  family (`n2`, `c2`, `g2` 0.69 and 3.75; `t2d`, `c2d` 0.46 and 1.83; `c3`, `h3` 1.04 and 4.06; `c4`, `n4`, `a3` 0.81 and
+  4.38; `m3` 0.77 and 3.65; any other family, Arm and Cloud SQL, CCF's medians 0.68 and 4.11) at 50% use, 0.392 W a GB of
+  memory and a PUE of 1.1; a Cloud SQL instance with `ha` twice, one without `vcpus` and `memoryGb` has no estimate. The grid
+  factor is that of the item's own region (a VM's zone's: a global load balancer's backends may run elsewhere than the router),
+  from Google's published grid factors as CCF lists them; another Google Cloud region takes CCF's average, 0.3101.
+
 ## Idle window advisor
 
 - **What it does:** a workload's Idle window card replays its last 14 days of requests (CloudWatch `RequestCount` per
@@ -69,3 +115,8 @@ What the manager prices for each nap, how it adds savings up, and how a workload
   earlier manager has no `hours` until the next one.
 - **Changing the window:** the workload module's `idle_minutes`, or offboarding and onboarding again; not from the
   manager yet.
+- **On Google Cloud:** the same card and heatmap read Cloud Monitoring's load balancer request counts per minute (the discovery
+  account reads every page, 14 days at most), filtered to the workload's own URL map and its application and waker backend
+  services added up: the waker's service is shared, so the URL map keeps another workload's requests out. Monitoring samples
+  them, so the answer carries `estimated: true` and the card and heatmap say "Google's request counts are estimates"; the
+  advice's `wakerTargetGroup` then means that the waker's requests are counted. The rest is as above.

@@ -120,9 +120,10 @@ account, one change per load balancer at a time.</p>
   browser wake mode, only a page that runs its script wakes the workload.
 - **EC2, Auto Scaling, ECS, EKS, RDS.** Instances stop; Auto Scaling groups, ECS services and Kubernetes Deployments
   scale to zero; databases stop after their application and start before it.
-- **Savings you can check.** AWS list prices of what each nap stopped, Spot capacity at Spot prices, less the discounts
-  you set, net of Dormeto's own cost. Each workload's idle window card replays its last 14 days of requests to choose
-  the window.
+- **Savings you can check.** AWS and Google Cloud list prices of what each nap stopped (Google's from the Cloud Billing
+  Catalog), Spot capacity at Spot prices, less the discounts you set, net of Dormeto's own cost. Each workload's idle
+  window card replays its last 14 days of requests to choose the window (estimated on Google Cloud, whose request counts
+  are sampled).
 - **Both clouds, one dashboard.** A cloud mark before each account or project, Google Cloud regions and backend kinds
   (VM, managed instance group, GKE workload, Cloud SQL instance) and console links. Discovery, onboarding, offboarding and exclusions
   work on both; an alert carries its `cloud` for filter policies.
@@ -189,7 +190,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 |---|---|
 | [Access control](docs/access-control.md) | Roles, members, workload tags, groups and grants, permissions, when changes apply |
 | [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, Google Cloud routers (the poll, `too-old`, the refusals), health alerts, IP lists, MFA, failed wakes, state history |
-| [Savings](docs/savings.md) | What is priced, Spot, discounts, the daily job, the idle window advisor |
+| [Savings](docs/savings.md) | What is priced on AWS and Google Cloud, Spot, discounts, the daily job, the idle window advisor |
 | [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto aws estimate`: accounts, filters, uptime, companion databases, cache, permissions |
 | [Organization access](docs/organization-access.md) | The discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |
 | [Development](docs/development.md) | Build, test, a development environment, screenshots, releases |
