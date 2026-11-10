@@ -1,11 +1,18 @@
 // Settings at scale (vision design §8): the organization's defaults and types in settings.json, a router's and a workload's
 // through the router, what a level reaches, who may, the audit, and a router before 0.37.0.
 import { describe, expect, it } from 'vitest';
+import type { InstalledRouter } from '@dormeto/operations';
 import { createApi, type ApiEvent, type AuditEntry, type Invoke } from '../src/api.js';
 
 const NOW = Date.UTC(2026, 10, 3, 12, 0);
 const MANAGER = '121014831971';
 const ROUTERS = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: MANAGER }];
+// A Google Cloud router as the registry holds it (the API lists it as dmtr-<project>-<region>).
+const GCP = 'dmtr-dormeto-dev-europe-west2';
+const GCP_INSTALLED: InstalledRouter = {
+  name: 'dmtr-europe-west2', account: 'dormeto-dev', region: 'europe-west2', controller: 'https://dmtr-europe-west2-controller-abc-nw.a.run.app', onboarder: '',
+  version: '0.40.0', build: '', installedBy: 'cli', cloud: 'gcp', installedAt: new Date(NOW).toISOString(),
+};
 const API_TYPE = { name: 'api', tags: { kind: 'api' }, settings: { idleMinutes: 30 } };
 const SUMMARIES = [
   { account: MANAGER, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', type: 'api', settingsFrom: { idleMinutes: 'router', waitSeconds: 'workload' } },
@@ -13,7 +20,7 @@ const SUMMARIES = [
   { account: MANAGER, region: 'eu-west-1', router: 'other', workloadId: 'c', type: 'api', settingsFrom: { idleMinutes: 'default' } },
 ];
 
-function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null } = {}) {
+function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null; google?: boolean } = {}) {
   const audit: AuditEntry[] = [];
   const calls: Record<string, unknown>[] = [];
   const store = { doc: opts.doc ?? null, writes: [] as Record<string, unknown>[] };
@@ -28,6 +35,7 @@ function setup(opts: { invoke?: Invoke; doc?: Record<string, unknown> | null } =
     },
     globalSettings: { read: async () => store.doc, write: async (d: Record<string, unknown>) => { store.writes.push(d); store.doc = d; } },
     fleet: { listRouters: async () => [], listWorkloads: async () => SUMMARIES as never, getWorkload: async () => null },
+    ...(opts.google ? { operations: { installedRouters: async () => [GCP_INSTALLED], create: async () => { throw new Error('no operation'); }, list: async () => [], get: async () => null } } : {}),
   });
   return { api, audit, calls, store };
 }
@@ -136,5 +144,26 @@ describe('a router\'s and a workload\'s defaults through the router', () => {
     expect((await s.api(event('PUT', '/api/workloads/dmt-dev/shop/settings', 'dmt-operator', { hibernate: false }))).statusCode).toBe(200);
     const old = await setup({ invoke: OLD }).api(event('PUT', '/api/workloads/dmt-dev/shop/settings', 'dmt-operator', { idleMinutes: 45 }));
     expect([old.statusCode, json(old).message]).toEqual([409, 'upgrade the router to 0.37.0']);
+  });
+
+  // The router's own range (router gcp/src/levels.mjs): one controller request lasts at most 1800 s.
+  it('checks a Google Cloud router\'s and workload\'s wake timeout from 60 to 1700 s, as the router does, nothing sent', async () => {
+    const s = setup({ google: true });
+    for (const [path, body] of [[`/api/routers/${GCP}/settings`, { defaults: { wakeTimeoutSeconds: 1800 } }], [`/api/workloads/${GCP}/vm-demo/settings`, { wakeTimeoutSeconds: 1800 }]] as const) {
+      const res = await s.api(event('PUT', path, 'dmt-admin', body));
+      expect([res.statusCode, json(res)]).toEqual([400, { error: 'bad_request', message: 'wakeTimeoutSeconds: must be a whole number from 60 to 1700' }]);
+    }
+    expect(s.calls).toEqual([]);
+    expect((await s.api(event('PUT', `/api/workloads/${GCP}/vm-demo/settings`, 'dmt-admin', { wakeTimeoutSeconds: 1700 }))).statusCode).toBe(200);
+    // AWS's router keeps AWS's range.
+    expect((await s.api(event('PUT', '/api/routers/dmt-dev/settings', 'dmt-admin', { defaults: { wakeTimeoutSeconds: 1800 } }))).statusCode).toBe(200);
+  });
+
+  it('leaves the hold, the drain and the holders of a Google Cloud router to the router, which answers why they are 0 there', async () => {
+    const fixed = 'waitSeconds is 0 on Google Cloud: the waker holds no request, it answers the waiting page at once and the page waits for the wake';
+    const s = setup({ google: true, invoke: async (_r, payload) => (payload.action === 'settings' ? { problems: [fixed] } : null) });
+    const res = await s.api(event('PUT', `/api/workloads/${GCP}/vm-demo/settings`, 'dmt-admin', { waitSeconds: 500 }));
+    expect([res.statusCode, json(res).message]).toEqual([400, fixed]);
+    expect(s.calls.at(-1)).toMatchObject({ action: 'settings', workloadId: 'vm-demo', settings: { waitSeconds: 500 } });
   });
 });

@@ -216,7 +216,9 @@ moved from `docs/organization-access.md` to `docs/development.md`.
 - **The settings problem texts in one form:** an invalid setting is `<key>: must be a whole number from <min> to <max>` (or the
 key's own rule: `wakeMode: must be any or browser`, `type: must be a type's name …`, `settings: fallbackInstanceTypes: must be a
 list of at most 5 EC2 instance types, such as t3a.medium`), where some had no colon. `hibernate must be …` and `unknown setting <key>`
-are as they were, which released CLIs match.
+are as they were, which released CLIs match. A Google Cloud router's and workload's settings are checked as that router takes
+them: the wake timeout from 60 to 1700 (`wakeTimeoutSeconds: must be a whole number from 60 to 1700`), the hold, the drain and
+the holders left to the router, which says why they are 0 there; the organization's and the types' keep 60 to 3600.
 - **Router 0.40.0, what changes in its API:** an action a router doesn't know answers AWS's `unsupported` refusal on a Google Cloud
 router, as AWS's does. Its REST workload answer has `workloadId` and `pauses` beside `id` and `paused`, and its onboarding takes
 `databases` and `settings.fallbackInstanceTypes` beside `cloudSql` and the top-level `fallbackInstanceTypes`. Its waiting page

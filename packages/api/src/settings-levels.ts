@@ -2,10 +2,16 @@
 // organization's defaults and types, a router's defaults and a workload's settings. The router checks them again and
 // keeps the last word (router lambda/src/lib/settings-levels.mjs and no-wake.mjs).
 import { isIP } from 'node:net';
+import type { Cloud } from '@dormeto/fleet/clouds';
 
 export const SETTING_RANGES: Record<string, [number, number]> = {
   idleMinutes: [5, 1440], waitSeconds: [5, 120], drainSeconds: [0, 300], wakeTimeoutSeconds: [60, 3600], maxHolders: [1, 500], failedRetrySeconds: [10, 600],
 };
+// A Google Cloud router's and workload's (router gcp/src/levels.mjs levelProblems): the wake timeout at most 1700 s (one
+// controller request lasts at most 1800 s); the hold, the drain and the holders fixed at 0, which the router refuses in its
+// own words. The organization's and the types' levels, which both clouds share, keep AWS's ranges.
+const GOOGLE_WAKE_TIMEOUT_MAX = 1700;
+const GOOGLE_FIXED_ZERO = ['waitSeconds', 'drainSeconds', 'maxHolders'];
 export const SCALAR_KEYS = [...Object.keys(SETTING_RANGES), 'wakeMode'];
 export const RULE_KEYS = ['noWakeRules', 'wakeRules'];
 export const BUILT_IN_TYPES = ['instance', 'asg', 'ecs', 'k8s', 'databases'];
@@ -81,13 +87,15 @@ function rulesProblems(key: string, rules: unknown): string[] {
   return problems;
 }
 
-// A level's settings: each a value or null (unset); `type` only at a workload's.
-export function defaultsProblems(defaults: unknown, { workload = false } = {}): string[] {
+// A level's settings: each a value or null (unset); `type` only at a workload's; `cloud` the router's, for a router's or a
+// workload's.
+export function defaultsProblems(defaults: unknown, { workload = false, cloud = 'aws' }: { workload?: boolean; cloud?: Cloud } = {}): string[] {
   if (!isObject(defaults)) return ['settings must be an object'];
   const problems: string[] = [];
   for (const [key, value] of Object.entries(defaults)) {
     if (value === null && (SCALAR_KEYS.includes(key) || RULE_KEYS.includes(key) || (workload && key === 'type'))) continue;
-    const range = SETTING_RANGES[key];
+    if (cloud === 'gcp' && GOOGLE_FIXED_ZERO.includes(key)) continue;
+    const range: [number, number] | undefined = cloud === 'gcp' && key === 'wakeTimeoutSeconds' ? [SETTING_RANGES.wakeTimeoutSeconds![0], GOOGLE_WAKE_TIMEOUT_MAX] : SETTING_RANGES[key];
     if (range) {
       if (!Number.isInteger(value) || (value as number) < range[0] || (value as number) > range[1]) problems.push(`${key}: must be a whole number from ${range[0]} to ${range[1]}`);
     } else if (key === 'wakeMode') {

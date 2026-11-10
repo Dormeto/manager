@@ -572,10 +572,10 @@ function joinMinutesOf(body: Record<string, unknown>): number | null {
   return join;
 }
 // The body of a router's settings: only the keys it holds, each to set or unset, so that one never rewrites the other. An empty
-// one is refused here: the router would take it and change nothing.
-function routerSettingsOf(body: Record<string, unknown>): { hibernate?: boolean | null; joinMinutes?: number | null; defaults?: Record<string, unknown> | null } {
+// one is refused here: the router would take it and change nothing. Its defaults are checked as the router's cloud takes them.
+function routerSettingsOf(body: Record<string, unknown>, cloud: Cloud): { hibernate?: boolean | null; joinMinutes?: number | null; defaults?: Record<string, unknown> | null } {
   if (body.hibernate === undefined && body.joinMinutes === undefined && body.defaults === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or defaults is required');
-  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults) }) };
+  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults, cloud) }) };
 }
 // What a save of the types changed, for the audit (settings at scale design §8): each type added or removed, each changed
 // key of a type with its value before and after (review, 2026-11-04).
@@ -600,18 +600,20 @@ function typesChangeText(before: Record<string, unknown>[], after: { name: strin
 // What a router before 0.37.0 answers to a setting of the levels: unknown.
 const LEVEL_SETTING_UNKNOWN = /^settings: unknown setting (defaults|idleMinutes|waitSeconds|drainSeconds|wakeTimeoutSeconds|maxHolders|failedRetrySeconds|wakeMode|noWakeRules|wakeRules|type)$/;
 // A level's defaults in a body (settings at scale design §8): each key a value or null, null for all of them; refused in the router's words.
-function defaultsOf(defaults: unknown): Record<string, unknown> | null {
+// cloud: a router's (the organization's level, both clouds', is AWS's).
+function defaultsOf(defaults: unknown, cloud: Cloud = 'aws'): Record<string, unknown> | null {
   if (defaults === null) return null;
-  const problems = defaultsProblems(defaults);
+  const problems = defaultsProblems(defaults, { cloud });
   if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
   return defaults as Record<string, unknown>;
 }
 // A workload's settings in a body: hibernate, the levels' settings and its type, each a value or null; its join is on its schedule.
-function workloadSettingsOf(body: Record<string, unknown>): Record<string, unknown> {
+// cloud: its router's.
+function workloadSettingsOf(body: Record<string, unknown>, cloud: Cloud): Record<string, unknown> {
   if (body.joinMinutes !== undefined) throw new HttpError(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
   if (!Object.keys(body).length) throw new HttpError(400, 'bad_request', 'a setting is required');
   const { hibernate, ...rest } = body;
-  const problems = defaultsProblems(rest, { workload: true });
+  const problems = defaultsProblems(rest, { workload: true, cloud });
   if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
   return { ...(hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...rest };
 }
@@ -1323,8 +1325,9 @@ export function createApi({
     });
   }
 
+  const cloudOfRouter = (router: Router): Cloud => router.cloud ?? cloudOf(accountOfRouter(router)) ?? 'aws';
   const where = (router: Router) => ({
-    name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), cloud: router.cloud ?? cloudOf(accountOfRouter(router)) ?? 'aws', ...(router.source ? { source: router.source } : {}),
+    name: router.name, region: router.region, ...(router.account ? { account: router.account } : {}), cloud: cloudOfRouter(router), ...(router.source ? { source: router.source } : {}),
     ...(router.clusters ? { clusters: router.clusters } : {}),
   });
 
@@ -1667,7 +1670,7 @@ export function createApi({
       if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && b === 'waiting-page' && !action) return waitingPageRoute(identity, event, method, router);
       if (method === 'PUT' && b === 'settings' && !action) {
         await needAudited(identity, 'admin', 'router-settings', router.name);
-        const settings = routerSettingsOf(bodyOf(event));
+        const settings = routerSettingsOf(bodyOf(event), cloudOfRouter(router));
         return audited(identity, 'router-settings', router.name, async () => {
           const result = await settingsCall(router, { settings }, identity.email);
           return { result: settingsText(settings, 'inherit'), response: reply(200, result) };
@@ -1947,7 +1950,7 @@ export function createApi({
       if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && action === 'waiting-page' && !parts[4]) return waitingPageRoute(identity, event, method, router, id);
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
-        const settings = workloadSettingsOf(bodyOf(event));
+        const settings = workloadSettingsOf(bodyOf(event), cloudOfRouter(router));
         return audited(identity, 'workload-settings', `${router.name}/${id}`, async () => {
           const result = await settingsCall(router, { workloadId: id, settings }, identity.email);
           return { result: workloadSettingsText(settings), response: reply(200, result) };

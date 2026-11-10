@@ -22,6 +22,19 @@ describe('a level\'s settings', () => {
     expect(defaultsProblems({ type: 'Bad' }, { workload: true })).toEqual(['type: must be a type\'s name (lower-case letters, digits and hyphens) or null']);
     expect(defaultsProblems([])).toEqual(['settings must be an object']);
   });
+
+  // A Google Cloud router's and workload's (router gcp/src/levels.mjs levelProblems): one controller request lasts at most
+  // 1800 s; the hold, the drain and the holders are 0 there, which the router refuses in its own words.
+  it('takes a Google Cloud wake timeout from 60 to 1700 s and leaves the hold, the drain and the holders to the router', () => {
+    expect(defaultsProblems({ wakeTimeoutSeconds: 1700 }, { cloud: 'gcp' })).toEqual([]);
+    expect(defaultsProblems({ wakeTimeoutSeconds: 1701 }, { cloud: 'gcp' })).toEqual(['wakeTimeoutSeconds: must be a whole number from 60 to 1700']);
+    expect(defaultsProblems({ wakeTimeoutSeconds: 59 }, { cloud: 'gcp', workload: true })).toEqual(['wakeTimeoutSeconds: must be a whole number from 60 to 1700']);
+    expect(defaultsProblems({ waitSeconds: 500, drainSeconds: 30, maxHolders: 0 }, { cloud: 'gcp' })).toEqual([]);
+    expect(defaultsProblems({ idleMinutes: 4 }, { cloud: 'gcp' })).toEqual(['idleMinutes: must be a whole number from 5 to 1440']);
+    // AWS's, and the levels both clouds share (the organization's, the types'), keep AWS's ranges.
+    expect(defaultsProblems({ wakeTimeoutSeconds: 3600, waitSeconds: 500 })).toEqual(['waitSeconds: must be a whole number from 5 to 120']);
+    expect(defaultsProblems({ wakeTimeoutSeconds: 1701 }, { cloud: 'aws' })).toEqual([]);
+  });
 });
 
 describe('the organization\'s types', () => {
