@@ -56,7 +56,7 @@ export interface TargetOption {
 
 // What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account. On Google
 // Cloud: its backend service, its URL map (by their paths) and its project.
-export function exclusionTargets(c: { targetGroupArn: string | null; targetGroup: string | null; loadBalancerArn: string; loadBalancer: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string }): TargetOption[] {
+export function exclusionTargets(c: { targetGroupArn?: string | null; targetGroup: string | null; loadBalancerArn?: string; loadBalancer: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string }): TargetOption[] {
   if (cloudOf(c.account) === 'gcp') {
     const service = c.backendService ?? c.id;
     return [
@@ -67,7 +67,7 @@ export function exclusionTargets(c: { targetGroupArn: string | null; targetGroup
   }
   return [
     ...(c.targetGroupArn ? [{ kind: 'target-group' as const, arn: c.targetGroupArn, label: `Target group ${c.targetGroup ?? c.targetGroupArn}` }] : []),
-    ...(c.loadBalancerArn.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: `Load balancer ${c.loadBalancer} (every rule on it)` }] : []),
+    ...(c.loadBalancerArn?.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: `Load balancer ${c.loadBalancer} (every rule on it)` }] : []),
     { kind: 'account' as const, account: c.account, label: `Account ${c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`} (never read again)` },
   ];
 }

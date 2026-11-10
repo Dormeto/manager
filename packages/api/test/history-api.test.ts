@@ -47,6 +47,8 @@ describe('workload history (R8)', () => {
     expect(body.totals.ASLEEP).toBe(3_000);
     expect(body.wakes).toEqual({ count: 1, failed: 0, medianMs: 40_000, maxMs: 40_000 });
     expect(body.entries).toHaveLength(3);
+    // Each row says its cloud beside its account.
+    expect([...body.entries, body.before].map((e: { cloud: string }) => e.cloud)).toEqual(['aws', 'aws', 'aws', 'aws']);
     expect(body.before.to).toBe('AWAKE');
     expect(body.truncated).toBe(false);
     expect(calls).toEqual([]);

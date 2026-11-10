@@ -45,10 +45,11 @@ describe('the demo\'s Google Cloud router', () => {
   it('finds the project\'s candidates as the API answers them: the backend service\'s path as the id, its name and the URL map\'s, global, the kind of load balancer', async () => {
     const [eligible] = await google('pending-onboarding');
     expect(eligible).toMatchObject({
-      id: 'projects/dormeto-dev/global/backendServices/shop-bs', cloud: 'gcp', account: 'dormeto-dev', region: 'global', targetGroup: 'shop-bs', targetGroupArn: null, loadBalancer: 'shop-lb',
-      loadBalancerArn: '', listener: '', priority: '', rules: [], backendService: 'projects/dormeto-dev/global/backendServices/shop-bs', urlMap: 'projects/dormeto-dev/global/urlMaps/shop-lb',
+      id: 'projects/dormeto-dev/global/backendServices/shop-bs', cloud: 'gcp', account: 'dormeto-dev', region: 'global', targetGroup: 'shop-bs', loadBalancer: 'shop-lb',
+      rules: [], backendService: 'projects/dormeto-dev/global/backendServices/shop-bs', urlMap: 'projects/dormeto-dev/global/urlMaps/shop-lb',
       lb: { kind: 'global' }, backend: { kind: 'asg' }, status: 'pending-onboarding',
     });
+    for (const key of ['targetGroupArn', 'loadBalancerArn', 'listener', 'priority']) expect(key in eligible!, key).toBe(false);
     expect(eligible!.idleHours7d).toEqual(expect.any(Number));
   });
 

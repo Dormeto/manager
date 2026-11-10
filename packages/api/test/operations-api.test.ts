@@ -166,6 +166,32 @@ describe('operations', () => {
     expect((await api(event('GET', '/api/operations/nope'))).statusCode).toBe(404);
   });
 
+  it('says the cloud of each operation\'s account in its target: gcp for a project, aws for an account, none for a record without one', async () => {
+    const op = setup().operation;
+    const aws = { ...op('onboard', {}), id: 'op-aws', target: { account: MANAGER, region: 'eu-west-3', targetGroupArn: TG } };
+    const gcp = { ...op('onboard', {}), id: 'op-gcp', target: { account: 'dormeto-dev', region: 'europe-west1', backendService: 'projects/dormeto-dev/global/backendServices/web' } };
+    const bare = { ...op('onboard', {}), id: 'op-bare', target: {} };
+    const s = setup({ listed: [aws, gcp, bare] });
+    const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
+    expect(listed.map((o) => [o.id, (o.target as { cloud?: string }).cloud])).toEqual([['op-aws', 'aws'], ['op-gcp', 'gcp'], ['op-bare', undefined]]);
+    expect(json(await s.api(event('GET', '/api/operations/op-gcp', 'dmt-admin'))).target).toMatchObject({ account: 'dormeto-dev', cloud: 'gcp' });
+  });
+
+  it('refuses an AWS onboarding\'s database of another kind or shape, in one message form, and starts nothing; RDS instances and clusters go through', async () => {
+    const s = setup();
+    const form = 'is not an RDS instance or cluster: give {"kind": "rds-instance" or "rds-cluster", "id": "<identifier>"}';
+    for (const databases of [[{ kind: 'cloudsql-instance', id: 'db-1' }], ['db-1'], [{ kind: 'rds-instance' }], [{ kind: 'rds-cluster', id: '' }], [{ id: 'db-1' }], [null]]) {
+      const res = await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases }));
+      expect([res.statusCode, json(res).error], JSON.stringify(databases)).toEqual([400, 'bad_request']);
+      expect(json(res).message).toBe(`databases: ${JSON.stringify(databases[0])} ${form}`);
+    }
+    expect((await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases: 'db-1' }))).statusCode).toBe(400);
+    expect(s.created).toEqual([]);
+    const ok = [{ kind: 'rds-instance', id: 'db-1' }, { kind: 'rds-cluster', id: 'aurora-1' }];
+    expect((await s.api(event('POST', '/api/operations', 'dmt-operator', { type: 'onboard', candidateId: TG, databases: ok }))).statusCode).toBe(202);
+    expect(s.created.at(-1)![1]).toMatchObject({ databases: ok });
+  });
+
   it('lists and reads the manager\'s update operations for administrators only, whatever the perimeter', async () => {
     const op = setup().operation;
     const onboard = { ...op('onboard', {}), target: { account: MANAGER, region: 'eu-west-3' } };

@@ -38,7 +38,7 @@ describe('matches', () => {
     expect(m({ loadBalancers: ['web-*'] })).toBe(true);
     expect(m({ loadBalancers: ['web-shop'] })).toBe(true);
     expect(m({ loadBalancers: ['web'] })).toBe(false);
-    expect(m({ loadBalancers: [rule().loadBalancerArn] })).toBe(true);
+    expect(m({ loadBalancers: [rule().loadBalancerArn!] })).toBe(true);
     expect(m({ loadBalancers: ['arn:aws:elasticloadbalancing:eu-west-1:111111111111:loadbalancer/app/other/1'] })).toBe(false);
   });
 

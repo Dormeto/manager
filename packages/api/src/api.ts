@@ -518,6 +518,16 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud
   }
   if (settings?.hibernate !== undefined && typeof settings.hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'settings: hibernate must be true or false');
 }
+// An AWS onboarding's databases: RDS instances and clusters, as the onboarder takes them (router lambda/src/lib/onboarding.mjs's
+// databasesOf: a kind and an identifier), refused here in one message form before an operation starts.
+function rdsFailures(databases: unknown[]) {
+  for (const d of databases) {
+    const { kind, id } = (d && typeof d === 'object' ? d : {}) as { kind?: unknown; id?: unknown };
+    if ((kind !== 'rds-instance' && kind !== 'rds-cluster') || typeof id !== 'string' || !id) {
+      throw new HttpError(400, 'bad_request', `databases: ${JSON.stringify(d)} is not an RDS instance or cluster: give {"kind": "rds-instance" or "rds-cluster", "id": "<identifier>"}`);
+    }
+  }
+}
 // A Google Cloud onboarding's databases: Cloud SQL instances as AWS's entries, by their names (router gcp/src/actions.mjs's
 // databaseNames, cloudsql.mjs:19), each named once.
 const CLOUD_SQL_NAME = /^[a-z]([-a-z0-9]{0,96}[a-z0-9])?$/;
@@ -1087,7 +1097,7 @@ export function createApi({
       // Over the days stored: those older than the history are gone.
       cumulative: { usd: stored.reduce((n, d) => n + sum(d), 0), since: stored[0] ?? summary.day, lastDay: summary.cumulative.lastDay },
       counted,
-      top: [...byWorkload.values()].filter((w) => w.usd > 0).sort((a, b) => b.usd - a.usd).slice(0, 10),
+      top: [...byWorkload.values()].filter((w) => w.usd > 0).sort((a, b) => b.usd - a.usd).slice(0, 10).map((w) => ({ ...w, ...cloudField(w.account) })),
       unpriced: { workloads: unpriced.length, hours: unpriced.reduce((n, d) => n + d.unpriced.reduce((m, u) => m + u.hours, 0), 0) },
       workloads: latestDay.length,
       ...(summary.discounts ? { discounts: summary.discounts } : {}),
@@ -1667,7 +1677,7 @@ export function createApi({
       if (identity.role === 'member') {
         return reply(200, { summary: summary ? await readableSavings(identity, summary) : null, settings: settings ? { compute: settings.compute, databases: settings.databases } : null });
       }
-      return reply(200, { summary, settings });
+      return reply(200, { summary: summary ? { ...summary, ...(summary.top ? { top: summary.top.map((w) => ({ ...w, ...cloudField(w.account) })) } : {}) } : null, settings });
     }
     // The discounts for commitments (R9.5): administrators set them, whole percentages from 0 to 90.
     if (method === 'PUT' && resource === 'savings' && a === 'settings' && !b) {
@@ -1803,7 +1813,8 @@ export function createApi({
           ? await discountsOf().then((discounts) => savingsOf(view.phases, { hourly: (item) => savings.hourly(router.region, item, discounts), baseline: savings.baseline })
             .then((r) => ({ ...r, baseline: savings.baseline, ...(anyDiscount(discounts) ? { discounts } : {}) }))).catch(() => undefined)
           : undefined;
-        return reply(200, { ...view, before, entries, truncated, ...(priced ? { savings: priced } : {}) });
+        const withCloud = <T extends { account: string }>(row: T) => ({ ...row, ...cloudField(row.account) });
+        return reply(200, { ...view, before: before ? withCloud(before) : before, entries: entries.map(withCloud), truncated, ...(priced ? { savings: priced } : {}) });
       }
       // Its idle window advice (R10): its last 14 days of requests replayed against idle windows, priced as its savings;
       // kept a day, or until its idle window changes.
@@ -1826,7 +1837,8 @@ export function createApi({
         const idle = (summary.settings as { idleMinutes?: unknown } | undefined)?.idleMinutes;
         const current = typeof idle === 'number' && idle > 0 ? idle : DEFAULT_IDLE_MINUTES;
         const kept = await fleet.getIdleWindow?.(account, router.region, id).catch(() => null);
-        if (kept && kept.current === current) return reply(200, kept);
+        // One kept by an earlier build has no `estimated` on AWS: false there.
+        if (kept && kept.current === current) return reply(200, { ...kept, estimated: kept.estimated ?? false });
         let requests: Awaited<ReturnType<IdleRequests>>;
         try {
           requests = await idleRequests(account, router.region, target, IDLE_DAYS);
@@ -2489,7 +2501,7 @@ export function createApi({
       };
       return reply(200, {
         exclusions: await Promise.all(all.map(async (e) => ({
-          ...e, ...(e.paused ? { paused: await Promise.all(e.paused.map(named)) } : {}), expired: !e.liftedAt && !active.has(e.id), lifting: Boolean(e.liftedAt),
+          ...e, target: { ...e.target, ...cloudField(e.target.account) }, ...(e.paused ? { paused: await Promise.all(e.paused.map(named)) } : {}), expired: !e.liftedAt && !active.has(e.id), lifting: Boolean(e.liftedAt),
         }))),
       });
     }
@@ -2531,7 +2543,7 @@ export function createApi({
           throw new HttpError(503, 'unavailable', `the operation pausing its workloads could not start (${(err as Error).message}): nothing excluded, try again`);
         }
         const result = [reason, ...(expiresAt ? [`until ${expiresAt}`] : []), `operation ${op.id}`].join('; ');
-        return { result, response: reply(202, { exclusion, candidates, operation: op }) };
+        return { result, response: reply(202, { exclusion: { ...exclusion, target: { ...exclusion.target, ...cloudField(exclusion.target.account) } }, candidates, operation: op }) };
       });
     }
     if (method === 'DELETE' && id) {
@@ -2571,6 +2583,8 @@ export function createApi({
     return typeof id === 'string' ? { account: op.target.account, region: op.target.region, id } : null;
   };
   // What a member is shown of an operation: who and what, its steps and their errors; not its input, context or holds.
+  // An operation as answered: its target says the cloud of its account beside it (a stored record has none).
+  const operationView = (op: Operation) => (op.target.account ? { ...op, target: { ...op.target, ...cloudField(op.target.account) } } : op);
   const memberView = (op: Operation) => {
     const w = workloadOf(op);
     const router = op.type === 'offboard' ? op.target.router : routers.find((r) => accountOfRouter(r) === op.target.account && r.region === op.target.region)?.name;
@@ -2595,13 +2609,13 @@ export function createApi({
         console.error(JSON.stringify({ level: 'error', event: 'UpdateOperationsNotRefreshed', error: err.message }));
         return shown;
       }) : shown;
-      return reply(200, { operations: RANK[identity.role] >= RANK.viewer ? operations : operations.map(memberView) });
+      return reply(200, { operations: RANK[identity.role] >= RANK.viewer ? operations.map(operationView) : operations.map(memberView) });
     }
     if (method === 'GET' && id) {
       const op = await ops.get(decodeURIComponent(id));
       const index = op && RANK[identity.role] < RANK.viewer ? await tagIndex(identity) : new Map<string, Record<string, string>>();
       if (!op || !readsOperation(identity, index, op)) throw new HttpError(404, 'not_found', `unknown operation: ${id}`);
-      return reply(200, RANK[identity.role] >= RANK.viewer ? op : memberView(op));
+      return reply(200, RANK[identity.role] >= RANK.viewer ? operationView(op) : memberView(op));
     }
     if (method !== 'POST' || id) return null;
     const body = bodyOf(event);
@@ -2621,6 +2635,7 @@ export function createApi({
       const onGoogle = isProject(c.account);
       settingsOfFailures(body.settings as Record<string, unknown> | undefined, onGoogle ? 'gcp' : 'aws');
       if (onGoogle) cloudSqlFailures((body.databases ?? []) as unknown[]);
+      else rdsFailures((body.databases ?? []) as unknown[]);
       // A Google Cloud router is 0.40.0 or later (checked with its choice): it takes Hibernate.
       const router = onGoogle ? googleRouterOf(c, body.router, identity) : null;
       // A router before 0.32.0 would refuse the setting at the preview ("unknown setting hibernate"): refused here, with the

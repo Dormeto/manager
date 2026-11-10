@@ -132,6 +132,15 @@ describe('discovery routes', () => {
     });
     const ask = async (api: ReturnType<typeof setup>['api'], status = 'managed') => json(await api(event('GET', '/api/discovery/candidates', 'dmt-viewer', undefined, { status }))).candidates as (Candidate & { workload?: unknown; operation?: unknown })[];
 
+    it('reads a candidate an earlier build stored (a null targetGroupArn, empty AWS fields) as it reads a new one, absent them, both as Google Cloud\'s', async () => {
+      const old = gcp('old-bs', 'global', { loadBalancerArn: '', listener: '', priority: '' });
+      const fresh = gcp('new-bs', 'global');
+      delete (fresh as { targetGroupArn?: unknown }).targetGroupArn;
+      const { api } = setup([old, fresh], { listAll: true, operations: registered });
+      const listed = await ask(api, 'pending-onboarding');
+      expect(listed.map((c) => [c.id.split('/').pop(), (c as { cloud?: string }).cloud, c.targetGroup])).toEqual([['new-bs', 'gcp', 'new-bs'], ['old-bs', 'gcp', 'old-bs']]);
+    });
+
     it('finds the workload of a global candidate on its project\'s router of any region, by the backend service\'s name and scope', async () => {
       const shop = gcp('shop-bs', 'global', { status: 'managed', statusReason: 'managed', eligibility: 'managed', workloadId: 'shop-bs' });
       const { api } = setup([shop], {

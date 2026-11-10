@@ -4,6 +4,7 @@
 // router's poll (Google Cloud manager design §6.3) on its RS# item, beside the summary.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import type { Refusal } from '@dormeto/google/router';
+import type { Cloud } from './clouds.js';
 import type { Discounts, StoppedItem } from './prices.js';
 import { checkMinutesOf, type IdleWindowAdvice } from './idle.js';
 
@@ -119,7 +120,7 @@ export interface SavingsSummary {
   cumulative: { usd: number; since: string; lastDay: string };
   counted: Record<string, number>; // each day's total (review I1: a day run again replaces its amount, in any order)
   failed?: number; // workloads whose day could not be computed, at the latest run
-  top: { account: string; region: string; router: string; workloadId: string; name?: string; usd: number }[];
+  top: { account: string; cloud?: Cloud; region: string; router: string; workloadId: string; name?: string; usd: number }[];
   unpriced: { workloads: number; hours: number };
   workloads: number;
   dormeto: { usdMonth: number };

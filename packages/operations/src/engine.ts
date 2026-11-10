@@ -671,7 +671,7 @@ export function createEngine(deps: EngineDeps) {
       const c = await deps.discovery?.getCandidate(String(input.candidateId));
       if (c && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
-      return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn }, activeKey: `TG#${c.targetGroupArn}` };
+      return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn ?? '' }, activeKey: `TG#${c.targetGroupArn}` };
     }
     if (type === 'connect-account' || type === 'disconnect-account') {
       const account = String(input.account);

@@ -234,9 +234,22 @@ describe('one workload', () => {
 describe('aggregates', () => {
   const savings = async (s: ReturnType<typeof setup>, user: keyof typeof USERS) => json(await s.api(event(user, 'GET', '/api/savings'))).summary;
 
+  it('names the cloud of each top workload: gcp for a project, aws for an account', async () => {
+    const s = setup();
+    const gcp = { account: 'dormeto-dev', region: 'europe-west1', router: 'dmt-dev-gcp', workloadId: 'g', usd: 16, asleepHours: 2, hours: 2, unpriced: [] };
+    DAYS['2026-10-17']!.push(gcp);
+    try {
+      const top = (await savings(s, 'all')).top as { workloadId: string; cloud: string }[];
+      expect(top.map((t) => [t.workloadId, t.cloud])).toEqual([['g', 'gcp'], ['plain', 'aws'], ['search', 'aws'], ['pay', 'aws']]);
+    } finally {
+      DAYS['2026-10-17']!.pop();
+    }
+  });
+
   it('gives a member the sums of the readable workloads\' days; a viewer\'s are unchanged', async () => {
     const s = setup();
-    expect(await savings(s, 'viewer')).toEqual(SAVINGS);
+    // The stored summary is an earlier build's, its top rows without `cloud`: the answer adds it.
+    expect(await savings(s, 'viewer')).toEqual({ ...SAVINGS, top: SAVINGS.top.map((w) => ({ ...w, cloud: 'aws' })) });
     const pay = await savings(s, 'pay');
     expect([pay.last30.usd, pay.last30.asleepHours, pay.month.usd, pay.cumulative.usd, pay.counted, pay.workloads, pay.top.map((t: { workloadId: string; usd: number }) => [t.workloadId, t.usd])])
       .toEqual([2, 4, 2, 2, { '2026-10-16': 1, '2026-10-17': 1 }, 1, [['pay', 2]]]);

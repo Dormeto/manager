@@ -222,7 +222,7 @@ export function startOperation(d: Demo, body: Body, now: number) {
     const router = routerIn(d, c.account, c.region);
     const kubernetes = c.backend?.kind === 'k8s';
     op = {
-      id, type, target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn ?? c.id, loadBalancerArn: c.loadBalancerArn },
+      id, type, target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn ?? c.id, loadBalancerArn: c.loadBalancerArn ?? '' },
       input: { candidateId: c.id, ...(name ? { name } : {}), settings: body.settings ?? {}, databases: body.databases ?? [], ...(body.tags !== undefined ? { tags: body.tags } : {}) }, context: { name: name ?? c.targetGroup ?? c.id },
       by: ME, createdAt: now,
       steps: plan('onboard', now, {

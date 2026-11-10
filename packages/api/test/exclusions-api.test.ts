@@ -81,7 +81,7 @@ describe('exclusions', () => {
       id: 'x1', target: { kind: 'target-group', arn: TG, account: ACCOUNT, region: 'eu-west-1', name: 'dmt-dev-asg-app' },
       reason: 'migration', by: 'ops@example.com', at: new Date(NOW).toISOString(), expiresAt,
     };
-    expect(json(res)).toMatchObject({ exclusion, candidates: 1, operation: { id: 'op1' } });
+    expect(json(res)).toMatchObject({ exclusion: { ...exclusion, target: { ...exclusion.target, cloud: 'aws' } }, candidates: 1, operation: { id: 'op1' } });
     expect(await store.getExclusion('x1')).toEqual(exclusion);
     // The API answers at once: no router is called, the operation pauses the workloads.
     expect([calls, created]).toEqual([[], [['exclude', { exclusionId: 'x1' }, 'ops@example.com']]]);
@@ -129,7 +129,7 @@ describe('exclusions', () => {
   it('excludes an account, named from the organization inventory', async () => {
     const { api, store } = setup();
     const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'account', account: ACCOUNT }, reason: 'payments' })));
-    expect(res.exclusion.target).toEqual({ kind: 'account', account: ACCOUNT, name: 'dormeto' });
+    expect(res.exclusion.target).toEqual({ kind: 'account', account: ACCOUNT, cloud: 'aws', name: 'dormeto' });
     expect((await store.listCandidates()).map((c) => c.status).sort()).toEqual(['excluded', 'pending-offboarding', 'pending-offboarding']);
   });
 
@@ -143,19 +143,28 @@ describe('exclusions', () => {
   it('excludes a Google Cloud backend service by its path: account and region come from the path, the name is the service\'s', async () => {
     const { api, store } = setup();
     const res = json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', path: BS }, reason: 'migration' })));
-    expect(res.exclusion.target).toEqual({ kind: 'target-group', path: BS, account: 'dormeto-dev', region: 'europe-west2', name: 'web' });
+    expect(res.exclusion.target).toEqual({ kind: 'target-group', path: BS, account: 'dormeto-dev', cloud: 'gcp', region: 'europe-west2', name: 'web' });
     expect(await store.getExclusion('x1')).toMatchObject({ target: { path: BS, account: 'dormeto-dev', region: 'europe-west2' } });
+  });
+
+  it('lists each exclusion with the cloud of its target\'s account, stored without it', async () => {
+    const { api, store } = setup();
+    await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'migration' }));
+    await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', path: BS }, reason: 'migration' }));
+    expect(Object.values((await store.getExclusion('x1'))!.target)).not.toContain('aws');
+    const { exclusions } = json(await api(event('GET', '/api/exclusions')));
+    expect(exclusions.map((e: { target: { account: string; cloud: string } }) => [e.target.account, e.target.cloud]).sort()).toEqual([[ACCOUNT, 'aws'], ['dormeto-dev', 'gcp']]);
   });
 
   it('excludes a Google Cloud URL map by its path, and a project by its ID; an ARN stays AWS\'s', async () => {
     const { api } = setup();
     const map = 'projects/dormeto-dev/global/urlMaps/lb';
     expect(json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'load-balancer', path: map }, reason: 'a' }))).exclusion.target)
-      .toEqual({ kind: 'load-balancer', path: map, account: 'dormeto-dev', region: 'global', name: 'lb' });
+      .toEqual({ kind: 'load-balancer', path: map, account: 'dormeto-dev', cloud: 'gcp', region: 'global', name: 'lb' });
     expect(json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'account', account: 'dormeto-dev' }, reason: 'b' }))).exclusion.target)
-      .toEqual({ kind: 'account', account: 'dormeto-dev', name: 'dormeto-dev' });
+      .toEqual({ kind: 'account', account: 'dormeto-dev', cloud: 'gcp', name: 'dormeto-dev' });
     expect(json(await api(event('POST', '/api/exclusions', 'dmt-operator', { target: { kind: 'target-group', arn: TG }, reason: 'c' }))).exclusion.target)
-      .toEqual({ kind: 'target-group', arn: TG, account: ACCOUNT, region: 'eu-west-1', name: 'dmt-dev-asg-app' });
+      .toEqual({ kind: 'target-group', arn: TG, account: ACCOUNT, cloud: 'aws', region: 'eu-west-1', name: 'dmt-dev-asg-app' });
   });
 
   it('refuses a path of the wrong kind or whose project is twelve digits, naming both forms', async () => {

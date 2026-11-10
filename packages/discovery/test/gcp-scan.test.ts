@@ -36,13 +36,10 @@ describe('a Google Cloud project\'s scan', () => {
       account: PROJECT,
       region: 'global',
       loadBalancer: 'dmt-dev',
-      loadBalancerArn: '',
-      listener: '',
-      priority: '',
       conditions: 'hosts mig.gcp.dev.dormeto.com; paths /*',
       hosts: ['mig.gcp.dev.dormeto.com'],
       targetGroup: 'dmt-demo-mig-app',
-      targetGroupArn: null,
+      cloud: 'gcp',
       backend: { kind: 'asg', id: 'dmt-demo-mig' },
       tags: { env: ['dev'], app: ['demo-mig'] },
       rules: [],
@@ -53,6 +50,9 @@ describe('a Google Cloud project\'s scan', () => {
       urlMap: 'projects/dormeto-dev/global/urlMaps/dmt-dev',
       lb: { kind: 'global' },
     });
+    // AWS's four fields are absent, not null or empty.
+    const mig = named(rules, 'dmt-demo-mig-app')!;
+    for (const key of ['targetGroupArn', 'loadBalancerArn', 'listener', 'priority']) expect(key in mig, key).toBe(false);
     // Onboarded: managed, its waker's /_dormeto/* route being Dormeto's own; the map's default reaches it too.
     const app = named(rules, 'dmt-demo-app')!;
     expect(app).toMatchObject({ eligibility: 'managed', workloadId: 'dmt-demo-app', backend: { kind: 'instance', id: 'dmt-demo' }, hosts: ['gcp.dev.dormeto.com', '*'], conditions: 'hosts gcp.dev.dormeto.com, *; paths /*', tags: { env: ['dev'], app: ['demo'] } });

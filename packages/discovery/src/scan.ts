@@ -306,7 +306,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   for (const row of visible.filter((r) => !r.app)) candidates.push(ruleCandidate(row, where, tags, groups));
 
   const measured = candidates.filter((c) => c.eligibility !== 'ineligible' && c.targetGroupArn);
-  const pairs = [...new Map(measured.map((c) => [c.targetGroupArn!, { lb: c.loadBalancerArn, tg: c.targetGroupArn! }])).values()];
+  const pairs = [...new Map(measured.map((c) => [c.targetGroupArn!, { lb: c.loadBalancerArn ?? '', tg: c.targetGroupArn! }])).values()];
   const idle = pairs.length && ports.cloudwatch ? await idleHours(ports.cloudwatch, pairs, now) : new Map();
   for (const c of measured) Object.assign(c, idle.get(c.targetGroupArn!) ?? {});
   return candidates;

@@ -63,8 +63,8 @@ describe('a workload\'s idle window advice (R10)', () => {
     // The 30 days of the median wake, and the replay's 14 days.
     expect(s.asked.history).toEqual(expect.arrayContaining([iso(NOW - 30 * DAY), iso(MINUTE - 14 * DAY)]));
     expect(body).toMatchObject({ current: 15, checkMinutes: 10, wakeSeconds: 50, priced: true, wakerTargetGroup: true, recommended: 5 });
-    // AWS's counts are CloudWatch's: no `estimated`.
-    expect('estimated' in body).toBe(false);
+    // AWS's counts are CloudWatch's: `estimated` is there, false.
+    expect(body.estimated).toBe(false);
     // Asleep at the start of the 14 days and no request: asleep all the time, whatever the window.
     expect(body.windows.find((w) => w.minutes === 15)!.asleepHours).toBeCloseTo(24, 6);
     expect(body.windows.find((w) => w.minutes === 15)!.usdMonth).toBeCloseTo(24 * 30 * 0.0456, 6);

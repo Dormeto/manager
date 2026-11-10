@@ -573,7 +573,7 @@ export function restatus(d: Demo, now: number): number {
 }
 
 export const activeExclusions = (d: Demo, now: number) => d.exclusions.filter((e) => !e.liftedAt && !(e.expiresAt && Date.parse(e.expiresAt) <= now));
-export function matches(e: StoredExclusion, c: { account: string; targetGroupArn: string | null; loadBalancerArn: string; backendService?: string; urlMap?: string }): boolean {
+export function matches(e: StoredExclusion, c: { account: string; targetGroupArn?: string | null; loadBalancerArn?: string; backendService?: string; urlMap?: string }): boolean {
   if (e.target.kind === 'account') return c.account === e.target.account;
   // Google Cloud: a backend service's or a URL map's path.
   if (e.target.path) return e.target.kind === 'load-balancer' ? c.urlMap === e.target.path : c.backendService === e.target.path;
@@ -714,14 +714,14 @@ interface GoogleCandidateSpec {
   eligibility: Candidate['eligibility']; reason?: string; workloadId?: string; idleHours7d: number; requests7d: number; firstSeenDays: number;
 }
 // A Google Cloud candidate as discovery records it: the backend service's path as its id, its name, the URL map's, the region the
-// map is in or `global`, and AWS's fields empty.
+// map is in or `global`, and AWS's fields absent.
 function googleCandidate(c: GoogleCandidateSpec, now: number, lastSeen: number): Candidate {
   const scope = c.region === 'global' ? 'global' : `regions/${c.region}`;
   const path = (collection: string, name: string) => `projects/${GOOGLE_PROJECT}/${scope}/${collection}/${name}`;
   const service = path('backendServices', c.name);
   return {
-    id: service, account: GOOGLE_PROJECT, region: c.region, loadBalancer: c.urlMap, loadBalancerArn: '', listener: '', priority: '', conditions: `host ${c.host}, path /*`, hosts: [c.host],
-    targetGroup: c.name, targetGroupArn: null, backend: { kind: c.backend.kind, id: c.backend.id }, tags: {}, rules: [], eligibility: c.eligibility,
+    id: service, account: GOOGLE_PROJECT, region: c.region, loadBalancer: c.urlMap, conditions: `host ${c.host}, path /*`, hosts: [c.host],
+    targetGroup: c.name, cloud: 'gcp', backend: { kind: c.backend.kind, id: c.backend.id }, tags: {}, rules: [], eligibility: c.eligibility,
     ...(c.reason ? { reason: c.reason } : {}), ...(c.workloadId ? { workloadId: c.workloadId } : {}), idleHours7d: c.idleHours7d, requests7d: c.requests7d,
     backendService: service, urlMap: path('urlMaps', c.urlMap), lb: { kind: c.lb },
     accountName: GOOGLE_PROJECT, ouPath: [], scope: 'in', scopeReason: IN_SCOPE, status: 'pending-onboarding', statusReason: 'eligible',
@@ -1013,7 +1013,7 @@ function seedOperations(d: Demo, now: number) {
     const name = c.targetGroup ?? c.id;
     const w = d.workloads.find((x) => x.name === name);
     return addOperation(d, {
-      id: uuid(`operation:onboard:${name}`), type: 'onboard', target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn!, loadBalancerArn: c.loadBalancerArn },
+      id: uuid(`operation:onboard:${name}`), type: 'onboard', target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn!, loadBalancerArn: c.loadBalancerArn! },
       input: { candidateId: c.id, name, settings: { idleMinutes: w?.settings.idleMinutes ?? 15, wakeMode: w?.wakeMode ?? 'any' }, databases: [] },
       context: { router: router.name, ...(w ? { workloadId: w.workloadId, name } : { name }) }, by: first, createdAt: start,
       steps: plan('onboard', start, { skip: routerSkip, details: { 'find router': `${router.name} ${AVAILABLE.version}`, preview: '1 rule, the waker target group to create' }, seed: name, ...options }),
@@ -1072,7 +1072,7 @@ function seedOperations(d: Demo, now: number) {
     const why = `the rule forwards to 2 target groups with weights (${name}, ${name}-canary): not supported`;
     story.push({
       at, add: () => addOperation(d, {
-        id: uuid(`operation:onboard:${name}`), type: 'onboard', target: { account: lone.account, region: lone.region, targetGroupArn: lone.targetGroupArn!, loadBalancerArn: lone.loadBalancerArn },
+        id: uuid(`operation:onboard:${name}`), type: 'onboard', target: { account: lone.account, region: lone.region, targetGroupArn: lone.targetGroupArn!, loadBalancerArn: lone.loadBalancerArn! },
         input: { candidateId: lone.id, name, settings: { idleMinutes: 30, wakeMode: 'browser' }, databases: [] }, context: { name }, by: second, createdAt: at,
         steps: plan('onboard', at, {
           skip: (s) => CLUSTER.includes(s), seed: name, details: { 'find router': `none: installing dmtr-${accountName(lone.account)}-${lone.region}` },

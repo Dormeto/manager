@@ -34,8 +34,8 @@ export interface IdleWindowAdvice {
   actual: { wakes: number; replayedWakes: number; noisy: boolean };
   // The waker's requests are counted (AWS's name; on Google Cloud its waker backend service).
   wakerTargetGroup: boolean;
-  // Google Cloud's counts are Cloud Monitoring's (§12): present, true, only there.
-  estimated?: true;
+  // Google Cloud's counts are Cloud Monitoring's, sampled (§12): true there, false on AWS (CloudWatch's).
+  estimated: boolean;
   // Absent from an answer kept from before the manager computed it.
   hours?: RequestHours;
 }
@@ -180,6 +180,6 @@ export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs
     computedAt: new Date(now).toISOString(), from: requests.from, to: requests.to, current, recommended: recommendWindow(replayed), checkMinutes,
     wakeSeconds, priced, windows,
     actual: { wakes: actualWakes, replayedWakes, noisy: actualFrom !== null && replayedWakes > 1.5 * actualWakes && replayedWakes >= actualWakes + 3 },
-    wakerTargetGroup, ...(estimated ? { estimated: true as const } : {}), hours: requestHours(requests),
+    wakerTargetGroup, estimated, hours: requestHours(requests),
   };
 }

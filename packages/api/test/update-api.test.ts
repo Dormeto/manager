@@ -587,8 +587,10 @@ describe('an operation per dashboard request', () => {
     const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
     expect(listed.find((o) => o.id === 'op-1')).toMatchObject({ status: 'succeeded', context: { build: b.id, consoleUrl: consoleOf(5) } });
     expect(s.ops.get('op-1')!.status).toBe('succeeded');
-    expect(listed.find((o) => o.id === 'op-0')).toEqual(done);
-    expect(listed.find((o) => o.id === 'op-r')).toEqual(router);
+    // Listed, an operation's target also says its account's cloud.
+    const withCloud = (o: { target: object }) => ({ ...o, target: { ...o.target, cloud: 'aws' } });
+    expect(listed.find((o) => o.id === 'op-0')).toEqual(withCloud(done));
+    expect(listed.find((o) => o.id === 'op-r')).toEqual(withCloud(router));
     expect(s.state.gets).toEqual([`prod/results/${REQ}.json`]);
     // Nothing running: nothing read.
     s.state.gets.length = 0;
@@ -646,7 +648,7 @@ describe('an operation per dashboard request', () => {
     const listed = json(await s.api(event('GET', '/api/operations', 'dmt-admin'))).operations as Operation[];
     expect(s.state.updates).toBe(0);
     expect(s.ops.get('op-1')).toEqual(stored);
-    expect(listed[0]).toEqual(stored);
+    expect(listed[0]).toEqual({ ...stored, target: { ...stored.target, cloud: 'aws' } });
   });
 
   it('lists the operations as they are when they cannot be brought up to date', async () => {

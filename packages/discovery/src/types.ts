@@ -1,5 +1,6 @@
 // Organization discovery (vision docs/specs/2026-10-04-org-discovery-design.md).
 
+import type { Cloud } from '@dormeto/fleet/clouds';
 import type { KubernetesCandidate } from './kubernetes.js';
 
 export type BackendKind = 'instance' | 'asg' | 'ecs' | 'k8s';
@@ -84,13 +85,14 @@ export interface ScannedRule {
   account: string;
   region: string;
   loadBalancer: string;
-  loadBalancerArn: string;
-  listener: string;
-  priority: string;
+  loadBalancerArn?: string; // absent on Google Cloud (a candidate stored by an earlier build holds '')
+  listener?: string; // absent on Google Cloud
+  priority?: string; // absent on Google Cloud
   conditions: string;
   hosts: string[];
   targetGroup: string | null;
-  targetGroupArn: string | null;
+  targetGroupArn?: string | null; // absent on Google Cloud (an earlier build stored null)
+  cloud?: Cloud; // 'gcp' on a Google Cloud candidate; an AWS one is told by its account
   backend: { kind: BackendKind; id: string; arn?: string; kubernetes?: KubernetesCandidate } | null; // arn: from 2026-10-05 scans
   tags: Record<string, string[]>; // every value of each tag on the load balancer, the target group or the rule
   rules: RuleRef[]; // sorted by priority; the first one gives priority, listener and conditions
@@ -100,7 +102,7 @@ export interface ScannedRule {
   idleHours7d: number | null;
   requests7d: number | null;
   // Google Cloud: the id is the backend service's path; targetGroup holds its name, loadBalancer the URL map's, region the
-  // URL map's or `global`, targetGroupArn is null and the AWS-only fields are empty.
+  // URL map's or `global`, and the AWS-only fields (targetGroupArn, loadBalancerArn, listener, priority) are absent.
   backendService?: string;
   urlMap?: string;
   lb?: { kind: 'global' | 'classic' | 'regional' | 'internal' | 'cross-region-internal' };
