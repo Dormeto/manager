@@ -37,7 +37,7 @@ import DmLogo from '../components/DmLogo.vue';
 import CommandBlock from '../components/CommandBlock.vue';
 import DmLoader from '../components/DmLoader.vue';
 import { stateSince } from '../state';
-import { backendCost, barSavings, discountText } from '../costs';
+import { GOOGLE_PRICE_NOTES, backendCost, barSavings, discountText } from '../costs';
 import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
@@ -271,7 +271,7 @@ const costNote = computed(() => {
   // Kubernetes workloads (R10.5): what the pods' price supposes, and what keeps running.
   const kubernetes = status.value?.backends.some((b) => b.kind === 'k8s')
     ? ` Pods count as the pods' share of their nodes, where an autoscaler removes the nodes they free; the ${gcp.value ? 'GKE' : 'EKS'} control plane and the nodes' DaemonSets keep running.` : '';
-  return `${gcp.value ? 'Google Cloud' : 'AWS'} list prices of what its last nap stopped, ${gcp.value ? 'Spot VMs at Spot prices' : 'Spot at Spot prices'}${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.${kubernetes}`;
+  return `${gcp.value ? 'Google Cloud' : 'AWS'} list prices of what its last nap stopped, ${gcp.value ? 'Spot VMs at Spot prices' : 'Spot at Spot prices'}${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.${gcp.value ? ` ${GOOGLE_PRICE_NOTES}` : ''}${kubernetes}`;
 });
 
 // The console's page of a Google Cloud backend, and of the load balancer that carries its backend services (the services' own
@@ -539,14 +539,9 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
       </v-card>
       <HistoryCard :router="router" :id="id" :now="now" />
-      <!-- A Google Cloud workload's requests are read with Google Cloud's request counts (the manager's savings, later): no
-           advice to read until then, rather than its error. -->
-      <RequestHeatmap v-if="!gcp" :router="router" :id="id" />
+      <RequestHeatmap :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
-      <IdleWindowCard v-if="!gcp" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
-      <v-card v-else data-test="gcp-requests" title="Requests and idle window">
-        <v-card-text class="text-body-medium text-medium-emphasis">Its requests per hour and the idle window advice come with Google Cloud's request counts, in a later manager version.</v-card-text>
-      </v-card>
+      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
     </div>
 
     <div class="dm-stack">

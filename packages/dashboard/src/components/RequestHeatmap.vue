@@ -101,8 +101,8 @@ function point(e: Event) {
         <span>More</span>
         <template v-if="unknown"><span :class="['dm-heat__cell', 'dm-heat__swatch', 'is-none']" class="ml-3" /><span>No data</span></template>
       </div>
-      <div class="text-body-small text-medium-emphasis mt-2">The load balancer's requests (application and waker target groups) per hour, in your time zone:
-        visitors and scanners alike, as the idle window advice replays them.</div>
+      <div class="text-body-small text-medium-emphasis mt-2">The load balancer's requests (application and waker {{ advice?.estimated ? 'backend services' : 'target groups' }}) per hour, in your time zone:
+        visitors and scanners alike, as the idle window advice replays them.<template v-if="advice?.estimated"> <span data-test="heat-estimated">Google's request counts are estimates.</span></template></div>
     </v-card-text>
   </v-card>
 </template>

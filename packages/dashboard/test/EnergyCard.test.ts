@@ -29,7 +29,7 @@ describe('EnergyCard', () => {
     await sleep(300);
     const tip = document.querySelector('.v-overlay--active [data-test="energy-tip"]')!.textContent!.replace(/\s+/g, ' ');
     for (const part of ['Each workload\'s last nap\'s items', 'every hour asleep within the savings baseline over the last 30 days', '50% CPU use',
-      'an unknown region at the average', 'left out', 'Cloud Carbon Footprint']) expect(tip).toContain(part);
+      'an unknown region at the average', 'left out', 'Cloud Carbon Footprint\'s coefficients for AWS and Google Cloud']) expect(tip).toContain(part);
     wrapper.unmount();
   });
 

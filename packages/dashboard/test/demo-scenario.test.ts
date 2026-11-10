@@ -87,6 +87,30 @@ describe('demo scenario', () => {
     vi.useRealTimers();
   });
 
+  it('prices the Google Cloud workloads\' naps at europe-west1\'s measured prices, with their energy', async () => {
+    const { mockApi } = await import('../src/mock');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const call = <T>(path: string) => {
+      const answer = mockApi(path) as Promise<T>;
+      vi.runAllTimers();
+      return answer;
+    };
+    type Priced = { costs: { items: { item: { kind: string; machineType?: string; tier?: string; suspended?: true }; hourly: number | null }[]; saved: { unpricedHours: number } }; energy: { estimated: number; kwh: number; co2Kg: number } };
+    const { workloads } = await call<{ workloads: { router: string; workloadId: string; cloud: string }[] }>('/workloads?limit=1000');
+    const google = workloads.filter((w) => w.cloud === 'gcp');
+    expect(google).toHaveLength(2);
+    const [vm, mig] = await Promise.all(['vm-demo', 'mig-demo'].map((id) => call<Priced>(`/workloads/${google[0]!.router}/${id}`)));
+    expect(vm!.costs.items.map((i) => [i.item.kind, i.item.machineType ?? i.item.tier, i.hourly])).toEqual([['gce', 'e2-small', 0.018], ['cloudsql', 'db-custom-2-7680', 0.1351]]);
+    expect(vm!.costs.items[0]!.item.suspended).toBe(true);
+    expect(mig!.costs.items.map((i) => [i.item.kind, i.item.machineType, i.hourly])).toEqual([['gce', 'e2-small', 0.0369]]);
+    for (const w of [vm!, mig!]) {
+      expect(w.costs.saved.unpricedHours).toBe(0);
+      expect(w.energy.estimated).toBeGreaterThan(0);
+      expect(w.energy.kwh).toBeGreaterThan(0);
+    }
+    vi.useRealTimers();
+  });
+
   it('adds the Google Cloud project\'s candidates to any scenario: managed, to onboard, a GKE workload and a two-map refusal, apart from the generated ones', async () => {
     sessionStorage.setItem('dormeto.demo', 'tiny,people=1,accounts=1,routers=1,workloads=2,candidates=1');
     const { mockApi } = await import('../src/mock');

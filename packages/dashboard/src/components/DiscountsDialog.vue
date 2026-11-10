@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// The discounts for commitments (R9.5): whole percentages off the list prices, compute (EC2, Fargate) and databases (RDS,
-// Aurora), never off Spot. An average rate: a nap saves the list price of what goes beyond a commitment, nothing within.
+// The discounts for commitments (R9.5): whole percentages off the list prices, compute (EC2, Fargate, Compute Engine) and databases
+// (RDS, Aurora, Cloud SQL), never off Spot. An average rate: a nap saves the list price of what goes beyond a commitment, nothing within.
 import { ref, watch } from 'vue';
 import { mdiInformationOutline, mdiPercentOutline } from '@mdi/js';
 import type { Discounts } from '../types';
@@ -22,10 +22,10 @@ const submit = () => { if (valid()) emit('submit', { compute: Number(compute.val
     <v-card title="Discounts for commitments" class="dm-discounts">
       <template #prepend><v-avatar color="secondary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiPercentOutline" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-4">What Savings Plans, Reserved Instances or your AWS agreement take off the list prices, on average. Spot is
-          priced at Spot prices, without discount.</p>
-        <v-text-field v-model="compute" data-test="compute" label="Compute: EC2 and Fargate" suffix="%" inputmode="numeric" :rules="[percent]" autofocus class="dm-discounts__field" />
-        <v-text-field v-model="databases" data-test="databases" label="Databases: RDS and Aurora" suffix="%" inputmode="numeric" :rules="[percent]" class="dm-discounts__field" @keyup.enter="submit" />
+        <p class="mb-4">What Savings Plans, Reserved Instances or an AWS agreement, and Google Cloud's committed use and sustained use
+          discounts, take off the list prices, on average. Spot is priced at Spot prices, without discount.</p>
+        <v-text-field v-model="compute" data-test="compute" label="Compute: EC2, Fargate and Compute Engine" suffix="%" inputmode="numeric" :rules="[percent]" autofocus class="dm-discounts__field" />
+        <v-text-field v-model="databases" data-test="databases" label="Databases: RDS, Aurora and Cloud SQL" suffix="%" inputmode="numeric" :rules="[percent]" class="dm-discounts__field" @keyup.enter="submit" />
         <div class="dm-discounts__note text-body-small">
           <v-icon :icon="mdiInformationOutline" size="18" />
           <p class="mb-0">Under a commitment, a nap saves the list price of what goes beyond it and nothing of what

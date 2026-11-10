@@ -162,7 +162,7 @@ export function ipLists(now: number): IpListsInfo {
 
 const discountsOf = (d: Demo): Discounts | null => (d.savings.compute || d.savings.databases ? { compute: d.savings.compute, databases: d.savings.databases } : null);
 const discounted = (item: StoppedItem, hourly: number, discounts: Discounts | null) =>
-  (discounts ? hourly * (1 - (item.kind === 'rds' || item.kind === 'aurora-serverless' ? discounts.databases : discounts.compute) / 100) : hourly);
+  (discounts ? hourly * (1 - (item.kind === 'rds' || item.kind === 'aurora-serverless' || item.kind === 'cloudsql' ? discounts.databases : discounts.compute) / 100) : hourly);
 
 // Its savings over the last 30 days: what its naps saved, its share of time asleep, what its last nap stopped.
 export function costsOf(d: Demo, w: DemoWorkload, now: number): Costs {

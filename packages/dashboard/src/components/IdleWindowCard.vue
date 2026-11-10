@@ -95,7 +95,8 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
           <span v-if="quiet">No request in 14 days: the workload sleeps whatever the window.</span>
           <span v-if="advice.actual.noisy">The replay counts {{ advice.actual.replayedWakes }} wakes over the 14 days for {{ advice.actual.wakes }} that happened: requests the waker ignores (scanners, no-wake rules, IP lists) count here as wakes, so real wakes are fewer.</span>
           <span v-if="advice.wakeSeconds === null">No wake measured yet: the visitors' wait is unknown.</span>
-          <span v-if="!advice.wakerTargetGroup">The waker target group was not found: only the requests while awake are replayed.</span>
+          <span v-if="!advice.wakerTargetGroup">{{ advice.estimated ? 'The waker backend service\'s requests were not found' : 'The waker target group was not found' }}: only the requests while awake are replayed.</span>
+          <span v-if="advice.estimated" data-test="idle-estimated">Google's request counts are estimates.</span>
           <span v-if="!advice.priced">Nothing priced yet (no nap described, or an item without a price): hours asleep instead of dollars.</span>
           <span v-if="source === 'terraform'">To change it: <code>idle_minutes</code> in the workload's Terraform module.</span>
           <span v-else-if="levels === false">To change it: upgrade its router to 0.37.0, or offboard the workload and onboard it again.</span>

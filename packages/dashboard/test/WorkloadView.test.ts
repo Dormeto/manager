@@ -983,15 +983,26 @@ describe('a Google Cloud workload', () => {
     tagged.unmount();
   });
 
-  // The manager reads Google Cloud's request counts with savings (plan 3): until then, no advice to read, so no error.
-  it('reads no idle window advice: its card and the requests heatmap say they come with Google Cloud\'s request counts', async () => {
+  // The idle window advice and the heatmap read Google Cloud's request counts (plan 3), said estimated.
+  it('shows the idle window advice and the requests heatmap, as AWS\'s', async () => {
     current = google;
     vi.mocked(api).mockClear();
     const wrapper = await mountView('operator');
-    expect(wrapper.findComponent(IdleWindowCard).exists()).toBe(false);
-    expect(wrapper.findComponent(RequestHeatmap).exists()).toBe(false);
-    expect(vi.mocked(api).mock.calls.map(([path]) => String(path)).filter((path) => path.endsWith('/idle-window'))).toEqual([]);
-    expect(wrapper.find('[data-test="gcp-requests"]').text()).toContain('come with Google Cloud\'s request counts');
+    expect(wrapper.findComponent(IdleWindowCard).exists()).toBe(true);
+    expect(wrapper.findComponent(RequestHeatmap).exists()).toBe(true);
+    expect(wrapper.find('[data-test="gcp-requests"]').exists()).toBe(false);
+    expect(vi.mocked(api).mock.calls.map(([path]) => String(path)).filter((path) => path.endsWith('/idle-window')).length).toBeGreaterThan(0);
+    wrapper.unmount();
+  });
+
+  it('says the three notes of Google Cloud\'s prices in its cost note, which AWS\'s lacks', async () => {
+    current = google;
+    const wrapper = await mountView('operator');
+    const note = wrapper.find('.dm-costs__note').text();
+    expect(note).toContain('Google Cloud list prices of what its last nap stopped, Spot VMs at Spot prices');
+    expect(note).toContain('Windows licenses are not counted');
+    expect(note).toContain('a suspended VM\'s memory, which Google still bills, is subtracted');
+    expect(note).toContain('Cloud SQL is priced for custom, shared-core and Enterprise Plus N tiers (others not priced)');
     wrapper.unmount();
   });
 

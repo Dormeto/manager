@@ -694,8 +694,8 @@ function build(now: number): Demo {
 }
 
 // The demo's Google Cloud router (installed by the CLI in the project dormeto-dev) and its two workloads, a VM and a managed
-// instance group. They are apart from the generated organization (they change none of its workloads or routers), and are not
-// priced (savings at Google's prices come later). The project's discovery candidates are theirs and a few more: one to onboard,
+// instance group. They are apart from the generated organization (they change none of its workloads or routers); their naps
+// are priced at europe-west1's list prices as the Cloud Billing Catalog gave them (measured 2026-11-10). The project's discovery candidates are theirs and a few more: one to onboard,
 // a GKE workload and a backend service named in two URL maps, which the router refuses.
 const GOOGLE_PROJECT = 'dormeto-dev';
 const GOOGLE_REGION = 'europe-west2';
@@ -739,13 +739,23 @@ function addGoogleCloud(d: Demo, now: number): void {
   };
   const google = (name: string): GoogleWorkload => ({ backendService: name, wakerBackendService: `${name}-waker`, urlMap: GOOGLE_MAP, lb: { kind: 'regional', region: GOOGLE_REGION } });
   const specs: { id: string; name: string; spec: WorkloadSpec; tags?: Record<string, string> }[] = [
-    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-medium' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
-    { id: 'mig-demo', name: 'mig-demo', spec: { name: 'mig-demo', router: router.name, state: 'AWAKE', profile: 'busy', backends: [{ kind: 'asg', type: 'e2-standard-2', count: 2 }], idleMinutes: 30, wakeMode: 'any', source: 'manager', awakeFor: 70 } },
+    { id: 'vm-demo', name: 'Demo VM', tags: { team: 'payments', env: 'dev' }, spec: { name: 'vm-demo', router: router.name, state: 'ASLEEP', profile: 'office', backends: [{ kind: 'instance', type: 'e2-small' }], idleMinutes: 15, wakeMode: 'browser', source: 'manager' } },
+    { id: 'mig-demo', name: 'mig-demo', spec: { name: 'mig-demo', router: router.name, state: 'AWAKE', profile: 'busy', backends: [{ kind: 'asg', type: 'e2-small', count: 2 }], idleMinutes: 30, wakeMode: 'any', source: 'manager', awakeFor: 70 } },
   ];
+  // What their last nap stopped, priced: an e2-small (0.5 vCPU, 2 GiB) on demand an hour, suspended (its memory, which Google
+  // still bills, subtracted), a PostgreSQL db-custom-2-7680 zonal.
+  const E2_SMALL = { kind: 'gce', machineType: 'e2-small', family: 'e2', vcpus: 0.5, memoryGb: 2, os: 'linux', zone: 'europe-west1-b' } as const;
+  const items: Record<string, DemoWorkload['items']> = {
+    'vm-demo': [
+      { item: { ...E2_SMALL, count: 1, suspended: true }, hourly: 0.017962748 },
+      { item: { kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: false, region: 'europe-west1', vcpus: 2, memoryGb: 7.5 }, hourly: 0.1351 },
+    ],
+    'mig-demo': [{ item: { ...E2_SMALL, count: 2 }, hourly: 0.036857 }],
+  };
   for (const { id, name, spec, tags } of specs) {
     const w = buildWorkload({ ...spec, source: 'terraform' }, router, now);
     Object.assign(w, {
-      workloadId: id, name, cloud: 'gcp', source: 'cli', google: google(id), targetGroupArn: '', loadBalancerArn: '', ruleArns: [], items: [], itemsKnown: false, schedule: null, hibernate: null, fallbackTypes: [],
+      workloadId: id, name, cloud: 'gcp', source: 'cli', google: google(id), targetGroupArn: '', loadBalancerArn: '', ruleArns: [], items: items[id] ?? [], itemsKnown: true, schedule: null, hibernate: null, fallbackTypes: [],
       ...(tags ? { tags } : {}),
     });
     d.workloads.push(w);

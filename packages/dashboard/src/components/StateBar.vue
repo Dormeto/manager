@@ -6,7 +6,7 @@
 // note, the bar of all workloads. block: as wide as its parent; legend: each state's share under the bar.
 import { computed } from 'vue';
 import { idleText } from '../discovery';
-import { MONTH_HOURS, discountText, type BarSavings } from '../costs';
+import { GOOGLE_PRICE_NOTES, MONTH_HOURS, discountText, type BarSavings } from '../costs';
 import { longDuration, stateColor, usd } from '../format';
 import { stateLabel } from '../history';
 import { stateBrief } from '../state';
@@ -76,7 +76,7 @@ const monthly = computed(() => {
   return typeof m === 'number' ? `Estimated saving: about ${usd(m)} a month at that rate` : null;
 });
 // R9.5: Spot at Spot prices, the discounts when set.
-const estimates = computed(() => `Estimates: ${props.cloud === 'gcp' ? 'Google Cloud list prices of what the naps stopped, Spot VMs at Spot prices' : 'AWS list prices of what the naps stopped, Spot at Spot prices'}${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, for the time asleep the baseline would have run.`);
+const estimates = computed(() => `Estimates: ${props.cloud === 'gcp' ? 'Google Cloud list prices of what the naps stopped, Spot VMs at Spot prices' : 'AWS list prices of what the naps stopped, Spot at Spot prices'}${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, for the time asleep the baseline would have run.${props.cloud === 'gcp' ? ` ${GOOGLE_PRICE_NOTES}` : ''}`);
 const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }).detail}` : null));
 </script>
 

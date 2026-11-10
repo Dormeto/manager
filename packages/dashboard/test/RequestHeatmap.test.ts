@@ -83,4 +83,13 @@ describe('RequestHeatmap', () => {
     await flushPromises();
     expect(vi.mocked(api)).toHaveBeenCalledTimes(1);
   });
+
+  it('says Google\'s request counts are estimates only when the answer says so', async () => {
+    const plain = await mountHeat(ADVICE);
+    expect(plain.find('[data-test="heat-estimated"]').exists()).toBe(false);
+    plain.unmount();
+    const wrapper = await mountHeat({ ...ADVICE, estimated: true });
+    expect(wrapper.find('[data-test="heat-estimated"]').text()).toBe('Google\'s request counts are estimates.');
+    wrapper.unmount();
+  });
 });

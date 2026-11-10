@@ -1,12 +1,12 @@
 // What a workload's backends cost and save (user request): its last nap's items, priced by the API, matched to its
-// backends by kind (EC2 instances and Auto Scaling groups, ECS services, databases); several backends of a kind share the
+// backends by kind (EC2 instances and Auto Scaling groups, ECS services, databases; Compute Engine VMs and groups, Cloud SQL); several backends of a kind share the
 // price of their items, which the nap does not tell apart. A month is 730 hours, saved at the share of the last 30 days
 // asleep within the baseline.
 import type { Costs, Discounts, StoppedItem } from './types';
 
 export const MONTH_HOURS = 730;
-const BACKEND_GROUPS: Record<string, string> = { instance: 'ec2', asg: 'ec2', ecs: 'fargate', k8s: 'k8s', 'rds-instance': 'db', 'rds-cluster': 'db' };
-const ITEM_GROUPS: Record<string, string> = { ec2: 'ec2', fargate: 'fargate', 'k8s-pods': 'k8s', rds: 'db', 'aurora-serverless': 'db' };
+const BACKEND_GROUPS: Record<string, string> = { instance: 'ec2', asg: 'ec2', ecs: 'fargate', k8s: 'k8s', 'rds-instance': 'db', 'rds-cluster': 'db', 'cloudsql-instance': 'db' };
+const ITEM_GROUPS: Record<string, string> = { ec2: 'ec2', fargate: 'fargate', 'k8s-pods': 'k8s', rds: 'db', 'aurora-serverless': 'db', gce: 'ec2', cloudsql: 'db' };
 // A Kubernetes workload's pods on Fargate are Fargate items: its own, when no ECS service shares the workload.
 const groupOf = (item: StoppedItem, backends: { kind: string }[]) => (item.kind === 'fargate' && backends.some((b) => b.kind === 'k8s') && !backends.some((b) => b.kind === 'ecs') ? 'k8s' : ITEM_GROUPS[item.kind]);
 
@@ -29,8 +29,10 @@ export function itemText(item: StoppedItem): string {
       const pods = `${item.count} pod${item.count === 1 ? '' : 's'} × ${item.cpu} vCPU, ${item.memoryGb} GB on ${item.nodeType ?? 'a node of unknown type'} (${item.os}${item.spot ? ', Spot' : ''})`;
       return item.autoscaled ? pods : `${pods}: nothing saved, no autoscaler removes the nodes`;
     }
+    case 'gce': return `${item.count} × ${item.machineType} (${item.os}${item.spot ? ', Spot' : ''}${item.suspended ? ', suspended' : ''})`;
+    case 'cloudsql': return `${item.tier} ${item.engine}${item.ha ? ', high availability' : ''}`;
     case 'unknown': return item.reason;
-    default: return item.kind;
+    default: return (item as { kind: string }).kind; // an item of a newer router
   }
 }
 
@@ -53,6 +55,9 @@ export function monthlySaving(costs: Costs | undefined | null): number | null {
   if (!costs || !priced.length || costs.savedShare === null) return null;
   return priced.reduce((n, i) => n + i.hourly!, 0) * MONTH_HOURS * costs.savedShare;
 }
+
+// What a Google Cloud workload's prices leave out or estimate (the design's §9.2): the tooltips' sentences.
+export const GOOGLE_PRICE_NOTES = 'Windows licenses are not counted; a suspended VM\'s memory, which Google still bills, is subtracted; Cloud SQL is priced for custom, shared-core and Enterprise Plus N tiers (others not priced).';
 
 // The discounts for commitments in a few words (R9.5).
 export const discountText = (d: Discounts) => `compute ${d.compute}%, databases ${d.databases}%`;

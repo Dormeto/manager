@@ -91,4 +91,13 @@ describe('IdleWindowCard', () => {
     expect(viewer.text()).toContain('An operator can apply it from here.');
     viewer.unmount();
   });
+
+  it('says Google\'s request counts are estimates only when the answer says so', async () => {
+    const plain = await mountCard(ADVICE);
+    expect(plain.text()).not.toContain('estimates');
+    plain.unmount();
+    const wrapper = await mountCard({ ...ADVICE, estimated: true });
+    expect(wrapper.find('[data-test="idle-estimated"]').text()).toBe('Google\'s request counts are estimates.');
+    wrapper.unmount();
+  });
 });

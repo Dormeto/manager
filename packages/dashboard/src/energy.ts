@@ -1,6 +1,6 @@
 // The energy a nap saves, and its carbon, as the API estimates it (packages/fleet/src/energy.ts: what the nap stopped times
-// the hours asleep, with Cloud Carbon Footprint's coefficients for AWS and each region's grid intensity); here, only how
-// it is said. Not a measure: the instances' real load and AWS's own figures differ.
+// the hours asleep, with Cloud Carbon Footprint's coefficients for AWS and Google Cloud, each region's grid intensity); here,
+// only how it is said. Not a measure: the instances' real load and the clouds' own figures differ.
 
 // estimated: how many items had a known shape (none: no estimate).
 export interface Energy { kwh: number; co2Kg: number; estimated: number }

@@ -447,7 +447,8 @@ export interface IdleWindowAdvice {
   priced: boolean;
   windows: IdleWindowRow[];
   actual: { wakes: number; replayedWakes: number; noisy: boolean };
-  wakerTargetGroup: boolean;
+  wakerTargetGroup: boolean; // the waker's requests are counted (its target group on AWS, its backend service on Google Cloud)
+  estimated?: true; // Google Cloud's request counts are estimates (the manager 0.24.0)
   // The replayed requests per UTC hour from `from` (managers before 0.20.0, or an answer kept from before: absent).
   hours?: { from: string; counts: number[] };
 }

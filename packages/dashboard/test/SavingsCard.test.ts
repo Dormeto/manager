@@ -54,10 +54,10 @@ describe('SavingsCard', () => {
     const wrapper = await mountCard({ summary: SUMMARY });
     const links = wrapper.findAll('a').map((a) => [a.text(), a.attributes('href')]);
     expect(links).toEqual(expect.arrayContaining([[expect.stringContaining('demo-rds'), '/workloads/dmt-dev/demo-rds']]));
-    expect(wrapper.text()).toMatch(/AWS list prices of what the naps stopped, against 24\/7/);
+    expect(wrapper.text()).toMatch(/AWS and Google Cloud list prices of what the naps stopped, against 24\/7/);
     expect(wrapper.text()).toMatch(/1 workload not priced yet/);
     // Kubernetes workloads (R10.5): what their pods' price supposes.
-    expect(wrapper.text()).toContain('nor the EKS control plane and the nodes\' DaemonSets: Kubernetes pods count as their share of their nodes, where an autoscaler removes the nodes they free');
+    expect(wrapper.text()).toContain('nor the EKS or GKE control plane and the nodes\' DaemonSets: Kubernetes pods count as their share of their nodes, where an autoscaler removes the nodes they free');
     wrapper.unmount();
   });
 
@@ -86,7 +86,7 @@ describe('SavingsCard', () => {
     const set = await mountCard({ summary: { ...SUMMARY, discounts: { compute: 20, databases: 30 } }, settings: SET });
     expect(set.text()).toContain('Discounts: compute 20%, databases 30% off the list prices; Spot at Spot prices (Fargate Spot at 30% of on-demand).');
     expect(set.text()).not.toContain('from the next day computed');
-    expect(set.text()).toMatch(/AWS list prices of what the naps stopped, against 24\/7/);
+    expect(set.text()).toMatch(/AWS and Google Cloud list prices of what the naps stopped, against 24\/7/);
     expect(set.text()).toContain('the discounts are an average rate');
     expect(set.text()).not.toContain('Savings Plans, Reserved Instances and Spot lower the real figure');
     set.unmount();
@@ -114,6 +114,9 @@ describe('SavingsCard', () => {
     const field = (name: string) => document.querySelector(`[data-test="${name}"] input`) as HTMLInputElement;
     const save = () => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === 'Save') as HTMLButtonElement;
     expect(document.body.textContent).toContain('an average rate');
+    expect(document.body.textContent).toContain('Savings Plans, Reserved Instances or an AWS agreement, and Google Cloud\'s committed use and sustained use discounts');
+    expect(document.body.textContent).toContain('Compute: EC2, Fargate and Compute Engine');
+    expect(document.body.textContent).toContain('Databases: RDS, Aurora and Cloud SQL');
     for (const [compute, databases] of [['91', '30'], ['2.5', '30'], ['20', '']]) {
       field('compute').value = compute!;
       field('compute').dispatchEvent(new Event('input'));

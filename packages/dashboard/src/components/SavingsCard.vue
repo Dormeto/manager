@@ -62,7 +62,7 @@ const peak = computed(() => Math.max(...(summary.value?.last30.days ?? []).map((
 const baseline = computed(() => (summary.value?.baseline.kind === 'business-hours' ? `business hours (weekdays 08:00 to 20:00, ${summary.value.baseline.timeZone})` : '24/7'));
 const unpriced = computed(() => {
   const n = summary.value?.unpriced.workloads ?? 0;
-  return n ? ` ${n} workload${n === 1 ? '' : 's'} not priced yet (a router before 0.27.0, or what AWS's list prices do not name).` : '';
+  return n ? ` ${n} workload${n === 1 ? '' : 's'} not priced yet (a router before 0.27.0, or what the list prices do not name).` : '';
 });
 </script>
 
@@ -98,8 +98,8 @@ const unpriced = computed(() => {
           </v-list-item>
         </v-list>
       </div>
-      <div class="text-body-small text-medium-emphasis mt-2">AWS list prices of what the naps stopped, against {{ baseline }}. Storage, load balancers and
-        data transfer keep running and are not counted, nor the EKS control plane and the nodes' DaemonSets: Kubernetes pods count as their share of their
+      <div class="text-body-small text-medium-emphasis mt-2">AWS and Google Cloud list prices of what the naps stopped, against {{ baseline }}. Storage, load balancers and
+        data transfer keep running and are not counted, nor the EKS or GKE control plane and the nodes' DaemonSets: Kubernetes pods count as their share of their
         nodes, where an autoscaler removes the nodes they free; the discounts are an average rate.{{ unpriced }}</div>
     </v-card-text>
     <DmLoader v-else label="Adding up the naps…" :size="48" />
