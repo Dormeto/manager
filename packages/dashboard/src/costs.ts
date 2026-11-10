@@ -29,7 +29,8 @@ export function itemText(item: StoppedItem): string {
       const pods = `${item.count} pod${item.count === 1 ? '' : 's'} × ${item.cpu} vCPU, ${item.memoryGb} GB on ${item.nodeType ?? 'a node of unknown type'} (${item.os}${item.spot ? ', Spot' : ''})`;
       return item.autoscaled ? pods : `${pods}: nothing saved, no autoscaler removes the nodes`;
     }
-    default: return item.reason;
+    case 'unknown': return item.reason;
+    default: return item.kind;
   }
 }
 

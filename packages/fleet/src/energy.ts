@@ -2,7 +2,8 @@
 // nap stopped (its items) times the hours asleep, with Cloud Carbon Footprint's coefficients for AWS (compute at 50%
 // utilisation, memory, the data centres' PUE) and the region's grid intensity. Not a measure: the instances' real load and
 // AWS's own figures differ. The API computes it (@dormeto/fleet/energy), the dashboard's demo mode too: this module and the
-// one it reads its type from (prices.ts) import nothing else, so neither pulls the fleet's store nor the AWS SDK.
+// one it reads its type from (prices.ts, with google-prices.ts) import nothing else, so none pulls the fleet's store nor
+// the AWS SDK.
 import type { StoppedItem } from './prices.js';
 
 // Cloud Carbon Footprint, AWS: watts per vCPU at 0% and 100%, watts per GB of memory, power usage effectiveness.

@@ -2,7 +2,10 @@
 // List API (free, us-east-1), cached per region and item. What it cannot price is null: another OS, Oracle or SQL Server,
 // an unknown item, a product the API does not return, or an API that failed (not cached: the next run asks again).
 // Spot capacity at Spot prices and the discounts for commitments (docs/specs/2026-10-09-sharper-savings-design.md,
-// R9.5b): the net price of an item, its list price cached as it is.
+// R9.5b): the net price of an item, its list price cached as it is. Google Cloud's items (Google Cloud design §9.2):
+// Google's list prices from the Cloud Billing Catalog (google-prices.ts), the same discounts.
+
+import { createGooglePrices } from './google-prices.js';
 
 export type StoppedItem =
   | { kind: 'ec2'; type: string; count: number; os: string; spot?: true }
@@ -12,6 +15,11 @@ export type StoppedItem =
   // Pods on EC2 nodes (Kubernetes workloads, R10.5): each pod's requests, its node's type, OS and allocatable, Spot, and
   // whether a node autoscaler removes the nodes they free.
   | { kind: 'k8s-pods'; count: number; cpu: number; memoryGb: number; nodeType: string | null; os: string; spot?: true; autoscaled: boolean; allocatable: { cpu: number; memoryGb: number } }
+  // A Google Cloud router's (routers 0.40.0, Google Cloud design §9.1): VMs of one machine type, zone, OS, Spot and
+  // suspension, priced in their zone's region; a Cloud SQL instance in its region (a global load balancer's backends may
+  // run in another region than the router). `vcpus` billed (a shared core's fraction), `memoryGb` in GiB.
+  | { kind: 'gce'; machineType: string; family: string; vcpus: number; memoryGb: number; count: number; os: 'linux' | 'windows'; spot?: true; suspended?: true; zone: string }
+  | { kind: 'cloudsql'; tier: string; engine: 'postgres' | 'mysql' | 'sqlserver'; edition: 'enterprise' | 'enterprise-plus'; ha: boolean; region: string; vcpus?: number; memoryGb?: number }
   | { kind: 'unknown'; backend: string; reason: string };
 
 // The Price List API, as the manager's handlers give it (GetProducts).
@@ -22,12 +30,24 @@ export interface PricingPort {
 export interface SpotPort {
   history(region: string, input: { InstanceTypes: string[]; ProductDescriptions: string[]; StartTime: Date }): Promise<{ SpotPriceHistory?: { AvailabilityZone?: string; SpotPrice?: string; Timestamp?: Date }[] }>;
 }
+// The Cloud Billing Catalog API (services.skus.list, USD), as the discovery account reads it: a page of a service's SKUs
+// (`service`: its id, 6F81-5844-456A for Compute Engine), in Google's shape.
+export interface CatalogSku {
+  description?: string;
+  category?: { resourceFamily?: string; resourceGroup?: string; usageType?: string };
+  serviceRegions?: string[];
+  pricingInfo?: { pricingExpression?: { usageUnit?: string; tieredRates?: { startUsageAmount?: number; unitPrice?: { currencyCode?: string; units?: string; nanos?: number } }[] } }[];
+}
+export interface GoogleCatalogPort {
+  skus(service: string, pageToken?: string): Promise<{ skus?: CatalogSku[]; nextPageToken?: string }>;
+}
 // The cache (the fleet store): a price per key, null when the API has none; kept `days` (30 by default).
 export interface PriceCache {
   getPrice(key: string): Promise<{ usd: number | null } | null>;
   putPrice(key: string, usd: number | null, days?: number): Promise<void>;
 }
-// Percentages off the list prices for commitments: compute (EC2, Fargate), databases (RDS, Aurora). Never off Spot.
+// Percentages off the list prices for commitments: compute (EC2, Fargate, Compute Engine), databases (RDS, Aurora, Cloud
+// SQL); Google Cloud's committed use and sustained use discounts are entered there too. Never off Spot.
 export interface Discounts { compute: number; databases: number }
 export const NO_DISCOUNTS: Discounts = { compute: 0, databases: 0 };
 // AWS publishes no Fargate Spot price: its largest announced discount (up to 70% off), the smallest saving.
@@ -72,7 +92,9 @@ const off = (usd: number | null, percent: number) => (usd === null ? null : usd 
 const MEMORY_MS = 3_600_000;
 const FAILURE_MS = 300_000;
 
-export function createPriceBook({ pricing, spot, store, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; now?: () => number }) {
+// Without `catalog` (the API), Google Cloud's items are read from the table only.
+export function createPriceBook({ pricing, spot, store, catalog, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; catalog?: GoogleCatalogPort; now?: () => number }) {
+  const google = createGooglePrices({ catalog, store, now });
   const memory = new Map<string, { usd: number | null; until: number }>();
   const pending = new Map<string, Promise<number | null>>();
   // One price: from memory, the table, else the API; a failed call prices nothing, caches nothing in the table, and is not
@@ -121,7 +143,7 @@ export function createPriceBook({ pricing, spot, store, now = Date.now }: { pric
 
   return {
     // USD an hour of an item, in its region, net: a Spot price, or the list price less its family's discount; null when
-    // it cannot be priced.
+    // it cannot be priced. A Google Cloud item is priced in its own region (a VM's zone's, a Cloud SQL instance's).
     async hourly(region: string, item: StoppedItem, discounts: Discounts = NO_DISCOUNTS): Promise<number | null> {
       switch (item.kind) {
         case 'ec2': {
@@ -163,6 +185,9 @@ export function createPriceBook({ pricing, spot, store, now = Date.now }: { pric
           const usd = await price(`${region}#aurora-serverless#${engine}`, 'AmazonRDS', [term('regionCode', region), term('databaseEngine', engine), contains('usagetype', 'Aurora:ServerlessV2Usage')]);
           return usd === null ? null : off(usd * item.acu, discounts.databases);
         }
+        case 'gce':
+        case 'cloudsql':
+          return google.hourly(item, discounts);
         default:
           return null;
       }
