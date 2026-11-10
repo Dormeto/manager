@@ -25,10 +25,11 @@ the workload row's project and region).
 - **A refusal of a Google Cloud router says what Google answered:** the poll's error, the API's 409 and the watchdog's problem for
 `no_access` end with `(Google: <host> <status> <reason>: <message>)`, the host being STS, iamcredentials or the
 controller's, the message cut to 200 characters; never a token or a signature.
-- **One model for both clouds:** an `account` is an AWS account or a Google Cloud project, answers carrying one also carry `cloud`,
-and a region is checked against its account's cloud (`@dormeto/fleet/clouds`). The manager accepts a Google Cloud router's
-rows and events (a backend service instead of a target group, VM names in `hibernated`), names its router
-`dmtr-<project>-<region>`, and reads a `*/N * * * *` check schedule. An AWS router behaves as before.
+- **One model for both clouds:** an `account` is an AWS account or a Google Cloud project; a row that can be of either
+cloud carries `cloud` (event refresh's accounts are AWS's), and a region is checked against its account's cloud
+(`@dormeto/fleet/clouds`). The manager accepts a Google Cloud router's rows and events (a backend service instead of a
+target group, VM names in `hibernated`), names its router `dmtr-<project>-<region>`, and reads a `*/N * * * *` check
+schedule. An AWS router behaves as before.
 - **The manager's Google identity (`@dormeto/google`):** its Lambda roles act as the two service accounts of a Google Cloud host
 project through workload identity federation (a signed `GetCallerIdentity` exchanged at Google's STS, then
 `iamcredentials`), with no key and nothing stored; tokens are kept in memory until 5 minutes before they expire, and every
