@@ -196,8 +196,9 @@ build stored (`manager-access-missing`, `router-too-old`, `router-unknown`) is r
 by a test, read by the manager and the dashboard.
 - **A Google Cloud candidate and an operation say their cloud:** a Google Cloud candidate has no `targetGroupArn`, `loadBalancerArn`,
 `listener` or `priority` (absent, not empty or `null`; an AWS reader can no longer mistake it) and `cloud: 'gcp'`; its `targetGroup`
-and `loadBalancer` are the backend service's and the URL map's names. Operations (the 202 answers too), exclusions, and the savings'
-top and history rows carry `cloud`; an AWS answer's idle window advice says `estimated: false`; an AWS onboarding given a
+and `loadBalancer` are the backend service's and the URL map's names. Operations (the 202 answers too), exclusions and the
+workloads they paused, the candidates a dismissal or a restore answers, the discovery run's targets, and the savings' top and
+history rows carry `cloud`; an AWS answer's idle window advice says `estimated: false`; an AWS onboarding given a
 `cloudsql-instance` database and a Google Cloud one given an `rds-instance` are refused 400 in one message form. A candidate or
 operation an earlier build stored reads as before.
 - **A Google Cloud project's candidates in their own words:** a managed candidate of a project the connection no longer reaches

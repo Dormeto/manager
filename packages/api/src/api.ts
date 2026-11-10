@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import {
   CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, lint, rescope, restatus, validateConfig, withExclusions,
-  type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type Status,
+  type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type RunRecord, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { GoogleError, type Google, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
@@ -2336,7 +2336,9 @@ export function createApi({
       // never hides that run and its result.
       const [newest, lastRun, counts] = await Promise.all([d.store.lastRun(), d.store.lastRun({ completed: true }), d.store.getCounts()]);
       const refused = newest?.status === 'skipped' && (!lastRun || newest.startedAt > lastRun.startedAt) ? newest : null;
-      return reply(200, { lastRun, ...(refused ? { refused } : {}), counts: counts?.counts ?? lastRun?.counts ?? {}, ...(accessRoles ? { access: { ...accessRoles, source: 'terraform' } } : {}) });
+      // Each target says the cloud of its account (an AWS account or a project).
+      const withClouds = (run: RunRecord | null) => (run ? { ...run, targets: run.targets.map((t) => ({ ...t, ...cloudField(t.account) })) } : run);
+      return reply(200, { lastRun: withClouds(lastRun), ...(refused ? { refused: withClouds(refused) } : {}), counts: counts?.counts ?? lastRun?.counts ?? {}, ...(accessRoles ? { access: { ...accessRoles, source: 'terraform' } } : {}) });
     }
     // Organization access of the last run (packaging design §3): the counts, and the accounts not ready by page.
     if (method === 'GET' && sub === 'access') {
@@ -2437,7 +2439,7 @@ export function createApi({
           return restatus(sub === 'dismiss' ? { ...rest, dismissed: { by: identity.email, at, ...(note ? { note } : {}) } } : rest, at);
         });
         await d.store.replaceCandidates(updated, found as Candidate[]);
-        return { result: plural(updated.length, 'candidate'), response: reply(200, { candidates: updated }) };
+        return { result: plural(updated.length, 'candidate'), response: reply(200, { candidates: updated.map((c) => ({ ...c, ...cloudField(c.account) })) }) };
       });
     }
     return null;
@@ -2509,10 +2511,11 @@ export function createApi({
     if (method === 'GET' && !id) {
       const all = (await settleExpired(d)).filter((e) => sees(identity, e.target.account, e.target.region));
       const active = new Set(activeExclusions(all, now()).map((e) => e.id));
-      // The workloads each one paused, by their names (from their summaries; the id is not for people).
+      // The workloads each one paused, by their names (from their summaries; the id is not for people), with the cloud of
+      // their account when the entry names one.
       const named = async (p: NonNullable<Exclusion['paused']>[number]) => {
         const summary = fleet && p.account && p.region ? await fleet.getWorkload(p.account, p.region, p.workloadId).catch(() => null) : null;
-        return summary?.name ? { ...p, name: summary.name } : p;
+        return { ...p, ...cloudField(p.account), ...(summary?.name ? { name: summary.name } : {}) };
       };
       return reply(200, {
         exclusions: await Promise.all(all.map(async (e) => ({

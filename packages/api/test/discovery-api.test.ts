@@ -51,6 +51,16 @@ describe('discovery routes', () => {
     expect(json(await api(event('GET', '/api/discovery'))).counts).toEqual({ 'pending-onboarding': 1, ineligible: 1 });
   });
 
+  it('says the cloud of each target of the last run and of a refused one: aws for an account, gcp for a project', async () => {
+    const { api, store } = setup();
+    const targets: RunRecord['targets'] = [{ account: '121014831971', region: 'eu-west-1', status: 'error', error: 'AccessDenied' }, { account: 'dormeto-dev', region: 'europe-west2', status: 'ok', rules: 2 }];
+    const refused: RunRecord = { ...RUN, startedAt: '2026-10-04T11:31:00.000Z', trigger: 'manual', status: 'skipped', skippedReason: 'another run is in progress', targets, counts: {} };
+    store.runs.push({ ...RUN, startedAt: '2026-10-04T11:30:00.000Z', targets }, refused);
+    const body = json(await api(event('GET', '/api/discovery')));
+    const clouds = (run: RunRecord) => run.targets.map((t) => [t.account, (t as { cloud?: string }).cloud]);
+    expect([clouds(body.lastRun), clouds(body.refused)]).toEqual([[['121014831971', 'aws'], ['dormeto-dev', 'gcp']], [['121014831971', 'aws'], ['dormeto-dev', 'gcp']]]);
+  });
+
   it('a Run now refused while a run is in progress never hides that run: it is given apart', async () => {
     const { api, store } = setup();
     const running: RunRecord = { ...RUN, startedAt: '2026-10-04T11:30:00.000Z', finishedAt: '2026-10-04T11:30:00.000Z', status: 'running', counts: {} };
@@ -280,6 +290,14 @@ describe('discovery routes', () => {
     expect(audit.map((a) => [a.action, a.target])).toEqual([['discovery-dismiss', 'r1'], ['discovery-restore', 'r1']]);
     expect((await api(event('POST', '/api/discovery/dismiss', 'dmt-viewer', { ids: ['r1'] }))).statusCode).toBe(403);
     expect((await api(event('POST', '/api/discovery/dismiss', 'dmt-operator', { ids: [] }))).statusCode).toBe(400);
+  });
+
+  it('answers the dismissed and restored candidates with their cloud: aws for an account, gcp for a project', async () => {
+    const { api } = setup([candidate('r1'), candidate('projects/dormeto-dev/global/backendServices/web', { account: 'dormeto-dev', region: 'global', cloud: 'gcp' })]);
+    for (const sub of ['dismiss', 'restore']) {
+      const res = await api(event('POST', `/api/discovery/${sub}`, 'dmt-operator', { ids: ['r1', 'projects/dormeto-dev/global/backendServices/web'] }));
+      expect(json(res).candidates.map((c: Candidate & { cloud?: string }) => [c.account, c.cloud])).toEqual([['121014831971', 'aws'], ['dormeto-dev', 'gcp']]);
+    }
   });
 
   it('no longer serves the per-router discovery', async () => {

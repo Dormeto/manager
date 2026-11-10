@@ -288,6 +288,16 @@ describe('exclusions', () => {
     expect(e.paused.map((p: { name?: string }) => p.name ?? null)).toEqual(['Shop', null]);
   });
 
+  it('says the cloud of each paused workload\'s account: aws for an account, gcp for a project, none for an entry without one', async () => {
+    const { api, store } = setup();
+    await store.putExclusion({
+      id: 'x9', target: { kind: 'account', account: ACCOUNT, name: 'dormeto' }, reason: 'a', by: 'ops@example.com', at: '2026-10-04T00:00:00.000Z',
+      paused: [{ router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-1', workloadId: 'a' }, { router: 'dmtr-europe-west2', account: 'dormeto-dev', region: 'europe-west2', workloadId: 'web' }, { router: 'dmt-old', workloadId: 'b' }],
+    });
+    const [e] = json(await api(event('GET', '/api/exclusions'))).exclusions;
+    expect(e.paused.map((p: { workloadId: string; cloud?: string }) => [p.workloadId, p.cloud ?? null])).toEqual([['a', 'aws'], ['web', 'gcp'], ['b', null]]);
+  });
+
   it('lists exclusions to viewers, expired ones marked', async () => {
     const { api, store } = setup();
     await store.putExclusion({ id: 'old', target: { kind: 'account', account: ACCOUNT, name: 'dormeto' }, reason: 'a', by: 'ops@example.com', at: '2026-10-01T00:00:00.000Z', expiresAt: '2026-10-02T00:00:00.000Z' });
