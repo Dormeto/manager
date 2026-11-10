@@ -284,6 +284,44 @@ describe('lint from the accounts of a run', () => {
         expect(await reasons(s.store)).toEqual({ [APP]: ['pending-offboarding', reason], [MIG]: ['out-of-scope', reason] });
       });
 
+      // A retired project's candidates are decided again when the connection comes or goes, not only when the project leaves.
+      it('out of the scopes, then disconnected: out of scope with the connection\'s removal, the managed one no longer waiting for an offboarding', async () => {
+        const { s, g, again } = await scanned();
+        s.deps.google = google(() => ({ projects: [] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
+        await again();
+        expect((await reasons(s.store))[APP]![0]).toBe('pending-offboarding');
+        s.deps.google = { ...g, connection: async () => null };
+        await again();
+        expect(await reasons(s.store)).toEqual({ [APP]: ['out-of-scope', GOOGLE_DISCONNECTED], [MIG]: ['out-of-scope', GOOGLE_DISCONNECTED] });
+        // Decided once for that connection: a later run without it changes nothing.
+        const history = (await s.store.accountCandidates('dev-project')).map((c) => c.history.length);
+        await again();
+        expect((await s.store.accountCandidates('dev-project')).map((c) => c.history.length)).toEqual(history);
+      });
+
+      it('disconnected, then connected again without the project: out of the scopes, the managed one waiting for its offboarding', async () => {
+        const { s, g, again } = await scanned();
+        s.deps.google = { ...g, connection: async () => null };
+        await again();
+        expect((await reasons(s.store))[APP]).toEqual(['out-of-scope', GOOGLE_DISCONNECTED]);
+        s.deps.google = google(() => ({ projects: [] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
+        await again();
+        const reason = 'out of scope: project no longer at the connection\'s scopes';
+        expect(await reasons(s.store)).toEqual({ [APP]: ['pending-offboarding', reason], [MIG]: ['out-of-scope', reason] });
+      });
+
+      it('retired by an earlier build (no word of the connection it left under): decided once more by the connection now', async () => {
+        const { s, g, again } = await scanned();
+        s.deps.google = google(() => ({ projects: [] }), { compute: devWithInternal(), routers: [gcpRouter('dev-project', 'europe-west2')], rows: onboarded });
+        await again();
+        const { retiredConnected: _, ...earlier } = (await s.store.getAccountScan('dev-project'))!;
+        await s.store.putAccountScan(earlier);
+        s.deps.google = { ...g, connection: async () => null };
+        await again();
+        expect((await reasons(s.store))[APP]).toEqual(['out-of-scope', GOOGLE_DISCONNECTED]);
+        expect((await s.store.getAccountScan('dev-project'))!.retiredConnected).toBe(false);
+      });
+
       it('when the projects can\'t be listed: the project scanned again, its candidates unchanged', async () => {
         const { s, again } = await scanned();
         const before = await reasons(s.store);

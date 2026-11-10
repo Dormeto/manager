@@ -95,7 +95,8 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
 - **After a disconnect,** the record is cleared and the manager's Google Cloud routers are unregistered. The next
   discovery run lists the projects' candidates `out-of-scope` with the reason `the Google Cloud connection was removed`,
   a managed one too: the manager can't offboard without the connection, and the workload stays on its router, run with
-  the CLI. The disconnect
+  the CLI. A project that had left the scopes before is listed so too; one a later connection leaves out reads `project no
+  longer at the connection's scopes` again, a managed one pending offboarding. The disconnect
   removes, under the two accounts' names, every binding at the recorded scopes and router projects and at the host, the
   two custom roles where connect defined them, the accounts, the provider and the pool; the APIs stay. It looks only
   at the scopes and the host: a project that has left the scopes keeps its `dormetoCommand` role, bound to nobody, after a

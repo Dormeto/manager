@@ -161,7 +161,10 @@ export interface AccountScan {
   // emptyRuns: successive scans without any rule; skippedRuns: runs skipped since (scanned again at 6).
   regions: Record<string, { scannedAt: string; emptyRuns: number; skippedRuns?: number }>;
   runId?: string; // the run that scanned it last
-  retiredAt?: string; // left the perimeter: its candidates were decided again, once
+  retiredAt?: string; // left the perimeter: its candidates were decided again, once (a project's: see retiredConnected)
+  // A retired project's: whether a Google Cloud connection was read when its candidates were last decided; they are decided
+  // again when that changes.
+  retiredConnected?: boolean;
   result?: AccountResult;
   synthetic?: boolean; // written by the synthetic scanner (dev): deleted with its candidates once it is turned off
   // Both organization roles, checked at each scan (a synthetic account has none).

@@ -612,8 +612,9 @@ function accessSummary(plan: RunPlan, scans: AccountScan[], inventory: OrgInvent
   return { counts, accounts, delegation: plan.delegation ?? null, checkedAt: at, ...(discoveryOnly.length ? { discoveryOnly } : {}) };
 }
 
-// The end of a run: the candidates of accounts that left the perimeter decided again (once), the run record from the
-// account results (an account without one did not finish), the counts from the index, the lint, the lock released.
+// The end of a run: the candidates of accounts that left the perimeter decided again (once; a project's, again when the
+// connection comes or goes, so that they say why they left), the run record from the account results (an account without
+// one did not finish), the counts from the index, the lint, the lock released.
 export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunRecord> {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? silent;
@@ -624,7 +625,11 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const inventory = (await deps.store.getInventory()) ?? singleAccount(deps.managerAccount);
     const scans = await deps.store.listAccountScans();
     const inRun = new Set(plan.accounts);
-    for (const left of scans.filter((s) => !inRun.has(s.account) && !s.retiredAt)) {
+    // Whether this run read a Google Cloud connection: a retired project decided under the other word (or by an earlier
+    // build, which kept none) is decided again, the connection's removal and the scopes' giving different reasons (§6.4).
+    const connected = inventory.google?.connected;
+    const connectionMoved = (s: AccountScan) => connected !== undefined && isProject(s.account) && s.retiredConnected !== connected;
+    for (const left of scans.filter((s) => !inRun.has(s.account) && (!s.retiredAt || connectionMoved(s)))) {
       const previous = new Map((await deps.store.accountCandidates(left.account)).map((c) => [c.id, c]));
       // A synthetic account the run's start deleted, still on the index: deleted again, never written back.
       if (left.synthetic) {
@@ -633,7 +638,7 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
         continue;
       }
       await deps.store.putCandidates(nextCandidates({ previous, results: [], inventory, config, now: now() }));
-      await deps.store.putAccountScan({ ...left, retiredAt: plan.runId });
+      await deps.store.putAccountScan({ ...left, retiredAt: left.retiredAt ?? plan.runId, ...(connected !== undefined && isProject(left.account) ? { retiredConnected: connected } : {}) });
     }
 
     const ofRun = (await deps.store.getAccountScans(plan.accounts)).filter((s) => s.runId === plan.runId);

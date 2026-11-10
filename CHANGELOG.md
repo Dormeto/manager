@@ -203,8 +203,8 @@ history rows carry `cloud`; an AWS answer's idle window advice says `estimated: 
 operation an earlier build stored reads as before.
 - **A Google Cloud project's candidates in their own words:** a managed candidate of a project the connection no longer reaches
 is "out of scope: the Google Cloud connection was removed" (no offboarding proposed, as the manager can't offboard without
-it) or, out of a connected perimeter, "out of scope: project no longer at the connection's scopes" (pending offboarding); a failed
-listing leaves its candidates as they were; a managed backend service gone reads "managed backend service not found in the last scan:
+it) or, out of a connected perimeter, "out of scope: project no longer at the connection's scopes" (pending offboarding), decided
+again when the connection comes or goes after the project left; a failed listing leaves its candidates as they were; a managed backend service gone reads "managed backend service not found in the last scan:
 offboard it" (AWS's keeps "rule"). One rule, `brokenConnection`, tells a revoked federation in the router calls, the access check
 and the scan; the workloads list joins a workload to its candidate by its backend service; an operation's title and step detail
 read right for Google Cloud.
