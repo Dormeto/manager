@@ -89,7 +89,8 @@ mocked provider: `cd infra/terraform/modules/<module> && tfenv exec init -backen
 ## Release
 
 A release is built from a commit whose `package.json` names the new version (and `dormeto.router` the router it
-carries, built in the sibling repository), with its section in `CHANGELOG.md`:
+carries, built in the sibling repository), with its section in `CHANGELOG.md` and the README's Terraform example naming
+it (`scripts/readme.test.mjs` fails until it does):
 
 ```bash
 (cd ../router && npm run package)
