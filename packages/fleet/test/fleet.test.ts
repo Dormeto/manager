@@ -609,7 +609,7 @@ describe('state history (R8)', () => {
     expect(await hibernated()).toBeUndefined();
   });
 
-  it('keeps what a nap stopped (router 0.27.0), its known kinds only (R9)', async () => {
+  it('keeps what a nap stopped (router 0.27.0), its known kinds, the others as unknown', async () => {
     const s = setup();
     await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [
       { kind: 'ec2', type: 't3.medium', count: 2, os: 'Linux' }, { kind: 'fargate', vcpu: 0.5, memoryGb: 1, count: 1, arch: 'arm64', os: 'Linux' },
@@ -617,17 +617,22 @@ describe('state history (R8)', () => {
       { kind: 'unknown', backend: 'ecs:x', reason: 'denied' }, { kind: 'ec2', type: 'bad type', count: 1, os: 'Linux' }, { kind: 'gpu', n: 1 }, 'junk',
     ] }));
     const [entry] = await history(s);
-    expect(entry!.stopped!.map((i) => i.kind)).toEqual(['ec2', 'fargate', 'rds', 'aurora-serverless', 'unknown']);
+    expect(entry!.stopped!.map((i) => i.kind)).toEqual(['ec2', 'fargate', 'rds', 'aurora-serverless', 'unknown', 'unknown', 'unknown', 'unknown']);
+    expect(entry!.stopped!.slice(5)).toEqual([
+      { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: ec2' }, { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: gpu' },
+      { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: ' },
+    ]);
   });
 
-  it('keeps the pods a Kubernetes nap stopped (router 0.29.0, R10.5), well-formed only', async () => {
+  it('keeps the pods a Kubernetes nap stopped (router 0.29.0, R10.5), the malformed ones as unknown', async () => {
     const s = setup();
     const pods = { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: 'm5.large', os: 'Linux', spot: true, autoscaled: true, allocatable: { cpu: 1.93, memoryGb: 6.886 } };
     await s.ingest(change('ASLEEP', at(T1, 10), { from: 'NAPPING', stopped: [
       pods, { ...pods, nodeType: null, spot: false, autoscaled: false }, { ...pods, count: 0 }, { ...pods, allocatable: 'big' }, { ...pods, nodeType: 'not a type' },
     ] }));
     const [entry] = await history(s);
-    expect(entry!.stopped).toEqual([pods, { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: null, os: 'Linux', autoscaled: false, allocatable: { cpu: 1.93, memoryGb: 6.886 } }]);
+    expect(entry!.stopped).toEqual([pods, { kind: 'k8s-pods', count: 2, cpu: 0.25, memoryGb: 0.5, nodeType: null, os: 'Linux', autoscaled: false, allocatable: { cpu: 1.93, memoryGb: 6.886 } },
+      ...Array.from({ length: 3 }, () => ({ kind: 'unknown', backend: 'all', reason: 'not readable by this manager: k8s-pods' }))]);
   });
 
   it('caches a price 30 days, the absence of one a day (R9)', async () => {

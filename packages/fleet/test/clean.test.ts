@@ -25,8 +25,8 @@ describe('stopped items', () => {
     ]);
   });
 
-  it('drops a Google Cloud item outside its bounds: no vCPU, another engine, a region for a zone, and the like', () => {
-    expect(stoppedOf([
+  it('turns a Google Cloud item outside its bounds into an unknown one: no vCPU, another engine, a region for a zone, and the like', () => {
+    const bad = [
       { ...gce, vcpus: 0 },
       { ...gce, vcpus: 1025 },
       { ...gce, memoryGb: 12_289 },
@@ -39,7 +39,8 @@ describe('stopped items', () => {
       { ...sql, edition: 'standard' },
       { ...sql, tier: 'n1-standard-2' },
       { ...sql, region: 'eu-west-1' },
-    ])).toEqual([]);
+    ];
+    expect(stoppedOf(bad)).toEqual(bad.map((i) => ({ kind: 'unknown', backend: 'all', reason: `not readable by this manager: ${i.kind}` })));
   });
 
   it('keeps a Cloud SQL instance whose shape is out of bounds without its shape (not priced, its hours kept)', () => {
@@ -56,6 +57,28 @@ describe('stopped items', () => {
       { kind: 'unknown', backend: 'ecs:web', reason: 'denied' },
     ];
     expect(stoppedOf(aws)).toEqual(aws);
-    expect(stoppedOf([{ kind: 'ec2', type: 't3.medium', count: 0, os: 'Linux' }, { kind: 'rds', class: 'm5.large', engine: 'postgres' }])).toEqual([]);
+    expect(stoppedOf([{ kind: 'ec2', type: 't3.medium', count: 0, os: 'Linux' }, { kind: 'rds', class: 'm5.large', engine: 'postgres' }])).toEqual([
+      { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: ec2' }, { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: rds' },
+    ]);
+  });
+
+  it('turns a kind this manager does not know, or a malformed item, into an unknown one, named by its backend when it has one', () => {
+    expect(stoppedOf([
+      { kind: 'gce', machineType: 'e2-small', backend: 'mig:web', vcpus: 0 },
+      { kind: 'a'.repeat(100), backend: 7 },
+      { kind: 'bigquery-slots', backend: 'bq:x' },
+      'text', null,
+    ])).toEqual([
+      { kind: 'unknown', backend: 'mig:web', reason: 'not readable by this manager: gce' },
+      { kind: 'unknown', backend: 'all', reason: `not readable by this manager: ${'a'.repeat(40)}` },
+      { kind: 'unknown', backend: 'bq:x', reason: 'not readable by this manager: bigquery-slots' },
+      { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: ' },
+      { kind: 'unknown', backend: 'all', reason: 'not readable by this manager: ' },
+    ]);
+  });
+
+  it('keeps a list that is empty as it is, and an absent one absent', () => {
+    expect(stoppedOf([])).toEqual([]);
+    expect(stoppedOf(undefined)).toBeUndefined();
   });
 });

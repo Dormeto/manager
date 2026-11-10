@@ -186,6 +186,8 @@ notes (Windows licenses not counted, suspended memory subtracted, Cloud SQL tier
 savings and the energy, and the demo's naps priced at europe-west2.
 - **Fixed, a Google Cloud workload's idle window advice:** the requests are asked with the paths of its backend service, its waker's
 and its URL map, built from the names its row holds in the scope of its load balancer, where the advice failed with `requests_unreadable`.
+- **Fixed, what a router's newer than the manager writes:** a nap's item the manager can't read (a kind it doesn't know, a shape out
+of its bounds) is kept as an unknown item, so its hours show as not priced, never as $0 saved.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`
   (onboarding, offboarding and exclusions on Google Cloud, the tag, the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).

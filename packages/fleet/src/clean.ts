@@ -115,7 +115,7 @@ const ZONE = /^[a-z]+-[a-z]+\d{1,2}-[a-z]$/;
 const SQL_TIER = /^db-[a-zA-Z0-9-]{1,60}$/;
 const SQL_ENGINES = new Set(['postgres', 'mysql', 'sqlserver']);
 const SQL_EDITIONS = new Set(['enterprise', 'enterprise-plus']);
-function stoppedItemOf(v: unknown): Json | null {
+function knownStoppedItemOf(v: unknown): Json | null {
   if (!isObject(v)) return null;
   if (v.kind === 'ec2' && typeof v.type === 'string' && TYPE.test(v.type) && between(v.count, 1, 10_000) && typeof v.os === 'string') return { kind: 'ec2', type: v.type, count: v.count, os: v.os.slice(0, 40), ...spotOf(v) };
   if (v.kind === 'fargate' && between(v.vcpu, 0.25, 64) && between(v.memoryGb, 0.5, 512) && between(v.count, 1, 10_000) && (v.arch === 'x86_64' || v.arch === 'arm64') && typeof v.os === 'string') {
@@ -146,7 +146,13 @@ function stoppedItemOf(v: unknown): Json | null {
   if (v.kind === 'unknown') return { kind: 'unknown', backend: text(v.backend, 200) ?? '', reason: text(v.reason, 200) ?? '' };
   return null;
 }
-export const stoppedOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(stoppedItemOf).filter((i): i is Json => i !== null) : undefined);
+// An item this manager can't read (a kind newer than it: a router is upgraded without its manager; a shape out of its
+// bounds) stays, as an unknown one: dropped, its hours would be priced as nothing stopped ($0), not as not priced.
+const stoppedItemOf = (v: unknown): Json => knownStoppedItemOf(v) ?? {
+  kind: 'unknown', backend: isObject(v) && typeof v.backend === 'string' ? text(v.backend, 200)! : 'all',
+  reason: `not readable by this manager: ${isObject(v) && typeof v.kind === 'string' ? v.kind.slice(0, 40) : ''}`,
+};
+export const stoppedOf = (v: unknown) => (Array.isArray(v) ? v.slice(0, 50).map(stoppedItemOf) : undefined);
 
 // The instances a nap hibernated (routers 0.32.0): well-formed ids, at most 50; nothing when none is valid.
 export function hibernatedOf(v: unknown, cloud: Cloud | null = 'aws'): string[] | undefined {

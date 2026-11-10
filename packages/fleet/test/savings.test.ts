@@ -1,6 +1,7 @@
 // A period's savings (R9b): each ASLEEP phase's hours within the baseline × the hourly prices of what it stopped.
 import { describe, expect, it } from 'vitest';
 import { baselineHours, savingsOf } from '../src/savings.js';
+import { stoppedOf } from '../src/clean.js';
 import type { StoppedItem } from '../src/prices.js';
 
 const T3: StoppedItem = { kind: 'ec2', type: 't3.medium', count: 1, os: 'Linux' };
@@ -37,6 +38,14 @@ describe('savings of a period', () => {
     expect(s.hours).toBe(12);
     expect(s.items.map((i) => [i.item.kind, i.hours])).toEqual([['ec2', 12], ['rds', 10]]);
     expect(s.unpriced).toEqual([]);
+  });
+
+  it('a nap whose items this manager could not read is not priced, never $0 saved (a router newer than its manager)', async () => {
+    const stopped = stoppedOf([{ kind: 'gce', machineType: 'e2-small', vcpus: 0 }, { kind: 'tpu-pod' }]) as StoppedItem[];
+    expect(stopped).toHaveLength(2);
+    const s = await savingsOf([{ state: 'ASLEEP', from: '2026-10-08T00:00:00.000Z', to: '2026-10-08T04:00:00.000Z', stopped }], { hourly, baseline: { kind: 'always' } });
+    expect(s.usd).toBe(0);
+    expect(s.unpriced).toEqual(stopped.map((item) => ({ reason: 'not priced', item, hours: 4 })));
   });
 
   it('says what it could not price, never as nothing saved: no stopped (router before 0.27.0), an unknown item', async () => {
