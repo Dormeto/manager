@@ -29,6 +29,8 @@ const HIBERNATION: { settings: { hibernate: boolean | null; joinMinutes?: number
 };
 // A Google Cloud router, installed by the CLI, behind the pinned version: its health says so with the command.
 const GCP = 'dmtr-dormeto-dev-europe-west2';
+// The card names the pinned version, never below 0.40.0 (the pin here is the AWS router's 0.26.0).
+const GCP_CARD_COMMAND = 'dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0';
 const GCP_COMMAND = 'dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.26.0';
 const GOOGLE_ROUTER = {
   name: GCP, cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', version: '0.25.1', build: 'g1', workloads: 1, workloadStates: { AWAKE: 1 },
@@ -480,7 +482,7 @@ describe('a Google Cloud router', () => {
     expect(wrapper.find('[data-cloud="gcp"]').exists()).toBe(true);
     // The too-old problem names the command, and so does the card of commands.
     expect(wrapper.find('.dm-problem').text()).toContain(GCP_COMMAND);
-    expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_COMMAND);
+    expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_CARD_COMMAND);
     expect(wrapper.find('[data-test="gcp-uninstall"]').text()).toBe('dormeto gcp uninstall --project dormeto-dev --region europe-west2');
     expect(wrapper.find('[aria-label^="Upgrade "]').exists()).toBe(false);
     expect(wrapper.find(`[aria-label="Uninstall ${GCP}"]`).exists()).toBe(false);
@@ -498,7 +500,7 @@ describe('a Google Cloud router', () => {
     };
     try {
       const wrapper = await mountView(GCP);
-      expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_COMMAND);
+      expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_CARD_COMMAND);
       expect(wrapper.find('[data-test="gcp-router"]').text()).toContain('Upgrade to 0.26.0');
       wrapper.unmount();
     } finally {

@@ -2313,7 +2313,7 @@ export function createApi({
         failed: (report.forwarders.failed ?? []).filter((f) => sees(identity, f.account, '')),
       };
       return reply(200, {
-        ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')), ...(forwarders ? { forwarders } : {}),
+        ...report, accounts: report.accounts.filter((a) => sees(identity, a.account, '')).map((a) => ({ ...a, ...cloudField(a.account) })), ...(forwarders ? { forwarders } : {}),
         ...(report.discoveryOnly ? { discoveryOnly: report.discoveryOnly.filter((account) => sees(identity, account, '')) } : {}),
       });
     }

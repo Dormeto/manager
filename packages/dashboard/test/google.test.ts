@@ -34,6 +34,8 @@ describe('Google Cloud console links and commands', () => {
     expect(controllerConsoleUrl('dormeto-dev', 'europe-west2')).toBe('https://console.cloud.google.com/run/detail/europe-west2/dmtr-europe-west2-controller/metrics?project=dormeto-dev');
     expect(installCommand('dormeto-dev', 'europe-west2')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2');
     expect(installCommand('dormeto-dev', 'europe-west2', '0.40.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.37.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.41.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.41.0');
     expect(uninstallCommand('dormeto-dev', 'europe-west2')).toBe('dormeto gcp uninstall --project dormeto-dev --region europe-west2');
     expect(resourceName('projects/p/regions/r/backendServices/web-waker')).toBe('web-waker');
   });

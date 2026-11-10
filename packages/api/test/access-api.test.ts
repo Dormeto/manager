@@ -16,7 +16,7 @@ const DENIED = 'access denied: the role is missing or does not trust the manager
 const tg = (account: string) => `arn:aws:elasticloadbalancing:eu-west-1:${account}:targetgroup/app/73e2d6bc24d8a067`;
 const row = (account: string, command: boolean) => ({ account, name: `n${account}`, discovery: { ok: true as const }, command: command ? { ok: true as const } : { ok: false as const, reason: DENIED } });
 
-function setup({ visible, discoveryOnly = false }: { visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; discoveryOnly?: boolean } = {}) {
+function setup({ visible, discoveryOnly = false, project = false }: { visible?: (identity: unknown, item: { account?: string; region: string }) => boolean; discoveryOnly?: boolean; project?: boolean } = {}) {
   const store = memoryStore([
     ...[READY, NO_COMMAND, UNCHECKED].map((account) => candidate(tg(account), { account, region: 'eu-west-1', targetGroupArn: tg(account) })),
     candidate(service, { account: PROJECT, region: 'global', targetGroupArn: null as never, backendService: service } as never),
@@ -28,7 +28,7 @@ function setup({ visible, discoveryOnly = false }: { visible?: (identity: unknow
   };
   store.getAccountScan = async (account: string) => scans[account] ?? null;
   const summary: AccessSummary = {
-    counts: { ready: 1, discoveryMissing: 0, commandMissing: 2, unchecked: 1 }, accounts: [row(NO_COMMAND, false), row('444444444444', false)], delegation: 'ok', checkedAt: new Date(NOW).toISOString(),
+    counts: { ready: 1, discoveryMissing: 0, commandMissing: 2, unchecked: 1 }, accounts: [row(NO_COMMAND, false), row('444444444444', false), ...(project ? [{ account: PROJECT, name: 'Dev', discovery: { ok: true as const }, command: { ok: false as const, reason: MISSING } }] : [])], delegation: 'ok', checkedAt: new Date(NOW).toISOString(),
     forwarders: { connected: 1, connecting: 0, impossible: [{ account: NO_COMMAND, name: 'shop', reason: 'no command role' }], failed: [{ account: '444444444444', name: 'data', reason: 'AccessDenied' }] },
     discoveryOnly: [NO_COMMAND, '555555555555'],
   };
@@ -72,6 +72,12 @@ describe('organization access', () => {
     expect(json(await hidden.api(event('GET', '/api/discovery/access'))).discoveryOnly).toEqual(['555555555555']);
     const none = setup({ visible: () => false });
     expect(json(await none.api(event('GET', '/api/discovery/access'))).forwarders).toMatchObject({ impossible: [], failed: [] });
+  });
+
+  it('carries each row\'s cloud: a project\'s gcp, an account\'s aws', async () => {
+    const s = setup({ project: true });
+    const rows = json(await s.api(event('GET', '/api/discovery/access'))).accounts as { account: string; cloud?: string }[];
+    expect(rows.map((a) => [a.account, a.cloud])).toEqual([[NO_COMMAND, 'aws'], ['444444444444', 'aws'], [PROJECT, 'gcp']]);
   });
 
   it('refuses onboarding where the last check found no command role; an account never checked, or ready, is let through', async () => {

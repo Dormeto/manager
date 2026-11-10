@@ -327,6 +327,31 @@ describe('lint from the accounts of a run', () => {
         expect(report.accounts.map((a) => [a.account, a.discovery.ok, a.command])).toEqual([['dev-project', true, { ok: false, reason }]]);
       });
 
+      it('a router installed since the last run is registered by the plan step and its controller checked by the same run\'s project step', async () => {
+        const s = setup({ cfg: both });
+        await s.ready;
+        const registry: InstalledRouter[] = [];
+        const g = google(() => ({ projects: [{ projectId: 'dev-project' }] }), { compute: devWithInternal() });
+        const installed = { name: 'projects/dev-project/locations/europe-west2/services/dmtr-europe-west2-controller', uri: 'https://dmtr-europe-west2-controller-abc-nw.a.run.app', template: { containers: [{ env: [{ name: 'DMT_VERSION', value: '0.40.0' }] }] } };
+        const call = g.call;
+        g.call = (async (method: string, url: string, body?: unknown) => (url.startsWith('https://run.googleapis.com/') ? { services: [installed] } : call(method, url, body))) as GooglePort['call'];
+        g.registry = { list: async () => registry, put: async (r) => { registry.push(r); }, delete: async () => {} };
+        const asked: unknown[] = [];
+        const reason = `the command account c@x is missing run.routes.invoke on ${installed.name}: ${CONNECT}`;
+        s.deps.assumeCommand = async (account, extra) => {
+          asked.push([account, extra]);
+          if (account === 'dev-project') throw Object.assign(new Error(reason), { name: 'AccessDenied' });
+        };
+        const plan = await stepOf(s, g);
+        expect(registry.map((r) => [r.account, r.region])).toEqual([['dev-project', 'europe-west2']]);
+        expect(asked).toEqual([['dev-project', { controllers: [installed.name] }]]);
+        expect((await s.store.getAccountScan('dev-project'))!.access).toMatchObject({ command: { ok: false, reason } });
+        await scanAccount(s.deps, { runId: plan.runId, account: A.id });
+        const record = await finalizeRun(s.deps, plan);
+        expect(record.google).toMatchObject({ routers: 1, added: 1 });
+        expect(registry).toHaveLength(1);
+      });
+
       it('a project without a router is ready, its command not even asked', async () => {
         const s = setup({ cfg: both });
         await s.ready;

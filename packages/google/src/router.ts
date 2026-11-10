@@ -22,7 +22,9 @@ export type Refusal = RouterRefusal | 'router-unknown';
 // The commands that fix what the manager can't do on Google Cloud, as the API answers them and the fleet's poll records
 // them. The operator's AWS profile is theirs to fill in.
 export const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
-export const installCommand = (project: string, region: string, pinned: string | undefined) => `dormeto gcp install --project ${project} --region ${region}${pinned ? ` --version ${pinned}` : ''}`;
+// The version named is the pinned one, never below the minimum (a dev release pins the AWS router's).
+export const installCommand = (project: string, region: string, pinned: string | undefined) =>
+  `dormeto gcp install --project ${project} --region ${region}${pinned ? ` --version ${routerTooOld(pinned) ? ROUTER_MINIMUM : pinned}` : ''}`;
 // said: what Google answered (see `googleSaid`), so the cause can be seen from the poll's error and the API's 502.
 export const accessMissingText = (host: string, env: string, said?: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}${said ? ` (${said})` : ''}`;
 export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;

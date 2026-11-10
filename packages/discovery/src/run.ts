@@ -66,6 +66,7 @@ export interface RunPlan {
   accounts: string[]; // to scan, one step each
   delegation?: 'ok' | 'missing'; // organization mode: the delegation policy answered
   skipped: NonNullable<RunRecord['skipped']>; // accounts not scanned, per reason
+  googleRouters?: GoogleSummary; // Google Cloud's routers as the plan step listed them (the projects' account steps check this run's routers)
   googleErrors?: GoogleSummary['errors']; // the projects of the connection's scopes could not be listed: the last run's are planned again
   record?: RunRecord; // when skipped or failed
 }
@@ -190,13 +191,18 @@ export async function planRun(deps: RunDeps, event: { source: 'schedule' | 'manu
     }
     const delegation = config.mode === 'organization' ? { delegation: 'ok' as const } : {};
     await deps.store.putInventory(inventory);
+    // Google Cloud's routers, in the projects just listed, before any account step: a failure is recorded, never the run's.
+    const googleRouters = deps.google ? await discoverGoogleRouters(deps.google, { now, log, projects: inventory.accounts.filter((a) => isProject(a.id)).map((a) => a.id) }).catch((err): GoogleSummary => {
+      log.error('GoogleRoutersFailed', { error: errorText(err) });
+      return { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [{ project: '*', error: errorText(err) }] };
+    }) : null;
     const plans = scanAccounts(config, inventory);
     const pairsOf = config.regions.includes('*') ? 1 : config.regions.length;
     const skipped = bySkipReason(plans.filter((p) => !p.scan).map((p) => ({ account: p.account, reason: p.reason, pairs: pairsOf })));
     const accounts = plans.filter((p) => p.scan).map((p) => p.account);
     await deps.store.putRun(record({ status: 'running', finishedAt: runId, skipped, ...delegation }));
     log.info('DiscoveryPlanned', { runId, accounts: accounts.length });
-    return { runId, status: 'planned', ...who, accounts, skipped, ...delegation, ...(googleErrors.length ? { googleErrors } : {}) };
+    return { runId, status: 'planned', ...who, accounts, skipped, ...delegation, ...(googleRouters ? { googleRouters } : {}), ...(googleErrors.length ? { googleErrors } : {}) };
   } catch (err) {
     const missing = (err as { delegation?: 'missing' }).delegation;
     const failed = record({ status: 'failed', error: missing ? ORGANIZATION_ACCESS : errorText(err), ...(missing ? { delegation: missing } : {}) });
@@ -648,13 +654,8 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
     const status = errors === 0 ? 'ok' : errors === targets.length + emptyPairs ? 'failed' : 'partial';
     const skipped = [...plan.skipped, ...bySkipReason(skippedPairs)];
     const { connections, forwarders } = await connectionsOf(deps, config, plan, ofRun, inventory, now());
-    // Google Cloud's routers, in the projects the plan listed: a failure here is recorded, never the run's.
-    const projects = inventory.accounts.filter((a) => isProject(a.id)).map((a) => a.id);
-    let google = deps.google ? await discoverGoogleRouters(deps.google, { now, log, projects }).catch((err) => {
-      log.error('GoogleRoutersFailed', { error: errorText(err) });
-      return { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [{ project: '*', error: errorText(err) }] };
-    }) : null;
-    // What the plan could not list is in the record too.
+    // What the plan listed of Google Cloud's routers, and what it could not list of the projects, is in the record.
+    let google = plan.googleRouters ?? null;
     if (google && plan.googleErrors?.length) google = { ...google, errors: [...plan.googleErrors.filter((e) => !google!.errors.some((x) => x.project === e.project && x.error === e.error)), ...google.errors] };
     const record: RunRecord = {
       startedAt: plan.runId, ...who, finishedAt: iso(now()), status, targets, skipped, emptyPairs,

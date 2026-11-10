@@ -163,7 +163,8 @@ instance with theirs and their Google Cloud icons, "suspended" where AWS says "h
 its tags and settings in Google Cloud's words (no EC2, target or Lambda; the values Google Cloud fixes said so), no target group,
 targets or ARN, and no idle window advice or requests heatmap yet (they come with Google Cloud's request counts); the workload the CLI
 onboarded is renamed, tagged and set from the dashboard, which offers Offboard for it, but a GKE workload's and that of one whose
-onboarding turned request logs on, which stay with the `dormeto gcp workloads offboard` command. Discovery settings shows the Google Cloud connection read-only
+onboarding turned request logs on stay with the `dormeto gcp workloads offboard` command: the workload view shows that command
+(Discovery's Offboard on its candidate fails at `locate`, before any change). Discovery settings shows the Google Cloud connection read-only
 (`GET /api/discovery/google`: the host project, scopes, the two service accounts, its routers, who connected it and when), or the command that connects one.
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`

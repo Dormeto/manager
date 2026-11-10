@@ -115,6 +115,7 @@ export async function discoverGoogleRouters(port: GooglePort, { now, log, projec
   const summary: GoogleSummary = { projects: 0, routers: 0, added: 0, updated: 0, removed: 0, errors: [] };
   const found: Found[] = [];
   const listed = new Set<string>();
+  const registered = (await port.registry.list()).filter((r) => r.cloud === 'gcp');
   const unreachable = new Set<string>(); // <project>#<region>: neither updated nor removed
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(PROJECTS_AT_ONCE, projects.length) }, async () => {
@@ -125,7 +126,9 @@ export async function discoverGoogleRouters(port: GooglePort, { now, log, projec
         found.push(...out.found);
         listed.add(project);
         for (const region of out.unreachable) unreachable.add(`${project}#${region}`);
-        if (out.unreachable.length) summary.errors.push({ project, error: `regions unreachable: ${out.unreachable.join(', ')}` });
+        // Cloud Run lists restricted regions unreachable on every call: an error only where a router is registered.
+        const stuck = out.unreachable.filter((region) => registered.some((r) => r.account === project && r.region === region));
+        if (stuck.length) summary.errors.push({ project, error: `regions unreachable: ${stuck.join(', ')}` });
       } catch (err) {
         summary.errors.push({ project, error: messageOf(err) });
         log.warn('GoogleProjectFailed', { project, error: messageOf(err) });
@@ -136,7 +139,6 @@ export async function discoverGoogleRouters(port: GooglePort, { now, log, projec
   summary.routers = found.length;
   summary.errors.sort((a, b) => a.project.localeCompare(b.project));
 
-  const registered = (await port.registry.list()).filter((r) => r.cloud === 'gcp');
   const known = new Map(registered.map((r) => [`${r.account}#${r.region}`, r]));
   for (const f of found) {
     const existing = known.get(`${f.project}#${f.region}`);

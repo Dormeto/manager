@@ -119,6 +119,26 @@ describe('Google Cloud routers in a discovery run', () => {
     expect(record.google!.errors).toEqual([{ project: 'dormeto-dev', error: 'regions unreachable: europe-west2' }]);
   });
 
+  it('does not record Cloud Run\'s unreachable regions as errors where no router is registered', async () => {
+    const g = fakeGoogle({ projects: ['dormeto-dev'], services: {} });
+    const restricted = ['us-east7', 'us-south1', 'europe-west5', 'europe-west8', 'me-central1'];
+    const call = g.port.call;
+    g.port.call = (async (m: string, url: string) => (url.includes('/v2/projects/') ? { services: [service('dormeto-dev', 'europe-west2', '0.40.0')], unreachable: restricted.map((r) => `projects/dormeto-dev/locations/${r}`) } : call(m, url))) as GooglePort['call'];
+    const record = await run(g);
+    expect(record.google!.errors).toEqual([]);
+    expect([...g.registry.keys()]).toEqual(['dormeto-dev#europe-west2']);
+  });
+
+  it('records only the unreachable regions where a router is registered', async () => {
+    const g = fakeGoogle({ projects: ['dormeto-dev'], services: {} });
+    g.registry.set('dormeto-dev#europe-west5', registered('dormeto-dev', 'europe-west5'));
+    const call = g.port.call;
+    g.port.call = (async (m: string, url: string) => (url.includes('/v2/projects/') ? { services: [], unreachable: ['projects/dormeto-dev/locations/us-east7', 'projects/dormeto-dev/locations/europe-west5'] } : call(m, url))) as GooglePort['call'];
+    const record = await run(g);
+    expect(record.google!.errors).toEqual([{ project: 'dormeto-dev', error: 'regions unreachable: europe-west5' }]);
+    expect([...g.registry.keys()]).toEqual(['dormeto-dev#europe-west5']);
+  });
+
   it('never touches an AWS registration or a router of a project not listed', async () => {
     const g = fakeGoogle({ projects: ['dormeto-dev'], services: { 'dormeto-dev': [] } });
     g.registry.set(`${A.id}#eu-west-1`, { ...registered(A.id, 'eu-west-1', { name: 'dmtr-1', controller: 'arn:fn', onboarder: 'arn:on' }), cloud: undefined });

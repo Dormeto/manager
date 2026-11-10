@@ -59,8 +59,9 @@ export function urlMapConsoleUrl(urlMap: string, lb: { kind: string; region?: st
 export const controllerConsoleUrl = (project: string, region: string): string => `${CONSOLE}/run/detail/${part(region)}/dmtr-${region}-controller/metrics${withProject(project)}`;
 
 // Routers are installed, upgraded and uninstalled by the CLI, which changes the project's IAM policy through its own checks.
+// The version named is the pinned one, never below the router minimum (a dev release pins the AWS router's).
 export const installCommand = (project: string, region: string, version?: string | null): string =>
-  `dormeto gcp install --project ${project} --region ${region}${version ? ` --version ${version}` : ''}`;
+  `dormeto gcp install --project ${project} --region ${region}${version ? ` --version ${googleRouterTooOld({ version }) ? '0.40.0' : version}` : ''}`;
 export const uninstallCommand = (project: string, region: string): string => `dormeto gcp uninstall --project ${project} --region ${region}`;
 
 const LB_KINDS: Record<string, string> = {

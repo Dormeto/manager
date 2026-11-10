@@ -2,7 +2,7 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // bounded; Google's refusal of the token is the refusal manager-access-missing, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accessMissingText, actOnRouter, callRouter, createGoogle, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
+import { accessMissingText, actOnRouter, callRouter, createGoogle, installCommand, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
 
 const T0 = Date.parse('2026-11-09T12:00:00Z');
 const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
@@ -318,6 +318,13 @@ describe('routerTooOld', () => {
 });
 
 describe('the refusals\' texts', () => {
+
+  it('names the install command with the pinned version but never below the router minimum', () => {
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.37.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.41.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.41.0');
+    expect(installCommand('dormeto-dev', 'europe-west2', undefined)).toBe('dormeto gcp install --project dormeto-dev --region europe-west2');
+    expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.37.0')).toContain('--version 0.40.0');
+  });
   it('name the command that fixes each, as the API answers them and the poll records them', () => {
     expect(accessMissingText('dormeto-host', 'dev')).toBe('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
     expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')).toBe('router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
