@@ -506,8 +506,14 @@ const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
 function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud: Cloud = 'aws') {
   const types = settings?.fallbackInstanceTypes;
   const listed = (pattern: RegExp) => Array.isArray(types) && types.length <= 5 && types.every((t) => typeof t === 'string' && pattern.test(t));
-  if (types !== undefined && cloud === 'gcp' && !(listed(MACHINE_TYPE) && new Set(types as string[]).size === (types as string[]).length)) {
-    throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium');
+  if (types !== undefined && cloud === 'gcp') {
+    // The router's split (gcp/src/onboarding.mjs fallbackTypesProblems): one text for a non-list or a long one, then a bad name, then a repeat.
+    const field = 'settings: fallbackInstanceTypes';
+    if (!Array.isArray(types) || types.length > 5) throw new HttpError(400, 'bad_request', `${field}: must be a list of at most 5 machine types, such as e2-medium`);
+    const bad = types.find((t) => typeof t !== 'string' || !MACHINE_TYPE.test(t));
+    if (bad !== undefined || types.some((t) => typeof t !== 'string')) throw new HttpError(400, 'bad_request', `${field}: ${JSON.stringify(bad ?? types.find((t) => typeof t !== 'string'))} is not a machine type name`);
+    const twice = types.find((t, i) => types.indexOf(t) !== i);
+    if (twice !== undefined) throw new HttpError(400, 'bad_request', `${field}: ${twice} is named twice`);
   }
   if (types !== undefined && cloud === 'aws' && !listed(INSTANCE_TYPE)) {
     throw new HttpError(400, 'bad_request', 'settings: fallbackInstanceTypes: must be a list of at most 5 EC2 instance types, such as t3a.medium');

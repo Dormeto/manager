@@ -353,9 +353,10 @@ describe('onboarding on Google Cloud', () => {
   it('takes Compute Engine machine types as fallback types and Cloud SQL instances as databases, refusing an EC2 type and another database', async () => {
     const s = await googleSetup({ installed: [registered('europe-west2')] });
     for (const [body, message] of [
-      [{ settings: { fallbackInstanceTypes: ['t3a.medium'] } }, 'settings: fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium'],
+      [{ settings: { fallbackInstanceTypes: ['t3a.medium'] } }, 'settings: fallbackInstanceTypes: "t3a.medium" is not a machine type name'],
+      [{ settings: { fallbackInstanceTypes: 'e2-medium' } }, 'settings: fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium'],
       [{ settings: { fallbackInstanceTypes: ['e2-small', 'e2-medium', 'e2-standard-2', 'n2-standard-2', 'n2d-standard-2', 'c3-standard-4'] } }, /fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium/],
-      [{ settings: { fallbackInstanceTypes: ['e2-medium', 'e2-medium'] } }, /fallbackInstanceTypes: must be a list of at most 5 machine types, such as e2-medium/],
+      [{ settings: { fallbackInstanceTypes: ['e2-medium', 'e2-medium'] } }, 'settings: fallbackInstanceTypes: e2-medium is named twice'],
       [{ databases: [{ kind: 'rds-instance', id: 'db-1' }] }, 'databases: {"kind":"rds-instance","id":"db-1"} is not a Cloud SQL instance: give {"kind": "cloudsql-instance", "id": "<instance name>"}'],
       [{ databases: ['db-1'] }, /is not a Cloud SQL instance/],
       [{ databases: [{ kind: 'cloudsql-instance', id: 'DB_1' }] }, /is not a Cloud SQL instance/],
