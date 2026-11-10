@@ -7,8 +7,8 @@
 // (its project and region), never the payload. A router whose controller URL answers Google's own 404 twice in a row is
 // uninstalled: unregistered. One too old to poll (below 0.40.0, or one that answered it has no /v1/actions) is kept and not
 // polled until its version changes: its version is read from its health (GET /v1/health) at most every 10 minutes and kept
-// in the registry, so that the advised `dormeto gcp install` clears too-old within 10 minutes. What a poll did not do, and
-// where the journal was read up to, is its RS# item's poll.
+// in the registry, so that the advised `dormeto gcp routers install` clears too-old within 10 minutes. What a poll did not
+// do, and where the journal was read up to, is its RS# item's poll.
 import type { Google, GoogleConnection } from '@dormeto/google';
 import { accessMissingText, callRouter, controllerUnknownText, RouterCallError, routerHealth, routerTooOld, tooOldText } from '@dormeto/google/router';
 import { CHUNK_WORKLOADS_MAX, timely } from './clean.js';

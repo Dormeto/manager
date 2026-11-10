@@ -301,7 +301,7 @@ export type RouterOperationType = 'install-router' | 'upgrade-router' | 'uninsta
 
 export interface Configured<T> {
   value: T;
-  source: 'terraform' | 'manager' | 'cli'; // cli: a Google Cloud router's, set by `dormeto gcp install`
+  source: 'terraform' | 'manager' | 'cli'; // cli: a Google Cloud router's, set by `dormeto gcp routers install`
 }
 
 // GET /api/routers/{name}: the router action.

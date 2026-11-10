@@ -90,8 +90,8 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   that the manager can't act as the command account, with the same command, rather than listing every permission. The onboarding of a
   candidate of that project is refused with 409 and the same command. A Google failure that is no refusal keeps the last verdict.
 - **A router installed later**, in a project the command account does not reach yet, is reached after
-  `dormeto gcp connect` is run again; `dormeto gcp install` changes nothing about the manager. Until then, a call to that
-  router is refused with the command (`no_access`).
+  `dormeto gcp connect` is run again; `dormeto gcp routers install` changes nothing about the manager. Until then, a call
+  to that router is refused with the command (`no_access`).
 - **After a disconnect,** the record is cleared and the manager's Google Cloud routers are unregistered. The next
   discovery run lists the projects' candidates `out-of-scope` with the reason `the Google Cloud connection was removed`,
   a managed one too: the manager can't offboard without the connection, and the workload stays on its router, run with

@@ -421,11 +421,11 @@ describe('onboarding a Google Cloud candidate', () => {
     const gone = setup({ routers: [] });
     const op = await gone.engine.create('onboard', INPUT, 'ops@example.com');
     await gone.drive(op.id);
-    expect((await gone.records.getOperation(op.id))!.error).toBe(`find router: no router in project ${PROJECT}, region ${REGION}: dormeto gcp install --project ${PROJECT} --region ${REGION} --version 0.40.0`);
+    expect((await gone.records.getOperation(op.id))!.error).toBe(`find router: no router in project ${PROJECT}, region ${REGION}: dormeto gcp routers install --project ${PROJECT} --region ${REGION} --version 0.40.0`);
     const old = setup({ routers: [{ ...ROUTER, version: '0.39.2' }] });
     const op2 = await old.engine.create('onboard', INPUT, 'ops@example.com');
     await old.drive(op2.id);
-    expect((await old.records.getOperation(op2.id))!.error).toBe(`find router: router 0.39.2 can't report to the manager: dormeto gcp install --project ${PROJECT} --region ${REGION} --version 0.40.0`);
+    expect((await old.records.getOperation(op2.id))!.error).toBe(`find router: router 0.39.2 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region ${REGION} --version 0.40.0`);
     expect([...gone.invocations, ...old.invocations]).toEqual([]);
   });
 

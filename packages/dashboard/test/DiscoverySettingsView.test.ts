@@ -88,6 +88,13 @@ describe('Discovery settings: the Google Cloud connection', () => {
     wrapper.unmount();
   });
 
+  it('names the commands that add a router when the connection has none yet', async () => {
+    connection = { ...CONNECTION, routers: [] };
+    const wrapper = await mountView();
+    expect(wrapper.find('[data-test="google-connection"]').text()).toContain('none yet: dormeto gcp routers install, then dormeto gcp connect again');
+    wrapper.unmount();
+  });
+
   it('says there is none, and names the command that connects one', async () => {
     connection = null;
     const wrapper = await mountView();

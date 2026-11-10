@@ -310,6 +310,13 @@ describe('OnboardDialog', () => {
       wrapper.unmount();
     });
 
+    it('names the command that upgrades a router when the project has none of 0.40.0 or later', async () => {
+      const wrapper = await gcp({ routers: [], chooseRouter: true });
+      const select = wrapper.findAllComponents(VSelect).find((s) => s.props('label') === 'Router')!;
+      expect(select.props('hint')).toBe('No router of the project is 0.40.0 or later: upgrade one with dormeto gcp routers install');
+      wrapper.unmount();
+    });
+
     it('names the only router offered when the API needs one (the project\'s others below 0.40.0)', async () => {
       const wrapper = await gcp({ routers: [{ name: 'dmtr-dev-us-east1', region: 'us-east1' }], chooseRouter: true });
       expect(document.querySelector('.v-dialog')!.textContent).toContain('Router');

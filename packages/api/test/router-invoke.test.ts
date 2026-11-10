@@ -65,7 +65,7 @@ describe('a Google Cloud router\'s controller, from the manager', () => {
     const invoke = routerInvoker(never, { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }), env: 'dev', routerVersion: '0.40.0' });
     expect(await invoke({ ...GCP, installed: { ...GCP.installed!, version: '0.40.0-dev.1' } }, { action: 'list' })).toEqual({ workloads: [] });
     const err = await invoke({ ...GCP, installed: { ...GCP.installed!, version: '0.39.0-dev.3' } }, { action: 'list' }).catch((e: unknown) => e) as RouterError;
-    expect([err.refusal, err.message]).toEqual(['router_too_old', 'router 0.39.0-dev.3 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0']);
+    expect([err.refusal, err.message]).toEqual(['router_too_old', 'router 0.39.0-dev.3 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0']);
     expect(sent).toEqual([{ action: 'list', refusals: true }]);
   });
 

@@ -340,15 +340,15 @@ describe('routerTooOld', () => {
 describe('the refusals\' texts', () => {
 
   it('names the install command with the pinned version but never below the router minimum', () => {
-    expect(installCommand('dormeto-dev', 'europe-west2', '0.37.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
-    expect(installCommand('dormeto-dev', 'europe-west2', '0.41.0')).toBe('dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.41.0');
-    expect(installCommand('dormeto-dev', 'europe-west2', undefined)).toBe('dormeto gcp install --project dormeto-dev --region europe-west2');
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.37.0')).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0');
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.41.0')).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.41.0');
+    expect(installCommand('dormeto-dev', 'europe-west2', undefined)).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2');
     expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.37.0')).toContain('--version 0.40.0');
   });
   it('name the command that fixes each, as the API answers them and the poll records them', () => {
     expect(accessMissingText('dormeto-host', 'dev')).toBe('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
-    expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')).toBe('router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0');
-    expect(tooOldText('', 'dormeto-dev', 'europe-west2', undefined)).toBe('router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2');
+    expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')).toBe('router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0');
+    expect(tooOldText('', 'dormeto-dev', 'europe-west2', undefined)).toBe('router older than 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2');
   });
 });
 

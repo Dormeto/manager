@@ -156,7 +156,7 @@ function submit() {
           </v-col>
         </v-row>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
-          :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : 'No router of the project is 0.40.0 or later: upgrade one with dormeto gcp install'" />
+          :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : 'No router of the project is 0.40.0 or later: upgrade one with dormeto gcp routers install'" />
         <v-text-field v-if="gcp" v-model="databases" label="Companion Cloud SQL instances (optional)" hint="Cloud SQL instance names, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-else v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
         <v-text-field v-if="gcp" v-model="fallbacks" label="Fallback machine types (optional)" :rules="[fallbackRule]" class="mt-4"

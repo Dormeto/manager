@@ -2696,7 +2696,7 @@ export function createApi({
         if (router.cloud === 'gcp') {
           throw new HttpError(400, 'bad_request', type === 'upgrade-router'
             ? `a Google Cloud router is upgraded with the CLI: ${installCommand(account, router.region, routerVersion)}`
-            : `a Google Cloud router is uninstalled with the CLI: dormeto gcp uninstall --project ${account} --region ${router.region}`);
+            : `a Google Cloud router is uninstalled with the CLI: dormeto gcp routers uninstall --project ${account} --region ${router.region}`);
         }
         input = { account, region: router.region };
         target = router.name;

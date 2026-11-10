@@ -157,7 +157,7 @@ function googleRouterFor(d: Demo, c: Candidate, named: unknown): DemoRouter {
     return router;
   }
   const routers = d.routers.filter((r) => r.cloud === 'gcp' && r.account === c.account && (c.region === 'global' || r.region === googleScope(c.id)));
-  if (routers.length === 0) fail(409, 'conflict', `no router of the manager in ${c.account}${c.region === 'global' ? '' : `/${c.region}`}: dormeto gcp install`);
+  if (routers.length === 0) fail(409, 'conflict', `no router of the manager in ${c.account}${c.region === 'global' ? '' : `/${c.region}`}: dormeto gcp routers install`);
   if (routers.length > 1) fail(400, 'bad_request', `${c.account} has several routers (${routers.map((r) => r.name).join(', ')}): router is required`);
   return routers[0]!;
 }

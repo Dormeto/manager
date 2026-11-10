@@ -472,7 +472,7 @@ describe('Google Cloud routers', () => {
     const m = manager({ routers: [gcp({ version: '0.39.0' })] });
     const res = await m.api(event('POST', `/api/workloads/${NAME}/demo/wake`, 'dmt-operator'));
     expect([res.statusCode, json(res)]).toEqual([409, {
-      error: 'router_too_old', message: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      error: 'router_too_old', message: 'router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     }]);
     expect(m.seen).toEqual([]);
   });
@@ -481,7 +481,7 @@ describe('Google Cloud routers', () => {
     const m = manager({ routers: [gcp({ version: '' })], controller: () => answer(404, { error: 'no route for POST /v1/actions', reason: 'not-found' }) });
     const res = await m.api(event('GET', `/api/workloads/${NAME}/demo`, 'dmt-operator'));
     expect([res.statusCode, json(res)]).toEqual([409, {
-      error: 'router_too_old', message: 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      error: 'router_too_old', message: 'router older than 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     }]);
     expect(m.actions()).toHaveLength(1);
   });
@@ -491,11 +491,11 @@ describe('Google Cloud routers', () => {
     const known = manager({ routers: [gcp({ version: '0.39.0' })] });
     expect(json(await known.api(event('GET', '/api/routers', 'dmt-viewer'))).routers.find((r: { name: string }) => r.name === NAME)).toEqual({
       name: NAME, region: 'europe-west2', account: 'dormeto-dev', cloud: 'gcp', source: 'cli', version: '0.39.0', refusal: 'router_too_old', reporting: false,
-      error: 'router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      error: 'router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     const unknown = manager({ routers: [gcp({ version: '' })], controller: () => answer(404, { error: 'no route for POST /v1/actions', reason: 'not-found' }) });
     const row = json(await unknown.api(event('GET', '/api/routers', 'dmt-viewer'))).routers.find((r: { name: string }) => r.name === NAME);
-    expect([row.refusal, row.version, row.error]).toEqual(['router_too_old', undefined, 'router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0']);
+    expect([row.refusal, row.version, row.error]).toEqual(['router_too_old', undefined, 'router older than 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0']);
   });
 
   it('answers router_unknown for a router whose controller discovery hasn\'t found yet, without a call', async () => {
@@ -511,15 +511,15 @@ describe('Google Cloud routers', () => {
     const m = manager();
     const install = await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'install-router', account: 'dormeto-dev', region: 'europe-west2' }));
     expect([install.statusCode, json(install)]).toEqual([400, {
-      error: 'bad_request', message: 'a Google Cloud router is installed with the CLI: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      error: 'bad_request', message: 'a Google Cloud router is installed with the CLI: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     }]);
     const upgrade = await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'upgrade-router', router: NAME }));
     expect([upgrade.statusCode, json(upgrade)]).toEqual([400, {
-      error: 'bad_request', message: 'a Google Cloud router is upgraded with the CLI: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      error: 'bad_request', message: 'a Google Cloud router is upgraded with the CLI: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     }]);
     const uninstall = await m.api(event('POST', '/api/operations', 'dmt-admin', { type: 'uninstall-router', router: NAME }));
     expect([uninstall.statusCode, json(uninstall)]).toEqual([400, {
-      error: 'bad_request', message: 'a Google Cloud router is uninstalled with the CLI: dormeto gcp uninstall --project dormeto-dev --region europe-west2',
+      error: 'bad_request', message: 'a Google Cloud router is uninstalled with the CLI: dormeto gcp routers uninstall --project dormeto-dev --region europe-west2',
     }]);
     expect(m.created).toEqual([]);
     // An AWS account's install is as before.

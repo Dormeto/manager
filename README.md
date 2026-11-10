@@ -55,7 +55,7 @@ flowchart TB
 
 **On Google Cloud** the same three steps run in a Cloud Run router, behind a Google Cloud Application Load Balancer, for
 Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs, upgrades and uninstalls the routers and sets
-`--request-logs` and GKE access (`dormeto gcp install`, `dormeto gcp workloads access grant`), because those change IAM
+`--request-logs` and GKE access (`dormeto gcp routers install`, `dormeto gcp workloads access grant`), because those change IAM
 policies, backend services or clusters, which the manager never does. A GKE workload's onboarding and offboarding, and the offboarding of a workload whose onboarding turned request logs
 on, stay with the CLI too (`dormeto gcp workloads onboard`, `offboard`). The manager discovers the candidates of your Google Cloud projects (backend
 services a URL map names, with the router's own reasons when one can't be onboarded and an idle share estimated from Cloud Monitoring),
@@ -65,7 +65,7 @@ identity federation from its AWS roles to two service accounts of a host project
 ([Organization access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
 reads the router's journal of state changes and its check summary, which feed the same history, health and alerts
 as an AWS router's, and it pushes the organization's settings to it ([Operations](docs/operations.md#google-cloud-routers)).
-A router older than 0.40.0 is listed with the `dormeto gcp install` command that upgrades it.
+A router older than 0.40.0 is listed with the `dormeto gcp routers install` command that upgrades it.
 
 ```mermaid
 flowchart LR
@@ -102,7 +102,7 @@ quotas. Your rules and your infrastructure as code stay untouched.</p>
   <img src="https://dormeto.com/img/routers-light.webp" alt="Routers: version, health, last idle check, workloads, an upgrade offered, pause and uninstall">
 </picture>
 <p><b>Installs and upgrades the routers.</b> AWS's by API calls, through the command role you created; Google Cloud's with
-the CLI (<code>dormeto gcp install</code>), which the manager then reads. Each router reports its health, and failed wakes
+the CLI (<code>dormeto gcp routers install</code>), which the manager then reads. Each router reports its health, and failed wakes
 say why.</p>
 </td>
 <td width="50%" valign="top">

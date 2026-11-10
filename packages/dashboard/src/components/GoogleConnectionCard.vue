@@ -33,7 +33,7 @@ const now = useNow();
           <tr><th>Routers</th>
             <td>
               <div v-for="r in connection.routers" :key="`${r.project}/${r.region}`"><span class="mono">{{ r.project }}</span> · <span class="mono">{{ r.region }}</span><span v-if="r.version" class="text-medium-emphasis"> · {{ r.version }}</span></div>
-              <span v-if="!connection.routers.length" class="text-medium-emphasis">none yet: <code>dormeto gcp install</code>, then <code>dormeto gcp connect</code> again</span>
+              <span v-if="!connection.routers.length" class="text-medium-emphasis">none yet: <code>dormeto gcp routers install</code>, then <code>dormeto gcp connect</code> again</span>
             </td></tr>
         </tbody>
       </v-table>

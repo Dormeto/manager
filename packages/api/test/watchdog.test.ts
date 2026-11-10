@@ -81,7 +81,7 @@ describe('watchdog: Google Cloud routers', () => {
     const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.39.0' })] });
     await s.watchdog.run();
     expect(s.sent).toHaveLength(1);
-    expect(s.sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    expect(s.sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
     expect(s.sent[0]!.attributes).toEqual({ level: 'error', kind: 'router', cloud: 'gcp', account: PROJECT, region: 'europe-west1', router: `dmtr-${PROJECT}-europe-west1` });
     expect(s.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
   });
@@ -89,7 +89,7 @@ describe('watchdog: Google Cloud routers', () => {
   it('calls a router too old when its poll says it has no /v1/actions, even with an unknown version', async () => {
     const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '' })], polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: null, poll: { tooOld: '' } }] });
     await s.watchdog.run();
-    expect(s.sent[0]!.message).toContain(`router older than 0.40.0 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    expect(s.sent[0]!.message).toContain(`router older than 0.40.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
     expect(s.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
   });
 
@@ -180,7 +180,7 @@ describe('watchdog: Google Cloud routers', () => {
   });
 });
 
-// The fleet's poll and the watchdog over one table: the advised `dormeto gcp install` clears too-old within 10 minutes.
+// The fleet's poll and the watchdog over one table: the advised `dormeto gcp routers install` clears too-old within 10 minutes.
 describe('watchdog and the poll: a too-old Google Cloud router upgraded', () => {
   it('resolves the router\'s too-old alarm once the poll read 0.40.0 from its health and polled it at the next run', async () => {
     let t = NOW;
@@ -214,7 +214,7 @@ describe('watchdog and the poll: a too-old Google Cloud router upgraded', () => 
     await poll();
     await watchdog.run();
     expect(sent.map((n) => n.attributes.level)).toEqual(['error']);
-    expect(sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    expect(sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
     // The advised install.
     running.version = '0.40.0';
     t += 10 * MIN;
@@ -463,7 +463,7 @@ describe('watchdog: failed wakes (R7b)', () => {
     expect(google('capacity')).toContain('Fallback machine types');
     expect(google('quota')).toContain('A Compute Engine quota of the project and region was reached');
     expect(google('permission')).toContain('the router\'s service account dmtr-europe-west1');
-    expect(google('permission')).toContain('dormeto gcp status --project acme-prod --region europe-west1');
+    expect(google('permission')).toContain('dormeto gcp routers show --project acme-prod --region europe-west1');
     expect(google('unhealthy')).toContain('the backend service\'s health check');
     expect(google('unhealthy')).toContain('If its backends keep running without passing the health check, Dormeto stops them after its idle window.');
     for (const kind of ['capacity', 'quota', 'permission', 'configuration', 'unhealthy', 'throttled', 'timeout', 'cluster', 'unknown']) {

@@ -74,7 +74,7 @@ project that misses access is refused with 409 and the `dormeto gcp connect` com
 refusal keeps the last verdict. AWS accounts behave as before.
 - **Onboarding on Google Cloud:** `POST /api/operations` `{type: 'onboard'}` takes a candidate of a project, on the router of its
 region for a regional load balancer, on the project's router for a global one (`router` names it when the project has several,
-else 400 listing them); no router there is a 400 with `dormeto gcp install --project <p> --region <region> --version <pinned>`, one
+else 400 listing them); no router there is a 400 with `dormeto gcp routers install --project <p> --region <region> --version <pinned>`, one
 before 0.40.0 a 409 `router_too_old`. Its `settings.fallbackInstanceTypes` are Compute Engine machine types (at most 5, each once) and
 its `databases` Cloud SQL instances, `{kind: 'cloudsql-instance', id: <name>}`; the project's number is read as the discovery
 account (a refusal: 502 with Google's words). The operation runs `find router`, `slot` (the project's and the router's region),
@@ -103,12 +103,12 @@ workload; its lift resumes them by the exclusion's id. A router below 0.40.0 is 
 than `not_found`, a timeout) is not called again in that run of the step; their errors are said for a workload no router paused,
 and a lift keeps the pauses on them. AWS offboardings and exclusions are unchanged.
 - **The watchdog watches Google Cloud routers:** one below 0.40.0 (by major.minor.patch: a dev router's `0.40.0-dev.1` meets it), or
-whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp install` command (never
+whose controller answered the poll that it has no `/v1/actions`, is `too-old` with the `dormeto gcp routers install` command (never
 `silent`); one the poll is refused at says that refusal with its command (`no_access`, `router_unknown`) instead of
 `silent`, once its 15 minutes of grace are over; a silent one gets the advice for Cloud Run, its Scheduler job
 `dmtr-<region>-check` and the controller's logs. A Google Cloud workload's failed wake is advised in Google Cloud's words for its
 kind (Compute Engine's zone capacity and fallback machine types, its quotas, the router's service account and `dormeto gcp
-status`, the backend service's health check). Every alert gains the message attribute `cloud` (`aws` or `gcp`); the update
+routers show`, the backend service's health check). Every alert gains the message attribute `cloud` (`aws` or `gcp`); the update
 check's is `aws`, a digest carries the cloud its alarms share, and both as the `String.Array` `["aws","gcp"]` when they mix (a
 subscription filter on either cloud receives it).
 - **The manager calls Google Cloud routers:** every action it sends an AWS router's controller goes to a Google Cloud router's
@@ -118,10 +118,10 @@ read as the AWS controller answers them; an empty failure at the controller URL 
 A Google Cloud router the manager can't use answers 409 `{ error, message }` with the command that fixes it: `no_access` when Google
 refuses the manager's token or the connection is broken (its pool, provider or service account gone, its grant revoked), with `the manager's accounts can't reach the router: dormeto gcp connect --project <host> --profile <profile> --env <env>`,
 `router_too_old` for a router below 0.40.0 (by major.minor.patch), without calling it, or one whose controller has no `/v1/actions`
-(`router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`), and `router_unknown`
+(`router <v> can't report to the manager: dormeto gcp routers install --project <p> --region <r> --version <pinned>`), and `router_unknown`
 while discovery hasn't found its controller; `GET /routers` lists such a router with its `refusal` and the version the registry
 knows. `install-router` for a project, and `upgrade-router` and `uninstall-router` for a Google
-Cloud router, answer 400 with the `dormeto gcp install` or `uninstall` command: they change IAM policies, which stays with the CLI.
+Cloud router, answer 400 with the `dormeto gcp routers install` or `uninstall` command: they change IAM policies, which stays with the CLI.
 Each write of `settings.json` (`PUT /settings/workloads`, `/settings/types`, `PUT` and `DELETE /settings/waiting-page`) is pushed to
 every Google Cloud router with a controller, but one below 0.40.0, as `manager-settings` (the object written and S3's ETag), 10 at a time; a router that
 fails is logged (`ManagerSettingsNotPushed`) and gets it at the next poll, and the write's answer is unchanged. A workload the CLI
@@ -136,7 +136,7 @@ never sets a summary back); when its check is newer than its summary, its rows (
 A router whose controller URL answers Google's own 404 twice in a row is unregistered (`RouterUnregistered`); a broken
 connection never counts as a router gone. A router too old to poll (below 0.40.0, or whose controller has no `/v1/actions`) is
 kept and not polled until its version changes, nor pushed to: its version is read from its health (`GET /v1/health`, as the
-command account) at most every 10 minutes and kept in the registry (`RouterVersionRead`), so the advised `dormeto gcp install`
+command account) at most every 10 minutes and kept in the registry (`RouterVersionRead`), so the advised `dormeto gcp routers install`
 clears `too-old` within 10 minutes. Each router's poll (where its journal was read up to, its 404s in a row, its last error with
 the command that fixes it and the refusal it met, `router_unknown` for one whose controller discovery hasn't found yet, the
 ETag it holds, when its version was read) is kept on its `RS#` item, beside the summary. The fleet function reads
@@ -153,11 +153,11 @@ names; Organization access lists a project with its cloud mark and the API's rea
 for both clouds and takes Kubernetes workloads as a backend type. A workload's backend services and URL map, named by the router's row, are linked from their built paths.
 `npm run dev:mock` gains the project's candidates (managed, to onboard, a GKE workload and a backend service two URL maps name) and a project in the access report.
 - **The dashboard's Google Cloud router and workload views:** a router installed by the CLI (`source: 'cli'`) shows its version, health (a `too-old`
-router, its version known or not, with the `dormeto gcp install ... --version <pinned>` command), pauses, settings (its hibernate
+router, its version known or not, with the `dormeto gcp routers install ... --version <pinned>` command), pauses, settings (its hibernate
 setting as suspension, inherited from the organization's level the manager pushed, and no Lambda or failure queue figure),
 waiting page and description, and no install, upgrade,
-uninstall or Terraform control: the `dormeto gcp install` and `uninstall` commands and its controller's page in the Google Cloud console instead;
-the Routers install form stays AWS's with one line naming `dormeto gcp install`. A Google Cloud workload shows its backend service, waker backend
+uninstall or Terraform control: the `dormeto gcp routers install` and `uninstall` commands and its controller's page in the Google Cloud console instead;
+the Routers install form stays AWS's with one line naming `dormeto gcp routers install`. A Google Cloud workload shows its backend service, waker backend
 service and URL map with the console link (a regional URL map links the project's list of load balancers), its VM, group and Cloud SQL
 instance with theirs and their Google Cloud icons, "suspended" where AWS says "hibernated", fallback machine types, a failure, a wake,
 its tags and settings in Google Cloud's words (no EC2, target or Lambda; the values Google Cloud fixes said so), no target group,

@@ -18,9 +18,9 @@ time per target group, router or workload, one per load balancer (lock), three p
 ## Onboarding and offboarding on Google Cloud
 
 The same operations, on the routers the CLI installed (0.40.0 or later; an older one is a 409 `router_too_old` with the
-`dormeto gcp install` command), through the [connection](organization-access.md#google-cloud). The manager never changes a Google
-IAM policy, a backend service, a URL map or a cluster: it calls the router, which changes the load balancer, and binds and
-removes one resource tag, `dormeto/managed`, as the command account.
+`dormeto gcp routers install` command), through the [connection](organization-access.md#google-cloud). The manager never
+changes a Google IAM policy, a backend service, a URL map or a cluster: it calls the router, which changes the load
+balancer, and binds and removes one resource tag, `dormeto/managed`, as the command account.
 
 - **Onboarding** a candidate (a backend service a URL map names) runs `find router`, `slot` (the project's and the router's
   region), `lock load balancer` (the URL map), `preview`, `tag`, `onboard`, `verify` and `candidate`. The router is that of the
@@ -79,8 +79,9 @@ doesn't); the registry keeps the version as the router reports it.
   is unregistered (`RouterUnregistered`): an uninstalled router leaves within two minutes instead of alarming. A broken
   connection never counts as a router gone.
 - **`too-old`:** a router below 0.40.0 has no `/v1/actions`. It is listed with its version, never polled and never pushed
-  to, and the watchdog says `too-old`, not `silent`, with the command that upgrades it: `dormeto gcp install --project <p>
-  --region <r> --version <pinned>`. So is a router of unknown version whose controller answered it has no `/v1/actions`.
+  to, and the watchdog says `too-old`, not `silent`, with the command that upgrades it: `dormeto gcp routers install
+  --project <p> --region <r> --version <pinned>`. So is a router of unknown version whose controller answered it has no
+  `/v1/actions`.
   The poll reads a too-old router's version from its health (`GET /v1/health`, which every router version answers) at most
   every 10 minutes and keeps it in the registry (`RouterVersionRead`): after the advised install, the router is polled at the
   next run and its alarm resolves, within 10 minutes.
@@ -89,7 +90,7 @@ doesn't); the registry keeps the version as the router reports it.
     service account gone, a grant revoked), `the manager's accounts can't reach the router: dormeto gcp connect
     --project <host> --profile <profile> --env <env>`;
   - `router_too_old`, without a call for a router below 0.40.0, or when its controller has no `/v1/actions`:
-    `router <v> can't report to the manager: dormeto gcp install --project <p> --region <r> --version <pinned>`;
+    `router <v> can't report to the manager: dormeto gcp routers install --project <p> --region <r> --version <pinned>`;
   - `router_unknown`: discovery has not found the router's controller yet, `dormeto gcp connect` again.
   An action the router does not know (an `unknown-action` answer) is an error that names the action.
 - **The organization's settings:** each write of `settings.json` (`PUT /api/settings/workloads`, `/settings/types`,
@@ -98,8 +99,8 @@ doesn't); the registry keeps the version as the router reports it.
   poll pushes it when the ETag the router holds differs from the file's (`ManagerSettingsPushed`); the write's answer
   does not change.
 - **What stays with the CLI:** every change of an IAM policy, a backend service or a cluster. `install-router` for a project
-  and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp install` or
-  `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
+  and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp routers install`
+  or `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
   uninstall, `--request-logs` and a GKE workload's Kubernetes access are CLI commands (`dormeto gcp`). A workload the CLI
   onboarded is renamed, tagged and set through the manager and, a VM or managed instance group one, offboarded; a GKE workload and one whose
   onboarding turned request logs on are not: their offboarding fails at `locate`, before anything changes, with `dormeto gcp
@@ -108,8 +109,8 @@ doesn't); the registry keeps the version as the router reports it.
 - **Alerts:** every alert carries the message attribute `cloud` (`aws` or `gcp`), for filter policies; a digest carries
   the cloud its alarms share, and both as the `String.Array` `["aws","gcp"]` when they mix, which a filter on either cloud
   matches. A Google Cloud workload's failed wake is advised in Google Cloud's words for its kind: Compute Engine's zone
-  capacity and fallback machine types, its quotas, the router's service account (`dormeto gcp status --project <p> --region
-  <r>`, then `dormeto gcp install` again), the backend service's health check.
+  capacity and fallback machine types, its quotas, the router's service account (`dormeto gcp routers show --project <p>
+  --region <r>`, then `dormeto gcp routers install` again), the backend service's health check.
 
 ## Health alerts, IP lists and MFA
 

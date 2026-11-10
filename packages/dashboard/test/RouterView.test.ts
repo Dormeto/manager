@@ -30,8 +30,8 @@ const HIBERNATION: { settings: { hibernate: boolean | null; joinMinutes?: number
 // A Google Cloud router, installed by the CLI, behind the pinned version: its health says so with the command.
 const GCP = 'dmtr-dormeto-dev-europe-west2';
 // The card names the pinned version, never below 0.40.0 (the pin here is the AWS router's 0.26.0).
-const GCP_CARD_COMMAND = 'dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0';
-const GCP_COMMAND = 'dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.26.0';
+const GCP_CARD_COMMAND = 'dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0';
+const GCP_COMMAND = 'dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.26.0';
 const GOOGLE_ROUTER = {
   name: GCP, cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', version: '0.25.1', build: 'g1', workloads: 1, workloadStates: { AWAKE: 1 },
   health: { status: 'error', problems: [{ level: 'error', code: 'too-old', text: `router 0.25.1 can't report to the manager: ${GCP_COMMAND}` }] }, pauses: [], lastScheduledCheckAt: new Date().toISOString(),
@@ -483,7 +483,7 @@ describe('a Google Cloud router', () => {
     // The too-old problem names the command, and so does the card of commands.
     expect(wrapper.find('.dm-problem').text()).toContain(GCP_COMMAND);
     expect(wrapper.find('[data-test="gcp-install"]').text()).toBe(GCP_CARD_COMMAND);
-    expect(wrapper.find('[data-test="gcp-uninstall"]').text()).toBe('dormeto gcp uninstall --project dormeto-dev --region europe-west2');
+    expect(wrapper.find('[data-test="gcp-uninstall"]').text()).toBe('dormeto gcp routers uninstall --project dormeto-dev --region europe-west2');
     expect(wrapper.find('[aria-label^="Upgrade "]').exists()).toBe(false);
     expect(wrapper.find(`[aria-label="Uninstall ${GCP}"]`).exists()).toBe(false);
     expect(chips(wrapper)).not.toContain('Terraform');
@@ -551,7 +551,7 @@ describe('a Google Cloud router', () => {
 
   it('says its configuration is the CLI\'s, and still offers a pause, its description and its waiting page', async () => {
     const wrapper = await mountView(GCP, 'admin');
-    expect(wrapper.text()).toMatch(/Set when the CLI installs the router/);
+    expect(wrapper.text()).toMatch(/Set when the CLI installs the router \(dormeto gcp routers install\): run it again to change them/);
     expect(wrapper.text()).toContain('Pause');
     expect(wrapper.findComponent(DescriptionCard).exists()).toBe(true);
     expect(wrapper.text()).toContain('Waiting page');

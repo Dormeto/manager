@@ -168,7 +168,7 @@ const ADVICE: Record<string, string> = {
 const gcpAdvice = (kind: string, project: string, region: string): string => ({
   capacity: 'Compute Engine had no capacity for it in its zone: Dormeto retried during the wake. Fallback machine types (its VMs\'), or a regional managed instance group (several zones), let it start elsewhere.',
   quota: 'A Compute Engine quota of the project and region was reached (its CPUs, or a machine family\'s): raise it on the Quotas page of the Google Cloud console.',
-  permission: `A permission refused it: the router's service account dmtr-${region} (dormeto gcp status --project ${project} --region ${region} compares its grants with its install record; dormeto gcp install again restores them), or a VM, group or Cloud SQL instance without the tag dormeto=managed.`,
+  permission: `A permission refused it: the router's service account dmtr-${region} (dormeto gcp routers show --project ${project} --region ${region} compares its grants with its install record; dormeto gcp routers install again restores them), or a VM, group or Cloud SQL instance without the tag dormeto=managed.`,
   configuration: 'Its configuration refused it: the VM, instance group, GKE workload or Cloud SQL instance named in the message.',
   unhealthy: "Its backends started but the backend service's health check found none healthy: the health check and the application's logs.",
   throttled: 'Google Cloud throttled the switch: the URL map kept changing, or too many requests at once in this project.',

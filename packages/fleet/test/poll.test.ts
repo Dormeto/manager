@@ -424,7 +424,7 @@ describe('the poll of Google Cloud routers', () => {
     await w.poll();
     expect(await w.pollOf('europe-west2')).toEqual({
       newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', lastRefusal: 'router_too_old',
-      lastError: 'events: router older than 0.40.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      lastError: 'events: router older than 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Not called again: its version is read from its health instead, and kept in the registry.
     w.clock.t += 60 * S;
@@ -433,7 +433,7 @@ describe('the poll of Google Cloud routers', () => {
     expect((await w.registry.list()).map((x) => x.version)).toEqual(['0.39.0']);
     expect(await w.pollOf('europe-west2')).toEqual({
       newestAt: null, misses: 0, polledAt: iso(T0), tooOld: '', versionAt: iso(T0 + 60 * S), lastRefusal: 'router_too_old',
-      lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0',
+      lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0',
     });
     // Upgraded: discovery reads its new version.
     r.answer = undefined;
@@ -443,7 +443,7 @@ describe('the poll of Google Cloud routers', () => {
     expect(await w.pollOf('europe-west2')).toEqual({ newestAt: null, misses: 0, polledAt: iso(T0 + 60 * S) });
   });
 
-  // The advised `dormeto gcp install` clears too-old within 10 minutes: the registry learnt versions only from discovery
+  // The advised `dormeto gcp routers install` clears too-old within 10 minutes: the registry learnt versions only from discovery
   // (every 24 hours) and connect.
   it('reads a too-old router\'s version from its health at most every 10 minutes, keeps it in the registry, and polls it at the next run once it is 0.40.0 or later', async () => {
     const w = world();
@@ -451,7 +451,7 @@ describe('the poll of Google Cloud routers', () => {
     r.version = '0.39.0';
     await w.poll();
     expect([r.healthReads, r.calls.length]).toEqual([1, 0]);
-    expect(await w.pollOf('europe-west2')).toMatchObject({ versionAt: iso(T0), lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp install --project dormeto-dev --region europe-west2 --version 0.40.0' });
+    expect(await w.pollOf('europe-west2')).toMatchObject({ versionAt: iso(T0), lastError: 'version: router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0' });
     // The advised install: the router runs 0.40.0, the registry still says 0.39.0.
     r.version = '0.40.0';
     for (let minute = 1; minute < 10; minute += 1) {
