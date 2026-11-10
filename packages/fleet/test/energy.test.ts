@@ -35,6 +35,32 @@ describe('energy', () => {
     expect(savedEnergy([{ kind: 'unknown', backend: 'x', reason: 'r' }], 400, 'eu-west-1')).toEqual({ kwh: 0, co2Kg: 0, estimated: 0 });
   });
 
+  it('estimates a Google Cloud VM or database with Cloud Carbon Footprint\'s figures, on its own region\'s grid', () => {
+    const vm = (machineType: string, family: string, vcpus: number, memoryGb: number, count = 1) =>
+      ({ kind: 'gce' as const, machineType, family, vcpus, memoryGb, count, os: 'linux' as const, zone: 'europe-west1-b' });
+    // e2-small: 0.5 vCPU at 50% (0.68 + 0.5 × 3.43), 2 GB, PUE 1.1.
+    expect(itemWatts(vm('e2-small', 'e2', 0.5, 2))).toBeCloseTo(2.17965, 6);
+    expect(itemWatts(vm('e2-small', 'e2', 0.5, 2, 3))).toBeCloseTo(3 * 2.17965, 6);
+    expect(itemWatts(vm('n2-standard-2', 'n2', 2, 8))).toBeCloseTo(8.3336, 6);
+    const e = savedEnergy([vm('e2-small', 'e2', 0.5, 2)], 10, 'eu-west-1');
+    expect(e.kwh).toBeCloseTo(0.0217965, 7);
+    expect(e.co2Kg).toBeCloseTo(0.002245, 6);
+    expect(e.estimated).toBe(1);
+    const sql = { kind: 'cloudsql' as const, tier: 'db-custom-2-8192', engine: 'postgres' as const, edition: 'enterprise' as const, ha: false, region: 'europe-west1', vcpus: 2, memoryGb: 8 };
+    const zonal = itemWatts(sql);
+    expect(zonal).toBeCloseTo((2 * (0.68 + 0.5 * 3.43) + 8 * 0.392) * 1.1, 6);
+    expect(itemWatts({ ...sql, ha: true })).toBeCloseTo(2 * zonal!, 6);
+    expect(itemWatts({ kind: 'cloudsql', tier: 'db-f1-micro', engine: 'mysql', edition: 'enterprise', ha: false, region: 'europe-west1' })).toBeNull();
+    expect(savedEnergy([sql], 10, 'eu-west-1').co2Kg).toBeCloseTo(savedEnergy([sql], 10, 'eu-west-1').kwh * 0.103, 9);
+  });
+
+  it('reads Google Cloud\'s grid for its regions, 0.3101 for an unknown one, AWS\'s untouched', () => {
+    expect(gridIntensity('europe-west1')).toBe(0.103);
+    expect(gridIntensity('europe-west99')).toBe(0.3101);
+    expect(gridIntensity('eu-west-1')).toBe(0.279);
+    expect(gridIntensity('mars-1')).toBeCloseTo(5.605 / 17, 6);
+  });
+
   it('adds up estimates', () => {
     expect(addEnergy({ kwh: 1, co2Kg: 0.5, estimated: 2 }, { kwh: 0.5, co2Kg: 0.25, estimated: 1 })).toEqual({ kwh: 1.5, co2Kg: 0.75, estimated: 3 });
   });
