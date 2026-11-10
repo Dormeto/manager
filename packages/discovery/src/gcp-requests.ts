@@ -58,13 +58,13 @@ export async function googleRequestMinutes(port: Pick<GooglePort, 'call'>, { pro
   return { from: new Date(from).toISOString(), to: new Date(to).toISOString(), minutes: [...counts].sort((a, b) => a[0] - b[0]), wakerTargetGroupArn: null, wakerBackendService };
 }
 
-// The step's Google form, checked: a project, Google Cloud paths of that project, a known load balancer kind, days 1 to 31.
+// The step's Google form, checked: a project, Google Cloud paths of that project, a known load balancer kind (with its region when its metric names one), days 1 to 31.
 export async function googleRequestsStep(port: Pick<GooglePort, 'call'>, event: Record<string, unknown>, now: number): Promise<GoogleRequestMinutesAnswer> {
   const { account, region, backendService, wakerBackendService, urlMap, lb, days } = event;
   const paths = [googlePath(backendService), googlePath(wakerBackendService), googlePath(urlMap)];
   const kinds = ['backendServices', 'backendServices', 'urlMaps'];
   const l = lb as { kind?: unknown; region?: unknown } | null | undefined;
-  const lbOk = typeof l === 'object' && l !== null && typeof l.kind === 'string' && Object.hasOwn(METRICS, l.kind) && (l.region === undefined || isRegion('gcp', l.region));
+  const lbOk = typeof l === 'object' && l !== null && typeof l.kind === 'string' && Object.hasOwn(METRICS, l.kind) && (l.region === undefined || isRegion('gcp', l.region)) && (!METRICS[l.kind as keyof typeof METRICS].inRegion || l.region !== undefined);
   if (!isProject(account) || typeof region !== 'string' || !lbOk || paths.some((p, i) => !p || p.kind !== kinds[i] || p.project !== account)
     || typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > 31) {
     throw new Error('the requests of a Google Cloud workload need a project, its backend service, waker backend service and URL map paths, its load balancer and days from 1 to 31');

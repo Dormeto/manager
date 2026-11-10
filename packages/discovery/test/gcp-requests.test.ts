@@ -63,9 +63,14 @@ describe('the requests step\'s Google form', () => {
     expect(out.minutes).toEqual([[1, 2]]);
     expect(f.urls[0]!.searchParams.get('filter')).toContain('url_map_name = "dmt-demo-mig-lb"');
   });
+  it('a regional or internal load balancer with its region is answered', async () => {
+    const f = fake([{}]);
+    await googleRequestsStep(f.port, { ...event, lb: { kind: 'regional', region: 'europe-west2' } }, NOW);
+    expect(f.urls[0]!.searchParams.get('filter')).toContain('resource.labels.region = "europe-west2"');
+  });
   it('a bad path, project, load balancer or days is refused, nothing read', async () => {
     const f = fake([]);
-    for (const bad of [{ backendService: 'dmt-demo-mig-app' }, { urlMap: base.backendService }, { backendService: 'projects/other-project/global/backendServices/x' }, { account: 'x' }, { lb: { kind: 'nope' } }, { lb: undefined }, { days: 0 }, { days: 32 }, { days: '14' }]) {
+    for (const bad of [{ backendService: 'dmt-demo-mig-app' }, { urlMap: base.backendService }, { backendService: 'projects/other-project/global/backendServices/x' }, { account: 'x' }, { lb: { kind: 'nope' } }, { lb: { kind: 'regional' } }, { lb: { kind: 'internal' } }, { lb: undefined }, { days: 0 }, { days: 32 }, { days: '14' }]) {
       await expect(googleRequestsStep(f.port, { ...event, ...bad }, NOW)).rejects.toThrow('the requests of a Google Cloud workload need');
     }
     expect(f.urls).toEqual([]);

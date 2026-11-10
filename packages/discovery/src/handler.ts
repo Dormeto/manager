@@ -13,8 +13,7 @@ import { createRecords } from '../../operations/src/records.js';
 import { createFleetStore } from '../../fleet/src/store.js';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import { createProxyPrefixes } from './proxy-prefix.js';
-import { requestMinutes } from './requests.js';
-import { googleRequestsStep } from './gcp-requests.js';
+import { requestsStep } from './requests-step.js';
 import { routeOf } from './route.js';
 import { createStore } from './store.js';
 
@@ -44,7 +43,7 @@ const records = createRecords({ dynamo, table: process.env.TABLE ?? '' });
 const fleet = createFleetStore({ dynamo, table: process.env.TABLE ?? '' });
 const terraformRouters = JSON.parse(process.env.ROUTERS || '[]') as Parameters<typeof createProxyPrefixes>[0]['terraform'];
 const proxyPrefix = createProxyPrefixes({ terraform: terraformRouters, records, fleet, log });
-// The Google Cloud connection (`DISC#GOOGLE`, written by `dormeto gcp connect`), read at each plan, project step and finalize; one Google instance
+// The Google Cloud connection (`DISC#GOOGLE`, written by `dormeto gcp connect`), read at each plan, project step, finalize and requests step; one Google instance
 // per execution environment keeps its tokens between invocations.
 const googleSource = createGoogleSource({
   async read() {
@@ -77,11 +76,14 @@ const assumeDiscovery = createAssumeRole({ sts, roleName, sessionName: `dmt-${pr
 export const handler = async (event: Event = {}, context?: { getRemainingTimeInMillis(): number }) => {
   // An unknown step is refused, never taken for a whole run.
   const route = routeOf(event);
-  if (route === 'requests' && 'step' in event && event.step === 'requests') {
-    if (!('targetGroupArn' in event)) return googleRequestsStep({ call: (method, url, body) => googleSource.call('discovery', method, url, body) }, event, Date.now());
-    const credentials = await assumeDiscovery(event.account);
-    const ports = scanPorts(regionalClients(credentials, event.region));
-    return requestMinutes({ elbv2: ports.elbv2, cloudwatch: ports.cloudwatch! }, { targetGroupArn: event.targetGroupArn, days: event.days, now: Date.now() });
+  if (route === 'requests') {
+    return requestsStep({
+      google: googleSource,
+      aws: async (account, where) => {
+        const ports = scanPorts(regionalClients(await assumeDiscovery(account), where));
+        return { elbv2: ports.elbv2, cloudwatch: ports.cloudwatch! };
+      },
+    }, event as Record<string, unknown>, Date.now());
   }
   managerAccount ??= (await sts.send(new GetCallerIdentityCommand({}))).Account ?? '';
   const deps: RunDeps = {
