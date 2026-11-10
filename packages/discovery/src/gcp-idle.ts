@@ -14,7 +14,7 @@ const MONITORING = 'https://monitoring.googleapis.com/v3';
 const HOUR_MS = 3_600_000;
 const WINDOW_HOURS = 168;
 // By kind: the metric, and whether the region names the service too (monitoring.mjs METRICS).
-const METRICS: Record<LbKind, { metric: string; inRegion: boolean }> = {
+export const METRICS: Record<LbKind, { metric: string; inRegion: boolean }> = {
   global: { metric: 'loadbalancing.googleapis.com/https/request_count', inRegion: false },
   classic: { metric: 'loadbalancing.googleapis.com/https/request_count', inRegion: false },
   regional: { metric: 'loadbalancing.googleapis.com/https/external/regional/request_count', inRegion: true },

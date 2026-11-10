@@ -14,6 +14,7 @@ import { createFleetStore } from '../../fleet/src/store.js';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestMinutes } from './requests.js';
+import { googleRequestsStep } from './gcp-requests.js';
 import { routeOf } from './route.js';
 import { createStore } from './store.js';
 
@@ -63,6 +64,8 @@ type Event =
   | { step: 'abandon'; plan: RunPlan; error?: string }
   // The idle window advisor's requests of a workload (R10), for the API.
   | { step: 'requests'; account: string; region: string; targetGroupArn: string; days: number }
+  // A Google Cloud workload's (paths as its WS# row holds them): Cloud Monitoring's counts.
+  | { step: 'requests'; account: string; region: string; backendService: string; wakerBackendService: string; urlMap: string; lb: { kind: string; region?: string }; days: number }
   | { step?: undefined; source?: string; by?: string; action?: string }
   // Forwarded load balancer changes, in batches from the refresh queue (packaging design §5).
   | { step?: undefined; Records: { messageId: string; body: string }[] };
@@ -75,6 +78,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
   // An unknown step is refused, never taken for a whole run.
   const route = routeOf(event);
   if (route === 'requests' && 'step' in event && event.step === 'requests') {
+    if (!('targetGroupArn' in event)) return googleRequestsStep({ call: (method, url, body) => googleSource.call('discovery', method, url, body) }, event, Date.now());
     const credentials = await assumeDiscovery(event.account);
     const ports = scanPorts(regionalClients(credentials, event.region));
     return requestMinutes({ elbv2: ports.elbv2, cloudwatch: ports.cloudwatch! }, { targetGroupArn: event.targetGroupArn, days: event.days, now: Date.now() });

@@ -32,7 +32,10 @@ export interface IdleWindowAdvice {
   priced: boolean;
   windows: IdleWindowRow[];
   actual: { wakes: number; replayedWakes: number; noisy: boolean };
+  // The waker's requests are counted (AWS's name; on Google Cloud its waker backend service).
   wakerTargetGroup: boolean;
+  // Google Cloud's counts are Cloud Monitoring's (§12): present, true, only there.
+  estimated?: true;
   // Absent from an answer kept from before the manager computed it.
   hours?: RequestHours;
 }
@@ -145,9 +148,9 @@ function intersect(a: { from: string; to: string }[], b: { from: string; to: str
 // running: the backend's measured running periods (sorted, disjoint), when it does not run all the time (an instance
 // stopped at night by a schedule): its asleep time is worth something only while it ran. The hours asleep and the
 // wakes stay the replay's.
-export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs, startAsleep, actualWakes, actualFrom, stopped, hourly, baseline, wakerTargetGroup, now, running = null }: {
+export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs, startAsleep, actualWakes, actualFrom, stopped, hourly, baseline, wakerTargetGroup, estimated = false, now, running = null }: {
   requests: RequestMinutes; current: number; checkMinutes: number; wakeMs: number | null; startAsleep: boolean; actualWakes: number; actualFrom: string | null;
-  stopped: StoppedItem[] | null; hourly: (item: StoppedItem) => Promise<number | null>; baseline: Baseline; wakerTargetGroup: boolean; now: number;
+  stopped: StoppedItem[] | null; hourly: (item: StoppedItem) => Promise<number | null>; baseline: Baseline; wakerTargetGroup: boolean; estimated?: boolean; now: number;
   running?: { from: string; to: string }[] | null;
 }): Promise<IdleWindowAdvice> {
   const wakeSeconds = wakeMs === null ? null : wakeMs / 1000;
@@ -177,6 +180,6 @@ export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs
     computedAt: new Date(now).toISOString(), from: requests.from, to: requests.to, current, recommended: recommendWindow(replayed), checkMinutes,
     wakeSeconds, priced, windows,
     actual: { wakes: actualWakes, replayedWakes, noisy: actualFrom !== null && replayedWakes > 1.5 * actualWakes && replayedWakes >= actualWakes + 3 },
-    wakerTargetGroup, hours: requestHours(requests),
+    wakerTargetGroup, ...(estimated ? { estimated: true as const } : {}), hours: requestHours(requests),
   };
 }

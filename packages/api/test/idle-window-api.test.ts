@@ -11,6 +11,7 @@ const APP = 'arn:aws:elasticloadbalancing:eu-west-1:121014831971:targetgroup/dmt
 const ROUTERS: Router[] = [
   { name: 'dmt-dev', region: 'eu-west-1', controller: 'c1', account: ACCOUNT },
   { name: 'other', region: 'eu-west-3', controller: 'c3', account: '038606077307' },
+  { name: 'dmtr-europe-west2', region: 'europe-west2', controller: 'c4', account: 'dormeto-dev' },
 ];
 const DAY = 86_400_000;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -58,10 +59,12 @@ describe('a workload\'s idle window advice (R10)', () => {
     const res = await s.api(event(PATH));
     expect(res.statusCode).toBe(200);
     const body = json(res) as IdleWindowAdvice;
-    expect(s.asked.requests).toEqual([[ACCOUNT, 'eu-west-1', APP, 14]]);
+    expect(s.asked.requests).toEqual([[ACCOUNT, 'eu-west-1', { targetGroupArn: APP }, 14]]);
     // The 30 days of the median wake, and the replay's 14 days.
     expect(s.asked.history).toEqual(expect.arrayContaining([iso(NOW - 30 * DAY), iso(MINUTE - 14 * DAY)]));
     expect(body).toMatchObject({ current: 15, checkMinutes: 10, wakeSeconds: 50, priced: true, wakerTargetGroup: true, recommended: 5 });
+    // AWS's counts are CloudWatch's: no `estimated`.
+    expect('estimated' in body).toBe(false);
     // Asleep at the start of the 14 days and no request: asleep all the time, whatever the window.
     expect(body.windows.find((w) => w.minutes === 15)!.asleepHours).toBeCloseTo(24, 6);
     expect(body.windows.find((w) => w.minutes === 15)!.usdMonth).toBeCloseTo(24 * 30 * 0.0456, 6);
@@ -119,5 +122,31 @@ describe('a workload\'s idle window advice (R10)', () => {
   it('a workload with no idle window in its summary: 15 minutes, the router\'s default', async () => {
     const s = setup({ summary: { account: ACCOUNT, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'a', state: 'AWAKE', targetGroupArn: APP } });
     expect(json(await s.api(event(PATH))).current).toBe(15);
+  });
+});
+
+describe('a Google Cloud workload\'s idle window advice (§9.4)', () => {
+  const GOOGLE = '/api/workloads/dmtr-europe-west2/g/idle-window';
+  const ROW = {
+    account: 'dormeto-dev', region: 'europe-west2', router: 'dmtr-europe-west2', workloadId: 'g', state: 'ASLEEP', settings: { idleMinutes: 15 },
+    backendService: 'projects/dormeto-dev/global/backendServices/dmt-demo-mig-app', wakerBackendService: 'projects/dormeto-dev/regions/europe-west2/backendServices/dmtr-europe-west2-waker',
+    urlMap: 'projects/dormeto-dev/global/urlMaps/dmt-demo-mig-lb', lb: { kind: 'global' },
+  };
+  const COUNTS = { from: iso(MINUTE - 14 * DAY), to: iso(MINUTE), minutes: [] as [number, number][], wakerTargetGroupArn: null, wakerBackendService: ROW.wakerBackendService };
+
+  it('asks for its paths and load balancer, and says its counts are estimated, its waker counted', async () => {
+    const s = setup({ summary: ROW, requests: COUNTS });
+    const res = await s.api(event(GOOGLE));
+    expect(res.statusCode).toBe(200);
+    expect(s.asked.requests).toEqual([['dormeto-dev', 'europe-west2', { backendService: ROW.backendService, wakerBackendService: ROW.wakerBackendService, urlMap: ROW.urlMap, lb: { kind: 'global' } }, 14]]);
+    expect(json(res)).toMatchObject({ estimated: true, wakerTargetGroup: true, current: 15 });
+  });
+
+  it('a row without its backend service, waker, URL map or load balancer: 404, nothing asked', async () => {
+    for (const missing of ['backendService', 'wakerBackendService', 'urlMap', 'lb']) {
+      const s = setup({ summary: { ...ROW, [missing]: undefined } });
+      expect((await s.api(event(GOOGLE))).statusCode).toBe(404);
+      expect(s.asked.requests).toEqual([]);
+    }
   });
 });

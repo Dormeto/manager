@@ -1811,14 +1811,19 @@ export function createApi({
         if (!fleet?.listHistory || !fleet.historyBefore || !idleRequests) throw new HttpError(404, 'not_found', 'no idle window advice in this manager');
         const account = accountOfRouter(router);
         const summary = await fleet.getWorkload(account, router.region, id);
-        if (!summary || typeof summary.targetGroupArn !== 'string') throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
+        // The target its requests are read from: AWS's target group, or a Google Cloud row's services, URL map and load balancer.
+        const target = !summary ? null : cloudOf(account) === 'gcp'
+          ? (typeof summary.backendService === 'string' && typeof summary.wakerBackendService === 'string' && typeof summary.urlMap === 'string' && summary.lb
+            ? { backendService: summary.backendService, wakerBackendService: summary.wakerBackendService, urlMap: summary.urlMap, lb: summary.lb } : null)
+          : typeof summary.targetGroupArn === 'string' ? { targetGroupArn: summary.targetGroupArn } : null;
+        if (!summary || !target) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
         const idle = (summary.settings as { idleMinutes?: unknown } | undefined)?.idleMinutes;
         const current = typeof idle === 'number' && idle > 0 ? idle : DEFAULT_IDLE_MINUTES;
         const kept = await fleet.getIdleWindow?.(account, router.region, id).catch(() => null);
         if (kept && kept.current === current) return reply(200, kept);
         let requests: Awaited<ReturnType<IdleRequests>>;
         try {
-          requests = await idleRequests(account, router.region, summary.targetGroupArn, IDLE_DAYS);
+          requests = await idleRequests(account, router.region, target, IDLE_DAYS);
         } catch (err) {
           throw new HttpError(502, 'requests_unreadable', (err as Error).message);
         }
@@ -1838,7 +1843,7 @@ export function createApi({
           actualFrom: period.truncated ? null : period.view.phases.find((p) => p.state !== 'UNKNOWN')?.from ?? null,
           stopped: savings && discounts ? last?.stopped ?? null : null,
           hourly: (item) => (savings && discounts ? savings.hourly(router.region, item, discounts).catch(() => null) : Promise.resolve(null)),
-          baseline: savings?.baseline ?? { kind: 'always' }, wakerTargetGroup: requests.wakerTargetGroupArn !== null, now: t,
+          baseline: savings?.baseline ?? { kind: 'always' }, wakerTargetGroup: requests.wakerTargetGroupArn !== null || Boolean(requests.wakerBackendService), estimated: cloudOf(account) === 'gcp', now: t,
         });
         await fleet.putIdleWindow?.(account, router.region, id, advice).catch(() => undefined);
         return reply(200, advice);
