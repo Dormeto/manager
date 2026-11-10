@@ -62,7 +62,7 @@ services a URL map names, with the router's own reasons when one can't be onboar
 onboards and offboards Compute Engine and Cloud SQL workloads after the router's preview, and excludes
 them, binding and removing only the tag `dormeto/managed` ([Operations](docs/operations.md#onboarding-and-offboarding-on-google-cloud)). The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
 identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
-([Organization access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
+([Access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
 reads the router's journal of state changes and its check summary, which feed the same history, health and alerts
 as an AWS router's, and it pushes the organization's settings to it ([Operations](docs/operations.md#google-cloud-routers)).
 A router older than 0.40.0 is listed with the `dormeto gcp routers install` command that upgrades it.
@@ -196,7 +196,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, Google Cloud routers (the poll, `too-old`, the refusals), health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced on AWS and Google Cloud, Spot, discounts, the daily job, the idle window advisor |
 | [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto aws estimate`: accounts, filters, uptime, companion databases, cache, permissions |
-| [Organization access](docs/organization-access.md) | The AWS discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |
+| [Access](docs/organization-access.md) | The AWS discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |
 | [Development](docs/development.md) | Build, test, a development environment, the dev organization stack, screenshots, releases |
 
 ## Repository layout
