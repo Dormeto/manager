@@ -60,7 +60,7 @@ describe('Organization access panel', () => {
     expect(wrapper.find('[aria-label="Command account: missing access"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label^="Command role"]').exists()).toBe(false);
     const links = wrapper.findAll('.v-card-actions a').map((a) => [a.text(), a.attributes('href')]);
-    expect(links).toEqual([['How to connect Google Cloud', 'https://dormeto.com/google-cloud-manager.html#connection']]);
+    expect(links).toEqual([['How to connect Google Cloud', 'https://dormeto.com/configuration.html#connection']]);
     wrapper.unmount();
     // A project and an AWS account: both procedures.
     const both = mountPanel({ ...ready, counts: { ready: 0, discoveryMissing: 0, commandMissing: 2, unchecked: 0 },

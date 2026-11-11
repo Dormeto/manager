@@ -103,7 +103,7 @@ describe('organization access of a Google Cloud project', () => {
   });
 
   it('links to the Google Cloud page\'s connection for a project', () => {
-    expect(procedureLink('gcp')).toBe('https://dormeto.com/google-cloud-manager.html#connection');
+    expect(procedureLink('gcp')).toBe('https://dormeto.com/configuration.html#connection');
     expect(procedureLink('aws')).toBe(PROCEDURE_URL);
   });
 

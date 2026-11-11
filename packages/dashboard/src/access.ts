@@ -44,7 +44,7 @@ export function forwardersLine(f: Forwarders | undefined): string | null {
 // The website's page, with the roles' Terraform modules and AWS CLI commands.
 export const PROCEDURE_URL = 'https://dormeto.com/organization-access.html';
 // The Google Cloud connection on the website: the two service accounts, their scopes and grants, dormeto gcp connect.
-export const GOOGLE_PROCEDURE_URL = 'https://dormeto.com/google-cloud-manager.html#connection';
+export const GOOGLE_PROCEDURE_URL = 'https://dormeto.com/configuration.html#connection';
 const isGoogle = (account: string) => cloudOf(account) === 'gcp';
 
 // Why onboarding is refused in an account (the API refuses it too): said before trying. Null: let through.
