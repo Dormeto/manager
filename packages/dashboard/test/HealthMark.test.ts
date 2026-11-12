@@ -26,8 +26,8 @@ afterEach(() => {
   wrapper = undefined;
   document.body.innerHTML = '';
 });
-function render(router: RouterInfo, open?: AlarmInfo) {
-  wrapper = mount(HealthMark, { props: { router, alarm: open }, attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
+function render(router: RouterInfo, alarm?: AlarmInfo) {
+  wrapper = mount(HealthMark, { props: { router, alarm }, attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
   return wrapper;
 }
 const marks = (w: VueWrapper) => w.findAll('[data-test="status-mark"]');

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Operations (onboarding, R4b): onboardings, offboardings and router installations run by the workflow, as a table (tables
 // design §4): a row per operation, its status an icon, its steps under it (with the error and a manager update's build).
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   mdiAlertCircleOutline, mdiArrowUpBoldCircleOutline, mdiCancel, mdiCheck, mdiCheckCircleOutline, mdiCircleSmall, mdiClose, mdiDeleteOutline, mdiLinkVariant,
@@ -24,12 +24,26 @@ import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 const operations = ref<Operation[]>([]);
-// An operation a notice links to (?id=) opens with its steps; a refresh keeps the rows open (their ids).
+// An operation a link names (?id=, a notice's "Follow it in Operations", here or from another view) opens with its steps,
+// on the page that holds it once the list has it; a refresh keeps the rows open (their ids).
 const route = useRoute();
-const expanded = ref<string[]>(typeof route.query.id === 'string' ? [route.query.id] : []);
+const expanded = ref<string[]>([]);
+const table = ref<{ reveal: (value: unknown) => Promise<boolean> } | null>(null);
+const named = ref<string | null>(null);
+watch(() => route.query.id, (id) => {
+  if (typeof id !== 'string' || !id) return;
+  if (!expanded.value.includes(id)) expanded.value = [...expanded.value, id];
+  named.value = id;
+}, { immediate: true });
+// Its page once the list holds it (an operation just started comes with a later refresh).
+watch([named, operations, table], async ([id]) => {
+  if (id && table.value && operations.value.some((o) => o.id === id) && await table.value.reveal(id)) named.value = null;
+});
 const { error, loading, nextAt, run } = usePoll(async () => {
   operations.value = (await api<{ operations: Operation[] }>('/operations')).operations;
 });
+// A row's name (its toggle's, its steps'): its title and id, two operations having the same title.
+const rowName = (o: Operation) => `${operationTitle(o)} (${o.id})`;
 const running = computed(() => operations.value.filter((o) => o.status === 'running').length);
 
 // What a target's cell shows: the account or project, the region, the router, or the manager's version.
@@ -92,8 +106,8 @@ const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
     <v-alert v-if="error" type="error" class="mb-4" :text="error" />
 
     <v-card class="dm-operations">
-      <DmTable v-model:expanded="expanded" :headers="headers" :items="operations" :loading="loading && !operations.length" item-value="id" :sort-by="NEWEST"
-        :row-name="operationTitle" expandable expand-title="Steps" :exported="{ name: 'operations', title: 'Operations' }">
+      <DmTable ref="table" v-model:expanded="expanded" :headers="headers" :items="operations" :loading="loading && !operations.length" item-value="id" :sort-by="NEWEST"
+        :row-name="rowName" expandable expand-title="Steps" :exported="{ name: 'operations', title: 'Operations' }">
         <template #loading><DmLoader label="Reading the operations…" :size="56" /></template>
         <template #no-data>
           <div class="dm-calm">
@@ -144,13 +158,14 @@ const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
             <template #activator="{ props: tip }"><time v-bind="tip" :datetime="item.createdAt" tabindex="0" class="dm-op__when nowrap">{{ relative(item.createdAt, now) }}</time></template>
           </v-tooltip>
         </template>
-        <!-- Under an operation's row: its error, its steps (a vertical stepper), a manager update's build. -->
-        <template #expanded-row="{ item, columns }">
+        <!-- Under an operation's row: its error, its steps (a vertical stepper), a manager update's build; its id the one its
+             toggle names. -->
+        <template #expanded-row="{ item, columns, expandedId }">
           <tr class="dm-op-steps">
             <td :colspan="columns.length">
-              <div :id="`steps-${item.id}`" class="dm-op__steps">
+              <div :id="expandedId" class="dm-op__steps">
                 <div v-if="item.error" class="dm-op__error text-error"><v-icon :icon="mdiAlertCircleOutline" size="16" aria-hidden="true" /><span>{{ item.error }}</span></div>
-                <ol class="dm-steps" :aria-label="`Steps of ${operationTitle(item)}`">
+                <ol class="dm-steps" :aria-label="`Steps of ${rowName(item)}`">
                   <li v-for="step in item.steps" :key="step.name" class="dm-step" :class="`dm-step--${step.status}`">
                     <StatusMark :icon="STEP_MARKS[step.status].icon" :color="STEP_MARKS[step.status].color" :label="step.status" :pulse="step.status === 'running'" :size="14" class="dm-step__mark" />
                     <div class="dm-step__body">

@@ -3,8 +3,8 @@
 // at a time, paged on the server by its cursor (scale design §5), starting with the statuses people act on. The candidates'
 // table (tables design §4, §5): a selection that outlives a page turned, each row's menu, the exports of every candidate
 // of the status and filters shown.
-import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue, type Ref } from 'vue';
-import { mdiAlertCircleOutline, mdiCancel, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
+import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
+import { mdiAlertCircleOutline, mdiAlertOutline, mdiCancel, mdiCheckCircleOutline, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
   mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
@@ -36,6 +36,7 @@ import DmTable from '../components/DmTable.vue';
 import IdleBar from '../components/IdleBar.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import StatusHelp from '../components/StatusHelp.vue';
+import StatusMark from '../components/StatusMark.vue';
 import { useNow } from '../now';
 import { useDiscoveryBadge } from '../stores/discovery';
 import { useSession } from '../stores/session';
@@ -96,8 +97,9 @@ const dismissDialog = ref(false);
 const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
 const onboardOpen = ref(false);
-// A row's action acts on its candidate alone, the selection left as it is: `target` while its dialog is open. The dialogs
-// and their messages read `acting`: the row's candidate, else the one selected.
+// A row's action acts on its candidate alone, the selection left as it is: `target`, set as its dialog opens (the selection's
+// buttons set none) and kept while it closes, so that the dialog shows the same until it is gone. The dialogs and their
+// messages read `acting`: the row's candidate, else the one selected.
 const target = ref<Listed | null>(null);
 const acting = computed(() => target.value ?? single.value);
 // A Kubernetes candidate (R10.5): its owner and switch for the dialog, and its router's last check of its cluster.
@@ -130,10 +132,12 @@ watchValue(onboardOpen, async (open) => {
   clusterAccess.value = routers.find((r) => r.account === c.account && r.region === c.region)?.clusters?.find((x) => x.name === kubernetes.cluster) ?? null;
 });
 const excludeOpen = ref(false);
-// A row's dialog closed (done or cancelled): the next action is the selection's again.
-watchValue([onboardOpen, excludeOpen, () => dismissDialog.value], (open) => {
-  if (!open.some(Boolean)) target.value = null;
-});
+// A dialog opened for a row's candidate, or for the selection (null).
+const dialogs = { onboard: onboardOpen, exclude: excludeOpen, dismiss: dismissDialog };
+function openFor(c: Listed | null, dialog: keyof typeof dialogs) {
+  target.value = c;
+  dialogs[dialog].value = true;
+}
 const notice = ref<Notice | null>(null);
 let poll: number | undefined;
 // Onboardings and offboardings running on the candidates shown: the page is refreshed every 10 s while one runs, and a
@@ -142,13 +146,25 @@ const watch = operationWatch((n) => {
   notice.value = n;
   void load();
 });
+// Quiet (no loader: the rows are swapped when read), never two at once (a tick while one reads is skipped), and under a search
+// one tick in three: its whole list is read again (26 requests at most, where the cursor's page is one), and the toast of an
+// operation that ended comes 30 s after at most.
 let following: number | undefined;
+let refreshing = false;
+let ticks = 0;
 function follow() {
   if (following !== undefined || !watch.active) return;
+  ticks = 0;
   following = window.setInterval(() => {
-    if (watch.active) return void reloadList('refresh').catch((err: Error) => { error.value = err.message; });
-    window.clearInterval(following);
-    following = undefined;
+    if (!watch.active) {
+      window.clearInterval(following);
+      following = undefined;
+      return;
+    }
+    ticks += 1;
+    if (refreshing || (searchMode.value && ticks % 3 !== 0)) return;
+    refreshing = true;
+    reloadList('refresh', true).catch((err: Error) => { error.value = err.message; }).finally(() => { refreshing = false; });
   }, 10_000);
 }
 // A Google Cloud candidate is a backend service named in a URL map (its id is the service's path); its console pages are the map's.
@@ -207,7 +223,7 @@ async function loadPage({ selection = 'clear' }: { selection?: Selection } = {})
 
 // Every candidate of the shown status within the filters applied (an export, a search), the cursor followed one page at a
 // time, bounded (readCursor): `limit` at most.
-function readCandidates(limit: number): Promise<CursorRead<Listed>> | null {
+function readCandidates(limit: number, signal?: AbortSignal): Promise<CursorRead<Listed>> | null {
   const query = listQuery(EXPORT_PAGE);
   if (!query) return null;
   return readCursor<Listed>(async (cursor) => {
@@ -215,7 +231,7 @@ function readCandidates(limit: number): Promise<CursorRead<Listed>> | null {
     if (cursor) asked.set('cursor', cursor);
     const answer = await api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${asked}`);
     return { rows: answer.candidates, cursor: answer.cursor };
-  }, limit, EXPORT_PAGE);
+  }, limit, EXPORT_PAGE, signal);
 }
 const many = (n: number, what: string) => `${n.toLocaleString('en-US')} ${what}${n === 1 ? '' : 's'}`;
 
@@ -231,14 +247,22 @@ async function readAll(limit: number): Promise<Listed[] | DmRead<Listed>> {
 const server = computed<DmServer<Listed>>(() => ({ total: null, all: readAll }));
 
 // A search's list: every candidate, 5,000 at most (one more read to know there are others), what cut it said above the
-// table and at the end of its export. Answers of an earlier reading are dropped.
-let readings = 0;
-async function loadSearch(selection: Selection = 'keep') {
-  const mine = ++readings;
-  reading.value = true;
+// table and at the end of its export. A reading replaced by another, or by the search cleared or the view left, stops before
+// its next page and its answer is dropped. `quiet` (a refresh): no loader, the rows swapped when read.
+let searchRead: AbortController | null = null;
+function stopSearch() {
+  searchRead?.abort();
+  searchRead = null;
+  reading.value = false;
+}
+async function loadSearch(selection: Selection = 'keep', quiet = false) {
+  searchRead?.abort();
+  const mine = new AbortController();
+  searchRead = mine;
+  reading.value = !quiet;
   try {
-    const answer = await latest(() => readCandidates(EXPORT_LIMIT + 1) ?? Promise.resolve(null));
-    if (!answer?.value) return;
+    const answer = await latest(() => readCandidates(EXPORT_LIMIT + 1, mine.signal) ?? Promise.resolve(null));
+    if (!answer?.value || mine.signal.aborted) return;
     const read = answer.value;
     const before = everything.value;
     keepChosen();
@@ -250,12 +274,15 @@ async function loadSearch(selection: Selection = 'keep') {
           : null;
     select(selection, before, everything.value);
   } finally {
-    if (mine === readings) reading.value = false;
+    if (searchRead === mine) {
+      searchRead = null;
+      reading.value = false;
+    }
   }
 }
-// The list shown read again: the search's, or the cursor's page.
-function reloadList(selection: Selection) {
-  return searchMode.value ? loadSearch(selection) : loadPage({ selection });
+// The list shown read again: the search's, or the cursor's page (a page read shows no loader of its own).
+function reloadList(selection: Selection, quiet = false) {
+  return searchMode.value ? loadSearch(selection, quiet) : loadPage({ selection });
 }
 // A search typed: applied once typing pauses; the whole list read when one starts, the cursor's page again when it ends.
 let searchTyping: number | undefined;
@@ -269,7 +296,9 @@ watchValue(search, (text) => {
     }
     keepChosen();
     searched.value = next;
+    // Cleared: the search's reading stops, the cursor's page at once.
     if (next) everything.value = [];
+    else stopSearch();
     reloadList('keep').catch((err: Error) => { error.value = err.message; });
   }, 400);
 });
@@ -449,6 +478,7 @@ onBeforeUnmount(() => {
   window.clearInterval(following);
   window.clearTimeout(typing);
   window.clearTimeout(searchTyping);
+  stopSearch();
 });
 
 const failed = computed(() => lastRun.value?.targets.filter((t) => t.status === 'error') ?? []);
@@ -458,7 +488,11 @@ const scanned = computed(() => (lastRun.value?.targets.filter((t) => t.status ==
 const skipped = computed(() => lastRun.value?.skipped?.reduce((n, s) => n + s.pairs, 0) ?? lastRun.value?.targets.filter((t) => t.status === 'skipped').length ?? 0);
 const seconds = computed(() => (lastRun.value ? Math.round((Date.parse(lastRun.value.finishedAt) - Date.parse(lastRun.value.startedAt)) / 1000) : null));
 const selectedDismissed = computed(() => selected.value.length > 0 && chosen.value.length === selected.value.length && chosen.value.every((c) => c.status === 'dismissed'));
-const runColor = (status: RunRecord['status']) => ({ running: 'info', ok: 'success', partial: 'warning', failed: 'error', skipped: 'grey' })[status];
+// A run's status as its mark (tables design §3): its icon in its color, the word its name.
+const RUN_MARKS: Record<RunRecord['status'], { icon: string; color?: string }> = {
+  running: { icon: mdiProgressClock, color: 'info' }, ok: { icon: mdiCheckCircleOutline, color: 'success' }, partial: { icon: mdiAlertOutline, color: 'warning' },
+  failed: { icon: mdiAlertCircleOutline, color: 'error' }, skipped: { icon: mdiSkipNextCircleOutline },
+};
 // In account, region and id order (the index's): no other sort on the server. Each column's words: what an export prints (a
 // status's word, where a rule is, the idle share with its ~ on Google Cloud, dates as ISO 8601).
 const ruleWhere = (c: Listed): string[] => (isGoogle(c)
@@ -502,10 +536,6 @@ const exported = computed<DmExport>(() => ({
 
 // A row's menu (operators): what the selection's buttons offer, for that candidate alone; the selection stays as it is. A
 // running onboarding or offboarding says so instead, and an onboarding the API would refuse says why.
-function act(c: Listed, dialog: Ref<boolean>) {
-  target.value = c;
-  dialog.value = true;
-}
 function actions(c: Listed): DmAction[] {
   if (!session.canOperate) return [];
   const out: DmAction[] = [];
@@ -515,14 +545,14 @@ function actions(c: Listed): DmAction[] {
   } else {
     if (c.status === 'pending-onboarding') {
       const refusal = onboardRefusal(access.value, c.account);
-      out.push({ title: 'Onboard…', icon: mdiPlusCircleOutline, disabled: Boolean(refusal), help: refusal ?? undefined, run: () => act(c, onboardOpen) });
+      out.push({ title: 'Onboard…', icon: mdiPlusCircleOutline, disabled: Boolean(refusal), help: refusal ?? undefined, run: () => openFor(c, 'onboard') });
     }
     if (canOffboard(c)) out.push({ title: 'Offboard', icon: mdiLogoutVariant, run: () => void offboard(c, true) });
   }
-  if (exclusionTargets(c).length) out.push({ title: 'Exclude…', icon: mdiCancel, color: 'error', run: () => act(c, excludeOpen) });
+  if (exclusionTargets(c).length) out.push({ title: 'Exclude…', icon: mdiCancel, color: 'error', run: () => openFor(c, 'exclude') });
   out.push(c.status === 'dismissed'
     ? { title: 'Restore', icon: mdiEyeOutline, run: () => void changeDismissal('restore', [c.id], true) }
-    : { title: 'Dismiss…', icon: mdiEyeOffOutline, run: () => act(c, dismissDialog) });
+    : { title: 'Dismiss…', icon: mdiEyeOffOutline, run: () => openFor(c, 'dismiss') });
   return out;
 }
 const first = computed(() => page.value * PAGE + (candidates.value.length ? 1 : 0));
@@ -578,7 +608,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <div class="dm-eyebrow">{{ lastRun.trigger }}<template v-if="lastRun.by"> by {{ lastRun.by }}</template></div>
         <div class="dm-run__headline">
           <span>Last run {{ relative(lastRun.startedAt, now) }}</span>
-          <v-chip :color="runColor(lastRun.status)" variant="tonal" label size="small" class="dm-run__status">{{ lastRun.status }}</v-chip>
+          <StatusMark :icon="RUN_MARKS[lastRun.status].icon" :color="RUN_MARKS[lastRun.status].color" :label="lastRun.status" :pulse="lastRun.status === 'running'" />
         </div>
         <div class="dm-run__tiles">
           <div v-for="t in runTiles" :key="t.key" class="dm-figure" :class="{ 'dm-figure--alarm': t.key === 'failed' && failed.length }">
@@ -637,11 +667,11 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
           <v-tooltip v-else-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
             <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
           </v-tooltip>
-          <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="flat" @click="onboardOpen = true">Onboard…</v-btn>
+          <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="flat" @click="openFor(null, 'onboard')">Onboard…</v-btn>
           <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" color="warning" variant="tonal" @click="offboard()">Offboard</v-btn>
-          <v-btn v-if="selectionExcludable" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
+          <v-btn v-if="selectionExcludable" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="openFor(null, 'exclude')">Exclude…</v-btn>
           <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
-          <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
+          <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="openFor(null, 'dismiss')">Dismiss ({{ selected.length }})</v-btn>
         </div>
       </template>
       <template #[`item.status`]="{ item }">
@@ -789,7 +819,6 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 .dm-run__icon { display: grid; place-items: center; width: 84px; height: 84px; border-radius: 50%; border: 1px dashed rgba(var(--v-border-color), 0.2); }
 .dm-run__headline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 4px 0 16px; font-size: clamp(1.2rem, 1rem + 0.7vw, 1.5rem); font-weight: 600;
   letter-spacing: -0.03em; line-height: 1.2; }
-.dm-run__status { font-family: var(--dm-mono); font-size: 0.72rem; letter-spacing: 0.04em; }
 .dm-run__tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .dm-figure { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 12px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 14px;
   background: rgba(var(--v-theme-on-surface), 0.02); }

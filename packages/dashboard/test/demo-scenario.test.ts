@@ -68,6 +68,28 @@ describe('demo scenario', () => {
     expect(org.accountExclusion).not.toBeNull();
   });
 
+  // The tables' cases (tables design §6: the demo shows the same tables): each mark and the pages of Discovery.
+  it('gives the default demo the tables\' cases: a router that does not report, a paused workload on a router, an open alert, a failed operation, more than 50 candidates to onboard', async () => {
+    const { mockApi } = await import('../src/mock');
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    const call = <T>(path: string) => {
+      const answer = mockApi(path) as Promise<T>;
+      vi.runAllTimers();
+      return answer;
+    };
+    const { routers } = await call<{ routers: { name: string; reporting?: boolean; paused?: number }[] }>('/routers');
+    expect(routers.filter((r) => r.reporting === false)).toHaveLength(1);
+    expect(routers.some((r) => (r.paused ?? 0) > 0)).toBe(true);
+    expect((await call<{ alarms: unknown[] }>('/alerts')).alarms.length).toBeGreaterThan(0);
+    expect((await call<{ operations: { status: string }[] }>('/operations')).operations.some((o) => o.status === 'failed')).toBe(true);
+    const { counts } = await call<{ counts: Record<string, number> }>('/discovery');
+    expect(counts['pending-onboarding']).toBeGreaterThan(50);
+    const first = await call<{ candidates: unknown[]; cursor: string | null }>('/discovery/candidates?status=pending-onboarding&limit=50');
+    expect(first.candidates).toHaveLength(50);
+    expect(first.cursor).not.toBeNull();
+    vi.useRealTimers();
+  });
+
   it('builds the whole demo on the scenario kept for the tab', async () => {
     sessionStorage.setItem('dormeto.demo', 'initech,workloads=40,routers=4');
     const { mockApi } = await import('../src/mock');

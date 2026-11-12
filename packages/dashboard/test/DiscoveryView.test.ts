@@ -445,6 +445,18 @@ describe('Discovery view', () => {
     wrapper.unmount();
   });
 
+  it('says its last run\'s status by its icon alone, the word its name', async () => {
+    const { api } = await import('../src/api');
+    const at = '2026-10-07T06:00:00.000Z';
+    const run = { startedAt: at, finishedAt: '2026-10-07T06:00:47.000Z', trigger: 'schedule', status: 'partial', mode: 'organization', targets: [], lint: [] };
+    vi.mocked(api).mockImplementationOnce(async () => ({ lastRun: run, counts: { 'pending-onboarding': 1 } }));
+    const wrapper = await mountView();
+    const headline = wrapper.find('.dm-run__headline');
+    expect(headline.text()).toMatch(/^Last run .* ago$/);
+    expect(headline.find('[data-test="status-mark"]').attributes()).toMatchObject({ 'aria-label': 'partial', tabindex: '0', class: expect.stringContaining('text-warning') });
+    wrapper.unmount();
+  });
+
   it('refreshes while an onboarding runs, and says in a toast how it ended', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     server.running = 'op-5';
@@ -821,6 +833,143 @@ describe('Discovery view, its table: a row\'s actions, the export\'s reading, se
     expect(lines).toHaveLength(1 + 5_000 + 1);
     expect(lines.at(-1)).toBe(`"${said}",,,,,,,`);
     wrapper.unmount();
+  });
+  // A row's action leaves the ticked rows as they are (Onboard…, Offboard, Restore; Exclude… and Dismiss… above).
+  it('keeps the ticked rows through a row\'s Onboard…, Offboard and Restore', async () => {
+    const rows = numbered(4);
+    Object.assign(rows[2]!, gcpRow(), { status: 'managed', workloadId: 'shop-bs', workload: { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'shop-bs', name: 'Shop' }, backend: { kind: 'instance', id: 'shop-vm' } },
+      { id: 'c-2', conditions: 'host h002.example.com' });
+    Object.assign(rows[3]!, { status: 'dismissed' });
+    server.list = pagesOf(rows);
+    const wrapper = await mountView();
+    await box(wrapper, 'host h000.example.com').trigger('click');
+    await box(wrapper, 'host h001.example.com').trigger('click');
+    await nextTick();
+    const kept = () => [ticked(wrapper, 'host h000.example.com'), ticked(wrapper, 'host h001.example.com'), Boolean(button(wrapper, 'Dismiss (2)'))];
+    expect(kept()).toEqual([true, true, true]);
+    // Onboard… from the first row: its dialog for that row, the operation for it.
+    await choose(wrapper, 'host h000.example.com', 'Onboard…');
+    const onboarding = wrapper.findComponent(OnboardDialog);
+    expect(onboarding.props('title')).toBe('host h000.example.com');
+    onboarding.vm.$emit('submit', { settings: {}, databases: [] });
+    await flushPromises();
+    expect(JSON.parse(calls.find((c) => c.path === '/operations')!.init!.body as string)).toMatchObject({ type: 'onboard', candidateId: 'c-0' });
+    expect(kept()).toEqual([true, true, true]);
+    // Offboard from the managed one, Restore from the dismissed one.
+    await choose(wrapper, 'host h002.example.com', 'Offboard');
+    expect(JSON.parse(calls.filter((c) => c.path === '/operations').at(-1)!.init!.body as string)).toMatchObject({ type: 'offboard', workloadId: 'shop-bs' });
+    expect(kept()).toEqual([true, true, true]);
+    await choose(wrapper, 'host h003.example.com', 'Restore');
+    await flushPromises();
+    expect(JSON.parse(calls.find((c) => c.path === '/discovery/restore')!.init!.body as string)).toEqual({ ids: ['c-3'] });
+    expect(kept()).toEqual([true, true, true]);
+    wrapper.unmount();
+  });
+
+  it('keeps what a row\'s dialog shows while it closes: its options, not the selection\'s', async () => {
+    server.list = pagesOf(numbered(5));
+    const wrapper = await mountView();
+    await box(wrapper, 'host h000.example.com').trigger('click');
+    await nextTick();
+    await choose(wrapper, 'host h003.example.com', 'Exclude…');
+    const dialog = document.querySelector('.v-dialog.v-overlay--active')!;
+    expect(dialog.textContent).toContain('tg-3');
+    dialogButton('Cancel').click();
+    await nextTick();
+    // Closing: still the row's, never the one ticked.
+    expect(dialog.textContent).toContain('tg-3');
+    expect(dialog.textContent).not.toContain('tg-0');
+    await sleep(350);
+    // The selection's own Exclude… then shows the one ticked.
+    await button(wrapper, 'Exclude…')!.trigger('click');
+    await flushPromises();
+    expect(document.querySelector('.v-dialog.v-overlay--active')!.textContent).toContain('tg-0');
+    wrapper.unmount();
+  });
+
+  it('stops a search\'s reading when the search is cleared or another list is read, and shows the cursor\'s page at once, without the loader', async () => {
+    server.list = pagesOf(numbered(450));
+    const wrapper = await mountView();
+    let release!: () => void;
+    server.later = new Promise<void>((r) => { release = r; });
+    calls.length = 0;
+    await wrapper.find('[data-test="dm-table-search"] input').setValue('h00');
+    await sleep(450);
+    await flushPromises();
+    expect(listed()).toEqual([{ status: 'pending-onboarding', limit: '200' }]);
+    expect((wrapper.findComponent(DmTable).props() as { loading: boolean }).loading).toBe(true);
+    // Cleared while its first page is on its way: no loader over the page shown, and no second page asked once it answers.
+    await wrapper.find('[data-test="dm-table-search"] input').setValue('');
+    await sleep(450);
+    await flushPromises();
+    expect((wrapper.findComponent(DmTable).props() as { loading: boolean }).loading).toBe(false);
+    release();
+    delete server.later;
+    await flushPromises();
+    await sleep(20);
+    await flushPromises();
+    expect(listed().filter((q) => q.limit === '200')).toEqual([{ status: 'pending-onboarding', limit: '200' }]);
+    expect(wrapper.findAll('tbody tr')).toHaveLength(50);
+    expect(wrapper.find('nav.dm-candidates__foot').exists()).toBe(true);
+    // Replaced by the reading of another list (a filter typed while searching): the first stops after its page, the second
+    // reads to its end.
+    server.later = new Promise<void>((r) => { release = r; });
+    calls.length = 0;
+    await wrapper.find('[data-test="dm-table-search"] input').setValue('h44');
+    await sleep(450);
+    await flushPromises();
+    await wrapper.findAll('.dm-filter').find((f) => f.text().includes('Account or project'))!.find('input').setValue('111122223333');
+    await sleep(450);
+    await flushPromises();
+    release();
+    delete server.later;
+    await flushPromises();
+    await sleep(20);
+    await flushPromises();
+    expect(listed().filter((q) => q.limit === '200').map((q) => [q.account ?? '-', q.cursor ?? null])).toEqual([['-', null], ['111122223333', null], ['111122223333', '200'], ['111122223333', '400']]);
+    expect(wrapper.findAll('tbody tr').map((r) => r.text().match(/host h\d+/)?.[0])).toEqual(Array.from({ length: 10 }, (_, i) => `host h44${i}`));
+    wrapper.unmount();
+  });
+
+  it('refreshes a search\'s list quietly while an operation runs, every 30 s, never two readings at once', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const rows = numbered(250);
+      Object.assign(rows[0]!, { operation: { id: 'op-5', type: 'onboard' } });
+      server.list = pagesOf(rows);
+      const wrapper = await mountView();
+      await wrapper.find('[data-test="dm-table-search"] input').setValue('h00');
+      await sleep(450);
+      await flushPromises();
+      expect(wrapper.findAll('tbody tr')).toHaveLength(10);
+      calls.length = 0;
+      // Under a search, one tick in three: nothing at 10 s and 20 s.
+      vi.advanceTimersByTime(20_000);
+      await flushPromises();
+      expect(listed()).toEqual([]);
+      // At 30 s, a reading (its first page held), with no loader: the rows stay.
+      let release!: () => void;
+      server.later = new Promise<void>((r) => { release = r; });
+      vi.advanceTimersByTime(10_000);
+      await flushPromises();
+      expect(listed()).toEqual([{ status: 'pending-onboarding', limit: '200' }]);
+      expect((wrapper.findComponent(DmTable).props() as { loading: boolean }).loading).toBe(false);
+      expect(wrapper.findAll('tbody tr')).toHaveLength(10);
+      // Longer than the interval: the ticks meanwhile start nothing.
+      vi.advanceTimersByTime(60_000);
+      await flushPromises();
+      expect(listed()).toHaveLength(1);
+      release();
+      delete server.later;
+      await flushPromises();
+      await sleep(20);
+      await flushPromises();
+      expect(listed().map((q) => q.cursor ?? null)).toEqual([null, '200']);
+      expect(wrapper.findAll('tbody tr')).toHaveLength(10);
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

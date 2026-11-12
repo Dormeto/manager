@@ -8,6 +8,7 @@ import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import { mdiPauseCircleOutline } from '@mdi/js';
 import RoutersView from '../src/views/RoutersView.vue';
+import PauseDialog from '../src/components/PauseDialog.vue';
 import { useSession } from '../src/stores/session';
 import { download } from '../src/table-export';
 import { columnTexts, expectEveryColumnSaid } from './table-columns';
@@ -320,8 +321,13 @@ describe('Routers view', () => {
     expect(chip.attributes('aria-label')).toBe('×5 asleep on dmt-dev: open their list');
     await hover(chip);
     expect(document.body.textContent).toContain('5 workloads asleep on dmt-dev');
-    // Enter opens them, as a click does.
+    // Enter opens them, as a click does; Space too.
     await chip.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    await sleep(50);
+    expect(wrapper.router.currentRoute.value.fullPath).toBe('/workloads?router=dmt-dev&state=ASLEEP');
+    await wrapper.router.push('/routers');
+    await chip.trigger('keydown', { key: ' ' });
     await flushPromises();
     await sleep(50);
     expect(wrapper.router.currentRoute.value.fullPath).toBe('/workloads?router=dmt-dev&state=ASLEEP');
@@ -395,16 +401,24 @@ describe('Routers view', () => {
     const reason = document.querySelector('.v-overlay--active input') as HTMLInputElement;
     reason.value = 'load test';
     reason.dispatchEvent(new Event('input'));
+    // Resumed in a day, its asleep workloads left asleep.
+    const dialog = wrapper.findComponent(PauseDialog);
+    await dialog.findComponent({ name: 'VSelect' }).setValue('1d');
+    await dialog.findComponent({ name: 'VCheckbox' }).find('input').setValue(true);
     await flushPromises();
     buttonOfDialog('Pause').click();
     await flushPromises();
     const paused = calls.find((c) => c.path === '/routers/dmtr-dev-eu-west-3/pause')!;
-    expect(JSON.parse(String(paused.init!.body))).toMatchObject({ reason: 'load test', keepAsleep: false });
+    const sent = JSON.parse(String(paused.init!.body)) as { reason: string; keepAsleep: boolean; until: string };
+    expect(sent).toMatchObject({ reason: 'load test', keepAsleep: true });
+    expect(Date.parse(sent.until) - Date.now()).toBeGreaterThan(86_000_000);
     await sleep(350);
-    // The one dialog, opened for another router, starts again from nothing.
+    // The one dialog, opened for another router, starts again from nothing: no reason, resumed in 4 hours, workloads woken.
     await choose(wrapper, 'dmt-dev', 'Pause…');
     expect(document.querySelector('.v-overlay--active .v-card-title')?.textContent).toBe('Pause dmt-dev');
     expect((document.querySelector('.v-overlay--active input') as HTMLInputElement).value).toBe('');
+    expect(dialog.findComponent({ name: 'VSelect' }).props('modelValue')).toBe('4h');
+    expect((dialog.findComponent({ name: 'VCheckbox' }).find('input').element as HTMLInputElement).checked).toBe(false);
     buttonOfDialog('Cancel').click();
     await flushPromises();
     await sleep(350);

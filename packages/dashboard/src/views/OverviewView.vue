@@ -10,6 +10,7 @@ import CloudMark from '../components/CloudMark.vue';
 import { routerStatus } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
+import StatusMark from '../components/StatusMark.vue';
 import SavingsCard from '../components/SavingsCard.vue';
 import EnergyCard from '../components/EnergyCard.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -173,7 +174,11 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
             :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${routerStatus(r, now).detail}`">
             <template #prepend><CloudMark :cloud="rowCloud(r)" class="mr-2" /></template>
             <template #append>
-              <span class="d-inline-flex align-center ga-1"><PauseChip :pauses="r.pauses" /><v-chip :color="routerStatus(r, now).color" variant="tonal" label>{{ routerStatus(r, now).text }}</v-chip></span>
+              <!-- Its status as its icon alone (tables design §3): the word its name and its tooltip's first line, the detail next. -->
+              <span class="d-inline-flex align-center ga-2"><PauseChip :pauses="r.pauses" />
+                <StatusMark :icon="routerStatus(r, now).icon" :color="routerStatus(r, now).color" :label="routerStatus(r, now).text">
+                  <div class="text-body-medium dm-status-detail">{{ routerStatus(r, now).detail }}</div>
+                </StatusMark></span>
             </template>
           </v-list-item>
         </v-list>
@@ -214,6 +219,7 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
 .dm-fleet__bar { display: flex; gap: 3px; height: 8px; margin-top: 16px; border-radius: 4px; overflow: hidden; }
 .dm-fleet__bar span { min-width: 6px; border-radius: 4px; transition: width 0.8s var(--dm-ease); }
 .dm-calm { display: flex; align-items: center; gap: 14px; }
+.dm-status-detail { margin-top: 4px; overflow-wrap: anywhere; }
 .dm-fleet__map { position: relative; padding: 20px 28px 26px !important; }
 .dm-live { width: 8px; height: 8px; border-radius: 50%; background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 0 rgba(var(--v-theme-success), 0.6); animation: dm-live 1.8s ease-out infinite; }
 @keyframes dm-live { 70% { box-shadow: 0 0 0 8px rgba(var(--v-theme-success), 0); } 100% { box-shadow: 0 0 0 0 rgba(var(--v-theme-success), 0); } }

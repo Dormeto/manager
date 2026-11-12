@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { exclusionTargets, exclusionText, healthColor, healthText, pauseLabel, pauseLine, pausesText, routerStatus, untilFrom, workloadsText } from '../src/pause';
+import { mdiClockAlertOutline, mdiCloudOffOutline, mdiLanDisconnect } from '@mdi/js';
+import { exclusionTargets, exclusionText, healthColor, healthIcon, healthText, pauseLabel, pauseLine, pausesText, routerStatus, untilFrom, workloadsText } from '../src/pause';
 import type { Pause, RouterInfo } from '../src/types';
 
 const now = Date.parse('2026-10-05T12:00:00Z');
@@ -114,12 +115,12 @@ describe('routerStatus', () => {
   const now = Date.parse('2026-10-06T12:00:00Z');
   const base = { name: 'r', region: 'eu-west-3', checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: '2026-10-06T11:59:00Z' };
   it('a router that does not report, known by its list only, is "not reporting" — never "ok" from its schedule alone', () => {
-    expect(routerStatus({ ...base, reporting: false }, now)).toEqual({ color: 'warning', text: 'not reporting', detail: 'no report from its idle checks for 3 periods of its schedule' });
+    expect(routerStatus({ ...base, reporting: false }, now)).toEqual({ color: 'warning', icon: mdiCloudOffOutline, text: 'not reporting', detail: 'no report from its idle checks for 3 periods of its schedule' });
   });
-  it('else its health, unreachable, a late check or ok', () => {
-    expect(routerStatus({ ...base, reporting: false, health: { status: 'error', problems: [{ level: 'error', text: 'idle check late' }] } }, now)).toEqual({ color: healthColor('error'), text: 'error', detail: 'idle check late' });
-    expect(routerStatus({ ...base, error: 'timed out' }, now)).toEqual({ color: 'error', text: 'unreachable', detail: 'timed out' });
-    expect(routerStatus({ ...base, reporting: true, lastScheduledCheckAt: '2026-10-06T10:00:00Z' }, now).text).toBe('idle check late');
-    expect(routerStatus({ ...base, reporting: true }, now)).toMatchObject({ color: 'success', text: 'ok' });
+  it('else its health, unreachable, a late check or ok, each with the icon its mark shows (the word is its name)', () => {
+    expect(routerStatus({ ...base, reporting: false, health: { status: 'error', problems: [{ level: 'error', text: 'idle check late' }] } }, now)).toEqual({ color: healthColor('error'), icon: healthIcon('error'), text: 'error', detail: 'idle check late' });
+    expect(routerStatus({ ...base, error: 'timed out' }, now)).toEqual({ color: 'error', icon: mdiLanDisconnect, text: 'unreachable', detail: 'timed out' });
+    expect(routerStatus({ ...base, reporting: true, lastScheduledCheckAt: '2026-10-06T10:00:00Z' }, now)).toMatchObject({ color: 'warning', icon: mdiClockAlertOutline, text: 'idle check late' });
+    expect(routerStatus({ ...base, reporting: true }, now)).toMatchObject({ color: 'success', icon: healthIcon('ok'), text: 'ok' });
   });
 });

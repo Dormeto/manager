@@ -51,6 +51,7 @@ export interface DemoRouter {
   settingsBy: string | null;
   settingsAt: number | null;
   readsManager: boolean;
+  reporting: boolean; // false: its events do not reach the manager, which calls it at each view
   defaults?: Defaults; // its workloads' defaults (router 0.37.0: settings at scale)
   description: DescriptionInfo | null; // Markdown, by people (manager 0.19.0)
   page: StoredWaitingPage | null; // its waiting page (router 0.35.0)
@@ -263,7 +264,8 @@ function makeRouter(spec: RouterSpec, now: number): DemoRouter {
     name: spec.name, cloud: 'aws', account: spec.account, region: spec.region, source: spec.source, version: spec.version, build: spec.build,
     installedAt: now - spec.installedDays * DAY, metrics: spec.metrics, concurrency: spec.concurrency, peak: spec.peak,
     clusters: (spec.clusters ?? []).map((name, i) => ({ name, reachable: true, allowed: true, missing: [], ...(i === 0 ? { via: 'direct' as const } : { via: 'proxy' as const, proxy: { name: `${spec.name}-kube-${name}`, version: spec.version } }), checkedAt: iso(now - 2 * DAY - 3 * HOUR) })),
-    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, description: null, page: null,
+    ownLists: spec.ownLists ?? [], pauses: [], hibernate: null, joinMinutes: null, settingsBy: null, settingsAt: null, readsManager: true, reporting: spec.reporting ?? true,
+    description: null, page: null,
   };
 }
 

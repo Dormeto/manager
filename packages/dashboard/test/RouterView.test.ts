@@ -116,6 +116,28 @@ describe('Router view', () => {
     wrapper.unmount();
   });
 
+  it('says in its Health card each problem\'s level by its icon alone, and an unreachable router by its mark, the error under it: no status word beside an icon', async () => {
+    googleRouter = { ...GOOGLE_ROUTER, health: { status: 'error', problems: [{ level: 'error', text: 'idle check late' }, { level: 'warning', text: 'controller: 2 errors in 24 hours' }] } };
+    try {
+      const wrapper = await mountView(GCP);
+      const problems = wrapper.findAll('.dm-health .dm-problem');
+      expect(problems.map((p) => p.find('[data-test="status-mark"]').attributes('aria-label'))).toEqual(['error', 'warning']);
+      expect(problems.map((p) => p.find('[data-test="status-mark"]').attributes('tabindex'))).toEqual(['0', '0']);
+      expect(problems.map((p) => p.text())).toEqual(['idle check late', 'controller: 2 errors in 24 hours']);
+      wrapper.unmount();
+      googleRouter = { ...GOOGLE_ROUTER, error: 'router dmtr-dormeto-dev-europe-west2: timed out', health: undefined };
+      const down = await mountView(GCP);
+      const card = down.find('.dm-health');
+      expect(card.find('.v-chip').exists()).toBe(false);
+      const mark = card.find('[data-test="status-mark"]');
+      expect([mark.attributes('aria-label'), mark.classes()]).toEqual(['unreachable', expect.arrayContaining(['text-error'])]);
+      expect(card.find('.v-card-text').text()).toBe('router dmtr-dormeto-dev-europe-west2: timed out');
+      down.unmount();
+    } finally {
+      googleRouter = GOOGLE_ROUTER;
+    }
+  });
+
   it('shows its health and alert, its pause and its paused workloads as the Routers list does: icons, no word beside them', async () => {
     googleRouter = { ...GOOGLE_ROUTER, workloads: 3, workloadStates: { AWAKE: 3 }, paused: 3, pauses: [{ scope: 'router', by: 'ops@example.com', at: minutesAgo(30), reason: 'migration', until: null, keepAsleep: false }] };
     try {

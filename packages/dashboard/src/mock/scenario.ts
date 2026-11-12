@@ -20,7 +20,7 @@ export interface Scenario {
 }
 
 export const DEFAULT_SCENARIO: Scenario = {
-  seed: 'dormeto', domain: 'example.com', people: 5, accounts: 6, regions: ['eu-west-1', 'eu-west-3', 'us-east-1'], routers: 3, workloads: 18, candidates: 13,
+  seed: 'dormeto', domain: 'example.com', people: 5, accounts: 6, regions: ['eu-west-1', 'eu-west-3', 'us-east-1'], routers: 3, workloads: 18, candidates: 96,
 };
 const LIMITS = { people: [1, 40], accounts: [1, 40], routers: [1, 60], workloads: [0, 1000], candidates: [0, 300] } as const;
 
@@ -141,8 +141,9 @@ export function organization(scenario: Scenario): Organization {
         ownLists: [{ name: 'office-egress', url: `s3://dmt-demo-config-${account.id}/lists/office-egress.txt`, action: 'ignore', refreshHours: 24, entries: r.int(6, 20) }],
       };
     }
-    // The last one runs the version before (an upgrade is offered); the second one has little Lambda concurrency left.
-    if (i === routerCount - 1) return { ...base, source: 'manager' as const, ...PREVIOUS, installedDays: r.int(15, 28), metrics: false };
+    // The last one runs the version before (an upgrade is offered) and its events do not reach the manager (it does not
+    // report: the manager calls it at each view); the second one has little Lambda concurrency left.
+    if (i === routerCount - 1) return { ...base, source: 'manager' as const, ...PREVIOUS, installedDays: r.int(15, 28), metrics: false, reporting: false as const };
     return { ...base, source: r.chance(0.25) ? 'terraform' as const : 'manager' as const, ...AVAILABLE, installedDays: r.int(25, 90), metrics: r.chance(0.5) };
   });
   const cluster = routers[0]?.clusters?.[0] ?? null;

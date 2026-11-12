@@ -115,6 +115,20 @@ describe('Discovery view paging', () => {
     expect(await readCursor(async () => ({ rows: [], cursor: String(++n) }), 10, 2)).toEqual({ rows: [], requests: 30, end: 'requests' });
   });
 
+  it('stops reading a cursor between two pages once its signal is aborted (a search replaced, its view left)', async () => {
+    const stop = new AbortController();
+    const asked: (string | null)[] = [];
+    const read = await readCursor(async (cursor) => {
+      asked.push(cursor);
+      // Aborted while the first page was on its way.
+      stop.abort();
+      return { rows: [1, 2], cursor: '1' };
+    }, 10, 2, stop.signal);
+    expect([read, asked]).toEqual([{ rows: [1, 2], requests: 1, end: 'stopped' }, [null]]);
+    // Aborted before it starts: nothing asked.
+    expect(await readCursor(async () => { throw new Error('asked'); }, 10, 2, stop.signal)).toEqual({ rows: [], requests: 0, end: 'stopped' });
+  });
+
 });
 
 describe('Discovery status filters', () => {

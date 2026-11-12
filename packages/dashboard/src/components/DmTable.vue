@@ -7,7 +7,7 @@
 // A client table is filtered, sorted and cut into pages here (then shown by Vuetify's server table, which does neither):
 // the screen and the exports read the same rows in the same order. A server table (`server`) shows the page it is given
 // and sends its options (page, size, sort) to the view, which also sends the search to its API.
-import { computed, ref, useAttrs, watch } from 'vue';
+import { computed, nextTick, ref, useAttrs, useId, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { mdiChevronDown, mdiChevronUp, mdiFileDelimitedOutline, mdiFilePdfBox, mdiMagnify } from '@mdi/js';
 import { cellText, EXPORT_LIMIT, searchRows, sortRows, type DmAction, type DmExport, type DmHeader, type DmOptions, type DmServer, type DmSort } from '../table';
@@ -49,11 +49,14 @@ const expanded = defineModel<string[]>('expanded', { default: () => [] });
 
 // Vuetify's slots, a row's typed as the view's rows; and the toolbar (a view's filters, left of the search).
 interface RowScope { item: T; index: number; internalItem: unknown; value: unknown; column: unknown; isSelected: (items: unknown) => boolean; toggleSelect: (item: unknown) => void; isExpanded: (item: unknown) => boolean; toggleExpand: (item: unknown) => void }
+// The part under a row (Vuetify's expanded-row scope, its row's toggles taken as they are).
+interface ExpandedScope { item: T; index: number; internalItem: unknown; columns: unknown[]; isExpanded: (item: never) => boolean; toggleExpand: (item: never) => void }
 const slots = defineSlots<{
   toolbar?: () => unknown;
   loading?: () => unknown;
   'no-data'?: () => unknown;
-  'expanded-row'?: (scope: RowScope & { columns: unknown[] }) => unknown;
+  // `expandedId`: the id its part takes, which the row's toggle names (aria-controls).
+  'expanded-row'?: (scope: ExpandedScope & { expandedId: string }) => unknown;
   [slot: `item.${string}`]: ((scope: RowScope) => unknown) | undefined;
   // Vuetify's other slots (header.<key>, top, bottom…), passed through as they are.
   [slot: string]: ((scope: any) => unknown) | undefined;
@@ -100,7 +103,7 @@ const columns = computed(() => [
 // The view's slots go to Vuetify's table but the toolbar and the empty state (DmTable says when the search matches nothing).
 // Read at each render, not cached: the slots object is not reactive, and a view's slot comes and goes (a loading slot given
 // only before the first rows would otherwise stay, and Vuetify show it instead of the rows at each reload).
-const forwarded = () => Object.keys(slots).filter((name) => name !== 'toolbar' && name !== 'no-data');
+const forwarded = () => Object.keys(slots).filter((name) => name !== 'toolbar' && name !== 'no-data' && name !== 'expanded-row');
 // A column with a text and no cell of the view's shows its text.
 const textCells = () => props.headers.filter((h) => h.text && !slots[`item.${h.key}`]);
 // In development, a column with a cell of its own but no text, its rows without its field: search and the exports would
@@ -120,9 +123,33 @@ const searching = computed(() => (search.value ?? '').trim());
 const noMatch = computed(() => !props.server && Boolean(searching.value) && props.items.length > 0 && rows.value.length === 0);
 const mobile = computed(() => smAndDown.value);
 
-// A row's name, for its "⋮" button: the view's, else its first column's text.
-const rowName = (item: T) => props.rowName?.(item) ?? (props.headers[0] ? cellText(props.headers[0], item) : '');
+// A row's name, for its "⋮" button and its toggle: the view's, else its first column's text.
+const nameOf = (item: T) => props.rowName?.(item) ?? (props.headers[0] ? cellText(props.headers[0], item) : '');
 const rowActions = (item: T) => props.actions?.(item) ?? [];
+// A row's value (its item-value), and the id of its part under it: this table's, then the row's value.
+const valueOf = (item: T): unknown => (typeof props.itemValue === 'function' ? props.itemValue(item) : (item as Record<string, unknown>)[props.itemValue]);
+const tableId = useId();
+const expandedId = (item: T) => `${tableId}-expanded-${String(valueOf(item))}`;
+
+// A row brought into view (a link naming it): the page holding it in the sort shown, the search cleared if it hides the
+// row. A client table only (a server table's view pages it); false when the table does not hold it.
+async function reveal(value: unknown): Promise<boolean> {
+  if (props.server) return false;
+  // Rows just given: Vuetify's table counts them first (it holds a page beyond its count to the last it knows).
+  await nextTick();
+  const at = (list: T[]) => list.findIndex((item) => valueOf(item) === value);
+  if (at(rows.value) < 0) {
+    if (!props.items.some((item) => valueOf(item) === value)) return false;
+    search.value = '';
+    // The search's watcher goes back to the first page: the row's page after it.
+    await nextTick();
+  }
+  const index = at(rows.value);
+  if (index < 0) return false;
+  if (itemsPerPage.value !== -1) page.value = Math.floor(index / itemsPerPage.value) + 1;
+  return true;
+}
+defineExpose({ reveal });
 
 // The exports.
 const busy = ref(false);
@@ -133,9 +160,11 @@ const exportable = computed(() => props.headers.filter((h) => h.export !== false
 // the line saying they were cut (at the limit, or where the view's reading stopped).
 async function exportRows(viewNote: string | null): Promise<{ list: T[]; note: string | null }> {
   if (!props.server) return { list: rows.value, note: viewNote };
-  const { total: matching, all: read } = props.server;
-  // Without a total, one row more than the limit tells there are others.
-  const answer = await read(matching === null ? EXPORT_LIMIT + 1 : EXPORT_LIMIT);
+  const server = props.server;
+  const matching = server.total;
+  // Without a total, one row more than the limit tells there are others. Called as the server's method: a view's object
+  // may read its own fields.
+  const answer = await server.all(matching === null ? EXPORT_LIMIT + 1 : EXPORT_LIMIT);
   const [all, stopped] = Array.isArray(answer) ? [answer, null] : [answer.rows, answer.note];
   const of = matching === null ? null : Math.max(matching, all.length);
   const rest = 'narrow the search or the filters to export the others.';
@@ -209,10 +238,11 @@ function options(o: DmOptions) {
       <template v-if="expandable && !slots[`item.${EXPAND}`]" #[`item.${EXPAND}`]="{ item, internalItem, isExpanded, toggleExpand }">
         <v-btn data-test="dm-row-expand" variant="text" size="small" :icon="mobile ? undefined : isExpanded(internalItem) ? mdiChevronUp : mdiChevronDown"
           :append-icon="mobile ? (isExpanded(internalItem) ? mdiChevronUp : mdiChevronDown) : undefined" :text="mobile ? expandTitle : undefined"
-          :aria-label="`${expandTitle} of ${rowName(item as T)}`" :aria-expanded="isExpanded(internalItem)" @click.stop="toggleExpand(internalItem)" />
+          :aria-label="`${expandTitle} of ${nameOf(item as T)}`" :aria-expanded="isExpanded(internalItem)" :aria-controls="expandedId(item as T)" @click.stop="toggleExpand(internalItem)" />
       </template>
+      <template v-if="slots['expanded-row']" #expanded-row="scope"><slot name="expanded-row" v-bind="{ ...scope, expandedId: expandedId(scope.item as T) }" /></template>
       <template #[`item.${ACTIONS}`]="{ item }">
-        <DmActionsMenu v-if="rowActions(item as T).length" :actions="rowActions(item as T)" :label="`Actions for ${rowName(item as T)}`" test="dm-row-menu" />
+        <DmActionsMenu v-if="rowActions(item as T).length" :actions="rowActions(item as T)" :label="`Actions for ${nameOf(item as T)}`" test="dm-row-menu" />
       </template>
       <template #no-data>
         <div v-if="noMatch" class="dm-table__calm"><DmLogo state="sleep" :size="40" /><span class="text-medium-emphasis">No row matches “{{ searching }}”.</span></div>

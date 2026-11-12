@@ -92,14 +92,15 @@ function listPath(f: Filters, limit: number, offset: number, routers = false): s
   const tags = f.tags.map((tag) => `&tag=${encodeURIComponent(tag)}`).join('');
   return `/workloads?${query}${tags}`;
 }
-type ListAnswer = { workloads: WorkloadSummary[]; total?: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] };
+// `total`: the workloads matching, which the API always counts (GET /workloads), so the table pages on it.
+type ListAnswer = { workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] };
 const { error, loading, nextAt, refreshedAt, run } = usePoll(async () => {
   // Router health every minute is enough (the warning is about checks late by 15 minutes), in the same request.
   const withRouters = Date.now() - routersCheckedAt > 60_000;
   const result = await api<ListAnswer>(listPath(filters(), perPage.value, (page.value - 1) * perPage.value, withRouters));
   workloads.value = result.workloads;
   tagsSeen.value = [...new Set([...tagsSeen.value, ...result.workloads.flatMap((w) => tagsList(w.tags).map((t) => t.text))])];
-  total.value = result.total ?? result.workloads.length;
+  total.value = result.total;
   errors.value = result.errors;
   if (withRouters && result.routers) {
     routersCheckedAt = Date.now();
@@ -142,7 +143,7 @@ const workloadKey = (w: WorkloadSummary) => `${w.router}/${w.workloadId}`;
 
 // An export (tables design §5): every workload matching the search and filters as they are when it is asked, the API's
 // pages one at a time (the size the view asks at most, with each one's week), `limit` at most: until a short page, or all
-// those the API counts when it says how many.
+// those the API counts.
 const EXPORT_PAGE = 100;
 async function readAll(limit: number): Promise<WorkloadSummary[]> {
   const asked = filters();
@@ -150,7 +151,7 @@ async function readAll(limit: number): Promise<WorkloadSummary[]> {
   for (let offset = 0; rows.length < limit; offset += EXPORT_PAGE) {
     const result = await api<ListAnswer>(listPath(asked, EXPORT_PAGE, offset));
     rows.push(...result.workloads);
-    if (result.workloads.length < EXPORT_PAGE || (typeof result.total === 'number' && rows.length >= result.total)) break;
+    if (result.workloads.length < EXPORT_PAGE || rows.length >= result.total) break;
   }
   return rows.slice(0, limit);
 }

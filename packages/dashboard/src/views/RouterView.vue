@@ -6,7 +6,7 @@ import { mdiArrowRight, mdiBellRingOutline, mdiHeartPulse, mdiPauseCircleOutline
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { relative, rowCloud } from '../format';
-import { healthColor, healthIcon, pauseLine, workloadsCount } from '../pause';
+import { healthColor, healthIcon, healthMark, pauseLine, workloadsCount } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
 import { terraformHelp } from '../router-actions';
@@ -26,6 +26,7 @@ import RegionLabel from '../components/RegionLabel.vue';
 import RouterActions from '../components/RouterActions.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import RouterVersion from '../components/RouterVersion.vue';
+import StatusMark from '../components/StatusMark.vue';
 import TerraformChip from '../components/TerraformChip.vue';
 import WorkloadCounts from '../components/WorkloadCounts.vue';
 import type { AlarmInfo, AlertsInfo, DescriptionInfo, RouterInfo } from '../types';
@@ -179,19 +180,19 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
             <v-card-title>Health</v-card-title>
           </v-card-item>
           <v-card-text class="pt-2">
+            <!-- Unreachable, a problem's level: their icons alone, the word their name and tooltip (tables design §3). -->
             <template v-if="router.error">
-              <v-chip color="error" variant="tonal" label>unreachable</v-chip>
-              <div class="dm-problem dm-problem--error mt-3"><div class="dm-problem__text text-error">{{ router.error }}</div></div>
+              <div class="dm-problem dm-problem--error">
+                <StatusMark :icon="healthMark(router).icon" color="error" :label="healthMark(router).label" :size="18" class="dm-problem__icon" />
+                <div class="dm-problem__text text-body-medium text-error">{{ router.error }}</div>
+              </div>
             </template>
             <template v-else-if="router.health">
               <div v-if="alarm" class="dm-alarm" :class="`text-${alarm.level}`"><v-icon :icon="mdiBellRingOutline" size="16" />alert since {{ relative(alarm.since, now) }}</div>
               <ul v-if="router.health.problems.length" class="dm-problems">
                 <li v-for="p in router.health.problems" :key="p.text" class="dm-problem" :class="`dm-problem--${p.level}`">
-                  <v-icon :icon="healthIcon(p.level)" :color="p.level" size="18" class="dm-problem__icon" />
-                  <div class="text-body-medium">
-                    <span class="dm-problem__level" :class="`text-${p.level}`">{{ p.level }}</span><span class="d-sr-only">: </span>
-                    <div class="dm-problem__text">{{ p.text }}</div>
-                  </div>
+                  <StatusMark :icon="healthIcon(p.level)" :color="p.level" :label="p.level" :size="18" class="dm-problem__icon" />
+                  <div class="dm-problem__text text-body-medium">{{ p.text }}</div>
                 </li>
               </ul>
               <div v-if="!router.health.problems.length" class="dm-calm">
@@ -208,7 +209,6 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
 </template>
 
 <style scoped>
-.dm-num { font-variant-numeric: tabular-nums; }
 h1 { overflow-wrap: anywhere; }
 
 /* The hero: the router's icon in its sky, who and where it is, its health in a sentence, its key figures. */
@@ -246,7 +246,6 @@ h1 { overflow-wrap: anywhere; }
 .dm-problem--warning { background: rgba(var(--v-theme-warning), 0.07); border-color: rgba(var(--v-theme-warning), 0.22); }
 .dm-problem--error { background: rgba(var(--v-theme-error), 0.07); border-color: rgba(var(--v-theme-error), 0.24); }
 .dm-problem__icon { flex: none; margin-top: 1px; }
-.dm-problem__level { display: block; margin-bottom: 2px; font: 600 0.66rem/1.3 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; }
 .dm-problem__text { line-height: 1.5; text-wrap: pretty; overflow-wrap: anywhere; }
 .dm-calm { display: flex; align-items: center; gap: 14px; }
 

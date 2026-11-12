@@ -120,9 +120,12 @@ describe('Workload view', () => {
     const [k8s, asg] = wrapper.findAll('[data-test="backend"]');
     expect(k8s!.find('.v-list-item-subtitle').text()).toBe('Kubernetes workload · cluster eks-demo · 1 replica · Dormeto\'s Ingress in the group');
     expect(k8s!.find('.v-list-item-subtitle').classes()).toContain('text-wrap');
-    expect(k8s!.find('.v-list-item__append').text()).toBe('stopped');
+    // Its state as its icon alone (tables design §3): the word its name, no text beside it.
+    expect(k8s!.find('.v-list-item__append').text()).toBe('');
+    expect(k8s!.find('.v-list-item__append [data-test="status-mark"]').attributes()).toMatchObject({ 'aria-label': 'stopped', tabindex: '0', class: expect.stringContaining('text-info') });
     expect(asg!.find('.v-list-item-subtitle').text()).toBe('Auto Scaling group · min 0 · desired 1 · max 2');
-    expect(asg!.find('.v-list-item__append').text()).toBe('running');
+    expect(asg!.find('.v-list-item__append').text()).toBe('');
+    expect(asg!.find('.v-list-item__append [data-test="status-mark"]').attributes()).toMatchObject({ 'aria-label': 'running', class: expect.stringContaining('text-success') });
     wrapper.unmount();
     current = status;
   });

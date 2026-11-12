@@ -14,6 +14,8 @@ const paths: string[] = [];
 // The bar of all workloads (GET /workloads/states), with the energy the API estimates (PR #1).
 const ENERGY = { kwh: 1234.5, co2Kg: 345.6, workloads: 2, estimated: 5 };
 let updateNewer = true;
+// More routers for a case (unreachable, not reporting, a late check).
+let moreRouters: Record<string, unknown>[] = [];
 let updateResult: Record<string, unknown> | null = null;
 let fleetStates: Record<string, unknown> = {
   workloads: 2, computedAt: late, cacheMinutes: 60, states7d: { from: late, to: late, totals: {} },
@@ -34,11 +36,15 @@ vi.mock('../src/api', () => ({
     return {
       workloads: [], total: 0, byState: { ASLEEP: 2 }, stats7d: { wakes: 0, ignored: 0, deferred: 0 },
       routers: [{ name: 'dmt-dev', region: 'eu-west-1', version: '0.24.0', workloads: 2, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: late, health: { status: 'error', problems: [] } },
-        { name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', version: '0.40.0', workloads: 2, source: 'cli', health: { status: 'ok', problems: [] } }],
+        { name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', version: '0.40.0', workloads: 2, source: 'cli', health: { status: 'ok', problems: [] } }, ...moreRouters],
     };
   }),
 }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+Object.defineProperty(window, 'visualViewport', {
+  configurable: true,
+  value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
+});
 // Reduced motion: the figures show at once, without counting up.
 window.matchMedia ??= ((query: string) => ({ matches: query.includes('reduce'), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
 async function mountOverview(role: 'admin' | 'viewer' | 'member' = 'viewer', dismissedUpdate = '') {
@@ -47,7 +53,7 @@ async function mountOverview(role: 'admin' | 'viewer' | 'member' = 'viewer', dis
   usePreferences().dismissedUpdate = dismissedUpdate;
   useSession().applyMe({ email: 'a@example.com', role });
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:p(.*)*', component: { render: () => null } }] });
-  const wrapper = mount(OverviewView, { global: { plugins: [createVuetify({ components }), pinia, router] } });
+  const wrapper = mount(OverviewView, { attachTo: document.body, global: { plugins: [createVuetify({ components }), pinia, router] } });
   await flushPromises();
   return wrapper;
 }
@@ -100,6 +106,30 @@ describe('Overview', () => {
     await flushPromises();
     const items = wrapper.findAll('[data-test="routers-card"] .v-list-item');
     expect(items.map((i) => i.find('[data-test="cloud-mark"]').attributes('data-cloud'))).toEqual(['aws', 'gcp']);
+    wrapper.unmount();
+  });
+
+  it('says each router\'s status in the Routers card as its icon alone: its word the mark\'s name and its tooltip\'s first line, the detail under it', async () => {
+    const old = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    moreRouters = [
+      { name: 'dmtr-down', region: 'eu-west-3', version: '0.24.0', workloads: 1, error: 'timed out' },
+      { name: 'dmtr-silent', region: 'eu-west-3', version: '0.20.0', workloads: 1, reporting: false, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: late },
+      { name: 'dmtr-late', region: 'us-east-1', version: '0.20.0', workloads: 1, reporting: true, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: old },
+    ];
+    const wrapper = await mountOverview();
+    const items = wrapper.findAll('[data-test="routers-card"] .v-list-item');
+    const marks = items.map((i) => i.find('.v-list-item__append [data-test="status-mark"]'));
+    expect(marks.map((m) => m.attributes('aria-label'))).toEqual(['error', 'ok', 'unreachable', 'not reporting', 'idle check late']);
+    expect(marks.map((m) => m.classes().find((c) => c.startsWith('text-')))).toEqual(['text-error', 'text-success', 'text-error', 'text-warning', 'text-warning']);
+    expect(marks.map((m) => m.attributes('tabindex'))).toEqual(['0', '0', '0', '0', '0']);
+    // No word beside the icon: the append holds no text.
+    for (const item of items) expect(item.find('.v-list-item__append').text()).toBe('');
+    // The tooltip: the word, then the detail.
+    (marks[3]!.element as HTMLElement).focus();
+    const tip = () => document.getElementById(marks[3]!.attributes('aria-describedby')!);
+    for (const end = Date.now() + 2000; !tip()?.classList.contains('v-overlay--active') && Date.now() < end;) await new Promise((r) => setTimeout(r, 10));
+    expect([...tip()!.querySelector('.v-overlay__content')!.children].map((l) => l.textContent!.trim())).toEqual(['not reporting', 'no report from its idle checks for 3 periods of its schedule']);
+    moreRouters = [];
     wrapper.unmount();
   });
 

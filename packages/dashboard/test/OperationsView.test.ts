@@ -50,10 +50,11 @@ afterEach(() => {
 });
 
 type View = Awaited<ReturnType<typeof mountView>>;
+let router: ReturnType<typeof createRouter>;
 async function mountView(path = '/operations') {
   const pinia = createPinia();
   setActivePinia(pinia);
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/operations', component: OperationsView }] });
+  router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/operations', component: OperationsView }] });
   await router.push(path);
   const wrapper = mount(OperationsView, { attachTo: document.body, global: { plugins: [createVuetify({ components }), pinia, router] } });
   await flushPromises();
@@ -71,18 +72,31 @@ const toggle = async (wrapper: View, id: string) => {
   await rowOf(wrapper, id).find('[data-test="dm-row-expand"]').trigger('click');
   await flushPromises();
 };
-// The expanded part under an operation's row.
-const stepsOf = (wrapper: View, id: string) => wrapper.find(`#steps-${id}`);
+// The expanded part under an operation's row: the one its toggle names (aria-controls); none while it is closed.
+const stepsOf = (wrapper: View, id: string) => wrapper.find(`[id="${rowOf(wrapper, id).find('[data-test="dm-row-expand"]').attributes('aria-controls')}"]`);
+// Until a condition holds (a tooltip shown, then gone), 2 s at most.
+async function until(test: () => boolean) {
+  for (const end = Date.now() + 2000; !test(); await sleep(10)) if (Date.now() > end) throw new Error('timed out');
+}
 const icon = (el: { findComponent: (s: { name: string }) => { props: (k: string) => unknown } }) => el.findComponent({ name: 'VIcon' }).props('icon');
-// A tooltip opened by the keyboard's focus, as its lines (a mark's word first), then closed.
+// The tooltip an element names (aria-describedby), while it is open.
+const tooltipOf = (el: Element) => {
+  const overlay = document.getElementById(el.getAttribute('aria-describedby') ?? '');
+  return overlay?.classList.contains('v-overlay--active') ? overlay.querySelector('.v-overlay__content') : null;
+};
+// A tooltip opened by the keyboard's focus, as its lines (a mark's word first), then closed by the focus moving on (a blur to
+// nothing keeps a Vuetify tooltip open).
 async function tip(el: { element: Element }): Promise<string[]> {
-  (el.element as HTMLElement).focus();
+  const target = el.element as HTMLElement;
+  target.focus();
   await nextTick();
-  await sleep(300);
-  const content = document.querySelector('.v-overlay--active .v-overlay__content')!;
+  await until(() => Boolean(tooltipOf(target)));
+  const content = tooltipOf(target)!;
   const lines = content.children.length ? [...content.children].map((line) => line.textContent!.replace(/\s+/g, ' ').trim()) : [content.textContent!.trim()];
-  (el.element as HTMLElement).blur();
-  await sleep(300);
+  const away = document.body.appendChild(document.createElement('button'));
+  away.focus();
+  await until(() => !tooltipOf(target));
+  away.remove();
   return lines;
 }
 async function exportCsv(wrapper: View): Promise<string[]> {
@@ -102,6 +116,39 @@ describe('Operations view', () => {
     expect(wrapper.text()).not.toContain('step of the first');
     expect(rowOf(wrapper, 'op-2').find('[data-test="dm-row-expand"]').attributes('aria-expanded')).toBe('true');
     expect(rowOf(wrapper, 'op-1').find('[data-test="dm-row-expand"]').attributes('aria-expanded')).toBe('false');
+    wrapper.unmount();
+  });
+
+  it('names each row\'s toggle by the operation\'s title and id, so two of one title differ, and the toggle names the part it opens', async () => {
+    const target = { account: '111122223333', region: 'eu-west-3', router: 'dmtr-dev-eu-west-3' };
+    operations = [{ ...operation('op-1', 'first step'), target }, { ...operation('op-2', 'second step'), target }];
+    const wrapper = await mountView();
+    const toggles = ['op-1', 'op-2'].map((id) => rowOf(wrapper, id).find('[data-test="dm-row-expand"]'));
+    const title = 'Upgrade the router of 111122223333/eu-west-3';
+    expect(toggles.map((t) => t.attributes('aria-label'))).toEqual([`Steps of ${title} (op-1)`, `Steps of ${title} (op-2)`]);
+    expect(toggles[0]!.attributes('aria-controls')).not.toBe(toggles[1]!.attributes('aria-controls'));
+    await toggle(wrapper, 'op-2');
+    // The part the toggle names: the second one's steps, its list named the same way.
+    const part = document.getElementById(toggles[1]!.attributes('aria-controls')!)!;
+    expect(part.textContent).toContain('second step');
+    expect(part.textContent).not.toContain('first step');
+    expect(part.querySelector('ol')!.getAttribute('aria-label')).toBe(`Steps of ${title} (op-2)`);
+    wrapper.unmount();
+  });
+
+  it('opens the operation a link names on the page that holds it, and a link followed while on Operations opens its row', async () => {
+    // 60 operations, newest first: op-05 is the 55th, on the second page of 50.
+    operations = Array.from({ length: 60 }, (_, i) => ({ ...operation(`op-${String(i).padStart(2, '0')}`, `step ${i}`), createdAt: new Date(Date.UTC(2026, 9, 7, 0, i)).toISOString() }));
+    const wrapper = await mountView('/operations?id=op-05');
+    expect(ids(wrapper)).toContain('op-05');
+    expect(ids(wrapper)).toHaveLength(10);
+    expect(stepsOf(wrapper, 'op-05').text()).toContain('step 5');
+    // Followed from a toast while here: that row opens on its page, the other stays open.
+    await router.push('/operations?id=op-58');
+    await flushPromises();
+    expect(ids(wrapper)).toContain('op-58');
+    expect(rowOf(wrapper, 'op-58').find('[data-test="dm-row-expand"]').attributes('aria-expanded')).toBe('true');
+    expect(stepsOf(wrapper, 'op-58').text()).toContain('step 58');
     wrapper.unmount();
   });
 

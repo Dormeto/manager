@@ -58,7 +58,7 @@ export function routerRow(d: Demo, r: DemoRouter, now: number): RouterInfo {
     name: r.name, cloud: r.cloud, region: r.region, account: r.account, source: r.source, ...(r.clusters.length ? { clusters: r.clusters } : {}),
     version: r.version, build: r.build, workloads: list.length, checkSchedule: CHECK_SCHEDULE, lastScheduledCheckAt: iso(lastCheck(now)),
     health: { status: health.status, problems: health.problems }, pauses: r.pauses, workloadStates: byState(list), paused: pausedCount(r, list),
-    lastActivityAt: lastActivity(list), reporting: true, ...(r.description ? { summary: summaryOf(r.description.text) } : {}), checkedAt: iso(lastCheck(now) + 4 * SECOND),
+    lastActivityAt: lastActivity(list), reporting: r.reporting, ...(r.description ? { summary: summaryOf(r.description.text) } : {}), checkedAt: iso(lastCheck(now) + 4 * SECOND),
     ...(running ? { operation: { id: running.id, type: running.type as 'install-router' | 'upgrade-router' | 'uninstall-router' } } : {}),
   };
 }

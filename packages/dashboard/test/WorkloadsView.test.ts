@@ -291,7 +291,7 @@ describe('Workloads view, its table', () => {
   // The API's list: a page of `all` at the offset and limit asked, how many match, and how many pages were asked at once.
   let inFlight = 0;
   let mostInFlight = 0;
-  async function serve(all: unknown[], { counted = true } = {}) {
+  async function serve(all: unknown[]) {
     const { api } = await import('../src/api');
     vi.mocked(api).mockImplementation((async (path: string) => {
       paths.push(path);
@@ -303,7 +303,7 @@ describe('Workloads view, its table', () => {
       inFlight -= 1;
       const q = new URLSearchParams(path.split('?')[1]);
       const offset = Number(q.get('offset'));
-      return { workloads: all.slice(offset, offset + Number(q.get('limit'))), ...(counted ? { total: all.length } : {}), errors: [], ...(q.get('routers') === '1' ? { routers: [] } : {}) };
+      return { workloads: all.slice(offset, offset + Number(q.get('limit'))), total: all.length, errors: [], ...(q.get('routers') === '1' ? { routers: [] } : {}) };
     }) as never);
   }
   const numbered = (n: number) => Array.from({ length: n }, (_, i) => ({ ...SHOP, workloadId: `w${String(i).padStart(4, '0')}`, name: `W${String(i).padStart(4, '0')}`, summary: undefined }));
@@ -383,11 +383,19 @@ describe('Workloads view, its table', () => {
     wrapper.unmount();
   });
 
-  it('reads on to a short page when the API gives no total', async () => {
-    await serve(numbered(250), { counted: false });
-    const wrapper = await mountAt('/workloads');
+  // GET /workloads always counts the workloads matching (total), so the table pages on it and an export ends there.
+  it('ends its export at the total the API counts, without asking a page beyond, or at a short page', async () => {
+    await serve(numbered(200));
+    let wrapper = await mountAt('/workloads');
     paths.length = 0;
-    const lines = await exportCsv(wrapper);
+    let lines = await exportCsv(wrapper);
+    expect(lists()).toEqual([0, 100].map((offset) => `/workloads?limit=100&offset=${offset}&idle=1&states=1`));
+    expect(lines).toHaveLength(1 + 200);
+    wrapper.unmount();
+    await serve(numbered(250));
+    wrapper = await mountAt('/workloads');
+    paths.length = 0;
+    lines = await exportCsv(wrapper);
     expect(lists()).toEqual([0, 100, 200].map((offset) => `/workloads?limit=100&offset=${offset}&idle=1&states=1`));
     expect(lines).toHaveLength(1 + 250);
     wrapper.unmount();

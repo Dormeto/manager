@@ -51,6 +51,8 @@ export interface RouterSpec {
   clusters?: string[];
   // A router written in Terraform may download lists of its own.
   ownLists?: { name: string; url: string; action: string; refreshHours: number; entries: number }[];
+  // false: its events do not reach the manager (no event bus to it), which calls it at each view.
+  reporting?: false;
 }
 
 // The router's built-in no-wake rules (health checks, an uptime monitor).

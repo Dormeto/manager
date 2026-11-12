@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, onMounted, ref } from 'vue';
-import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay, mdiPowerSleep, mdiWeatherSunny } from '@mdi/js';
+import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiDotsHorizontalCircleOutline, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay,
+  mdiPlayCircleOutline, mdiPowerSleep, mdiStopCircleOutline, mdiWeatherSunny } from '@mdi/js';
 import { settingRows, sourceText, typeText } from '../settings';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
@@ -27,6 +28,7 @@ import NoticeAlert, { type Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import StateBar from '../components/StateBar.vue';
 import StateChip from '../components/StateChip.vue';
+import StatusMark from '../components/StatusMark.vue';
 import HistoryCard from '../components/HistoryCard.vue';
 import IdleWindowCard from '../components/IdleWindowCard.vue';
 import RequestHeatmap from '../components/RequestHeatmap.vue';
@@ -278,6 +280,8 @@ const costNote = computed(() => {
 // page is the URL map's: they are named in it).
 const project = computed(() => status.value?.account ?? '');
 const backendLink = (b: Backend) => (gcp.value ? backendConsoleUrl(b, project.value) : null);
+// A backend's state as a mark: running, stopped, or between the two (its word as its cloud says it).
+const backendMark = (status: string) => (status === 'running' ? { icon: mdiPlayCircleOutline, color: 'success' } : status === 'stopped' ? { icon: mdiStopCircleOutline, color: 'info' } : { icon: mdiDotsHorizontalCircleOutline, color: 'warning' });
 // The router's row names its backend services and URL map; their paths are built from the project, the load balancer's kind and the region.
 const googlePath = (collection: 'backendServices' | 'urlMaps', name: string) => googleResourcePath(project.value, collection, name, status.value?.lb, status.value?.region ?? '');
 const urlMapLink = computed(() => (status.value?.urlMap ? urlMapConsoleUrl(googlePath('urlMaps', status.value.urlMap), status.value.lb, project.value) : null));
@@ -498,7 +502,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
                 <v-list-item-subtitle class="text-wrap">{{ backendDetails(b) }}</v-list-item-subtitle>
                 <template #append>
                   <a v-if="backendLink(b)" :href="backendLink(b)!" target="_blank" rel="noopener" class="mr-3" :aria-label="`Open ${resourceName(b.id)} in the Google Cloud console`" @click.stop><v-icon :icon="mdiOpenInNew" size="small" /></a>
-                  <v-chip v-if="b.status" :color="b.status === 'running' ? 'success' : b.status === 'stopped' ? 'info' : 'warning'" variant="tonal" label>{{ b.status }}</v-chip>
+                  <!-- Its state as its icon alone (tables design §3), the word its name and tooltip. -->
+                  <StatusMark v-if="b.status" :icon="backendMark(b.status).icon" :color="backendMark(b.status).color" :label="b.status" />
                 </template>
               </v-list-item>
             </template>

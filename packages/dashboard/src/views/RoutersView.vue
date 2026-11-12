@@ -63,7 +63,8 @@ function start(body: Record<string, unknown>, what: string) {
 }
 
 // Each column's words: what search reads and an export prints (the marks' words, dates as ISO 8601). A router is said with
-// what its cell shows under its name (its cloud, account, region and description's first line); its "⋮" by its name alone.
+// what its cell shows under its name (its cloud, account, region, and its description's summary, whole where the cell cuts
+// it); its "⋮" by its name alone.
 const where = (r: RouterInfo) => [cloudMark(rowCloud(r)).label, r.account, r.region].filter(Boolean).join(', ');
 const headers: DmHeader<RouterInfo>[] = [
   { title: 'Router', key: 'name', text: (r) => [`${r.name} (${where(r)})`, ...(r.summary ? [r.summary] : [])].join(' · ') },

@@ -11,4 +11,21 @@ describe('dev server', () => {
     const config = await resolveConfig({ configFile: fileURLToPath(new URL('../vite.config.ts', import.meta.url)), logLevel: 'silent' }, 'serve', 'development');
     expect(config.optimizeDeps.include).toEqual(expect.arrayContaining(['vuetify/components/*', 'vuetify/directives/*']));
   });
+
+  // The demo answers in the browser: a request typed in its page (a fetch of /api/…) must not reach the dev manager.
+  it('proxies /api and /config.json to the dev dashboard, but not in the demo mode (VITE_MOCK=1), where nothing reaches the real API', async () => {
+    const configFile = fileURLToPath(new URL('../vite.config.ts', import.meta.url));
+    const before = process.env.VITE_MOCK;
+    try {
+      delete process.env.VITE_MOCK;
+      const live = await resolveConfig({ configFile, logLevel: 'silent' }, 'serve', 'development');
+      expect(Object.keys(live.server.proxy ?? {}).sort()).toEqual(['/api', '/config.json']);
+      process.env.VITE_MOCK = '1';
+      const demo = await resolveConfig({ configFile, logLevel: 'silent' }, 'serve', 'development');
+      expect(demo.server.proxy ?? {}).toEqual({});
+    } finally {
+      if (before === undefined) delete process.env.VITE_MOCK;
+      else process.env.VITE_MOCK = before;
+    }
+  });
 });

@@ -4,14 +4,16 @@ import { defineConfig } from 'vitest/config';
 import vue from '@vitejs/plugin-vue';
 import vuetify from 'vite-plugin-vuetify';
 
-// Local development: `npm run dev` proxies /api and /config.json to the deployed dev dashboard.
+// Local development: `npm run dev` proxies /api and /config.json to the deployed dev dashboard; the demo mode (npm run
+// dev:mock) proxies nothing, so that no request typed in its page reaches the dev manager (test/vite-config.test.ts).
 const remote = process.env.DASHBOARD_URL ?? 'https://app.dev.dormeto.com';
 
 export default defineConfig(({ command, mode }) => {
   // The demo mode (VITE_MOCK, npm run dev:mock) is for development only: a build refuses it, in any mode, from the
   // environment or an .env file of the directory it runs in or of the dashboard's (a build leaves src/mock out anyway).
   const dirs = new Set([process.cwd(), fileURLToPath(new URL('.', import.meta.url))]);
-  if (command === 'build' && [...dirs].some((dir) => loadEnv(mode, dir, 'VITE_').VITE_MOCK)) {
+  const mock = [...dirs].some((dir) => loadEnv(mode, dir, 'VITE_').VITE_MOCK);
+  if (command === 'build' && mock) {
     throw new Error('VITE_MOCK is set: the demo mode (npm run dev:mock) never goes into a build; unset it, in the environment and the .env files');
   }
   return {
@@ -20,7 +22,7 @@ export default defineConfig(({ command, mode }) => {
     // new ones, rebuilt the dependencies and reloaded, and the view's code could not be fetched meanwhile (its menu item did
     // nothing). All of them, from the start.
     optimizeDeps: { include: ['vuetify/components/*', 'vuetify/directives/*'] },
-    server: { proxy: { '/api': { target: remote, changeOrigin: true }, '/config.json': { target: remote, changeOrigin: true } } },
+    server: mock ? {} : { proxy: { '/api': { target: remote, changeOrigin: true }, '/config.json': { target: remote, changeOrigin: true } } },
     build: { sourcemap: false, chunkSizeWarningLimit: 1500 },
     test: { environment: 'jsdom', server: { deps: { inline: ['vuetify'] } } },
   };

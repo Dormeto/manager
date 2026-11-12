@@ -364,6 +364,54 @@ describe('DmTable', () => {
     expect(plain.find('[data-test="dm-row-expand"]').attributes('aria-label')).toBe('Details of w0000');
   });
 
+  it('an expandable table: each toggle names the part it opens (aria-controls), the id the expanded-row slot puts on it, one per row and per table', async () => {
+    const part = { 'expanded-row': ({ item, columns, expandedId }: { item: Row; columns: unknown[]; expandedId: string }) => h('tr', h('td', { colspan: columns.length, id: expandedId, class: 'steps' }, `steps of ${item.name}`)) };
+    const w = render({ expandable: true, expandTitle: 'Steps', expanded: ['w0002'] }, part);
+    const toggles = w.findAll('[data-test="dm-row-expand"]');
+    const ids = toggles.map((t) => t.attributes('aria-controls'));
+    expect(new Set(ids).size).toBe(6);
+    expect(ids.every(Boolean)).toBe(true);
+    expect(w.find('.steps').attributes('id')).toBe(ids[2]);
+    expect(document.getElementById(ids[2]!)!.textContent).toBe('steps of w0002');
+    w.unmount();
+    // Two tables of the same rows on a page: other ids.
+    const two = defineComponent({ render: () => [1, 2].map((n) => h(DmTable as unknown as Component, { key: n, headers, items: rows(6), itemValue: 'name', exported, expandable: true }, part)) });
+    wrapper = mount(two, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
+    const both = wrapper.findAll('[data-test="dm-row-expand"]').map((t) => t.attributes('aria-controls'));
+    expect(both).toHaveLength(12);
+    expect(new Set(both).size).toBe(12);
+  });
+
+  it('brings a row into view (reveal): the page holding it in the sort shown; a search that hides it is cleared', async () => {
+    const w = render({ items: rows(120), sortBy: [{ key: 'name', order: 'desc' }] });
+    const table = w.vm as unknown as { reveal: (value: unknown) => Promise<boolean> };
+    expect(names(w)[0]).toBe('w0119');
+    // w0010 is the 110th row going down: page 3 of 50.
+    expect(await table.reveal('w0010')).toBe(true);
+    await flushPromises();
+    expect(names(w)).toContain('w0010');
+    expect(w.emitted('update:page')!.at(-1)).toEqual([3]);
+    // A search that hides it is cleared, then its page (w0050 is the 70th: page 2).
+    await w.setProps({ search: 'w011' });
+    await flushPromises();
+    expect(await table.reveal('w0050')).toBe(true);
+    await flushPromises();
+    expect(w.emitted('update:search')!.at(-1)).toEqual(['']);
+    expect(names(w)).toContain('w0050');
+    expect(w.emitted('update:page')!.at(-1)).toEqual([2]);
+    // A row the table does not hold: nothing moves.
+    expect(await table.reveal('nope')).toBe(false);
+  });
+
+  it('calls a server\'s all as its method (a view\'s server object may read its own fields)', async () => {
+    const server = { total: 3, rows: rows(3), async all(this: { rows: Row[] }, limit: number) { return this.rows.slice(0, limit); } };
+    const w = render({ items: rows(3), server });
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-csv"]');
+    expect(w.find('.v-alert').exists()).toBe(false);
+    expect(csvLines()).toHaveLength(1 + 3);
+  });
+
   it('puts a view\'s filters in the toolbar, left of the search; a view\'s cell where it gives one, the column\'s text elsewhere', async () => {
     const w = render({}, { toolbar: () => h('span', { class: 'my-filter' }, 'Needing attention'), 'item.name': ({ item }: { item: Row }) => h('a', { class: 'my-name' }, item.name) });
     const toolbar = w.find('.dm-table__toolbar');

@@ -1,5 +1,5 @@
 // Router management display helpers: pauses, router health, manual exclusions.
-import { mdiAlertOctagonOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiHelpCircleOutline, mdiLanDisconnect } from '@mdi/js';
+import { mdiAlertOctagonOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiClockAlertOutline, mdiCloudOffOutline, mdiHelpCircleOutline, mdiLanDisconnect } from '@mdi/js';
 import { cloudOf } from '@dormeto/fleet/clouds';
 import { checkHealth, relative } from './format';
 import { resourceName } from './google';
@@ -81,14 +81,15 @@ export function workloadsText(r: Pick<RouterInfo, 'workloads' | 'workloadStates'
   return counts ? `${counts}; ${r.paused} of them paused` : `${r.paused} paused`;
 }
 
-// A router's status for the Overview: unreachable, its health, not reporting (a router known by its list answer only has
-// no health: its schedule alone could say ok while its checks fail), a late check, or ok.
-export function routerStatus(r: { error?: string; reporting?: boolean; health?: { status: string; problems: { level?: string; text: string }[] }; checkSchedule?: string | null; lastScheduledCheckAt?: string | null }, now = Date.now()): { color: string; text: string; detail: string } {
-  if (r.error) return { color: 'error', text: 'unreachable', detail: r.error };
+// A router's status for the Overview, as a mark (its icon; its word the mark's name): unreachable, its health, not reporting
+// (a router known by its list answer only has no health: its schedule alone could say ok while its checks fail), a late
+// check, or ok.
+export function routerStatus(r: { error?: string; reporting?: boolean; health?: { status: string; problems: { level?: string; text: string }[] }; checkSchedule?: string | null; lastScheduledCheckAt?: string | null }, now = Date.now()): { color: string; icon: string; text: string; detail: string } {
+  if (r.error) return { color: 'error', icon: mdiLanDisconnect, text: 'unreachable', detail: r.error };
   const check = checkHealth(r, now);
-  if (r.health) return { color: healthColor(r.health.status), text: r.health.status, detail: r.health.problems[0]?.text ?? check.text };
-  if (r.reporting === false) return { color: 'warning', text: 'not reporting', detail: 'no report from its idle checks for 3 periods of its schedule' };
-  return check.late ? { color: 'warning', text: 'idle check late', detail: check.text } : { color: 'success', text: 'ok', detail: check.text };
+  if (r.health) return { color: healthColor(r.health.status), icon: healthIcon(r.health.status), text: r.health.status, detail: r.health.problems[0]?.text ?? check.text };
+  if (r.reporting === false) return { color: 'warning', icon: mdiCloudOffOutline, text: 'not reporting', detail: 'no report from its idle checks for 3 periods of its schedule' };
+  return check.late ? { color: 'warning', icon: mdiClockAlertOutline, text: 'idle check late', detail: check.text } : { color: 'success', icon: healthIcon('ok'), text: 'ok', detail: check.text };
 }
 
 export interface TargetOption {
