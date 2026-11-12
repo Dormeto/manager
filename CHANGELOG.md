@@ -228,6 +228,39 @@ answers `x-dormeto-failure` and `x-dormeto-retry-at` as AWS's does, and its stat
 now refuses a `keepAsleep` that is not true or false** (a change to a released action: a value such as `"false"` or `1`, once taken
 as it was, is a refusal now; the manager always sends a boolean). The router's own settings problem texts take the same
 `<key>: must be …` form, and the Google Cloud wake timeout says 60 to 1700 in one text.
+- **The dashboard's tables, one component:** Routers, Workloads, Discovery, Operations, Users, Audit and the IP lists share one table:
+a search field reading what the columns say (Workloads' sent to the API as before), sort on the headers (Workloads and Discovery keep
+the API's order), pages of 25, 50, 100 or all rows (50 at first; Workloads 25 a page and no "all"; Discovery its Previous and Next along
+the API's cursor), and an Actions column, last: each row's "⋮" opens that row's actions (a destructive one in red, a disabled one
+saying why in its tooltip), the header's "⋮" the table's, with Export CSV and Export PDF. An export holds the rows of the search and filters in force, every page (Workloads and
+Discovery read the API's pages one at a time, 5,000 rows at most, the file's last line saying when it was cut or stopped), each column
+in words (a status' word, dates as ISO 8601), the Actions column left out: the CSV in UTF-8 with a byte order mark, a cell a spreadsheet
+would run as a formula (`=`, `+`, `-`, `@`, a tab or a carriage return, a plain number aside) starting with `'`; the PDF in A4 landscape
+with the view's title, the date, the search and filters and page numbers, made in the browser by jsPDF and jsPDF-AutoTable (loaded when
+asked; a character its standard font cannot print shows as `?`, the PDF says how many). The files are named
+`dormeto-<view>-<YYYY-MM-DD>.csv|pdf`. A table wider than its card keeps its Actions column in view at its end.
+- **Statuses as their icons alone:** a workload's state, a pause, a router's health (and the Overview's routers card), an operation's
+status and its steps', an audit result, a user's status and two-step verification, a discovery candidate's status, Discovery's last run,
+an IP list's last download and a backend's state show their icon in its color, no word beside it. The word is the icon's name for
+screen readers, the first line of its tooltip (the mouse's or the keyboard's: every mark is focusable), and the exports' text. Statuses
+that had no icon got one (Discovery's statuses, an audit refusal, a list not downloaded yet, a backend's state, a run's status).
+- **Routers:** the Workloads column shows one chip per state, its icon and `×N` (a click still opens those workloads), and the paused
+ones as one more chip, the pause icon and `×N`; the Health column the health's icon alone, a bell beside it for an open alert and a
+muted cloud for a router that does not report, the problems with their levels, the alert's date, the error and why it does not report
+in its tooltip. Each row's "⋮" holds Pause… or Resume and Uninstall…, opening the dialogs they did. A router's page shows the same
+marks, and its Health card each problem's level and an unreachable router as icons.
+- **Discovery:** the Idle column says a Google Cloud share is estimated by its `~` alone (no "estimated" beside it; its tooltip says
+why), and the Region column a `global` candidate by the earth alone. The table has a search field: it reads every candidate of the
+status within the filters (5,000 at most, said above the table and at an export's end when cut) and searches them as one list, read
+again quietly every 30 s while an onboarding or offboarding runs. The selection is kept across pages and searches; each candidate's
+actions are in its row's menu (Onboard…, Offboard, Exclude…, Dismiss… or Restore), acting on that candidate alone, the rows ticked
+staying ticked.
+- **Operations as a table:** a row per operation (its kind and title, target and id, status, progress with the step running, who
+started it and when), newest first, sorted on its headers; its steps open under the row with the error and a manager update's
+CodeBuild link, the error also in the status' tooltip. A link to an operation (`/operations?id=…`, a toast's "Follow it in Operations")
+opens it on the page that holds it, also while on Operations.
+- **The demo (`npm run dev:mock`)** proxies nothing to the dev manager, and has a router that does not report and 53 candidates to
+onboard (two pages).
 - **Documentation:** the README (Google Cloud in "How it works" and the highlights), `docs/organization-access.md` (the host
   project, the two service accounts, the pool and provider, the scopes, what a disconnect leaves, discovery of projects and the command account's check) and `docs/operations.md`
   (onboarding, offboarding and exclusions on Google Cloud, the tag, the poll, the journal's 5 minutes, `too-old`, the refusals, the organization's push, what stays with the CLI).
