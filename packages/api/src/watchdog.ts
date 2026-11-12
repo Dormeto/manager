@@ -2,8 +2,7 @@
 // manager knows are compared with what they report; an alarm per subject keeps its open problems, and each change that
 // matters (a problem opened or raised, a subject resolved) is published to the environment's alert topic.
 import { reporting, type RouterPoll, type RouterSummary } from '@dormeto/fleet';
-import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
-import { routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
+import { cloudOf, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fleetRouters, type TerraformRouter } from './routers.js';
 
