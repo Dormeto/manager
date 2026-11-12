@@ -1,6 +1,7 @@
 // One account and region: every rule of the application load balancers, with what Dormeto could do with it (managed,
 // eligible, ineligible and why), its host names and tags, and how idle its target group was over the last 7 days.
 // Ported from the router discovery (router lambda/src/lib/candidates.mjs).
+import { errorText } from './error-text.js';
 import type { BackendKind, IdleShare, RuleRef, ScannedRule } from './types.js';
 import { EKS_ACTIONS, clustersOf, kubernetesBackend, type Cluster, type KubernetesBackend, type KubernetesPorts } from './kubernetes.js';
 
@@ -322,7 +323,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   const unread = new Set<string>();
   const idle = pairs.length && ports.cloudwatch ? await idleHours(ports.cloudwatch, pairs, now, (targetGroups, err) => {
     for (const tg of targetGroups) unread.add(tg);
-    log?.warn('CloudWatchIdleFailed', { ...where, targetGroups: targetGroups.length, error: `${(err as Error)?.name ?? 'Error'}: ${(err as Error)?.message ?? String(err)}`.slice(0, 300) });
+    log?.warn('CloudWatchIdleFailed', { ...where, targetGroups: targetGroups.length, error: errorText(err).slice(0, 300) });
   }) : new Map();
   const kept = unread.size ? (await storedIdle?.()) ?? new Map<string, IdleShare>() : new Map<string, IdleShare>();
   for (const c of measured) Object.assign(c, unread.has(c.targetGroupArn!) ? kept.get(c.id) ?? {} : idle.get(c.targetGroupArn!) ?? {});

@@ -9,6 +9,7 @@ import type { InstalledRouter } from '@dormeto/fleet/registry';
 import { brokenConnection, connectCommand, GoogleError, type GoogleConnection } from '@dormeto/google';
 import { scanProject, type ProjectScan } from './gcp-scan.js';
 import { discoverGoogleRouters, listProjects, type GooglePort, type GoogleSummary } from './google.js';
+import { errorText } from './error-text.js';
 import { scanAccounts, targetPairs } from './filters.js';
 import { nextCandidates } from './lifecycle.js';
 import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
@@ -83,7 +84,6 @@ async function pool<T>(items: T[], size: number, work: (item: T) => Promise<void
   }));
 }
 
-const errorText = (err: unknown) => `${(err as Error).name ?? 'Error'}: ${(err as Error).message ?? String(err)}`;
 // Organization access (packaging design §3): a refusal means the role (or policy) is absent or does not trust the manager.
 const denied = (err: unknown) => /^AccessDenied/.test((err as Error).name ?? '') || /not authorized|permissions to access/i.test((err as Error).message ?? '');
 const ACCESS_DENIED = 'access denied: the role is missing or does not trust the manager';

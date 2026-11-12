@@ -16,6 +16,7 @@
 // find.
 import type { WorkloadSummary } from '@dormeto/fleet';
 import { GoogleError } from '@dormeto/google';
+import { errorText } from './error-text.js';
 import { idleOfProject } from './gcp-idle.js';
 import type { GooglePort } from './google.js';
 import type { BackendKind, Candidate, ScannedRule } from './types.js';
@@ -231,7 +232,7 @@ function limited(call: Call, size: number): Call {
 
 // A read that depends on a region Compute Engine could not list: the candidate's pair fails with that region's reason.
 class RegionFailed extends Error {}
-const errorText = (err: unknown) => (err instanceof RegionFailed ? err.message : `${(err as Error).name ?? 'Error'}: ${(err as Error).message ?? String(err)}`);
+const failureText = (err: unknown) => (err instanceof RegionFailed ? err.message : errorText(err));
 
 // `managed`: the rows of the project's routers. `stored`: the project's candidates in the store (an unreachable region where
 // one is fails; a Monitoring that fails keeps their idle share). `now`: the clock of the idle share (§7.3).
@@ -472,7 +473,7 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
       if (rule) rules.push(rule);
       seen.add(region);
     } catch (err) {
-      fail(region, errorText(err));
+      fail(region, failureText(err));
     }
   }));
   const kept = rules.filter((r) => !failed.has(r.region)).sort((a, b) => a.id.localeCompare(b.id));
