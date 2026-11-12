@@ -108,12 +108,19 @@ const columns = computed(() => [
 const root = ref<HTMLElement | null>(null);
 const wide = ref(false);
 // Kept in view only when a row has an action there (a table whose rows have none scrolls it with the others).
-const scrolls = computed(() => wide.value && props.items.some((item) => rowActions(item).length > 0));
+const rowsAct = computed(() => props.items.some((item) => rowActions(item).length > 0));
+const scrolls = computed(() => wide.value && rowsAct.value);
+// The table's "⋮" in the toolbar: a phone's (no header row), and a table scrolling with no row's action, whose header would
+// take it out of view. Its header then narrower by the "⋮" (28 px and its padding beyond the column's 56 px), the table
+// stays said to scroll until it fits with this much to spare, so that the "⋮" never goes back and forth.
+const MENU_SLACK = 24;
+const menuInToolbar = computed(() => mobile.value || (wide.value && !rowsAct.value));
 let observer: ResizeObserver | undefined;
+let check: (() => void) | undefined;
 onMounted(() => {
   const wrapper = root.value?.querySelector<HTMLElement>('.v-table__wrapper');
   if (!wrapper) return;
-  const check = () => { wide.value = wrapper.scrollWidth > wrapper.clientWidth + 1; };
+  check = () => { wide.value = wrapper.scrollWidth > wrapper.clientWidth + 1 - (wide.value && !rowsAct.value ? MENU_SLACK : 0); };
   observer = new ResizeObserver(check);
   observer.observe(wrapper);
   const table = wrapper.querySelector('table');
@@ -149,6 +156,8 @@ const mobile = computed(() => smAndDown.value);
 // A row's name, for its "⋮" button and its toggle: the view's, else its first column's text.
 const nameOf = (item: T) => props.rowName?.(item) ?? (props.headers[0] ? cellText(props.headers[0], item) : '');
 const rowActions = (item: T) => props.actions?.(item) ?? [];
+// Rows with actions or none: the table's width is read again, with the slack or without.
+watch(rowsAct, () => check?.());
 // A row's value (its item-value), and the id of its part under it: this table's, then the row's value.
 const valueOf = (item: T): unknown => (typeof props.itemValue === 'function' ? props.itemValue(item) : (item as Record<string, unknown>)[props.itemValue]);
 const tableId = useId();
@@ -237,13 +246,14 @@ function options(o: DmOptions) {
 
 <template>
   <div ref="root" class="dm-table" :class="{ 'dm-table--scrolls': scrolls }" v-bind="rootAttrs">
-    <div v-if="!noSearch || slots.toolbar || mobile" class="dm-table__toolbar">
+    <div v-if="!noSearch || slots.toolbar || menuInToolbar" class="dm-table__toolbar">
       <div class="dm-table__tools"><slot name="toolbar" /></div>
       <!-- Cleared, the search is empty text, never null (a server table's view sends it to its API). -->
       <v-text-field v-if="!noSearch" :model-value="search" data-test="dm-table-search" :prepend-inner-icon="mdiMagnify" label="Search" :aria-label="`Search ${named}`" density="compact" hide-details single-line clearable
         class="dm-table__search" @update:model-value="search = $event ?? ''" />
-      <!-- A phone's table has no header row: its menu is here. -->
-      <DmActionsMenu v-if="mobile" :lead="exports" :actions="tableActions" :busy="busy" :label="`Table actions: ${exported.title}`" test="dm-table-menu" />
+      <!-- A phone's table has no header row, and a table scrolling with no row's action would scroll its header's: its menu is
+           here, at the toolbar's end. -->
+      <div v-if="menuInToolbar" class="dm-table__menu"><DmActionsMenu :lead="exports" :actions="tableActions" :busy="busy" :label="`Table actions: ${exported.title}`" test="dm-table-menu" /></div>
     </div>
     <v-alert v-if="failure" type="error" variant="tonal" density="compact" closable class="ma-3" :text="failure" @click:close="failure = ''" />
     <v-data-table-server v-model="selected" v-model:page="page" v-model:items-per-page="itemsPerPage" v-model:sort-by="sortBy" v-model:expanded="expanded"
@@ -254,7 +264,7 @@ function options(o: DmOptions) {
       <!-- The column's name for screen readers (and a phone's cells, which show it); the "⋮" on a wide screen. -->
       <template #[`header.${ACTIONS}`]>
         <span :class="{ 'd-sr-only': !mobile }">Actions</span>
-        <DmActionsMenu v-if="!mobile" :lead="exports" :actions="tableActions" :busy="busy" :label="`Table actions: ${exported.title}`" test="dm-table-menu" />
+        <DmActionsMenu v-if="!menuInToolbar" :lead="exports" :actions="tableActions" :busy="busy" :label="`Table actions: ${exported.title}`" test="dm-table-menu" />
       </template>
       <!-- An expandable table's toggles, named by what they open and the row (a phone's says its title). -->
       <template v-if="expandable" #[`header.${EXPAND}`]><span :class="{ 'd-sr-only': !mobile }">{{ expandTitle }}</span></template>
@@ -282,6 +292,9 @@ function options(o: DmOptions) {
 .dm-table__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
 .dm-table__tools:empty { display: none; }
 .dm-table__search { flex: 0 1 280px; min-width: 200px; margin-inline-start: auto; }
+/* The table's "⋮" at the toolbar's end, also without a search or filters. */
+.dm-table__menu { display: flex; }
+.dm-table__tools:empty + .dm-table__menu { margin-inline-start: auto; }
 .dm-table__calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 28px 16px; }
 /* The loading and empty rows as tall as their content; the footer under a line. */
 .dm-table :deep(.v-data-table-rows-loading > td), .dm-table :deep(.v-data-table-rows-no-data > td) { height: auto !important; }

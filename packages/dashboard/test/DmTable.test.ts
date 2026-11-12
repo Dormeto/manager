@@ -460,6 +460,45 @@ describe('DmTable', () => {
     }
   });
 
+  // Workloads at 1280 px with the drawer open: its rows have no action, so its Actions column scrolls with the others, and
+  // the header's "⋮" (the exports) with it out of view.
+  it('puts the table\'s "⋮" in its toolbar while the table scrolls sideways and no row has an action, in its header again once it fits', async () => {
+    const observers: (() => void)[] = [];
+    const Before = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class { constructor(run: () => void) { observers.push(run); } observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+    try {
+      const w = render({ noSearch: true });
+      await flushPromises();
+      const wrapper = w.find('.v-table__wrapper').element as HTMLElement;
+      const size = async (scroll: number, client: number) => {
+        Object.defineProperty(wrapper, 'scrollWidth', { configurable: true, value: scroll });
+        Object.defineProperty(wrapper, 'clientWidth', { configurable: true, value: client });
+        for (const run of observers) run();
+        await nextTick();
+      };
+      const where = () => w.findAll('[data-test="dm-table-menu"]').map((m) => (m.element.closest('th') ? 'header' : m.element.closest('.dm-table__toolbar') ? 'toolbar' : 'elsewhere'));
+      await size(950, 950);
+      expect([where(), w.find('.dm-table__toolbar').exists()]).toEqual([['header'], false]);
+      await size(1240, 950);
+      expect(where()).toEqual(['toolbar']);
+      expect(w.find('[data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions: Tests');
+      expect(w.find('.dm-table').classes()).not.toContain('dm-table--scrolls');
+      // The header narrower without its "⋮": the table fitting by those few pixels keeps it in the toolbar (no flip-flop).
+      await size(946, 950);
+      expect(where()).toEqual(['toolbar']);
+      await size(900, 950);
+      expect(where()).toEqual(['header']);
+      // A row with an action: the Actions column is kept in view, its header's "⋮" with it.
+      await size(1240, 950);
+      await w.setProps({ actions: () => [{ title: 'Pause…', icon: mdiPauseCircleOutline, run: () => {} }] });
+      await nextTick();
+      expect(where()).toEqual(['header']);
+      expect(w.find('.dm-table').classes()).toContain('dm-table--scrolls');
+    } finally {
+      globalThis.ResizeObserver = Before;
+    }
+  });
+
   it('calls a server\'s all as its method (a view\'s server object may read its own fields)', async () => {
     const server = { total: 3, rows: rows(3), async all(this: { rows: Row[] }, limit: number) { return this.rows.slice(0, limit); } };
     const w = render({ items: rows(3), server });
