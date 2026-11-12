@@ -1,4 +1,5 @@
 import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from './cloud-words';
 
 // Organization access (packaging design §3): what an account misses, why, and the procedure that fixes it. A Google Cloud
 // project is a row too: its reasons name what is missing and the `dormeto gcp connect` command that fixes it, and its words
@@ -42,10 +43,10 @@ export function forwardersLine(f: Forwarders | undefined): string | null {
 }
 
 // The website's page, with the roles' Terraform modules and AWS CLI commands.
-export const PROCEDURE_URL = 'https://dormeto.com/organization-access.html';
-// The Google Cloud connection on the website: the two service accounts, their scopes and grants, dormeto gcp connect.
-export const GOOGLE_PROCEDURE_URL = 'https://dormeto.com/configuration.html#connection';
+export const PROCEDURE_URL = cloudWords('aws').procedureUrl;
 const isGoogle = (account: string) => cloudOf(account) === 'gcp';
+// The words of an account's cloud.
+const wordsOf = (account: string) => cloudWords(cloudOf(account) ?? 'aws');
 
 // Why onboarding is refused in an account (the API refuses it too): said before trying. Null: let through.
 export function onboardRefusal(report: AccessReport | null, account: string | undefined): string | null {
@@ -53,7 +54,7 @@ export function onboardRefusal(report: AccessReport | null, account: string | un
   if (report.discoveryOnly?.includes(account)) return 'Its account is set up for discovery only (no command role): onboarding is not possible there.';
   const row = report.accounts.find((a) => a.account === account && !a.command.ok);
   if (!row || row.command.ok) return null;
-  return cloudOf(account) === 'gcp' ? `Its project cannot be acted in: ${row.command.reason}. See Organization access.` : `Its account has no command role: ${row.command.reason}. See Organization access.`;
+  return `${wordsOf(account).noCommand}: ${row.command.reason}. See Organization access.`;
 }
 
 // `clouds`: those of the rows listed (AWS when none is). What a count misses is an AWS account's role, a project's service
@@ -70,7 +71,8 @@ export function countsLine(c: AccessReport['counts'], clouds: Iterable<Cloud> = 
 export function chipLabel(row: AccessRow, kind: 'discovery' | 'command'): string {
   const { ok } = row[kind];
   const name = `${kind[0]!.toUpperCase()}${kind.slice(1)}`;
-  return isGoogle(row.account) ? `${name} account: ${ok ? 'has access' : 'missing access'}` : `${name} role: ${ok ? 'assumed' : 'missing'}`;
+  const words = wordsOf(row.account);
+  return `${name} ${words.accessHolder}: ${ok ? words.accessOk : words.accessMissing}`;
 }
 
 // The panel's status: ok when every account is ready and no forwarder is impossible or failed; an error without the
@@ -86,7 +88,7 @@ export function accessStatus(report: AccessReport): 'ok' | 'warning' | 'error' {
 export function accessHelp(report: AccessReport): [string, string] {
   const refresh = forwardersLine(report.forwarders);
   return [
-    `${countsLine(report.counts, report.accounts.map((a) => (isGoogle(a.account) ? 'gcp' : 'aws')))} An account is ready when the manager assumed both roles there at the last discovery run: the discovery `
+    `${countsLine(report.counts, report.accounts.map((a) => cloudOf(a.account) ?? 'aws'))} An account is ready when the manager assumed both roles there at the last discovery run: the discovery `
       + 'role to read it, the command role to install its router and onboard its workloads; each discovery run checks them again. A Google Cloud project is ready '
       + 'when the manager\'s service accounts can read it and act in it (dormeto gcp connect gives them that).',
     refresh
@@ -108,5 +110,5 @@ export function accessLine(row: AccessRow): string {
 // The procedure: a static page (the website runs no script); the panel lists the accounts to set up. A project's is the
 // Google Cloud connection's.
 export function procedureLink(cloud: Cloud = 'aws'): string {
-  return cloud === 'gcp' ? GOOGLE_PROCEDURE_URL : PROCEDURE_URL;
+  return cloudWords(cloud).procedureUrl;
 }

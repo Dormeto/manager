@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // Rename a workload: the name is for people only (never in an AWS or Google Cloud name, tag, label or key); duplicates are accepted.
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { mdiPencilOutline } from '@mdi/js';
 import type { Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from '../cloud-words';
 import { nameRule } from '../format';
 
 const props = defineProps<{ modelValue: boolean; name: string; cloud?: Cloud }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [string] }>();
 const name = ref('');
 watch(() => props.modelValue, (open) => { if (open) name.value = props.name; });
+const words = computed(() => cloudWords(props.cloud ?? 'aws'));
 </script>
 
 <template>
@@ -16,7 +18,7 @@ watch(() => props.modelValue, (open) => { if (open) name.value = props.name; });
     <v-card title="Rename the workload">
       <template #prepend><v-avatar color="primary" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiPencilOutline" size="20" /></v-avatar></template>
       <v-card-text>
-        <p class="mb-5 text-medium-emphasis">The name shown in the manager and on the router's admin page. Nothing changes in {{ cloud === 'gcp' ? 'Google Cloud' : 'AWS' }}.</p>
+        <p class="mb-5 text-medium-emphasis">The name shown in the manager and on the router's admin page. Nothing changes in {{ words.name }}.</p>
         <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" autofocus @keyup.enter="nameRule(name) === true && name.trim() && emit('submit', name.trim())" />
       </v-card-text>
       <v-card-actions class="px-4 pb-4">

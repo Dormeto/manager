@@ -24,6 +24,7 @@ import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
 import { cursorPages, readCursor, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText, type CursorRead } from '../discovery';
 import { backendLabel, cloudMark, relative, rowCloud, shortId } from '../format';
+import { cloudWords } from '../cloud-words';
 import { googleRouterTooOld, lbText, urlMapConsoleUrl } from '../google';
 import { useCountUp } from '../count-up';
 import { EXPORT_LIMIT, type DmAction, type DmExport, type DmHeader, type DmRead, type DmServer } from '../table';
@@ -170,13 +171,15 @@ function follow() {
 }
 // A Google Cloud candidate is a backend service named in a URL map (its id is the service's path); its console pages are the map's.
 const isGoogle = (c: Listed) => rowCloud(c) === 'gcp';
+// The ~ of an estimated idle share (Google Cloud's: the user, 2026-11-12).
+const idleMark = (c: Listed) => cloudWords(rowCloud(c)).idleMark;
 const mapLink = (c: Listed) => (c.urlMap ? urlMapConsoleUrl(c.urlMap, c.lb, c.account) : null);
 const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
 // The filter takes an AWS account or a Google Cloud project; the region within it is that cloud's.
 const accountCloud = computed(() => cloudOf(account.value));
 const filtered = computed(() => accountCloud.value !== null);
 // The region typed within a project is Google Cloud's (or `global`), within an account AWS's.
-const regionHint = computed(() => (accountCloud.value === 'gcp' ? 'europe-west2 or global' : 'eu-west-1'));
+const regionHint = computed(() => cloudWords(accountCloud.value ?? 'aws').regionHint);
 
 // The list asked: the shown status, within the account (and region) applied, `limit` a page.
 const appliedCloud = computed(() => cloudOf(applied.value.account));
@@ -556,7 +559,7 @@ const headers: DmHeader<Listed>[] = [
   { title: 'Account or project', key: 'account', sortable: false, text: accountText },
   { title: 'Region', key: 'region', sortable: false },
   { title: 'Backend', key: 'backend', sortable: false, text: backendText },
-  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end', sortable: false, text: (c) => (c.idleHours7d === null ? '' : `${isGoogle(c) ? '~' : ''}${idleShare(c)}`) },
+  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end', sortable: false, text: (c) => (c.idleHours7d === null ? '' : `${idleMark(c)}${idleShare(c)}`) },
   { title: 'Reason', key: 'statusReason', sortable: false, text: reasonText },
   { title: 'First seen', key: 'firstSeenAt', sortable: false },
 ];
@@ -755,7 +758,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template #[`item.idleHours7d`]="{ item }">
         <!-- The ~ says a Google Cloud share is estimated (the user, 2026-11-12); the bar's tooltip says why. -->
         <div v-if="item.idleHours7d !== null" class="dm-idle">
-          <span class="dm-idle__share" aria-hidden="true">{{ isGoogle(item) ? '~' : '' }}{{ idleShare(item) }}</span>
+          <span class="dm-idle__share" aria-hidden="true">{{ idleMark(item) }}{{ idleShare(item) }}</span>
           <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :cloud="rowCloud(item)" />
         </div>
       </template>
@@ -822,7 +825,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="acting?.conditions ?? ''" :default-name="acting?.targetGroup ?? null" :kubernetes="actingKubernetes" :access="clusterAccess" :aws-tags="acting?.tags" :cloud="acting && isGoogle(acting) ? 'gcp' : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="acting ? backendKind(acting) ?? null : null" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="acting?.conditions ?? ''" :default-name="acting?.targetGroup ?? null" :kubernetes="actingKubernetes" :access="clusterAccess" :aws-tags="acting?.tags" :cloud="acting ? rowCloud(acting) : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="acting ? backendKind(acting) ?? null : null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">

@@ -2,6 +2,7 @@
 // locations name it: https://cloud.google.com/compute/docs/regions-zones), and the country's flag (flag-icons, MIT; only
 // these flags are bundled).
 import { isRegion, type Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from './cloud-words';
 import flagAe from 'flag-icons/flags/4x3/ae.svg';
 import flagAu from 'flag-icons/flags/4x3/au.svg';
 import flagBe from 'flag-icons/flags/4x3/be.svg';
@@ -186,4 +187,7 @@ export const partitionOf = (region: string): string => (region.startsWith('cn-')
 // The cloud a region code belongs to, from its shape (the two shapes never overlap); null for anything else.
 export const regionCloud = (code: string): Cloud | null => (isRegion('aws', code) ? 'aws' : isRegion('gcp', code) ? 'gcp' : null);
 // What a region's location is called, for the tooltip.
-export const regionKind = (code: string): string | null => ({ aws: 'AWS location', gcp: 'Google Cloud location', none: null })[regionCloud(code) ?? 'none'];
+export const regionKind = (code: string): string | null => {
+  const cloud = regionCloud(code);
+  return cloud ? cloudWords(cloud).location : null;
+};

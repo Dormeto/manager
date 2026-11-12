@@ -10,7 +10,7 @@ import WorkloadSettingsDialog from '../components/WorkloadSettingsDialog.vue';
 import { backendIcon, backendMdi } from '../icons';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendArn, backendKinds, backendLabel, backendService, googleBackendService, duration, listSourceHref, targetInfo, usd, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText, rowCloud } from '../format';
+import { backendArn, backendKinds, backendLabel, backendServiceOf, duration, listSourceHref, targetInfo, usd, relative, routeColor, routeLabel, ruleText, shortId, stateColor, kubernetesOwner, switchText, rowCloud } from '../format';
 import { backendConsoleUrl, googleResourcePath, lbText, resourceName, urlMapConsoleUrl } from '../google';
 import { equivalents, rounded } from '../energy';
 import { useSession } from '../stores/session';
@@ -39,7 +39,8 @@ import DmLogo from '../components/DmLogo.vue';
 import CommandBlock from '../components/CommandBlock.vue';
 import DmLoader from '../components/DmLoader.vue';
 import { stateSince } from '../state';
-import { GOOGLE_PRICE_NOTES, backendCost, barSavings, discountText } from '../costs';
+import { backendCost, barSavings, discountText } from '../costs';
+import { cloudWords } from '../cloud-words';
 import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import { failureTitle } from '../failures';
@@ -71,7 +72,9 @@ const canNap = computed(() => status.value?.can?.nap ?? session.canOperate);
 const tags = computed(() => tagsList(status.value?.tags));
 // The cloud it runs on. A Google Cloud workload has backend services and a URL map where an AWS one has a target group, and is
 // "suspended" where AWS's is hibernated.
-const gcp = computed(() => (status.value ? rowCloud(status.value) : 'aws') === 'gcp');
+const cloud = computed(() => (status.value ? rowCloud(status.value) : 'aws'));
+const gcp = computed(() => cloud.value === 'gcp');
+const words = computed(() => cloudWords(cloud.value));
 // Who can change it: what the manager onboarded, and a Google Cloud workload the CLI onboarded (both renamed, tagged and set
 // from here); a Terraform workload is written in Terraform.
 const managed = computed(() => status.value?.source === 'manager' || status.value?.source === 'cli');
@@ -140,7 +143,7 @@ async function setHibernate(hibernate: boolean | null) {
   try {
     await api(`${path.value}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate }) });
     hibernateOpen.value = false;
-    notice.value = { type: 'success', text: `${gcp.value ? 'Suspension' : 'Hibernation'} saved: it applies from the next nap.` };
+    notice.value = { type: 'success', text: `${words.value.hibernation} saved: it applies from the next nap.` };
     await run();
   } catch (err) {
     hibernateOpen.value = false;
@@ -248,7 +251,7 @@ const ownPause = computed(() => pauses.value.find((p) => p.scope === 'workload' 
 const excluded = computed(() => pauses.value.some((p) => p.exclusionId));
 // What a backend is, then what it runs: an Auto Scaling group's capacities, a Kubernetes owner's replicas and switch.
 function backendDetails(b: Backend): string {
-  const parts: (string | false | null | undefined)[] = [backendLabel(b.kind, gcp.value ? 'gcp' : 'aws'), b.companion && 'companion', b.cluster && `cluster ${b.cluster}`];
+  const parts: (string | false | null | undefined)[] = [backendLabel(b.kind, cloud.value), b.companion && 'companion', b.cluster && `cluster ${b.cluster}`];
   if (b.kind === 'asg') parts.push(`min ${b.min} · desired ${b.desired} · max ${b.max}`, b.warmPool && `warm pool ${b.warmPool.state} (${b.warmPool.size})`);
   if (b.kind === 'k8s') parts.push(`${b.replicas} replica${b.replicas === 1 ? '' : 's'}`, b.keda && 'KEDA', b.switch && switchText(b.switch));
   return parts.filter(Boolean).join(' · ');
@@ -272,8 +275,9 @@ const costNote = computed(() => {
   const d = status.value?.costs?.discounts;
   // Kubernetes workloads (R10.5): what the pods' price supposes, and what keeps running.
   const kubernetes = status.value?.backends.some((b) => b.kind === 'k8s')
-    ? ` Pods count as the pods' share of their nodes, where an autoscaler removes the nodes they free; the ${gcp.value ? 'GKE' : 'EKS'} control plane and the nodes' DaemonSets keep running.` : '';
-  return `${gcp.value ? 'Google Cloud' : 'AWS'} list prices of what its last nap stopped, ${gcp.value ? 'Spot VMs at Spot prices' : 'Spot at Spot prices'}${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.${gcp.value ? ` ${GOOGLE_PRICE_NOTES}` : ''}${kubernetes}`;
+    ? ` Pods count as the pods' share of their nodes, where an autoscaler removes the nodes they free; the ${words.value.kubernetes} control plane and the nodes' DaemonSets keep running.` : '';
+  const { name, spot, priceNotes } = words.value;
+  return `${name} list prices of what its last nap stopped, ${spot}${d ? `, after discounts (${discountText(d)})` : ''}; a month is 730 hours.${priceNotes ? ` ${priceNotes}` : ''}${kubernetes}`;
 });
 
 // The console's page of a Google Cloud backend, and of the load balancer that carries its backend services (the services' own
@@ -411,8 +415,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
         <div class="dm-hero__info">
         <div class="dm-hero__chips">
-          <StateChip v-if="status" :state="status.state" :failure="status.failure" :cloud="gcp ? 'gcp' : 'aws'" />
-          <v-chip v-if="hibernated" data-test="hibernated" size="small" variant="tonal" label>{{ gcp ? 'suspended' : 'hibernated' }}</v-chip>
+          <StateChip v-if="status" :state="status.state" :failure="status.failure" :cloud="cloud" />
+          <v-chip v-if="hibernated" data-test="hibernated" size="small" variant="tonal" label>{{ words.hibernated }}</v-chip>
           <PauseChip :pauses="pauses" />
           <!-- Since when, beside the state's icon: its word is the icon's name and tooltip (tables design §3). -->
           <span v-if="since" class="dm-hero__since">since <strong>{{ since.when }}</strong></span>
@@ -426,7 +430,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="status.source === 'terraform'" data-test="tags-terraform" class="text-body-small text-medium-emphasis">set in Terraform</span>
           <v-btn v-else-if="session.isAdmin && managed && status.tags" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
         </div>
-        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" :cloud="gcp ? 'gcp' : 'aws'" />
+        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" :cloud="cloud" />
         </div>
       </div>
       <div class="dm-hero__side">
@@ -468,12 +472,12 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </template>
     </div>
   </v-alert>
-  <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure, gcp ? 'gcp' : 'aws')">
+  <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure, cloud)">
     <div class="text-body-medium">{{ status.failure.message }}</div>
     <div class="text-body-small text-medium-emphasis mt-1">{{ failureDetail }}</div>
   </v-alert>
-  <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" :title="gcp ? 'On fallback machine types' : 'On fallback instance types'">
-    {{ fallbackText }}: {{ gcp ? 'Google Cloud' : 'AWS' }} had no capacity for their own types at the last wake; the next nap gives them back.
+  <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" :title="`On fallback ${words.types}`">
+    {{ fallbackText }}: {{ words.name }} had no capacity for their own types at the last wake; the next nap gives them back.
   </v-alert>
   <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
   <DescriptionCard class="mb-4" :description="description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
@@ -490,7 +494,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     <div class="dm-stack">
       <v-card title="Backends">
         <v-list density="comfortable" class="bg-transparent">
-          <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="gcp ? null : backendArn(b, where)" :cloud="gcp ? 'gcp' : 'aws'" :service="gcp ? googleBackendService(b.kind) : backendService(b.kind)" :rows="costRows(b)"
+          <ResourceTooltip v-for="b in status.backends" :id="b.id" :key="b.id" :arn="gcp ? null : backendArn(b, where)" :cloud="cloud" :service="backendServiceOf(b.kind, cloud)" :rows="costRows(b)"
             :note="costRows(b).some((r) => r.label === 'Base cost') ? costNote : null">
             <template #default="{ tip }">
               <v-list-item v-bind="tip" data-test="backend" :title="b.kind === 'k8s' ? kubernetesOwner(b.id) : gcp ? resourceName(b.id) : shortId(b.id)" class="dm-backend">
@@ -538,7 +542,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
               <div class="dm-energy__everyday">
                 <span v-for="e in everyday" :key="e.text" class="dm-energy__equiv"><v-icon :icon="e.icon" size="15" />≈ {{ rounded(e.value) }} {{ e.text }}</span>
               </div>
-              <div class="dm-energy__note">Cloud Carbon Footprint's coefficients for {{ gcp ? 'Google Cloud' : 'AWS' }}; not a measure.</div>
+              <div class="dm-energy__note">Cloud Carbon Footprint's coefficients for {{ words.name }}; not a measure.</div>
             </div>
           </div>
           <div class="dm-costs__note">{{ costNote }}</div>
@@ -638,7 +642,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card>
       <v-card title="Settings">
         <v-card-text class="d-flex flex-wrap align-center ga-2 text-body-medium">
-          <v-tooltip v-for="row in settingRows(status.settings, status.settingsFrom, gcp ? 'gcp' : 'aws')" :key="row.key" location="top" max-width="380" open-on-focus>
+          <v-tooltip v-for="row in settingRows(status.settings, status.settingsFrom, cloud)" :key="row.key" location="top" max-width="380" open-on-focus>
             <template #activator="{ props }">
               <span v-bind="props" class="setting dm-setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
                 {{ row.label }} <strong>{{ row.value }}</strong>
@@ -663,9 +667,9 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </v-card-text>
         <v-card-text v-else-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
           <div class="d-flex flex-wrap align-center ga-2">
-            <span>{{ gcp ? 'Suspend instead of stop' : 'Hibernate' }} <strong>{{ hibernationLine(status.hibernation, gcp ? 'gcp' : 'aws') }}</strong></span>
+            <span>{{ words.hibernate }} <strong>{{ hibernationLine(status.hibernation, cloud) }}</strong></span>
             <v-spacer />
-            <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set {{ gcp ? 'it' : 'hibernate' }} in its workload module</span>
+            <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set {{ words.moduleSetting }} in its workload module</span>
             <v-btn v-else-if="session.canOperate && managed" data-test="edit-hibernate" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="hibernateOpen = true">Edit</v-btn>
           </div>
           <div v-if="!gcp && readinessLine(status.hibernation)" class="text-body-small text-medium-emphasis">{{ readinessLine(status.hibernation) }}</div>
@@ -683,7 +687,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   </div>
 
   <WorkloadSettingsDialog v-if="status?.settingsFrom" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
-  <HibernateDialog v-if="status?.hibernation" :cloud="gcp ? 'gcp' : 'aws'" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
+  <HibernateDialog v-if="status?.hibernation" :cloud="cloud" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
   <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
   <v-dialog :model-value="confirm !== null" max-width="460" @update:model-value="confirm = null">
@@ -696,10 +700,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
         ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
         : confirm === 'offboard'
-          ? gcp ? 'The workload is woken, then Dormeto removes what onboarding added: its waker backend service, its routing in the URL map, the tags.'
-            : 'The workload is woken, then Dormeto removes what onboarding added: the waker from its rules, the waker target group, the tags. A workload written in Terraform is offboarded by removing its workload module.'
-          : gcp ? 'The backends start now; the route switches back to the application once its backend service\'s health check passes.'
-            : 'The backends start now; the route switches back to the application once a target is healthy.' }}</v-card-text>
+          ? words.offboarding
+          : words.waking }}</v-card-text>
       <v-card-actions class="px-4 pb-4">
         <v-spacer />
         <v-btn variant="text" @click="confirm = null">Cancel</v-btn>
@@ -707,9 +709,9 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card-actions>
     </v-card>
   </v-dialog>
-  <RenameDialog v-model="renameOpen" :name="title" :cloud="gcp ? 'gcp' : 'aws'" @submit="rename" />
+  <RenameDialog v-model="renameOpen" :name="title" :cloud="cloud" @submit="rename" />
   <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :join="status" :name="title" :kinds="backendKinds(status?.backends ?? [])" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
-  <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" :cloud="gcp ? 'gcp' : 'aws'" @submit="setTags" />
+  <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" :cloud="cloud" @submit="setTags" />
 </template>
 
 <style scoped>

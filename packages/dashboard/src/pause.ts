@@ -1,6 +1,7 @@
 // Router management display helpers: pauses, router health, manual exclusions.
 import { mdiAlertOctagonOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiClockAlertOutline, mdiCloudOffOutline, mdiHelpCircleOutline, mdiLanDisconnect } from '@mdi/js';
 import { cloudOf } from '@dormeto/fleet/clouds';
+import { cloudWords } from './cloud-words';
 import { checkHealth, relative } from './format';
 import { resourceName } from './google';
 import type { AlarmInfo, ExclusionKind, ExclusionTarget, Pause, RouterInfo } from './types';
@@ -118,6 +119,4 @@ export function exclusionTargets(c: { targetGroupArn?: string | null; targetGrou
   ];
 }
 
-const KINDS: Record<ExclusionKind, string> = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' };
-const GOOGLE_KINDS: Record<ExclusionKind, string> = { 'target-group': 'backend service', 'load-balancer': 'URL map', account: 'project' };
-export const exclusionText = (t: ExclusionTarget): string => [`${(cloudOf(t.account) === 'gcp' ? GOOGLE_KINDS : KINDS)[t.kind]} ${t.name}`, t.account, ...(t.region ? [t.region] : [])].join(' · ');
+export const exclusionText = (t: ExclusionTarget): string => [`${cloudWords(cloudOf(t.account) ?? 'aws').exclusionKinds[t.kind]} ${t.name}`, t.account, ...(t.region ? [t.region] : [])].join(' · ');

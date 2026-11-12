@@ -21,6 +21,7 @@ import { backendHelp, backendLabel } from '../src/format';
 import { exclusionText } from '../src/pause';
 import { settingRows } from '../src/settings';
 import { useSession } from '../src/stores/session';
+import { scanFile, scanSources } from './cloud-switches';
 
 // The words of the places that don't switch on a row's cloud (a page, a card) name both clouds, and a dialog about one workload
 // names its own cloud's (M28, design 6.5).
@@ -104,6 +105,86 @@ describe('the Routers view', () => {
     const tip = squash(document.querySelector('[data-test="routers-tip"]')?.textContent ?? '');
     expect(tip).toContain('One router per AWS account and region, or per Google Cloud project and region, naps and wakes its workloads.');
     expect(tip).toContain('health comes from its idle check and, on AWS, its Lambda functions and its failure queues.');
+  });
+});
+
+// The switches on the cloud that choose what to do, not a word: which call, card, field, icon element or id form a cloud has.
+// Each is named by its text, with why; a word goes in the words table (src/cloud-words.ts) instead.
+const BEHAVIOUR: { file: string; text: string; why: string }[] = [
+  { file: 'components/BackendKinds.vue', text: "props.cloud === 'gcp' ? null : backendIcon(kind)", why: 'a kind\'s icon element: AWS\'s product icon, an image' },
+  { file: 'components/BackendKinds.vue', text: "props.cloud === 'gcp' ? backendMdi(kind) : null", why: 'a kind\'s icon element: Google Cloud\'s Material Design icon' },
+  { file: 'components/OnboardDialog.vue', text: 'props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)', why: 'the lines its Terraform keeps: an AWS candidate\'s only' },
+  { file: 'components/OnboardDialog.vue', text: 'gcp.value ? MACHINE_TYPE : INSTANCE_TYPE', why: 'the pattern of a fallback type: a Compute Engine machine type, an EC2 instance type' },
+  {
+    file: 'components/OnboardDialog.vue', text: "gcp.value ? { kind: 'cloudsql-instance', id: d } : d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }",
+    why: 'the companion databases sent: Cloud SQL instances, or RDS instances and Aurora clusters',
+  },
+  {
+    file: 'views/DiscoveryView.vue',
+    text: 'isGoogle(c) ? [`backend service ${c.targetGroup}`, `URL map ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])] : [c.loadBalancer, c.listener, c.priority ? `priority ${c.priority}` : null, '
+      + 'c.rules?.length > 1 ? `${c.rules.length} rules` : null].filter((s): s is string => Boolean(s))',
+    why: 'where a candidate\'s rule is, exported: its backend service and URL map, or its load balancer, listener and priority',
+  },
+  { file: 'views/DiscoveryView.vue', text: 'isGoogle(c) ? c.backend.id : shortId(c.backend.id)', why: 'a backend\'s id, exported: a Google Cloud name whole, an ARN shortened' },
+  { file: 'views/DiscoveryView.vue', text: '<div v-if="isGoogle(item)">', why: 'where a candidate\'s rule is: its backend service and URL map linked to the console, or its listener rule' },
+  { file: 'views/WorkloadView.vue', text: 'gcp.value ? backendConsoleUrl(b, project.value) : null', why: 'a backend\'s console link: Google Cloud\'s only' },
+  {
+    file: 'views/WorkloadView.vue',
+    text: "gcp.value && status.value?.backendService ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, "
+      + "status.value.region ?? ''), label: `Backend service ${resourceName(status.value.backendService)} (this workload)` }] : status.value?.targetGroupArn ? [{ kind: 'target-group', arn: "
+      + "status.value.targetGroupArn, label: `Target group ${shortId(status.value.targetGroupArn.replace(/\\/[0-9a-f]+$/, ''))} (this workload)` }] : []",
+    why: 'what Exclude offers: the backend service by its path, or the target group by its ARN',
+  },
+  { file: 'views/WorkloadView.vue', text: 'gcp ? null : backendArn(b, where)', why: 'a backend\'s ARN: AWS\'s only' },
+  { file: 'views/WorkloadView.vue', text: 'gcp ? resourceName(b.id) : shortId(b.id)', why: 'a backend\'s name: its resource path\'s last segment, or its ARN shortened' },
+  { file: 'views/WorkloadView.vue', text: 'gcp ? backendMdi(b.kind) : backendIcon(b.kind)', why: 'a backend\'s icon element, as BackendKinds\'' },
+  { file: 'views/WorkloadView.vue', text: '<v-card v-if="gcp && status.backendService">', why: 'a Google Cloud workload\'s Load balancing card, an AWS one\'s Targets card' },
+  { file: 'views/WorkloadView.vue', text: '<v-card-text v-if="!gcp && status.hibernation && !standalone">', why: 'an AWS workload without a standalone EC2 instance, which hibernation does not apply to' },
+];
+
+// Every inline switch on the cloud that chooses a word reads the words table instead (cloud duplication design §5); the demo's
+// API (src/mock) is left out: its switches choose its example data and say the API's own words.
+describe('the inline switches on the cloud', () => {
+  const found = scanSources((file) => file.startsWith('mock/') || file === 'cloud-words.ts');
+  const listed = (f: { file: string; text: string }) => BEHAVIOUR.some((b) => b.file === f.file && b.text === f.text);
+
+  it('choose no word: each cloud\'s words are the table\'s', () => {
+    expect(found.filter((f) => !listed(f)).map((f) => `${f.file}:${f.line} ${f.text}`)).toEqual([]);
+  });
+
+  it('that choose what to do are each still in their file, once', () => {
+    expect(BEHAVIOUR.filter((b) => found.filter((f) => f.file === b.file && f.text === b.text).length !== 1).map((b) => `${b.file} ${b.text}`)).toEqual([]);
+  });
+
+  it('are found in each form a switch takes', () => {
+    const vue = [
+      '<script setup lang="ts">',
+      "const owner = (cloud: string) => (cloud === 'gcp'",
+      "  ? 'Project' : 'Account');",
+      "const name = (cloud: string) => { if ('aws' !== cloud) return `Google ${'Cloud'}`; return 'AWS'; };",
+      "const MARKS = { aws: 'AWS', 'gcp': 'Google Cloud' };",
+      "const notOne = (cloud: string, x: { gcp: boolean }) => (x.gcp ? cloudOf(cloud) === 'gcp' : null) ?? [cloud === 'aws'];",
+      '</script>',
+      '<template>',
+      '  <p v-if="gcp">Google</p>',
+      '  <!-- either -->',
+      '  <p v-else>AWS</p>',
+      '  <span v-if="isGoogle(c)" />',
+      '  <div v-else :title="google ? \'a\' : \'b\'">{{ gcp.value ? 1 : 2 }}</div>',
+      '  <li v-for="c in (gcp ? a : b)" :key="c" />',
+      '</template>',
+    ].join('\n');
+    expect(scanFile('x.vue', vue)).toEqual([
+      { file: 'x.vue', line: 2, text: "cloud === 'gcp' ? 'Project' : 'Account'" },
+      { file: 'x.vue', line: 4, text: "if ('aws' !== cloud)" },
+      { file: 'x.vue', line: 5, text: "{ aws: 'AWS', 'gcp': 'Google Cloud' }" },
+      { file: 'x.vue', line: 9, text: '<p v-if="gcp">' },
+      { file: 'x.vue', line: 13, text: "google ? 'a' : 'b'" },
+      { file: 'x.vue', line: 13, text: 'gcp.value ? 1 : 2' },
+    ]);
+    expect(scanFile('x.ts', "export const hint = (c: Cloud | null) =>\n  (c === 'gcp' && wide) ? 'europe-west2 or global' : 'eu-west-1';")).toEqual([
+      { file: 'x.ts', line: 2, text: "(c === 'gcp' && wide) ? 'europe-west2 or global' : 'eu-west-1'" },
+    ]);
   });
 });
 

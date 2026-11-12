@@ -1,6 +1,6 @@
 // Display helpers: relative times, durations, state colors and labels.
-import { mdiAws, mdiGoogleCloud } from '@mdi/js';
 import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from './cloud-words';
 import { partitionOf } from './regions';
 
 export function relative(iso: string | null | undefined, now = Date.now()): string {
@@ -32,36 +32,18 @@ const STATE_COLORS: Record<string, string> = { AWAKE: 'success', ASLEEP: 'info',
 export const stateColor = (state: string): string => STATE_COLORS[state] ?? 'grey';
 
 // The cloud mark of a router or a workload: Material Design Icons' AWS and Google Cloud marks, with the cloud's name.
-const MARKS: Record<Cloud, { icon: string; label: string }> = { aws: { icon: mdiAws, label: 'AWS' }, gcp: { icon: mdiGoogleCloud, label: 'Google Cloud' } };
-export const cloudMark = (cloud: Cloud): { icon: string; label: string } => MARKS[cloud];
+export const cloudMark = (cloud: Cloud): { icon: string; label: string } => ({ icon: cloudWords(cloud).icon, label: cloudWords(cloud).name });
 // The cloud of a row: the API's `cloud`, else read from its account (an older API names none: AWS).
 export const rowCloud = (row: { cloud?: Cloud; account?: string }): Cloud => row.cloud ?? (row.account ? cloudOf(row.account) : null) ?? 'aws';
 // What `account` is called in each cloud.
-export const ownerLabel = (cloud: Cloud): string => (cloud === 'gcp' ? 'Project' : 'Account');
+export const ownerLabel = (cloud: Cloud): string => cloudWords(cloud).owner;
 
-const BACKEND_LABELS: Record<string, string> = {
-  instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', k8s: 'Kubernetes workload', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster',
-};
-// The same keys on Google Cloud; the kinds it does not have fall back to AWS's name.
-const GOOGLE_BACKEND_LABELS: Record<string, string> = {
-  instance: 'Compute Engine VM', asg: 'Managed instance group', k8s: 'Kubernetes workload', 'cloudsql-instance': 'Cloud SQL instance',
-};
-export const backendLabel = (kind: string, cloud: Cloud = 'aws'): string => (cloud === 'gcp' ? GOOGLE_BACKEND_LABELS[kind] : undefined) ?? BACKEND_LABELS[kind] ?? kind;
-const BACKEND_HELP: Record<string, string> = {
-  instance: 'started and stopped by Dormeto',
-  asg: 'its instances are started and stopped through the group',
-  ecs: 'scaled to zero tasks when it naps, and back when it wakes',
-  k8s: 'a Deployment or StatefulSet on Amazon EKS, scaled to zero replicas when it naps, back to its replicas when it wakes',
-  'rds-instance': 'a companion database, stopped after the application and started before it',
-  'rds-cluster': 'a companion database, stopped after the application and started before it',
-};
-const GOOGLE_BACKEND_HELP: Record<string, string> = {
-  k8s: 'a Deployment or StatefulSet on Google Kubernetes Engine, scaled to zero replicas when it naps, back to its replicas when it wakes',
-  'cloudsql-instance': 'a companion database, stopped after the application and started before it',
-};
+// A kind of backend in its cloud's words; a kind Google Cloud has not falls back to AWS's.
+const kindWord = (table: 'backendLabels' | 'backendHelp' | 'backendServices', kind: string, cloud: Cloud): string | undefined => cloudWords(cloud)[table][kind] ?? cloudWords('aws')[table][kind];
+export const backendLabel = (kind: string, cloud: Cloud = 'aws'): string => kindWord('backendLabels', kind, cloud) ?? kind;
 // What Dormeto does with a kind of backend, for its tooltip.
 export const backendHelp = (kind: string, cloud: Cloud = 'aws'): string => {
-  const help = (cloud === 'gcp' ? GOOGLE_BACKEND_HELP[kind] : undefined) ?? BACKEND_HELP[kind];
+  const help = kindWord('backendHelp', kind, cloud);
   return `${backendLabel(kind, cloud)}${help ? `: ${help}` : ''}`;
 };
 // The kinds of a workload's backends once each, its companion databases last: the router's order in the workloads' list.
@@ -81,14 +63,9 @@ export function backendArn(backend: { kind: string; id: string; arn?: string }, 
   return resource ? `arn:${partitionOf(where.region)}:${resource}${backend.id}` : null;
 }
 
-const BACKEND_SERVICES: Record<string, string> = {
-  instance: 'Amazon EC2', asg: 'Amazon EC2 Auto Scaling', ecs: 'Amazon ECS', k8s: 'Amazon EKS', 'rds-instance': 'Amazon RDS', 'rds-cluster': 'Amazon Aurora',
-};
-const GOOGLE_BACKEND_SERVICES: Record<string, string> = { instance: 'Compute Engine', asg: 'Compute Engine managed instance group', k8s: 'Google Kubernetes Engine', 'cloudsql-instance': 'Cloud SQL' };
-// The AWS service of a kind of backend, for its tooltip.
-export const backendService = (kind: string): string => BACKEND_SERVICES[kind] ?? kind;
-// The same on Google Cloud.
-export const googleBackendService = (kind: string): string => GOOGLE_BACKEND_SERVICES[kind] ?? BACKEND_SERVICES[kind] ?? kind;
+// The service of a kind of backend in its cloud, for its tooltip; backendService, AWS's.
+export const backendServiceOf = (kind: string, cloud: Cloud): string => kindWord('backendServices', kind, cloud) ?? kind;
+export const backendService = (kind: string): string => backendServiceOf(kind, 'aws');
 
 // A Kubernetes workload's owner from its id (<cluster>/<namespace>/<kind>/<name>): "Deployment demo/web".
 export function kubernetesOwner(id: string): string {

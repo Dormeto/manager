@@ -3,6 +3,7 @@ import { BACKEND_KINDS as DISCOVERY_BACKEND_KINDS, type BackendKind, type Criter
 import type { Cloud } from '@dormeto/fleet/clouds';
 import { mdiCancel, mdiCheckCircleOutline, mdiEyeOffOutline, mdiFilterOffOutline, mdiHelpCircleOutline, mdiLogoutVariant, mdiMagnifyRemoveOutline, mdiPlusCircleOutline,
   mdiSleepOff } from '@mdi/js';
+import { cloudWords } from './cloud-words';
 import { percent } from './format';
 
 export const STATUSES: Status[] = ['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible', 'dismissed', 'excluded', 'out-of-scope', 'gone'];
@@ -81,10 +82,11 @@ export const idleShare = (c: { idleHours7d: number | null }): string | null => (
 // Google Cloud.
 export function idleText(c: { idleHours7d: number; requests7d: number | null }, cloud: Cloud = 'aws'): { title: string; detail: string } {
   const requests = !c.requests7d ? 'no request' : `${c.requests7d.toLocaleString('en-US')} request${c.requests7d === 1 ? '' : 's'}`;
+  const words = cloudWords(cloud);
   return {
     // Google Cloud's share is an estimate (Google samples its metrics): the cell's ~, said in words.
-    title: `Idle ${cloud === 'gcp' ? 'about ' : ''}${percent(c.idleHours7d, 168)} of the last 7 days`,
-    detail: `${c.idleHours7d} of 168 hours without any request to its ${cloud === 'gcp' ? 'backend service' : 'target group'} (${requests} in 7 days).`,
+    title: `Idle ${words.idleAbout}${percent(c.idleHours7d, 168)} of the last 7 days`,
+    detail: `${c.idleHours7d} of 168 hours without any request to its ${words.target} (${requests} in 7 days).`,
   };
 }
 

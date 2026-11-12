@@ -4,6 +4,7 @@
 // the GitOps snippet, the router's access to its cluster. Any other: the lines its Terraform must keep.
 import { computed, ref, watch } from 'vue';
 import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
+import { cloudWords } from '../cloud-words';
 import { nameRule } from '../format';
 import { copiedTags, rowsOf, rowsProblem, tagsOf, type TagRow, type Tags } from '../tags';
 import TagsEditor from './TagsEditor.vue';
@@ -17,6 +18,7 @@ import { terraformSnippet } from '../terraform';
 // one offered then chosen already.
 const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean }>();
 const gcp = computed(() => props.cloud === 'gcp');
+const words = computed(() => cloudWords(props.cloud ?? 'aws'));
 const waiting = computed(() => gcp.value && props.routers === null);
 const several = computed(() => gcp.value && (Boolean(props.chooseRouter) || (props.routers?.length ?? 0) > 1));
 const router = ref<string | null>(null);
@@ -47,7 +49,7 @@ function copyAws() {
   const { tags, left } = copiedTags(props.awsTags);
   // What the administrator already wrote stays.
   tagRows.value = rowsOf({ ...tags, ...tagsOf(tagRows.value) });
-  copyNote.value = left ? `${left} ${gcp.value ? 'label' : 'AWS tag'}${left === 1 ? '' : 's'} left out: reserved or with characters the tags do not allow.` : '';
+  copyNote.value = left ? `${left} ${words.value.tag}${left === 1 ? '' : 's'} left out: reserved or with characters the tags do not allow.` : '';
 }
 const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
 // The router's pattern for a Compute Engine machine type.
@@ -55,7 +57,7 @@ const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
 const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.trim()).filter(Boolean));
 const terraform = computed(() => (props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
 const fallbackRule = () => (fallbackTypes.value.length <= 5 && new Set(fallbackTypes.value).size === fallbackTypes.value.length && fallbackTypes.value.every((t) => (gcp.value ? MACHINE_TYPE : INSTANCE_TYPE).test(t)))
-  || (gcp.value ? 'At most 5 Compute Engine machine types, each once, for example e2-medium, n2-standard-4' : 'At most 5 EC2 instance types, for example t3a.medium, m6i.large');
+  || words.value.fallbacksRule;
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   name.value = props.defaultName ?? '';
@@ -146,7 +148,7 @@ function submit() {
           <pre data-test="terraform" class="gitops">{{ terraform }}</pre>
         </template>
         <div class="dm-eyebrow mt-6 mb-3">Settings</div>
-        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" :hint="`Shown in the manager; the ${gcp ? 'backend service' : 'target group'} name if empty. It can be changed later.`" persistent-hint autofocus class="mb-3" />
+        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" :hint="`Shown in the manager; the ${words.target} name if empty. It can be changed later.`" persistent-hint autofocus class="mb-3" />
         <v-row dense>
           <v-col cols="12" sm="5">
             <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" placeholder="Inherit" persistent-placeholder clearable />
@@ -157,23 +159,16 @@ function submit() {
         </v-row>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
           :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : 'No router of the project is 0.40.0 or later: upgrade one with dormeto gcp routers install'" />
-        <v-text-field v-if="gcp" v-model="databases" label="Companion Cloud SQL instances (optional)" hint="Cloud SQL instance names, comma separated: stopped after the application, started before it" persistent-hint />
-        <v-text-field v-else v-model="databases" label="Companion databases (optional)" hint="RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it" persistent-hint />
-        <v-text-field v-if="gcp" v-model="fallbacks" label="Fallback machine types (optional)" :rules="[fallbackRule]" class="mt-4"
-          hint="VMs only, comma separated, in order: tried when Compute Engine has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
-        <v-text-field v-else-if="!kubernetes" v-model="fallbacks" label="Fallback instance types (optional)" :rules="[fallbackRule]" class="mt-4"
-          hint="EC2 instances only, comma separated, in order: tried when AWS has no capacity for their own type at a wake; their own type comes back at the next nap" persistent-hint />
-        <v-select v-if="gcp" v-model="hibernate" label="Suspend instead of stop" class="mt-4" persistent-hint
-          :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
-          hint="The VMs are suspended instead of stopped at a nap, and resume faster; one that cannot be suspended is stopped; with fallback machine types, only if On" />
-        <v-select v-else-if="!kubernetes" v-model="hibernate" label="Hibernate" class="mt-4" persistent-hint
-          :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]"
-          hint="Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On" />
+        <v-text-field v-model="databases" :label="words.databasesLabel" :hint="words.databasesHint" persistent-hint />
+        <!-- Fallback types and hibernation: on Google Cloud always, on AWS but for a Kubernetes candidate. -->
+        <v-text-field v-if="gcp || !kubernetes" v-model="fallbacks" :label="`Fallback ${words.types} (optional)`" :rules="[fallbackRule]" class="mt-4" :hint="words.fallbacksHint" persistent-hint />
+        <v-select v-if="gcp || !kubernetes" v-model="hibernate" :label="words.hibernate" class="mt-4" persistent-hint
+          :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]" :hint="words.hibernateHint" />
         <template v-if="session.isAdmin">
         <div class="dm-eyebrow mt-6 mb-1">Tags</div>
-        <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not {{ gcp ? 'Google Cloud labels' : 'AWS tags' }}: the groups' grants pick workloads by them. Administrators can change them later.</p>
+        <p class="text-body-small text-medium-emphasis mb-3">Dormeto's own labels for this workload, not {{ words.tags }}: the groups' grants pick workloads by them. Administrators can change them later.</p>
         <TagsEditor v-model="tagRows" />
-        <v-btn v-if="hasAwsTags" variant="tonal" size="small" class="mb-2" @click="copyAws">{{ gcp ? 'Copy the VMs\' labels' : 'Copy the target group\'s AWS tags' }}</v-btn>
+        <v-btn v-if="hasAwsTags" variant="tonal" size="small" class="mb-2" @click="copyAws">{{ words.copyTags }}</v-btn>
         <p v-if="copyNote" class="text-body-small text-medium-emphasis">{{ copyNote }}</p>
         <v-alert v-if="tagsError" type="error" variant="tonal" density="compact" class="mt-2" :text="tagsError" />
         </template>

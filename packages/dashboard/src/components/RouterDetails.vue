@@ -4,6 +4,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { mdiChartTimelineVariant, mdiCogOutline, mdiKubernetes, mdiPencilOutline, mdiShieldSearch } from '@mdi/js';
 import { api } from '../api';
+import { cloudWords } from '../cloud-words';
 import { atLeast, concurrencyText, listSourceHref, relative, ruleText } from '../format';
 import { CLUSTER_ROLE } from '../kubernetes';
 import { useNow } from '../now';
@@ -35,7 +36,9 @@ const savingJoin = ref(false);
 const joinError = ref('');
 const path = computed(() => `/routers/${encodeURIComponent(props.name)}`);
 // A Google Cloud router (manager 0.24.0): no Lambda or queue figure, suspension for hibernation.
-const gcp = computed(() => details.value?.cloud === 'gcp');
+const cloud = computed(() => details.value?.cloud ?? 'aws');
+const gcp = computed(() => cloud.value === 'gcp');
+const words = computed(() => cloudWords(cloud.value));
 
 async function load() {
   try {
@@ -218,7 +221,7 @@ const columns = computed<Section[][]>(() => {
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.checkSchedule.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
           <tr><th>Wake statistics metrics</th><td>{{ details.configuration.metrics.value === null ? '—' : details.configuration.metrics.value ? 'published' : 'off' }}</td>
             <td class="dm-facts__src"><TerraformChip v-if="details.configuration.metrics.source === 'terraform'" size="x-small" variant="tonal" :text="terraformSettingHelp" /></td></tr>
-          <tr v-if="details.settings && details.managerSettings" data-test="hibernate"><th>{{ gcp ? 'Suspend instead of stop' : 'Hibernate' }}</th>
+          <tr v-if="details.settings && details.managerSettings" data-test="hibernate"><th>{{ words.hibernate }}</th>
             <td>
               <template v-if="details.settings.hibernate === null">Inherit <span class="text-medium-emphasis">({{ routerInheritText(details.managerSettings, now, details.cloud) }})</span></template>
               <template v-else>{{ details.settings.hibernate ? 'On' : 'Off' }}<span v-if="details.settings.by" class="text-medium-emphasis"> (set by {{ details.settings.by }}, {{ relative(details.settings.at, now) }})</span></template>
@@ -271,7 +274,7 @@ const columns = computed<Section[][]>(() => {
     </v-card>
     <DefaultsDialog v-if="details.settings && takesDefaults" v-model="defaultsOpen" :title="`Defaults of ${name}`" level="router" :name="name" :values="details.settings.defaults ?? {}"
       :inherited="inheritedDefaults" :saving="savingDefaults" @submit="saveDefaults" />
-    <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :cloud="gcp ? 'gcp' : 'aws'" :subject="name" :current="details.settings.hibernate"
+    <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :cloud="cloud" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now, details.cloud)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"
       :default-label="joinDefaultText(joinInherited)" :saving="savingJoin" @submit="saveJoin">

@@ -1,18 +1,18 @@
 // EC2 hibernation as the dashboard words it (router 0.32.0 and later), and Google Cloud's suspension, the same setting: where a
 // workload's value comes from, which of its instances can hibernate, and what a router that inherits its value reads.
 import type { Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from './cloud-words';
 import { relative } from './format';
 import type { Hibernation, ManagerSettings } from './types';
 
-const FROM: Record<Hibernation['from'], string> = {
+const FROM: Record<Exclude<Hibernation['from'], 'fallback-types'>, string> = {
   workload: 'set on this workload',
-  'fallback-types': 'off: the workload has fallback instance types',
   router: 'from the router',
   manager: "from the manager's default",
   default: 'built-in default',
 };
-// Google Cloud's VMs have machine types.
-export const fromText = (from: Hibernation['from'], cloud: Cloud = 'aws'): string => (cloud === 'gcp' && from === 'fallback-types' ? 'off: the workload has fallback machine types' : FROM[from]);
+// Fallback instance types, which Google Cloud's VMs have as machine types.
+export const fromText = (from: Hibernation['from'], cloud: Cloud = 'aws'): string => (from === 'fallback-types' ? `off: the workload has fallback ${cloudWords(cloud).types}` : FROM[from]);
 
 const onOff = (value: boolean) => (value ? 'On' : 'Off');
 
