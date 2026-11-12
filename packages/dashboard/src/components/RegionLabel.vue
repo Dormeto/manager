@@ -7,17 +7,17 @@ import { regionInfo, regionKind } from '../regions';
 const props = defineProps<{ region: string }>();
 const info = computed(() => regionInfo(props.region));
 const kind = computed(() => (info.value.location ? regionKind(props.region) : null));
-// A Google Cloud candidate of a global load balancer has no region: `global`, said in words beside the earth.
+// A Google Cloud candidate of a global load balancer has no region: `global`, the earth alone (tables design §4), its
+// name "global" and what it means in the tooltip.
 const global = computed(() => props.region === 'global');
 </script>
 
 <template>
-  <v-tooltip location="top">
+  <v-tooltip location="top" open-on-focus>
     <template #activator="{ props: tip }">
       <span v-bind="tip" class="region-label d-inline-flex align-center" tabindex="0" :aria-label="[region, info.location].filter(Boolean).join(', ')">
         <img v-if="info.flag" :src="info.flag" alt="" class="flag">
-        <v-icon v-else :icon="mdiEarth" size="1.2em" />
-        <span v-if="global" class="ml-1">global</span>
+        <v-icon v-else :icon="mdiEarth" size="1.2em" aria-hidden="true" />
       </span>
     </template>
     <template v-if="global">

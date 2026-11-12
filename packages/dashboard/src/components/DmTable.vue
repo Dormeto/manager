@@ -67,7 +67,8 @@ const tableAttrs = computed(() => Object.fromEntries(Object.entries(attrs).filte
 
 const itemsPerPage = ref(props.perPage);
 const rows = computed(() => (props.server ? props.items : sortRows(searchRows(props.items, props.headers, search.value), props.headers, sortBy.value)));
-const total = computed(() => (props.server ? props.server.total : rows.value.length));
+// A server table's total not known: its page's (the view pages it, in its own footer).
+const total = computed(() => (props.server ? props.server.total ?? props.items.length : rows.value.length));
 const shown = computed(() => {
   if (props.server || itemsPerPage.value === -1) return rows.value;
   const start = (page.value - 1) * itemsPerPage.value;
@@ -125,9 +126,11 @@ const exportable = computed(() => props.headers.filter((h) => h.export !== false
 async function exportRows(): Promise<{ list: T[]; note: string | null }> {
   if (!props.server) return { list: rows.value, note: null };
   const { total: matching, all: read } = props.server;
-  const all = await read(EXPORT_LIMIT);
-  const of = Math.max(matching, all.length);
-  const note = of > EXPORT_LIMIT ? `The first ${count(EXPORT_LIMIT)} rows of ${count(of)}: narrow the search or the filters to export the others.` : null;
+  // Without a total, one row more than the limit tells there are others.
+  const all = await read(matching === null ? EXPORT_LIMIT + 1 : EXPORT_LIMIT);
+  const of = matching === null ? null : Math.max(matching, all.length);
+  const rest = 'narrow the search or the filters to export the others.';
+  const note = (of ?? all.length) <= EXPORT_LIMIT ? null : of === null ? `The first ${count(EXPORT_LIMIT)} rows: ${rest}` : `The first ${count(EXPORT_LIMIT)} rows of ${count(of)}: ${rest}`;
   return { list: all.slice(0, EXPORT_LIMIT), note };
 }
 async function exportAs(kind: 'csv' | 'pdf') {

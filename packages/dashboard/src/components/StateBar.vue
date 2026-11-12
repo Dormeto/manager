@@ -9,7 +9,7 @@ import { idleText } from '../discovery';
 import { GOOGLE_PRICE_NOTES, MONTH_HOURS, discountText, type BarSavings } from '../costs';
 import { longDuration, stateColor, usd } from '../format';
 import { stateLabel } from '../history';
-import { stateBrief } from '../state';
+import { stateBrief, weekShares, weekText } from '../state';
 import type { Cloud } from '@dormeto/fleet/clouds';
 
 const props = withDefaults(defineProps<{
@@ -28,24 +28,21 @@ const props = withDefaults(defineProps<{
 
 // The narrowest a state is drawn, in percent of the bar: a few minutes of waking in a week stay visible.
 const MIN_WIDTH = 1;
-// Awake to asleep: a failure next to the time awake, the wakes and naps where one turns into the other.
-const ORDER = ['AWAKE', 'FAILED', 'WAKING', 'NAPPING', 'ASLEEP'];
+// A part's share, as the states' are said (a sliver as "<1 %").
 const share = (part: number, total: number) => {
   const p = Math.round((100 * part) / total);
   return part > 0 && p < 1 ? '<1 %' : `${p} %`;
 };
 
 const unknown = computed(() => props.states?.totals.UNKNOWN ?? 0);
+// Awake to asleep, each state's share of the time with history (state.ts: the words a table's export prints too).
 const rows = computed(() => {
-  const totals = props.states?.totals ?? {};
-  const known = ORDER.filter((state) => (totals[state] ?? 0) > 0).map((state) => ({ state, seconds: totals[state]! }));
+  const known = weekShares(props.states?.totals ?? {});
   const total = known.reduce((n, r) => n + r.seconds, 0);
   // The short ones drawn at the narrowest width, the others share the rest in proportion.
   const short = known.filter((r) => (100 * r.seconds) / total < MIN_WIDTH);
   const rest = total - short.reduce((n, r) => n + r.seconds, 0);
-  return known.map((r) => ({
-    ...r, share: share(r.seconds, total), width: short.includes(r) ? MIN_WIDTH : (r.seconds / rest) * (100 - MIN_WIDTH * short.length),
-  }));
+  return known.map((r) => ({ ...r, width: short.includes(r) ? MIN_WIDTH : (r.seconds / rest) * (100 - MIN_WIDTH * short.length) }));
 });
 // The legend: each state of 1 % or more, then the shorter ones together.
 const legendItems = computed(() => {
@@ -60,7 +57,7 @@ const legendItems = computed(() => {
 const title = computed(() => (rows.value.length
   ? `${props.title}${unknown.value ? ', of the time with history' : ''}`
   : 'No history yet: it starts when the manager first sees the workload.'));
-const label = computed(() => `${props.title}: ${rows.value.length ? rows.value.map((r) => `${stateLabel(r.state).toLowerCase()} ${r.share}`).join(', ') : 'no history yet'}`);
+const label = computed(() => `${props.title}: ${weekText(props.states?.totals)}`);
 const base = computed(() => {
   const h = props.savings?.hourly;
   return typeof h === 'number' ? `Base cost of what the naps stop: ${usd(h)} an hour · ${usd(h * MONTH_HOURS)} a month` : null;

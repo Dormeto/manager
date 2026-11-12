@@ -89,6 +89,16 @@ describe('pdf', () => {
     expect(text).not.toContain('cannot print');
   });
 
+  it('keeps every column wide enough for a word, though long unbreakable cells (addresses, dates) fill the page (Workloads\' 13 columns)', async () => {
+    const headers = ['Account or project', 'Workload', 'Backend', 'Router', 'Tags', 'State', 'Since', 'Last 7 days', 'URL', 'Wake mode', 'Wakes (7 days)', 'Wakes (total)', 'Saved (30 days)'];
+    const row = ['192546169435 (AWS)', 'booking-staging (309d8d56319d8ee9) · has a schedule', 'Kubernetes workload', 'dmtr-dev', 'env=dev, team=payments', 'Napping',
+      '2026-11-12T13:10:31.446Z', 'awake 20 %, waking <1 %, napping <1 %, asleep 80 % · idle 74 %', 'https://booking-staging.example.com/', 'any', '22', '180', '$45.8'];
+    const paused = row.map((cell, i) => (i === 5 ? 'Awake · Paused by avery.haddad@example.com at 2026-11-11T11:10:56.446Z: Training session all week; resumes at 2026-11-14T11:10:56.446Z' : cell));
+    const text = new TextDecoder('windows-1252').decode(await (await pdf({ title: 'Workloads', lines: [], headers, rows: [row, paused] })).arrayBuffer());
+    // Each word of the week whole on its line, not cut into pieces of two or three letters.
+    for (const word of ['awake', 'waking', 'napping', 'asleep', 'idle']) expect(text).toMatch(new RegExp(`\\([^)]*\\b${word}\\b[^)]*\\)`));
+  });
+
   it('says how many characters its font cannot print, shown as ?, which the CSV keeps', async () => {
     const read = async (rows: string[][]) => new TextDecoder('windows-1252').decode(await (await pdf({ title: 'Users', lines: [], headers: ['Email', 'Name'], rows })).arrayBuffer());
     const many = await read([['ops@example.com', '山田 太郎'], ['dev@example.com', 'Ölçü ✓']]);

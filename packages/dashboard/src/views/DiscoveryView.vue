@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // Organization discovery: the last run (scanned, skipped and failed account-regions, lint) and the candidates, a status
-// at a time, paged on the server (scale design §5), starting with the statuses people act on.
+// at a time, paged on the server by its cursor (scale design §5), starting with the statuses people act on. The candidates'
+// table (tables design §4, §5): a selection that outlives a page turned, each row's menu, the exports of every candidate
+// of the status and filters shown.
 import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
-import { useDisplay } from 'vuetify';
 import { mdiAlertCircleOutline, mdiCancel, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
-  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
+  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
@@ -22,14 +23,16 @@ import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
 import { cursorPages, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
-import { relative, rowCloud } from '../format';
+import { backendLabel, cloudMark, relative, rowCloud, shortId } from '../format';
 import { googleRouterTooOld, lbText, urlMapConsoleUrl } from '../google';
 import { useCountUp } from '../count-up';
+import type { DmAction, DmExport, DmHeader, DmServer } from '../table';
 import BackendKinds from '../components/BackendKinds.vue';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
+import DmTable from '../components/DmTable.vue';
 import IdleBar from '../components/IdleBar.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import StatusHelp from '../components/StatusHelp.vue';
@@ -42,11 +45,12 @@ import PageTitle from '../components/PageTitle.vue';
 const now = useNow();
 const session = useSession();
 const badge = useDiscoveryBadge();
-const { smAndDown } = useDisplay();
 // A managed candidate carries its workload's name and router (from its summary), and the onboarding or offboarding
 // running on it.
 type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string }; operation?: { id: string; type: 'onboard' | 'offboard' } };
 const PAGE = 50;
+// An export reads the API's largest pages (scale design §5), one at a time.
+const EXPORT_PAGE = 200;
 const lastRun = ref<RunRecord | null>(null);
 // Organization access of the last run (packaging design §3), and the roles set in the manager's Terraform.
 const access = ref<AccessReport | null>(null);
@@ -66,7 +70,10 @@ const hasNext = ref(false);
 const latest = latestOnly();
 // A Run now refused since the last run (another run was in progress).
 const refused = ref<RunRecord | null>(null);
+// The candidates chosen, by id, on any page seen (tables design §5); each as it was last read, for the selection's actions.
 const selected = ref<string[]>([]);
+const picked = ref<Record<string, Listed>>({});
+const chosen = computed(() => selected.value.map((id) => candidates.value.find((c) => c.id === id) ?? picked.value[id]).filter((c): c is Listed => Boolean(c)));
 const dismissDialog = ref(false);
 const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
@@ -76,7 +83,8 @@ const singleKubernetes = computed(() => {
   const backend = single.value?.backend as { kind?: string; kubernetes?: KubernetesCandidate } | null | undefined;
   return backend?.kind === 'k8s' ? backend.kubernetes ?? null : null;
 });
-const singleBackendKind = computed(() => (single.value?.backend as { kind?: string } | null | undefined)?.kind);
+const backendKind = (c: Listed) => (c.backend as { kind?: string } | null | undefined)?.kind;
+const singleBackendKind = computed(() => (single.value ? backendKind(single.value) : undefined));
 const clusterAccess = ref<ClusterCheck | null>(null);
 // A Google Cloud candidate's routers of 0.40.0 and later (an older one can't be acted through): its region's, or for a
 // `global` one every router of the project, the dialog asking which; null while a `global` one's are read (the dialog waits).
@@ -113,7 +121,7 @@ let following: number | undefined;
 function follow() {
   if (following !== undefined || !watch.active) return;
   following = window.setInterval(() => {
-    if (watch.active) return void loadPage({ keep: true });
+    if (watch.active) return void loadPage({ selection: 'refresh' });
     window.clearInterval(following);
     following = undefined;
   }, 10_000);
@@ -128,14 +136,25 @@ const filtered = computed(() => accountCloud.value !== null);
 // The region typed within a project is Google Cloud's (or `global`), within an account AWS's.
 const regionHint = computed(() => (accountCloud.value === 'gcp' ? 'europe-west2 or global' : 'eu-west-1'));
 
-// One page of the shown status, within the account (and region) when given; a refresh keeps what is selected.
-async function loadPage({ keep = false } = {}) {
-  if (!status.value) return;
-  const query = new URLSearchParams({ status: status.value, limit: String(PAGE) });
+// The list asked: the shown status, within the account (and region) when given, `limit` a page.
+const regionSent = computed(() => filtered.value && Boolean(accountCloud.value && isCandidateRegion(accountCloud.value, region.value)));
+function listQuery(limit: number): URLSearchParams | null {
+  if (!status.value) return null;
+  const query = new URLSearchParams({ status: status.value, limit: String(limit) });
   if (filtered.value) {
     query.set('account', account.value);
-    if (accountCloud.value && isCandidateRegion(accountCloud.value, region.value)) query.set('region', region.value);
+    if (regionSent.value) query.set('region', region.value);
   }
+  return query;
+}
+
+// What a page's answer does to the selection: another list starts it again ('clear'), a page turned keeps it ('keep'), a
+// refresh of the page drops the rows that left it ('refresh').
+type Selection = 'clear' | 'keep' | 'refresh';
+// One page of the shown status, within the account (and region) when given.
+async function loadPage({ selection = 'clear' }: { selection?: Selection } = {}) {
+  const query = listQuery(PAGE);
+  if (!query) return;
   const at = page.value;
   const cursor = pages.cursor(at);
   if (cursor) query.set('cursor', cursor);
@@ -143,13 +162,38 @@ async function loadPage({ keep = false } = {}) {
   if (!answer) return;
   pages.loaded(at, answer.value.cursor);
   hasNext.value = pages.hasNext(at);
+  const before = candidates.value;
+  // The rows chosen on the page left, kept as they were read.
+  for (const c of before) if (selected.value.includes(c.id)) picked.value[c.id] = c;
   candidates.value = answer.value.candidates;
-  selected.value = keep ? selected.value.filter((id) => candidates.value.some((c) => c.id === id)) : [];
+  if (selection === 'clear') {
+    selected.value = [];
+    picked.value = {};
+  } else if (selection === 'refresh') {
+    const left = new Set(before.filter((c) => !candidates.value.some((x) => x.id === c.id)).map((c) => c.id));
+    selected.value = selected.value.filter((id) => !left.has(id));
+  }
   watch.refreshed(candidates.value.flatMap((c) => (c.operation ? [{ ...c.operation, subject: subjectOf(c) }] : [])));
   follow();
 }
 
-async function load() {
+// An export (tables design §5): every candidate of the status shown within the filters, following the cursor one page at a
+// time, `limit` at most. The API does not count a filtered list, nor what a scoped user sees: the table reads one more
+// than it keeps to know there are others.
+async function readAll(limit: number): Promise<Listed[]> {
+  const query = listQuery(EXPORT_PAGE);
+  if (!query) return [];
+  const rows: Listed[] = [];
+  for (;;) {
+    const answer = await api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${query}`);
+    rows.push(...answer.candidates);
+    if (!answer.cursor || rows.length >= limit) return rows.slice(0, limit);
+    query.set('cursor', answer.cursor);
+  }
+}
+const server = computed<DmServer<Listed>>(() => ({ total: null, all: readAll }));
+
+async function load({ selection = 'clear' }: { selection?: Selection } = {}) {
   loading.value = true;
   try {
     const [result, excluded, report] = await Promise.all([
@@ -165,7 +209,7 @@ async function load() {
     exclusions.value = excluded.exclusions.sort((a, b) => b.at.localeCompare(a.at));
     badge.fromCounts(result.counts);
     status.value ??= firstStatus(result.counts);
-    await loadPage();
+    await loadPage({ selection });
     error.value = '';
   } catch (err) {
     error.value = (err as Error).message;
@@ -191,9 +235,10 @@ function restartSoon() {
   window.clearTimeout(typing);
   typing = window.setTimeout(restart, 400);
 }
+// Another page of the same list: the selection stays.
 function turn(by: number) {
   page.value += by;
-  load();
+  load({ selection: 'keep' });
 }
 
 // The run is asynchronous: poll until a new run record appears (a run takes seconds to minutes).
@@ -235,10 +280,7 @@ async function changeDismissal(action: 'dismiss' | 'restore') {
 }
 
 // Manual exclusions: a target group (a backend service), load balancer (a URL map) or account (a project) kept away from Dormeto (operators).
-const excludeOptions = computed(() => {
-  const c = selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined;
-  return c ? exclusionTargets(c) : [];
-});
+const excludeOptions = computed(() => (single.value ? exclusionTargets(single.value) : []));
 
 async function exclude(body: object) {
   excludeOpen.value = false;
@@ -263,13 +305,16 @@ async function lift(e: Exclusion) {
 }
 
 // Onboarding and offboarding: operations run by the workflow (Operations view).
-const single = computed(() => (selected.value.length === 1 ? candidates.value.find((x) => x.id === selected.value[0]) : undefined));
+const single = computed(() => (selected.value.length === 1 ? chosen.value[0] : undefined));
 const onboardable = computed(() => single.value?.status === 'pending-onboarding');
 // Refused by the API where the last run found the account's command role missing, or the account set up for discovery
 // only: said here, before trying.
 const noCommand = computed(() => onboardRefusal(access.value, single.value?.account));
 // A GKE workload is offboarded with the CLI (the API refuses it through the manager).
-const offboardable = computed(() => Boolean(single.value?.workloadId) && ['managed', 'pending-offboarding'].includes(single.value!.status) && !(isGoogle(single.value!) && singleBackendKind.value === 'k8s'));
+const canOffboard = (c: Listed) => Boolean(c.workloadId) && ['managed', 'pending-offboarding'].includes(c.status) && !(isGoogle(c) && backendKind(c) === 'k8s');
+const offboardable = computed(() => Boolean(single.value) && canOffboard(single.value!));
+// An onboarding or offboarding running on a candidate, in words.
+const runningText = (c: Listed & { operation: NonNullable<Listed['operation']> }) => `${operationLabel(c.operation.type, subjectOf(c))} is running`;
 
 async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<string, unknown>, c: Listed, subject: string) {
   try {
@@ -317,19 +362,73 @@ const scanned = computed(() => (lastRun.value?.targets.filter((t) => t.status ==
 // Skipped pairs are summarized per reason (older records listed them as targets).
 const skipped = computed(() => lastRun.value?.skipped?.reduce((n, s) => n + s.pairs, 0) ?? lastRun.value?.targets.filter((t) => t.status === 'skipped').length ?? 0);
 const seconds = computed(() => (lastRun.value ? Math.round((Date.parse(lastRun.value.finishedAt) - Date.parse(lastRun.value.startedAt)) / 1000) : null));
-const selectedDismissed = computed(() => selected.value.length > 0 && selected.value.every((id) => candidates.value.find((c) => c.id === id)?.status === 'dismissed'));
+const selectedDismissed = computed(() => selected.value.length > 0 && chosen.value.length === selected.value.length && chosen.value.every((c) => c.status === 'dismissed'));
 const runColor = (status: RunRecord['status']) => ({ running: 'info', ok: 'success', partial: 'warning', failed: 'error', skipped: 'grey' })[status];
-// In account, region and id order (the index's): no other sort on the server.
-const headers = [
-  { title: 'Status', key: 'status', sortable: false },
-  { title: 'Rule', key: 'conditions', sortable: false },
-  { title: 'Account or project', key: 'account', sortable: false },
+// In account, region and id order (the index's): no other sort on the server. Each column's words: what an export prints (a
+// status's word, where a rule is, the idle share with its ~ on Google Cloud, dates as ISO 8601).
+const ruleWhere = (c: Listed): string[] => (isGoogle(c)
+  ? [`backend service ${c.targetGroup}`, `URL map ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])]
+  : [c.loadBalancer, c.listener, c.priority ? `priority ${c.priority}` : null, c.rules?.length > 1 ? `${c.rules.length} rules` : null].filter((s): s is string => Boolean(s)));
+const accountText = (c: Listed): string => {
+  const cloud = cloudMark(rowCloud(c)).label;
+  return c.accountName && c.accountName !== c.account ? `${c.accountName} (${cloud}, ${c.account})` : `${c.account} (${cloud})`;
+};
+const backendText = (c: Listed): string => {
+  if (c.backend) return `${backendLabel(c.backend.kind, rowCloud(c))} ${isGoogle(c) ? c.backend.id : shortId(c.backend.id)}`;
+  return c.workloadId ? `workload ${c.workload?.name ?? c.workloadId}` : '';
+};
+const reasonText = (c: Listed): string => {
+  if (c.status === 'managed' && c.workload) return `managed as ${c.workload.name}`;
+  return c.status === 'managed' && c.workloadId ? `managed as workload ${c.workloadId}` : c.statusReason;
+};
+const headers: DmHeader<Listed>[] = [
+  { title: 'Status', key: 'status', sortable: false,
+    text: (c) => [statusLabel(c.status), ...(c.operation ? [`${c.operation.type === 'onboard' ? 'onboarding' : 'offboarding'} running`] : [])].join(' · ') },
+  { title: 'Rule', key: 'conditions', sortable: false, text: (c) => [c.conditions, ...ruleWhere(c)].join(' · ') },
+  { title: 'Account or project', key: 'account', sortable: false, text: accountText },
   { title: 'Region', key: 'region', sortable: false },
-  { title: 'Backend', key: 'backend', sortable: false },
-  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end' as const, sortable: false },
-  { title: 'Reason', key: 'statusReason', sortable: false },
+  { title: 'Backend', key: 'backend', sortable: false, text: backendText },
+  { title: 'Idle (7 days)', key: 'idleHours7d', align: 'end', sortable: false, text: (c) => (c.idleHours7d === null ? '' : `${isGoogle(c) ? '~' : ''}${idleShare(c)}`) },
+  { title: 'Reason', key: 'statusReason', sortable: false, text: reasonText },
   { title: 'First seen', key: 'firstSeenAt', sortable: false },
 ];
+// A row's "⋮" named by its rule (its first column is its status).
+const ruleName = (c: Listed) => c.conditions;
+// The PDF's title and lines: the status and the filters in force.
+const exported = computed<DmExport>(() => ({
+  name: 'discovery', title: 'Discovery candidates',
+  filters: [
+    ...(status.value ? [`Status: ${statusLabel(status.value)}`] : []),
+    ...(filtered.value ? [`Account or project: ${account.value}`] : []),
+    ...(regionSent.value ? [`Region: ${region.value}`] : []),
+  ],
+}));
+
+// A row's menu (operators): what the selection's buttons offer for that candidate alone, which it then is. A running
+// onboarding or offboarding says so instead, and an onboarding the API would refuse says why.
+function act(c: Listed, run: () => void) {
+  selected.value = [c.id];
+  run();
+}
+function actions(c: Listed): DmAction[] {
+  if (!session.canOperate) return [];
+  const out: DmAction[] = [];
+  if (c.operation) {
+    const running = runningText(c as Listed & { operation: NonNullable<Listed['operation']> });
+    out.push({ title: c.operation.type === 'onboard' ? 'Onboarding…' : 'Offboarding…', icon: mdiProgressClock, disabled: true, help: `${running}: follow it in Operations.`, run: () => {} });
+  } else {
+    if (c.status === 'pending-onboarding') {
+      const refusal = onboardRefusal(access.value, c.account);
+      out.push({ title: 'Onboard…', icon: mdiPlusCircleOutline, disabled: Boolean(refusal), help: refusal ?? undefined, run: () => act(c, () => { onboardOpen.value = true; }) });
+    }
+    if (canOffboard(c)) out.push({ title: 'Offboard', icon: mdiLogoutVariant, run: () => act(c, () => void offboard()) });
+  }
+  if (exclusionTargets(c).length) out.push({ title: 'Exclude…', icon: mdiCancel, color: 'error', run: () => act(c, () => { excludeOpen.value = true; }) });
+  out.push(c.status === 'dismissed'
+    ? { title: 'Restore', icon: mdiEyeOutline, run: () => act(c, () => void changeDismissal('restore')) }
+    : { title: 'Dismiss…', icon: mdiEyeOffOutline, run: () => act(c, () => { dismissDialog.value = true; }) });
+  return out;
+}
 const first = computed(() => page.value * PAGE + (candidates.value.length ? 1 : 0));
 const last = computed(() => page.value * PAGE + candidates.value.length);
 // Presentation: the first answer not there yet (the status is set by it), the icon's mood while a run scans, the run's
@@ -423,34 +522,38 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       </v-chip-group>
     </div>
     <v-divider v-if="status" />
-    <div class="dm-candidates__tools">
-      <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
-      <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
-      <v-spacer />
-      <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
-        <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
-          <template #activator="{ props }">
-            <span v-bind="props"><v-btn variant="tonal" disabled><template #prepend><v-progress-circular indeterminate size="16" width="2" /></template>{{ single.operation.type === 'onboard' ? 'Onboarding…' : 'Offboarding…' }}</v-btn></span>
-          </template>
-        </v-tooltip>
-        <v-tooltip v-else-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
-          <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
-        </v-tooltip>
-        <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="flat" @click="onboardOpen = true">Onboard…</v-btn>
-        <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" color="warning" variant="tonal" @click="offboard">Offboard</v-btn>
-        <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
-        <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
-        <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
-      </div>
-    </div>
-    <v-data-table v-model="selected" class="dm-table" :mobile="smAndDown" :headers="headers" :items="candidates" :loading="loading" item-value="id"
-      :show-select="session.canOperate" :items-per-page="-1" hide-default-footer>
+    <!-- The candidates of the status shown, a page at a time by the API's cursor (its own footer): the filters and the
+         selection's actions in the toolbar, each row's actions in its "⋮", the exports in the header's. The API has no text
+         search: the account and region filters are the table's. -->
+    <DmTable v-model:selected="selected" class="dm-candidates__table" :headers="headers" :items="candidates" :loading="loading" item-value="id" :selectable="session.canOperate"
+      :actions="actions" :row-name="ruleName" :server="server" :exported="exported" no-search>
+      <template #toolbar>
+        <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
+        <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
+        <v-spacer />
+        <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
+          <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
+            <template #activator="{ props }">
+              <span v-bind="props"><v-btn variant="tonal" disabled><template #prepend><v-progress-circular indeterminate size="16" width="2" /></template>{{ single.operation.type === 'onboard' ? 'Onboarding…' : 'Offboarding…' }}</v-btn></span>
+            </template>
+          </v-tooltip>
+          <v-tooltip v-else-if="onboardable && noCommand" location="top" max-width="380" :text="noCommand">
+            <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
+          </v-tooltip>
+          <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="flat" @click="onboardOpen = true">Onboard…</v-btn>
+          <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" color="warning" variant="tonal" @click="offboard">Offboard</v-btn>
+          <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
+          <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
+          <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
+        </div>
+      </template>
       <template #[`item.status`]="{ item }">
-        <v-tooltip v-if="item.operation" location="top" max-width="380" :text="`${operationLabel(item.operation.type, subjectOf(item))} is running: open its steps in Operations.`">
+        <!-- An onboarding or offboarding running: its spinner alone, opening its steps; its words in the name and the tooltip. -->
+        <v-tooltip v-if="item.operation" location="top" max-width="380" open-on-focus :text="`${operationLabel(item.operation.type, subjectOf(item))} is running: open its steps in Operations.`">
           <template #activator="{ props }">
-            <router-link v-bind="props" :to="{ path: '/operations', query: { id: item.operation.id } }" class="running"
+            <router-link v-bind="props" :to="{ path: '/operations', query: { id: item.operation.id } }" class="dm-running"
               :aria-label="`${operationLabel(item.operation.type, subjectOf(item))} running: follow it in Operations`">
-              <v-chip color="primary" variant="tonal" label><v-progress-circular indeterminate size="14" width="2" class="mr-2" />{{ item.operation.type === 'onboard' ? 'onboarding' : 'offboarding' }}</v-chip>
+              <v-progress-circular indeterminate size="18" width="2" color="primary" aria-hidden="true" />
             </router-link>
           </template>
         </v-tooltip>
@@ -483,22 +586,22 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <span v-else-if="item.workloadId" class="text-medium-emphasis">workload {{ item.workload?.name ?? item.workloadId }}</span>
       </template>
       <template #[`item.idleHours7d`]="{ item }">
+        <!-- The ~ says a Google Cloud share is estimated (the user, 2026-11-12); the bar's tooltip says why. -->
         <div v-if="item.idleHours7d !== null" class="dm-idle">
           <span class="dm-idle__share" aria-hidden="true">{{ isGoogle(item) ? '~' : '' }}{{ idleShare(item) }}</span>
           <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :cloud="rowCloud(item)" />
-          <span v-if="isGoogle(item)" class="dm-idle__estimate">estimated</span>
         </div>
       </template>
       <template #[`item.statusReason`]="{ item }">
         <div class="dm-reason">
           <span v-if="item.status === 'managed' && item.workload" class="text-medium-emphasis">managed as
             <router-link :to="`/workloads/${item.workload.router}/${item.workload.workloadId}`">{{ item.workload.name }}</router-link></span>
-          <span v-else class="text-medium-emphasis">{{ item.status === 'managed' && item.workloadId ? `managed as workload ${item.workloadId}` : item.statusReason }}</span>
+          <span v-else class="text-medium-emphasis">{{ reasonText(item) }}</span>
         </div>
       </template>
       <template #[`item.firstSeenAt`]="{ item }"><span class="nowrap text-medium-emphasis dm-num">{{ relative(item.firstSeenAt, now) }}</span></template>
       <template #loading>
-        <DmLoader label="Reading the candidates…" :size="40" class="dm-table__loader" />
+        <DmLoader label="Reading the candidates…" :size="40" class="dm-candidates__loader" />
       </template>
       <template #no-data>
         <div class="dm-calm justify-center py-6">
@@ -506,14 +609,16 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
           <span class="text-medium-emphasis">No candidate here.</span>
         </div>
       </template>
-    </v-data-table>
-    <v-divider />
-    <v-card-actions class="dm-candidates__foot">
-      <span class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!filtered && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
-      <v-spacer />
-      <v-btn variant="text" :prepend-icon="mdiChevronLeft" :disabled="page === 0 || loading" @click="turn(-1)">Previous</v-btn>
-      <v-btn variant="text" :append-icon="mdiChevronRight" :disabled="!hasNext || loading" @click="turn(1)">Next</v-btn>
-    </v-card-actions>
+      <template #bottom>
+        <v-divider />
+        <div class="dm-candidates__foot">
+          <span class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!filtered && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
+          <v-spacer />
+          <v-btn variant="text" :prepend-icon="mdiChevronLeft" :disabled="page === 0 || loading" @click="turn(-1)">Previous</v-btn>
+          <v-btn variant="text" :append-icon="mdiChevronRight" :disabled="!hasNext || loading" @click="turn(1)">Next</v-btn>
+        </div>
+      </template>
+    </DmTable>
   </v-card>
 
   <v-card id="exclusions" class="mt-4" title="Exclusions">
@@ -568,7 +673,9 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 </template>
 
 <style scoped>
-.running { text-decoration: none; }
+/* An onboarding or offboarding running: its spinner, a link to its steps. */
+.dm-running { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; border-radius: 50%; text-decoration: none; }
+.dm-running:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
 /* Readable over the page: the overlay's glass, nearly opaque (the global glass of cards would let the page through). */
 .v-card.dm-dialog:not(.v-card--variant-text):not(.v-card--variant-plain) { background: rgba(var(--v-theme-surface), 0.95) !important; }
 .dm-num { font-variant-numeric: tabular-nums; }
@@ -603,21 +710,20 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 .dm-tab__count { margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: rgba(var(--v-theme-on-surface), 0.08); font: 500 0.72rem/1.4 var(--dm-mono);
   font-variant-numeric: tabular-nums; }
 .dm-tab.v-chip--selected .dm-tab__count, .dm-tab.v-chip--active .dm-tab__count { background: rgba(var(--v-theme-on-surface), 0.12); }
-.dm-candidates__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 16px; }
 .dm-filter { flex: 1 1 160px; }
 .dm-candidates__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.dm-candidates__foot { padding: 8px 16px; }
-.dm-table__loader { padding: 28px 16px; }
-.dm-table :deep(th) { white-space: nowrap; padding-inline: 10px !important; }
-.dm-table :deep(td) { padding: 10px !important; vertical-align: middle; }
-.dm-table :deep(th:first-child), .dm-table :deep(td:first-child) { padding-left: 16px !important; }
-.dm-table :deep(.backend-label .mono) { display: inline-block; max-width: 144px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+/* The table's own footer: where the page is in the list, and the cursor's Previous and Next. */
+.dm-candidates__foot { display: flex; align-items: center; gap: 8px; padding: 8px 16px; }
+.dm-candidates__loader { padding: 28px 16px; }
+.dm-candidates__table :deep(th) { white-space: nowrap; padding-inline: 10px !important; }
+.dm-candidates__table :deep(td) { padding: 10px !important; vertical-align: middle; }
+.dm-candidates__table :deep(th:first-child), .dm-candidates__table :deep(td:first-child) { padding-left: 16px !important; }
+.dm-candidates__table :deep(.backend-label .mono) { display: inline-block; max-width: 144px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 .dm-rule { min-width: 176px; max-width: 300px; }
 .dm-rule__host { font-weight: 500; overflow-wrap: anywhere; }
 .dm-rule__where { margin-top: 2px; font-size: 0.78rem; opacity: 0.62; }
 .dm-reason { min-width: 90px; max-width: 260px; }
 .dm-idle { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.dm-idle__estimate { font-size: 0.7rem; opacity: 0.6; }
 .dm-idle__share { min-width: 3.4em; text-align: right; font: 500 0.74rem/1 var(--dm-mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
 .dm-idle :deep(.idle-bar) { width: 60px; margin-left: 0; }
 .dm-idle :deep(.v-progress-linear) { border-radius: 999px; }

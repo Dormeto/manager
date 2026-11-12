@@ -84,7 +84,9 @@ export async function pdf(doc: { title: string; lines: string[]; headers: string
     body: doc.rows.map((row) => row.map(winAnsi)),
     startY: y + 4,
     margin: { top: margin, right: margin, bottom: margin + 10, left: margin },
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4, overflow: 'linebreak', valign: 'top' },
+    // A column keeps a short word's width at least (8 letters): where long addresses and dates fill the page, the columns of
+    // short words would otherwise be cut to a few letters a line.
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4, overflow: 'linebreak', valign: 'top', minCellWidth: 44 },
     headStyles: { fillColor: [3, 75, 128], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 247, 250] },
   });

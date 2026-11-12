@@ -232,6 +232,28 @@ describe('DmTable', () => {
     expect(doc.lines[0]).toMatch(/· 5,000 rows$/);
   });
 
+  it('a server table whose total is not known (a list read by cursor): an export reads one row more than it keeps, to say when it was cut', async () => {
+    const all = vi.fn(async (limit: number) => rows(Math.min(limit, 6000)));
+    const w = render({ items: rows(50), server: { total: null, all } });
+    // Vuetify's count is the page's: the view pages it.
+    expect(w.findAll('tbody tr')).toHaveLength(50);
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-csv"]');
+    expect(all).toHaveBeenCalledWith(5001);
+    let lines = csvLines();
+    expect(lines).toHaveLength(1 + 5000 + 1);
+    expect(lines[5000]).toBe('w4999,awake,4999,');
+    expect(lines[5001]).toBe('"The first 5,000 rows: narrow the search or the filters to export the others.",,,');
+    // Exactly 5,000: nothing was cut.
+    all.mockImplementation(async () => rows(5000));
+    vi.mocked(download).mockClear();
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-csv"]');
+    lines = csvLines();
+    expect(lines).toHaveLength(1 + 5000);
+    expect(lines.at(-1)).toBe('w4999,awake,4999,');
+  });
+
   it('says when an export fails, and the table stays', async () => {
     const all = vi.fn(async () => { throw new Error('throttled'); });
     const w = render({ items: rows(50), server: { total: 120, all } });

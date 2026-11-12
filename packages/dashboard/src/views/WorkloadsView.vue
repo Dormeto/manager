@@ -1,18 +1,24 @@
 <script setup lang="ts">
+// The fleet's workloads: the week of all of them, then the table (tables design §5), paged, searched and filtered on the
+// server (scale design §4); its export reads every page of the list shown.
 import { useNow } from '../now';
-import { useDisplay } from 'vuetify';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { mdiCalendarClock, mdiMagnify, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
+import { mdiCalendarClock, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { checkHealth, relative, rowCloud, usd } from '../format';
+import { backendLabel, checkHealth, cloudMark, percent, relative, rowCloud, usd } from '../format';
 import CloudMark from '../components/CloudMark.vue';
 import BackendKinds from '../components/BackendKinds.vue';
 import StateBar from '../components/StateBar.vue';
 import { barSavings } from '../costs';
-import { stateSince } from '../state';
+import { failureTitle } from '../failures';
+import { stateLabel } from '../history';
+import { pausesText } from '../pause';
+import { stateSince, weekText } from '../state';
 import { useCountUp } from '../count-up';
+import type { DmExport, DmHeader, DmServer } from '../table';
+import DmTable from '../components/DmTable.vue';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -26,7 +32,6 @@ import PageTitle from '../components/PageTitle.vue';
 const now = useNow();
 // A member has no Routers view: the router column is text.
 const session = useSession();
-const { smAndDown } = useDisplay();
 // The bar of all workloads (user request): the API keeps each workload's figures an hour by default; asked again every
 // 10 minutes.
 const FLEET_MS = 600_000;
@@ -73,17 +78,25 @@ const page = ref(1);
 const perPage = ref(25);
 const late = ref<RouterInfo[]>([]);
 let routersCheckedAt = 0;
+// The list asked of the API: a page (`limit` from `offset`) of the workloads matching the search and the filters, with each
+// one's idle hours and week; the routers' health with it when asked.
+interface Filters { q: string; attention: boolean; router: string; state: string; tags: string[] }
+const filters = (): Filters => ({ q: search.value.trim(), attention: attentionOnly.value, router: routerFilter.value, state: stateFilter.value, tags: [...tagFilter.value] });
+function listPath(f: Filters, limit: number, offset: number, routers = false): string {
+  const query = new URLSearchParams({
+    limit: String(limit), offset: String(offset), idle: '1', states: '1', ...(f.q ? { q: f.q } : {}),
+    ...(f.attention ? { attention: '1' } : {}), ...(routers ? { routers: '1' } : {}),
+    ...(f.router ? { router: f.router } : {}), ...(f.state ? { state: f.state } : {}),
+  });
+  // Each tag percent-encoded (a space is %20, not the + of a form).
+  const tags = f.tags.map((tag) => `&tag=${encodeURIComponent(tag)}`).join('');
+  return `/workloads?${query}${tags}`;
+}
+type ListAnswer = { workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] };
 const { error, loading, nextAt, refreshedAt, run } = usePoll(async () => {
   // Router health every minute is enough (the warning is about checks late by 15 minutes), in the same request.
   const withRouters = Date.now() - routersCheckedAt > 60_000;
-  const query = new URLSearchParams({
-    limit: String(perPage.value), offset: String((page.value - 1) * perPage.value), idle: '1', states: '1', ...(search.value.trim() ? { q: search.value.trim() } : {}),
-    ...(attentionOnly.value ? { attention: '1' } : {}), ...(withRouters ? { routers: '1' } : {}),
-    ...(routerFilter.value ? { router: routerFilter.value } : {}), ...(stateFilter.value ? { state: stateFilter.value } : {}),
-  });
-  // Each tag percent-encoded (a space is %20, not the + of a form).
-  const tags = tagFilter.value.map((tag) => `&tag=${encodeURIComponent(tag)}`).join('');
-  const result = await api<{ workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] }>(`/workloads?${query}${tags}`);
+  const result = await api<ListAnswer>(listPath(filters(), perPage.value, (page.value - 1) * perPage.value, withRouters));
   workloads.value = result.workloads;
   tagsSeen.value = [...new Set([...tagsSeen.value, ...result.workloads.flatMap((w) => tagsList(w.tags).map((t) => t.text))])];
   total.value = result.total ?? result.workloads.length;
@@ -104,21 +117,53 @@ function allWorkloads() {
   void run();
 }
 
-const headers = [
-  { title: 'Account or project', key: 'account', sortable: false },
-  { title: 'Workload', key: 'name', value: (w: WorkloadSummary) => w.name ?? w.workloadId, sortable: false },
-  { title: 'Backend', key: 'backends', sortable: false },
+// Each column's words: what an export prints (the marks' words, dates as ISO 8601). No sort: the API's order.
+const stateText = (w: WorkloadSummary) => [
+  stateLabel(w.state), ...(w.failure ? [`${failureTitle(w.failure, rowCloud(w))} (${w.failure.message})`] : []), ...(w.pauses?.length ? [pausesText(w.pauses)] : []),
+].join(' · ');
+const headers: DmHeader<WorkloadSummary>[] = [
+  { title: 'Account or project', key: 'account', sortable: false, text: (w) => (w.account ? `${w.account} (${cloudMark(rowCloud(w)).label})` : cloudMark(rowCloud(w)).label) },
+  { title: 'Workload', key: 'name', value: (w) => w.name ?? w.workloadId, sortable: false,
+    text: (w) => [w.name ? `${w.name} (${w.workloadId})` : w.workloadId, ...(w.summary ? [w.summary] : []), ...(w.scheduled ? ['has a schedule'] : [])].join(' · ') },
+  { title: 'Backend', key: 'backends', sortable: false, text: (w) => (w.backends ?? []).map((kind) => backendLabel(kind, rowCloud(w))).join(', ') },
   { title: 'Router', key: 'router', sortable: false },
-  { title: 'Tags', key: 'tags', sortable: false },
-  { title: 'State', key: 'state', sortable: false },
-  { title: 'Since', key: 'since', sortable: false },
-  { title: 'Last 7 days', key: 'states7d', align: 'end' as const, sortable: false },
+  { title: 'Tags', key: 'tags', sortable: false, text: (w) => tagsList(w.tags).map((t) => t.text).join(', ') },
+  { title: 'State', key: 'state', sortable: false, text: stateText },
+  { title: 'Since', key: 'since', sortable: false, text: (w) => stateSince(w).at ?? w.updatedAt ?? '' },
+  { title: 'Last 7 days', key: 'states7d', align: 'end', sortable: false,
+    text: (w) => [weekText(w.states7d?.totals), ...(typeof w.idleHours7d === 'number' ? [`idle ${percent(w.idleHours7d, 168)}`] : [])].join(' · ') },
   { title: 'URL', key: 'url', sortable: false },
   { title: 'Wake mode', key: 'wakeMode', sortable: false },
-  { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end' as const, value: (w: WorkloadSummary) => w.stats7d?.wakes ?? null, sortable: false },
-  { title: 'Wakes (total)', key: 'wakeCount', align: 'end' as const, sortable: false },
-  { title: 'Saved (30 days)', key: 'saved', align: 'end' as const, value: (w: WorkloadSummary) => w.costs?.saved.usd ?? null, sortable: false },
+  { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end', value: (w) => w.stats7d?.wakes ?? null, sortable: false, text: (w) => (w.stats7d ? String(w.stats7d.wakes) : '') },
+  { title: 'Wakes (total)', key: 'wakeCount', align: 'end', sortable: false },
+  { title: 'Saved (30 days)', key: 'saved', align: 'end', value: (w) => w.costs?.saved.usd ?? null, sortable: false, text: (w) => (w.costs ? saved(w.costs.saved) : '') },
 ];
+const workloadKey = (w: WorkloadSummary) => `${w.router}/${w.workloadId}`;
+
+// An export (tables design §5): every workload matching the search and filters as they are when it is asked, the API's
+// pages one at a time (the size the view asks at most, with each one's week), `limit` at most.
+const EXPORT_PAGE = 100;
+async function readAll(limit: number): Promise<WorkloadSummary[]> {
+  const asked = filters();
+  const rows: WorkloadSummary[] = [];
+  for (let offset = 0; rows.length < limit; offset += EXPORT_PAGE) {
+    const result = await api<ListAnswer>(listPath(asked, EXPORT_PAGE, offset));
+    rows.push(...result.workloads);
+    if (result.workloads.length < EXPORT_PAGE || rows.length >= (result.total ?? rows.length)) break;
+  }
+  return rows.slice(0, limit);
+}
+const server = computed<DmServer<WorkloadSummary>>(() => ({ total: total.value, all: readAll }));
+// The PDF's lines: the filters in force (the search is the table's).
+const exported = computed<DmExport>(() => ({
+  name: 'workloads', title: 'Workloads',
+  filters: [
+    ...(attentionOnly.value ? ['Needing attention'] : []),
+    ...(routerFilter.value ? [`Router: ${routerFilter.value}`] : []),
+    ...(stateFilter.value ? [`State: ${stateLabel(stateFilter.value)}`] : []),
+    ...(tagFilter.value.length ? [`Tags: ${tagFilter.value.join(', ')}`] : []),
+  ],
+}));
 function options(o: { page: number; itemsPerPage: number }) {
   if (o.page === page.value && o.itemsPerPage === perPage.value) return;
   page.value = o.page;
@@ -182,18 +227,19 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
   <v-alert v-for="e in errors" :key="e.router" type="warning" variant="tonal" class="mb-4" :title="`Router ${e.router} unreachable`" :text="e.message" />
   <v-alert v-for="r in late" :key="r.name" type="warning" variant="tonal" class="mb-4" :title="`Workloads of ${r.name} do not nap on their own`" :text="`${checkHealth(r, now).text}.`" />
   <v-card class="dm-workloads">
-    <div class="dm-toolbar">
-      <div class="dm-toolbar__filters">
-        <span v-if="total" class="dm-toolbar__count"><span class="dm-num">{{ total.toLocaleString('en-US') }}</span> workload{{ total === 1 ? '' : 's' }}</span>
-        <v-chip v-if="attentionOnly" closable label color="secondary" variant="tonal" @click:close="allWorkloads">Needing attention</v-chip>
-        <v-chip v-if="routerFilter || stateFilter" closable label color="primary" variant="tonal" @click:close="allWorkloads">{{ [routerFilter, stateFilter.toLowerCase()].filter(Boolean).join(' · ') }}</v-chip>
-      </div>
-      <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
-        class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
-      <v-text-field v-model="search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line class="dm-toolbar__search" />
-    </div>
-    <v-data-table-server :mobile="smAndDown" :headers="headers" :items="workloads" :items-length="total" :loading="loading && !workloads.length"
-      :item-value="(w: WorkloadSummary) => `${w.router}/${w.workloadId}`" :page="page" :items-per-page="perPage" :sort-by="[]" :must-sort="false" @update:options="options">
+    <!-- A server table: the page, its size and the search go to the API (options and the search model), the filters too;
+         its export reads every page through readAll. The rows have no action: the header's "⋮" holds the exports. -->
+    <DmTable v-model:search="search" :headers="headers" :items="workloads" :loading="loading && !workloads.length" :item-value="workloadKey" :server="server" :page="page"
+      :per-page="25" :exported="exported" @update:options="options">
+      <template #toolbar>
+        <div class="dm-toolbar__filters">
+          <span v-if="total" class="dm-toolbar__count"><span class="dm-num">{{ total.toLocaleString('en-US') }}</span> workload{{ total === 1 ? '' : 's' }}</span>
+          <v-chip v-if="attentionOnly" closable label color="secondary" variant="tonal" @click:close="allWorkloads">Needing attention</v-chip>
+          <v-chip v-if="routerFilter || stateFilter" closable label color="primary" variant="tonal" @click:close="allWorkloads">{{ [routerFilter, stateFilter.toLowerCase()].filter(Boolean).join(' · ') }}</v-chip>
+        </div>
+        <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
+          class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
+      </template>
       <template #loading><DmLoader label="Reading the workloads…" :size="56" /></template>
       <template #no-data>
         <DmLoader v-if="!settled" label="Reading the workloads…" :size="56" />
@@ -231,7 +277,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       </template>
       <template #[`item.wakeMode`]="{ item }"><span class="dm-mode">{{ item.wakeMode }}</span></template>
       <template #[`item.saved`]="{ item }"><span :class="['nowrap', { 'text-medium-emphasis': !item.costs || (!item.costs.saved.usd && item.costs.saved.unpricedHours) }]">{{ saved(item.costs?.saved) }}</span></template>
-    </v-data-table-server>
+    </DmTable>
   </v-card>
 </template>
 
@@ -251,12 +297,10 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-figure__value { font-size: 1.55rem; font-weight: 600; line-height: 1.15; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
 .dm-figure__label { font-size: 0.78rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 
-/* The toolbar: how many, the filters, the search. */
-.dm-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 14px 16px 14px 20px; border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
+/* The table's toolbar (DmTable's, the search last): how many, the filters. */
 .dm-toolbar__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
 .dm-toolbar__count { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); margin-right: 4px; }
 .dm-toolbar__count .dm-num { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
-.dm-toolbar__search { flex: 0 1 280px; min-width: 200px; }
 .dm-toolbar__tags { flex: 0 1 320px; min-width: 200px; }
 .dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 
@@ -268,8 +312,6 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-workloads :deep(.v-table__wrapper > table > thead > tr > th:last-child),
 .dm-workloads :deep(.v-table__wrapper > table > tbody > tr:not(.v-data-table__tr--mobile) > td:last-child) { padding-right: 14px !important; }
 .dm-workloads :deep(.v-data-table-column--align-end) { font-variant-numeric: tabular-nums; }
-.dm-workloads :deep(.v-data-table-rows-loading > td), .dm-workloads :deep(.v-data-table-rows-no-data > td) { height: auto !important; }
-.dm-workloads :deep(.v-data-table-footer) { border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); padding: 4px 8px; font-size: 0.82rem; }
 
 .dm-account { font-size: 0.7rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 .dm-wl { min-width: 0; }
@@ -302,8 +344,9 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
   .dm-strip__figures > * { flex: 1 1 0; min-width: 0; }
 }
 @media (max-width: 600px) {
-  .dm-toolbar { padding: 12px 14px; }
-  .dm-toolbar__search, .dm-toolbar__tags { flex: 1 1 100%; min-width: 0; }
+  /* The count and the tags on a line, the search and the table's "⋮" on the next. */
+  .dm-workloads :deep(.dm-table__tools) { flex: 1 1 100%; }
+  .dm-toolbar__tags { flex: 1 1 100%; min-width: 0; }
   .dm-url { max-width: 11rem; }
   .dm-strip__body { padding: 16px; }
 }

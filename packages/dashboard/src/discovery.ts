@@ -1,6 +1,8 @@
 // Organization discovery in the dashboard: statuses, run targets, and criterion editing (dimension values as text).
 import { BACKEND_KINDS as DISCOVERY_BACKEND_KINDS, type BackendKind, type Criterion, type LintFinding, type RuleRef, type RunTarget, type Status } from '@dormeto/discovery/types';
 import type { Cloud } from '@dormeto/fleet/clouds';
+import { mdiCancel, mdiCheckCircleOutline, mdiEyeOffOutline, mdiFilterOffOutline, mdiHelpCircleOutline, mdiLogoutVariant, mdiMagnifyRemoveOutline, mdiPlusCircleOutline,
+  mdiSleepOff } from '@mdi/js';
 import { percent } from './format';
 
 export const STATUSES: Status[] = ['pending-onboarding', 'pending-offboarding', 'managed', 'ineligible', 'dismissed', 'excluded', 'out-of-scope', 'gone'];
@@ -10,49 +12,51 @@ export const visibleStatuses = (counts: Partial<Record<Status, number>>, shown: 
   STATUSES.filter((s) => (counts[s] ?? 0) > 0 || s === shown);
 
 // What each status means, the actions that leave it (operators; the perimeter: administrators) and what changes it by
-// itself at the next discovery run.
+// itself at the next discovery run; its icon (tables design §3: a cell shows the icon alone, its name in the tooltip), the
+// icon of the action it waits for (To onboard, To offboard) or came from (Dismissed, Excluded) where there is one.
 interface StatusMeta {
   label: string;
   color: string;
+  icon: string;
   help: string;
   transitions: { action: string; to: string }[];
   changes?: string;
 }
 const META: Record<Status, StatusMeta> = {
   'pending-onboarding': {
-    label: 'To onboard', color: 'primary', help: 'Eligible and in the perimeter, not onboarded yet: Dormeto can nap it once onboarded.',
+    label: 'To onboard', color: 'primary', icon: mdiPlusCircleOutline, help: 'Eligible and in the perimeter, not onboarded yet: Dormeto can nap it once onboarded.',
     transitions: [{ action: 'Onboard', to: 'Managed' }, { action: 'Dismiss', to: 'Dismissed' }, { action: 'Exclude', to: 'Excluded' }],
     changes: 'Ineligible, Out of scope or Gone when its rules, the perimeter or its load balancer change.',
   },
   'pending-offboarding': {
-    label: 'To offboard', color: 'warning', help: 'Onboarded, but out of the perimeter, excluded or no longer eligible (see the reason).',
+    label: 'To offboard', color: 'warning', icon: mdiLogoutVariant, help: 'Onboarded, but out of the perimeter, excluded or no longer eligible (see the reason).',
     transitions: [{ action: 'Offboard', to: 'Out of scope, Excluded or Ineligible' }, { action: 'Include it again (Perimeter)', to: 'Managed' }],
     changes: 'Managed again when its rule is eligible and in the perimeter.',
   },
   managed: {
-    label: 'Managed', color: 'success', help: 'Onboarded: Dormeto naps it when idle.',
+    label: 'Managed', color: 'success', icon: mdiCheckCircleOutline, help: 'Onboarded: Dormeto naps it when idle.',
     transitions: [{ action: 'Offboard', to: 'To onboard' }, { action: 'Exclude', to: 'To offboard, kept awake until offboarded' }],
     changes: 'To offboard when it leaves the perimeter or is no longer eligible; Gone when its rule is deleted.',
   },
   ineligible: {
-    label: 'Ineligible', color: 'grey', help: 'In the perimeter, but Dormeto cannot nap it (see the reason).',
+    label: 'Ineligible', color: 'grey', icon: mdiSleepOff, help: 'In the perimeter, but Dormeto cannot nap it (see the reason).',
     transitions: [{ action: 'Dismiss', to: 'Dismissed' }, { action: 'Exclude', to: 'Excluded' }],
     changes: 'To onboard at the next discovery run once its reason is fixed.',
   },
   dismissed: {
-    label: 'Dismissed', color: 'grey', help: 'An operator chose not to onboard it, whatever later runs find.',
+    label: 'Dismissed', color: 'grey', icon: mdiEyeOffOutline, help: 'An operator chose not to onboard it, whatever later runs find.',
     transitions: [{ action: 'Restore', to: 'its status again' }],
   },
   excluded: {
-    label: 'Excluded', color: 'error', help: 'Kept away by an exclusion, a global exclude or a filter exclude.',
+    label: 'Excluded', color: 'error', icon: mdiCancel, help: 'Kept away by an exclusion, a global exclude or a filter exclude.',
     transitions: [{ action: 'Lift the exclusion (Exclusions)', to: 'its status again' }, { action: 'Remove the exclude (Perimeter)', to: 'its status again' }],
   },
   'out-of-scope': {
-    label: 'Out of scope', color: 'grey', help: 'No filter of the perimeter includes it.',
+    label: 'Out of scope', color: 'grey', icon: mdiFilterOffOutline, help: 'No filter of the perimeter includes it.',
     transitions: [{ action: 'Include it (Perimeter)', to: 'To onboard or Ineligible' }],
   },
   gone: {
-    label: 'Gone', color: 'grey', help: 'Not found in the last scan of its account and region.',
+    label: 'Gone', color: 'grey', icon: mdiMagnifyRemoveOutline, help: 'Not found in the last scan of its account and region.',
     transitions: [],
     changes: 'Back to its status if a scan finds it again; a managed workload is offboarded from its workload view.',
   },
@@ -60,6 +64,7 @@ const META: Record<Status, StatusMeta> = {
 
 export const statusLabel = (s: Status): string => META[s]?.label ?? s;
 export const statusColor = (s: Status): string => META[s]?.color ?? 'grey';
+export const statusIcon = (s: Status): string => META[s]?.icon ?? mdiHelpCircleOutline;
 export const statusHelp = (s: Status): string => META[s]?.help ?? '';
 export const statusTransitions = (s: Status): { action: string; to: string }[] => META[s]?.transitions ?? [];
 export const statusChanges = (s: Status): string | null => META[s]?.changes ?? null;

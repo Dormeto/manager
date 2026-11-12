@@ -30,8 +30,9 @@ export interface DmAction { title: string; icon: string; color?: string; disable
 // The file's name (its view part), the PDF's title, and the PDF's lines for the filters in force.
 export interface DmExport { name: string; title: string; filters?: string[] }
 
-// A server table: the rows matching the search and filters, in all; `all` reads every one for an export, `limit` at most.
-export interface DmServer<T> { total: number; all: (limit: number) => Promise<T[]> }
+// A server table: the rows matching the search and filters, in all (null: not known, a list read by cursor); `all` reads
+// every one for an export, `limit` at most.
+export interface DmServer<T> { total: number | null; all: (limit: number) => Promise<T[]> }
 
 export interface DmSort { key: string; order?: 'asc' | 'desc' | boolean }
 

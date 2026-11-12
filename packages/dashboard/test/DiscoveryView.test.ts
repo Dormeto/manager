@@ -7,12 +7,19 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 import DiscoveryView from '../src/views/DiscoveryView.vue';
+import DmTable from '../src/components/DmTable.vue';
 import OnboardDialog from '../src/components/OnboardDialog.vue';
 import { useSession } from '../src/stores/session';
+import { download } from '../src/table-export';
+import type { Role } from '../src/auth';
+import { expectEveryColumnSaid } from './table-columns';
 
 const calls: { path: string; init?: RequestInit }[] = [];
-// The server's side: the onboarding running on the candidate (named by the candidates while it runs) and how it ended.
-const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; routersLater?: Promise<void>; tags?: Record<string, string[]>; row?: Record<string, unknown> } = { running: null, ended: { status: 'succeeded' } };
+// The server's side: the onboarding running on the candidate (named by the candidates while it runs) and how it ended;
+// `list` answers the candidates' pages instead of the one candidate; `inFlight` counts the pages asked at once.
+type Page = { candidates: unknown[]; cursor: string | null };
+const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; routersLater?: Promise<void>; tags?: Record<string, string[]>; row?: Record<string, unknown>;
+  list?: (query: URLSearchParams) => Page; inFlight: number; mostInFlight: number } = { running: null, ended: { status: 'succeeded' }, inFlight: 0, mostInFlight: 0 };
 const CHECK = { name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-11T10:00:00.000Z' };
 const candidate = () => ({
   id: 'c-1', status: 'pending-onboarding', statusReason: 'eligible', account: '111122223333', accountName: 'example', region: 'eu-west-3',
@@ -36,10 +43,20 @@ vi.mock('../src/api', () => ({
     if (path === '/routers' && server.routersLater) await server.routersLater;
     if (path === '/routers' && server.routers) return { routers: server.routers };
     if (path === '/routers') return { routers: [{ name: 'dmtr-dev-eu-west-3', account: '111122223333', region: 'eu-west-3', clusters: [CHECK] }] };
+    if (path === '/discovery/dismiss' || path === '/discovery/restore') return {};
+    if (path.startsWith('/discovery/candidates?') && server.list) {
+      server.inFlight += 1;
+      server.mostInFlight = Math.max(server.mostInFlight, server.inFlight);
+      // A page asked while another is still on its way would be counted here.
+      await Promise.resolve();
+      server.inFlight -= 1;
+      return server.list(new URLSearchParams(path.split('?')[1]));
+    }
     if (path.startsWith('/discovery/candidates?')) return { candidates: [candidate()], cursor: null };
     throw new Error(`unexpected ${path}`);
   }),
 }));
+vi.mock('../src/table-export', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/table-export')>()), download: vi.fn() }));
 
 // jsdom has no ResizeObserver nor visualViewport, which the Vuetify overlays use to position their content.
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -49,10 +66,10 @@ Object.defineProperty(window, 'visualViewport', {
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mountView() {
+async function mountView(role: Role = 'admin') {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useSession().role = 'admin';
+  useSession().role = role;
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/discovery', component: DiscoveryView }, { path: '/operations', component: { render: () => null } }] });
   await router.push('/discovery');
   const wrapper = mount(DiscoveryView, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
@@ -66,6 +83,49 @@ const select = async (wrapper: View) => {
 };
 const running = (wrapper: View) => wrapper.find('a[aria-label="Onboarding of ligoj-ui-prod running: follow it in Operations"]');
 const toast = () => document.querySelector('.v-snackbar');
+// A row by its rule, a cell of it by the column's title.
+const rowOf = (wrapper: View, host: string) => wrapper.findAll('tbody tr').find((tr) => tr.text().includes(host))!;
+const cellOf = (wrapper: View, row: ReturnType<View['find']>, column: string) => row.findAll('td')[wrapper.findAll('thead th').map((th) => th.text()).indexOf(column)]!;
+// A menu's items once its "⋮" is clicked; chosen, the menu closes (a click during its closing would be lost).
+const menuItems = () => [...document.querySelectorAll<HTMLElement>('.v-overlay--active .v-list-item')];
+async function openMenu(button: ReturnType<View['find']>) {
+  await button.trigger('click');
+  await flushPromises();
+  return menuItems();
+}
+async function menuOf(wrapper: View, host: string): Promise<string[] | null> {
+  const button = rowOf(wrapper, host).find('[data-test="dm-row-menu"]');
+  if (!button.exists()) return null;
+  const titles = (await openMenu(button)).map((i) => `${i.textContent!.trim()}${i.getAttribute('aria-disabled') === 'true' ? ' (disabled)' : ''}`);
+  await button.trigger('click');
+  await flushPromises();
+  await sleep(350);
+  return titles;
+}
+async function choose(wrapper: View, host: string, title: string) {
+  (await openMenu(rowOf(wrapper, host).find('[data-test="dm-row-menu"]'))).find((i) => i.textContent?.trim() === title)!.click();
+  await flushPromises();
+  await sleep(350);
+}
+// The CSV the table's menu exports, as its lines.
+async function exportCsv(wrapper: View) {
+  vi.mocked(download).mockClear();
+  await openMenu(wrapper.find('thead [data-test="dm-table-menu"]'));
+  (document.querySelector('.v-overlay--active [data-test="dm-table-export-csv"]') as HTMLElement).click();
+  await flushPromises();
+  await sleep(50);
+  await flushPromises();
+  const [name, , body] = vi.mocked(download).mock.calls.at(-1)!;
+  expect(name).toMatch(/^dormeto-discovery-\d{4}-\d{2}-\d{2}\.csv$/);
+  return (body as string).split('\r\n').slice(0, -1);
+}
+// Candidates of one status, by pages of the size asked, the cursor their offset.
+const pagesOf = (rows: unknown[]) => (q: URLSearchParams): Page => {
+  const start = Number(q.get('cursor') ?? 0);
+  const end = start + Number(q.get('limit'));
+  return { candidates: rows.slice(start, end), cursor: end < rows.length ? String(end) : null };
+};
+const numbered = (n: number) => Array.from({ length: n }, (_, i) => ({ ...candidate(), id: `c-${i}`, conditions: `host h${String(i).padStart(3, '0')}.example.com` }));
 
 describe('Discovery view, both clouds', () => {
   it('filters by an AWS account or a Google Cloud project, and by a region of that cloud only', async () => {
@@ -135,13 +195,20 @@ describe('Discovery view, a Google Cloud candidate', () => {
     delete server.routers;
   });
 
-  it('shows its backend service and URL map by name, linked to the Google Cloud console, in `global`, with its idle share said estimated', async () => {
+  it('shows its backend service and URL map by name, linked to the Google Cloud console, in `global` as the earth alone, its idle share with a ~ and no word', async () => {
     const wrapper = await mountView();
     const row = wrapper.findAll('tr').find((tr) => tr.text().includes('host shop.example.com'))!;
     expect(row.text()).toContain('shop-bs');
     expect(row.text()).toContain('shop-lb');
-    expect(row.text()).toContain('global');
-    expect(row.text()).toContain('estimated');
+    // The user (2026-11-12): no "estimated", the ~ says it; no region name for `global`.
+    expect(row.text()).not.toContain('estimated');
+    expect(cellOf(wrapper, row, 'Idle (7 days)').text()).toBe('~71 %');
+    const region = cellOf(wrapper, row, 'Region');
+    expect(region.text()).toBe('');
+    expect(region.find('.region-label').attributes('aria-label')).toBe('global');
+    await region.find('.region-label').trigger('mouseenter');
+    await sleep(300);
+    expect(document.querySelector('.v-overlay--active')?.textContent).toContain('A global load balancer');
     expect(row.text()).not.toContain('priority');
     expect(row.text()).toContain('shop-mig');
     const hrefs = row.findAll('a').map((a) => a.attributes('href')).filter(Boolean);
@@ -156,6 +223,7 @@ describe('Discovery view, a Google Cloud candidate', () => {
     const wrapper = await mountView();
     const row = wrapper.findAll('tr').find((tr) => tr.text().includes('host app.example.com'))!;
     expect(row.text()).not.toContain('estimated');
+    expect(cellOf(wrapper, row, 'Idle (7 days)').text()).toBe('71 %');
     expect(row.text()).toContain('priority 10');
     wrapper.unmount();
   });
@@ -381,6 +449,157 @@ describe('Discovery view', () => {
     expect(calls.some((c) => c.path === '/operations/op-5')).toBe(true);
     expect(toast()?.textContent).toContain('Onboarding of ligoj-ui-prod failed: verify: route app');
     expect(running(wrapper).exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe('Discovery view, its table', () => {
+  beforeEach(() => {
+    calls.length = 0;
+    server.running = null;
+    server.ended = { status: 'succeeded' };
+    server.mostInFlight = 0;
+    delete server.backend;
+    document.body.innerHTML = '';
+  });
+  afterEach(() => {
+    delete server.list;
+    delete server.routers;
+  });
+  const MANAGED_VM = { ...gcpRow(), status: 'managed', workloadId: 'shop-bs', workload: { router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'shop-bs', name: 'Shop' }, backend: { kind: 'instance', id: 'shop-vm' } };
+
+  it('shows each candidate\'s status as its icon alone, named, and an onboarding running as a spinner opening its operation', async () => {
+    server.list = () => ({ candidates: [candidate(), { ...candidate(), id: 'c-run', conditions: 'host run.example.com', operation: { id: 'op-5', type: 'onboard' } }], cursor: null });
+    const wrapper = await mountView();
+    const status = cellOf(wrapper, rowOf(wrapper, 'host app.example.com'), 'Status');
+    expect(status.text()).toBe('');
+    expect(status.find('[data-test="status-mark"]').attributes('aria-label')).toBe('To onboard');
+    const busy = cellOf(wrapper, rowOf(wrapper, 'host run.example.com'), 'Status');
+    expect(busy.text()).toBe('');
+    const link = busy.find('a');
+    expect([link.attributes('href'), link.attributes('aria-label')]).toEqual(['/operations?id=op-5', 'Onboarding of ligoj-ui-prod running: follow it in Operations']);
+    expect(link.find('.v-progress-circular--indeterminate').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('keeps the selection across pages: the selection\'s dismissal takes the rows chosen on each', async () => {
+    server.list = pagesOf(numbered(70));
+    const wrapper = await mountView();
+    const box = (host: string) => rowOf(wrapper, host).find('input[type="checkbox"]');
+    const footer = (text: string) => wrapper.findAll('button').find((b) => b.text() === text)!;
+    await box('host h001.example.com').trigger('click');
+    await nextTick();
+    await footer('Next').trigger('click');
+    await flushPromises();
+    expect(calls.filter((c) => c.path.startsWith('/discovery/candidates?')).at(-1)!.path).toBe('/discovery/candidates?status=pending-onboarding&limit=50&cursor=50');
+    await box('host h060.example.com').trigger('click');
+    await nextTick();
+    expect(wrapper.findAll('button').some((b) => b.text() === 'Dismiss (2)')).toBe(true);
+    // Back on the first page, its row is still chosen.
+    await footer('Previous').trigger('click');
+    await flushPromises();
+    expect((box('host h001.example.com').element as HTMLInputElement).checked).toBe(true);
+    expect((box('host h002.example.com').element as HTMLInputElement).checked).toBe(false);
+    await wrapper.findAll('button').find((b) => b.text() === 'Dismiss (2)')!.trigger('click');
+    await flushPromises();
+    const dialog = document.querySelector('.v-dialog')!;
+    expect(dialog.textContent).toContain('The 2 selected rules will stay dismissed');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dismiss')!.click();
+    await flushPromises();
+    const sent = calls.find((c) => c.path === '/discovery/dismiss')!;
+    expect(JSON.parse(sent.init!.body as string)).toEqual({ ids: ['c-1', 'c-60'] });
+    wrapper.unmount();
+  });
+
+  it('puts a candidate\'s actions in its row\'s menu for operators: Onboard, Offboard, Exclude, Dismiss or Restore, as the selection\'s buttons offer them', async () => {
+    server.list = () => ({ candidates: [
+      candidate(),
+      { ...candidate(), id: 'c-run', conditions: 'host run.example.com', operation: { id: 'op-5', type: 'onboard' } },
+      { ...candidate(), ...MANAGED_VM },
+      { ...candidate(), id: 'c-old', conditions: 'host old.example.com', status: 'dismissed' },
+    ], cursor: null });
+    const wrapper = await mountView();
+    expect(rowOf(wrapper, 'host app.example.com').find('[data-test="dm-row-menu"]').attributes('aria-label')).toBe('Actions for host app.example.com');
+    expect(await menuOf(wrapper, 'host app.example.com')).toEqual(['Onboard…', 'Exclude…', 'Dismiss…']);
+    expect(await menuOf(wrapper, 'host run.example.com')).toEqual(['Onboarding… (disabled)', 'Exclude…', 'Dismiss…']);
+    expect(await menuOf(wrapper, 'host shop.example.com')).toEqual(['Offboard', 'Exclude…', 'Dismiss…']);
+    expect(await menuOf(wrapper, 'host old.example.com')).toEqual(['Exclude…', 'Restore']);
+    // The running one says why in its tooltip.
+    const item = (await openMenu(rowOf(wrapper, 'host run.example.com').find('[data-test="dm-row-menu"]')))[0]!;
+    item.dispatchEvent(new Event('mouseenter'));
+    await sleep(300);
+    expect(document.querySelector('.v-overlay-container')!.textContent).toContain('Onboarding of ligoj-ui-prod is running: follow it in Operations.');
+    await rowOf(wrapper, 'host run.example.com').find('[data-test="dm-row-menu"]').trigger('click');
+    await sleep(350);
+
+    // Each acts on its row alone, through the same dialogs.
+    await choose(wrapper, 'host app.example.com', 'Onboard…');
+    const onboarding = wrapper.findComponent(OnboardDialog);
+    expect([onboarding.props('modelValue'), onboarding.props('title')]).toEqual([true, 'host app.example.com']);
+    onboarding.vm.$emit('update:modelValue', false);
+    await flushPromises();
+    await choose(wrapper, 'host old.example.com', 'Restore');
+    expect(JSON.parse(calls.find((c) => c.path === '/discovery/restore')!.init!.body as string)).toEqual({ ids: ['c-old'] });
+    await choose(wrapper, 'host shop.example.com', 'Offboard');
+    expect(JSON.parse(calls.find((c) => c.path === '/operations')!.init!.body as string)).toMatchObject({ type: 'offboard', router: 'dmtr-dormeto-dev-europe-west2', workloadId: 'shop-bs' });
+    wrapper.unmount();
+  });
+
+  it('gives a viewer no row menu and no selection, the table\'s menu with its exports still', async () => {
+    const wrapper = await mountView('viewer');
+    expect(wrapper.findAll('[data-test="dm-row-menu"]')).toHaveLength(0);
+    expect(wrapper.findAll('tbody input[type="checkbox"]')).toHaveLength(0);
+    expect(wrapper.find('thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
+    wrapper.unmount();
+  });
+
+  it('exports its candidates with each column in words: the status, the rule and where it is, the account, the region, the backend, the idle share with its ~, the reason, the first seen date', async () => {
+    const aws = { ...candidate(), backend: { kind: 'instance', id: 'i-0f30c85bc47412bf3' }, idleHours7d: 120, requests7d: 4_000,
+      rules: [{ priority: '10', listener: 'HTTPS:443', conditions: 'host app.example.com' }, { priority: '20', listener: 'HTTPS:443', conditions: 'host app.example.com path /api/*' }] };
+    server.list = () => ({ candidates: [aws, { ...candidate(), ...gcpRow(), operation: { id: 'op-7', type: 'onboard' } }, { ...candidate(), ...MANAGED_VM }], cursor: null });
+    const wrapper = await mountView();
+    expect(await exportCsv(wrapper)).toEqual([
+      'Status,Rule,Account or project,Region,Backend,Idle (7 days),Reason,First seen',
+      'To onboard,host app.example.com · web · HTTPS:443 · priority 10 · 2 rules,"example (AWS, 111122223333)",eu-west-3,EC2 instance i-0f30c85bc47412bf3,71 %,eligible,2026-10-07T06:00:00.000Z',
+      'To onboard · onboarding running,host shop.example.com · backend service shop-bs · URL map shop-lb · global external Application Load Balancer,dormeto-dev (Google Cloud),global,Managed instance group shop-mig,~71 %,eligible,2026-10-07T06:00:00.000Z',
+      'Managed,host shop.example.com · backend service shop-bs · URL map shop-lb · global external Application Load Balancer,dormeto-dev (Google Cloud),global,Compute Engine VM shop-vm,~71 %,managed as Shop,2026-10-07T06:00:00.000Z',
+    ]);
+    expectEveryColumnSaid(wrapper, 'discovery', aws);
+    wrapper.unmount();
+  });
+
+  it('exports every candidate of the status and the filters shown, reading the API\'s largest pages one at a time, the filters in the PDF', async () => {
+    server.list = pagesOf(numbered(450));
+    const wrapper = await mountView();
+    const type = async (label: string, value: string) => {
+      await wrapper.findAll('.dm-filter').find((f) => f.text().includes(label))!.find('input').setValue(value);
+      await sleep(450);
+      await flushPromises();
+    };
+    await type('Account or project', '111122223333');
+    await type('Region', 'eu-west-3');
+    calls.length = 0;
+    server.mostInFlight = 0;
+    const lines = await exportCsv(wrapper);
+    const asked = calls.filter((c) => c.path.startsWith('/discovery/candidates?')).map((c) => Object.fromEntries(new URLSearchParams(c.path.split('?')[1])));
+    const where = { status: 'pending-onboarding', limit: '200', account: '111122223333', region: 'eu-west-3' };
+    expect(asked).toEqual([where, { ...where, cursor: '200' }, { ...where, cursor: '400' }]);
+    expect(server.mostInFlight).toBe(1);
+    expect(lines).toHaveLength(1 + 450);
+    expect([lines[1]!.split(',')[1], lines[450]!.split(',')[1]]).toEqual(['host h000.example.com · web · HTTPS:443 · priority 10', 'host h449.example.com · web · HTTPS:443 · priority 10']);
+    expect((wrapper.findComponent(DmTable).props() as { exported: unknown }).exported).toEqual({ name: 'discovery', title: 'Discovery candidates', filters: ['Status: To onboard', 'Account or project: 111122223333', 'Region: eu-west-3'] });
+    wrapper.unmount();
+  });
+
+  it('cuts an export at 5,000 candidates, saying so (the API does not count a filtered list)', async () => {
+    server.list = pagesOf(numbered(5_300));
+    const wrapper = await mountView();
+    calls.length = 0;
+    const lines = await exportCsv(wrapper);
+    // 5,001 read to know there are others: 26 pages of 200.
+    expect(calls.filter((c) => c.path.startsWith('/discovery/candidates?'))).toHaveLength(26);
+    expect(lines).toHaveLength(1 + 5_000 + 1);
+    expect(lines.at(-1)).toBe('"The first 5,000 rows: narrow the search or the filters to export the others.",,,,,,,');
     wrapper.unmount();
   });
 });

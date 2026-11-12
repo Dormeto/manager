@@ -62,6 +62,18 @@ describe('discovery cells', () => {
     expect(icon.attributes('aria-hidden')).not.toBe('true');
   });
 
+  it('shows `global` (a Google Cloud global load balancer) as the earth alone, named global, what it means in the tooltip', async () => {
+    const w = render(RegionLabel, { region: 'global' });
+    expect(w.text()).toBe('');
+    expect(w.find('img').exists()).toBe(false);
+    expect(w.find('.region-label .v-icon').exists()).toBe(true);
+    expect(w.find('.region-label').attributes('aria-label')).toBe('global');
+    expect(w.find('.region-label').attributes('tabindex')).toBe('0');
+    const tip = await tooltipOf(w, '.region-label');
+    expect(tip).toContain('A global load balancer');
+    expect(tip).toContain('It serves every region, so its candidates have none.');
+  });
+
   it('shows an unknown region as a globe, its code in the tooltip', async () => {
     const w = render(RegionLabel, { region: 'xx-moon-1' });
     expect(w.find('img').exists()).toBe(false);
@@ -97,11 +109,24 @@ describe('discovery cells', () => {
     expect(tip).not.toContain('CloudWatch');
   });
 
-  it('shows a status by its short name, its meaning and transitions in the tooltip', async () => {
+  it('shows a status as its icon alone, its short name the icon\'s and the tooltip\'s first line, its meaning and transitions under it', async () => {
     const w = render(StatusChip, { status: 'pending-onboarding' });
-    expect(w.text()).toBe('To onboard');
-    const tip = await tooltipOf(w, '.v-chip');
+    expect(w.text()).toBe('');
+    const mark = w.find('[data-test="status-mark"]');
+    expect([mark.attributes('aria-label'), mark.attributes('tabindex'), mark.attributes('role')]).toEqual(['To onboard', '0', 'img']);
+    expect(mark.classes()).toContain('text-primary');
+    const tip = await tooltipOf(w, '[data-test="status-mark"]');
+    // The name once, then what it means.
+    expect(tip.match(/To onboard/g)).toHaveLength(1);
+    expect(tip).toContain('Eligible and in the perimeter');
     expect(tip).toContain('Onboard → Managed');
     expect(tip).toContain('Dismiss → Dismissed');
+  });
+
+  it('gives each discovery status its own icon', async () => {
+    const { STATUSES, statusIcon } = await import('../src/discovery');
+    const icons = STATUSES.map(statusIcon);
+    expect(new Set(icons).size).toBe(STATUSES.length);
+    for (const icon of icons) expect(icon).toMatch(/^M/);
   });
 });
