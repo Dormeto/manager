@@ -6,7 +6,8 @@
 // below don't name, an ambiguous match, or a Catalog that failed is null (not priced, never $0, never another family's
 // price); a failure caches nothing and is not asked again for five minutes. Without the Catalog (the API: a request would
 // wait for 45 MB), the table only: a miss is not priced and nothing is written (the daily savings job prices it).
-// This module imports types only from prices.ts (which imports it); its cache is AWS's (price-cache.ts).
+// This module imports types only from prices.ts (which imports it); its cache is the one both clouds' prices share
+// (price-cache.ts).
 import { createPriceCache, FAILURE_MS } from './price-cache.js';
 import type { CatalogSku, Discounts, GoogleCatalogPort, PriceCache, StoppedItem } from './prices.js';
 

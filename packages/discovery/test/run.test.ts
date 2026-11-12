@@ -141,6 +141,29 @@ describe('runDiscovery', () => {
     expect(reads).toEqual([A.id]);
   });
 
+  it('fails the pair with the store\'s error when the stored idle shares a scan asks for can\'t be read; the run is partial', async () => {
+    const s = setup({ cfg: config({ regions: ['eu-west-1', 'eu-west-3'], filters: [filter('a', [{ accountIds: [A.id] }])] }) });
+    await s.ready;
+    const accountCandidates = s.store.accountCandidates.bind(s.store);
+    let reads = 0;
+    s.deps.store = {
+      ...s.store,
+      accountCandidates: (account: string) => (++reads === 1
+        ? Promise.reject(Object.assign(new Error('Throughput exceeds the current capacity of your table'), { name: 'ProvisionedThroughputExceededException' }))
+        : accountCandidates(account)),
+    };
+    // eu-west-1's CloudWatch fails: its scan asks for the shares, as scanRegion does; eu-west-3's answers.
+    s.deps.scan = async (_c, where, options) => {
+      const kept = where.region === 'eu-west-1' ? (await options!.storedIdle()).get(`rule-${where.account}-${where.region}`) : undefined;
+      return [rule({ id: `rule-${where.account}-${where.region}`, account: where.account, region: where.region, ...kept })];
+    };
+    const run = await runDiscovery(s.deps, { source: 'manual' });
+    expect(run.status).toBe('partial');
+    expect(run.targets.map((t) => [t.region, t.status, t.error])).toEqual([
+      ['eu-west-1', 'error', 'ProvisionedThroughputExceededException: Throughput exceeds the current capacity of your table'], ['eu-west-3', 'ok', undefined],
+    ]);
+  });
+
   it('scans at most 8 pairs at a time', async () => {
     const regions = Array.from({ length: 20 }, (_, i) => `eu-test-${i + 1}`);
     const s = setup({ cfg: config({ regions, filters: [filter('a', [{ accountIds: [A.id] }])] }), delayMs: 5 });

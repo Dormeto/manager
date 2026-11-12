@@ -1,13 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { scanRegion } from '../src/scan.js';
+import { scanRegion, type ScanPorts } from '../src/scan.js';
 import type { ScannedRule } from '../src/types.js';
-import { BATCH_ASG_ARN, RULES, TGS, scanPorts } from './scan-fakes.js';
+import { BATCH_ASG_ARN, P, RULES, TGS, scanPorts } from './scan-fakes.js';
 
 const NOW = () => Date.UTC(2026, 9, 4, 12, 30);
 const WHERE = { account: '111122223333', region: 'eu-west-1' };
 // Target group candidates by target group name, rule candidates by rule ARN.
 const byKey = (candidates: ScannedRule[]): Record<string, ScannedRule> =>
   Object.fromEntries(candidates.map((c) => [c.id.includes(':targetgroup/') ? c.targetGroup ?? c.id : c.id, c]));
+
+// A region with one load balancer and `n` eligible target groups g0, g1, …, a rule and an instance each.
+function manyGroups(n: number) {
+  const lb = `${P}:loadbalancer/app/many/1`;
+  const listener = `${P}:listener/app/many/1/l443`;
+  const arn = (i: number) => `${P}:targetgroup/g${i}/1`;
+  const groups = Array.from({ length: n }, (_, i) => ({ TargetGroupArn: arn(i), TargetGroupName: `g${i}`, TargetType: 'instance' }));
+  const rules = groups.map((g, i) => ({ RuleArn: `rule-${i}`, Priority: String(i + 1), Conditions: [{ Field: 'host-header', HostHeaderConfig: { Values: [`g${i}.example.com`] } }], Actions: [{ Type: 'forward', Order: 1, TargetGroupArn: g.TargetGroupArn }] }));
+  const ports: ScanPorts = {
+    elbv2: {
+      async describeLoadBalancers() { return { LoadBalancers: [{ LoadBalancerArn: lb, LoadBalancerName: 'many', Type: 'application' }] }; },
+      async describeListeners() { return { Listeners: [{ ListenerArn: listener, Port: 443, Protocol: 'HTTPS' }] }; },
+      async describeRules() { return { Rules: rules }; },
+      async describeTags({ ResourceArns }) { return { TagDescriptions: ResourceArns.map((ResourceArn) => ({ ResourceArn, Tags: [] })) }; },
+      async describeTargetGroups() { return { TargetGroups: groups }; },
+      async describeTargetHealth({ TargetGroupArn }) { return { TargetHealthDescriptions: [{ Target: { Id: `i-${TargetGroupArn.split('/')[1]}` } }] }; },
+    },
+  };
+  return { ports, arn };
+}
 
 describe('scanRegion', () => {
   it('gives one candidate per application target group, and one per rule that forwards to none', async () => {
@@ -94,6 +114,33 @@ describe('scanRegion', () => {
     let reads = 0;
     const found = byKey(await scanRegion(scanPorts({ hourly: { 'targetgroup/shop/1': [5, 0, 3] } }).ports, WHERE, { now: NOW, storedIdle: async () => { reads += 1; return new Map(); } }));
     expect([found.shop!.idleHours7d, reads]).toEqual([166, 0]);
+  });
+
+  // CloudWatch is asked 500 target groups at a time: only the batch it failed for keeps the stored shares.
+  it('keeps the stored idle share of the batch CloudWatch failed for only, a stored 0 as it is, the next batch taking CloudWatch\'s', async () => {
+    const { ports, arn } = manyGroups(501);
+    let asked = 0;
+    ports.cloudwatch = {
+      async getMetricData({ MetricDataQueries }) {
+        asked += 1;
+        if (asked === 1) throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' });
+        return { MetricDataResults: MetricDataQueries.map((q) => ({ Id: q.Id, Values: [5, 0, 3] })) };
+      },
+    };
+    const stored = new Map([[arn(0), { idleHours7d: 0, requests7d: 1200 }], [arn(1), { idleHours7d: 168, requests7d: 0 }], [arn(500), { idleHours7d: 1, requests7d: 1 }]]);
+    const warned: [string, object | undefined][] = [];
+    const found = byKey(await scanRegion(ports, WHERE, { now: NOW, storedIdle: async () => stored, log: { warn: (event, data) => warned.push([event, data]) } }));
+    expect(asked).toBe(2);
+    expect([0, 1, 2, 499, 500].map((i) => [found[`g${i}`]!.idleHours7d, found[`g${i}`]!.requests7d])).toEqual([[0, 1200], [168, 0], [null, null], [null, null], [166, 8]]);
+    expect(warned).toEqual([['CloudWatchIdleFailed', { ...WHERE, targetGroups: 500, error: 'ThrottlingException: Rate exceeded' }]]);
+  });
+
+  // The account's shares are read from the store only then: a store that fails fails the region, as before B9.
+  it('fails the region with the store\'s error when the stored idle shares can\'t be read while CloudWatch fails', async () => {
+    const { ports } = scanPorts();
+    ports.cloudwatch = { async getMetricData() { throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' }); } };
+    const storeError = Object.assign(new Error('Throughput exceeds the current capacity of your table'), { name: 'ProvisionedThroughputExceededException' });
+    await expect(scanRegion(ports, WHERE, { now: NOW, storedIdle: async () => { throw storeError; } })).rejects.toBe(storeError);
   });
 
   it('gives a managed group the backend of its application target group, for backend type filters', async () => {
