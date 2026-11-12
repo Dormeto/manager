@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { exclusionTargets, exclusionText, healthColor, pauseLabel, pauseLine, routerStatus, untilFrom } from '../src/pause';
-import type { Pause } from '../src/types';
+import { exclusionTargets, exclusionText, healthColor, healthText, pauseLabel, pauseLine, pausesText, routerStatus, untilFrom, workloadsText } from '../src/pause';
+import type { Pause, RouterInfo } from '../src/types';
 
 const now = Date.parse('2026-10-05T12:00:00Z');
 const pause = (over: Partial<Pause> = {}): Pause => ({ scope: 'workload', by: 'ops@example.com', at: '2026-10-05T11:00:00.000Z', reason: 'load test', until: null, keepAsleep: false, ...over });
@@ -29,6 +29,36 @@ describe('pauses', () => {
 
   it('colors the router health', () => {
     expect([healthColor('ok'), healthColor('warning'), healthColor('error'), healthColor(undefined)]).toEqual(['success', 'warning', 'error', 'grey']);
+  });
+
+  it('says the pauses for an export, their dates as ISO 8601', () => {
+    expect(pausesText([pause({ scope: 'router', until: '2026-10-05T14:00:00.000Z' })])).toBe('Router paused by ops@example.com at 2026-10-05T11:00:00.000Z: load test; resumes at 2026-10-05T14:00:00.000Z');
+    expect(pausesText([pause({ reason: 'excluded: migration', exclusionId: 'x1' }), pause({ keepAsleep: true })]))
+      .toBe('Excluded by ops@example.com at 2026-10-05T11:00:00.000Z: migration · Paused by ops@example.com at 2026-10-05T11:00:00.000Z: load test; asleep workloads left asleep');
+    expect(pausesText([])).toBe('');
+    expect(pausesText(undefined)).toBe('');
+  });
+});
+
+// A router's Health and Workloads cells in words (Routers' exports and search, tables design §5).
+describe('a router in words', () => {
+  const r: RouterInfo = { name: 'dmtr-a', region: 'eu-west-3' };
+  it('says its health: the status, each problem (its level when it differs), an open alert, unreachable, not reporting', () => {
+    expect(healthText({ ...r, health: { status: 'ok', problems: [] } })).toBe('ok');
+    expect(healthText({ ...r, health: { status: 'error', problems: [{ level: 'error', text: 'idle check late' }, { level: 'warning', text: 'controller: 2 errors in 24 hours' }] } }))
+      .toBe('error: idle check late; controller: 2 errors in 24 hours (warning)');
+    expect(healthText({ ...r, error: 'timed out', reporting: false })).toBe('unreachable: timed out');
+    expect(healthText({ ...r })).toBe('no health report: upgrade to 0.16 for health');
+    expect(healthText({ ...r, reporting: false, health: { status: 'warning', problems: [{ level: 'warning', text: 'drift' }] } }, { level: 'warning', since: '2026-10-05T09:00:00.000Z' }))
+      .toBe('warning: drift · alert since 2026-10-05T09:00:00.000Z · not reporting');
+  });
+
+  it('says its workloads by state, then the paused ones', () => {
+    expect(workloadsText({ ...r, workloads: 5, workloadStates: { AWAKE: 3, ASLEEP: 1, FAILED: 1 }, paused: 1 })).toBe('3 awake, 1 asleep, 1 failed, 1 paused');
+    expect(workloadsText({ ...r, workloads: 5, workloadStates: { ASLEEP: 5 }, paused: 0 })).toBe('5 asleep');
+    // A router known by its list answer only: its count.
+    expect(workloadsText({ ...r, workloads: 4 })).toBe('4');
+    expect(workloadsText({ ...r })).toBe('');
   });
 });
 

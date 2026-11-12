@@ -6,9 +6,12 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
+import { mdiPauseCircleOutline } from '@mdi/js';
 import RoutersView from '../src/views/RoutersView.vue';
 import { useSession } from '../src/stores/session';
+import { download } from '../src/table-export';
 
+vi.mock('../src/table-export', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/table-export')>()), download: vi.fn() }));
 const calls: { path: string; init?: RequestInit }[] = [];
 let failPut = false;
 // The workload defaults as never set by an administrator (no who, no when).
@@ -17,8 +20,12 @@ let defaultsJoin: number | null = null;
 let defaultsEnded: number | null = null;
 let defaultsError: string | null = null;
 const DRIFT = '5 drift repairs in 24 hours: infrastructure as code changed what onboarding added (see the workloads)';
+// The open alarm on dmtr-dev-eu-west-1.
+const ALARM_SINCE = new Date(Date.now() - 3 * 3_600_000).toISOString();
 // The server's side: the upgrade running on dmtr-dev-eu-west-3 (named by /routers while it runs) and how it ended.
 let withGoogle = false;
+// A router older than 0.16: no health report.
+let withOld = false;
 const server: { running: string | null; ended: { status: string; error?: string } } = { running: null, ended: { status: 'succeeded' } };
 vi.mock('../src/api', () => ({
   api: vi.fn(async (path: string, init?: RequestInit) => {
@@ -29,6 +36,8 @@ vi.mock('../src/api', () => ({
     }
     if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'upgrade-router', target: { account: '111122223333', region: 'eu-west-3' }, ...server.ended };
     if (path.startsWith('/workloads?')) return { workloads: [{ workloadId: 'a4dffc5bf369a297', router: 'dmtr-dev-eu-west-3', state: 'ASLEEP' }], total: 1 };
+    if (path.endsWith('/pause')) return { woken: [] };
+    if (path.endsWith('/resume')) return { resumed: true };
     if (path.startsWith('/routers/')) {
       return {
         health: { checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: null, lambda: { controller: { errors: 0, throttles: 0 } }, queues: { check: 0, controller: 0 }, concurrency: null, ipLists: [] },
@@ -43,7 +52,7 @@ vi.mock('../src/api', () => ({
     if (path === '/ip-lists') return { catalog: 's3://b/catalog.json', lists: [{ name: 'ipsum', url: 'https://x/ipsum', action: 'defer', refreshHours: 24, version: '1', entries: 12, fetchedAt: new Date().toISOString() }] };
     if (path === '/alerts') {
       return {
-        alarms: [{ id: 'router#111122223333#eu-west-1', kind: 'router', name: 'dmtr-dev-eu-west-1', account: '111122223333', region: 'eu-west-1', level: 'warning', since: new Date(Date.now() - 3 * 3_600_000).toISOString(), problems: [] }],
+        alarms: [{ id: 'router#111122223333#eu-west-1', kind: 'router', name: 'dmtr-dev-eu-west-1', account: '111122223333', region: 'eu-west-1', level: 'warning', since: ALARM_SINCE, problems: [] }],
         notifications: { topicArn: 'arn', confirmed: 1, pending: 0 },
       };
     }
@@ -55,7 +64,8 @@ vi.mock('../src/api', () => ({
         { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0,
           health: { status: 'warning', problems: [{ level: 'warning', text: DRIFT }] },
           pauses: [{ scope: 'router', reason: 'load test', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z' }] },
-        { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, health: { status: 'ok', problems: [] } },
+        { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, paused: 2, health: { status: 'ok', problems: [] } },
+        ...(withOld ? [{ name: 'dmtr-old-eu-west-2', region: 'eu-west-2', account: '111122223333', source: 'manager', version: '0.15.2', build: '0a1b2c3d4e5f', workloads: 1 }] : []),
         ...(withGoogle ? [{ name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', version: '0.40.0', build: 'b1c2d3e4f5a6', workloads: 2, workloadStates: { ASLEEP: 2 }, health: { status: 'ok', problems: [] } }] : []),
       ],
     };
@@ -70,7 +80,7 @@ Object.defineProperty(window, 'visualViewport', {
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mountView(path = '/routers', role: 'admin' | 'operator' = 'admin') {
+async function mountView(path = '/routers', role: 'admin' | 'operator' | 'viewer' = 'admin') {
   const pinia = createPinia();
   setActivePinia(pinia);
   useSession().role = role;
@@ -87,6 +97,38 @@ const hover = async (el: { trigger: (e: string) => Promise<void> }) => {
   await nextTick();
   await sleep(300);
 };
+// A column's cell in a router's row, by the column's title.
+const cellOf = (wrapper: Awaited<ReturnType<typeof mountView>>, name: string, column: string) => {
+  const titles = wrapper.findAll('thead th').map((th) => th.text());
+  return rowOf(wrapper, name).findAll('td')[titles.indexOf(column)]!;
+};
+// A row's "⋮" opens its menu (the items of the menus open), and closes it again; a click during a menu's closing
+// transition would be lost, hence the wait.
+const menuItems = () => [...document.querySelectorAll<HTMLElement>('.v-overlay--active .v-list-item')];
+async function openMenu(wrapper: Awaited<ReturnType<typeof mountView>>, name: string) {
+  await rowOf(wrapper, name).find('[data-test="dm-row-menu"]').trigger('click');
+  await flushPromises();
+  return menuItems();
+}
+async function closeMenu(wrapper: Awaited<ReturnType<typeof mountView>>, name: string) {
+  await rowOf(wrapper, name).find('[data-test="dm-row-menu"]').trigger('click');
+  await flushPromises();
+  await sleep(350);
+}
+// A router's menu, as its items' titles (null: no menu).
+async function menuOf(wrapper: Awaited<ReturnType<typeof mountView>>, name: string): Promise<string[] | null> {
+  if (!rowOf(wrapper, name).find('[data-test="dm-row-menu"]').exists()) return null;
+  const titles = (await openMenu(wrapper, name)).map((i) => i.textContent!.trim());
+  await closeMenu(wrapper, name);
+  return titles;
+}
+async function choose(wrapper: Awaited<ReturnType<typeof mountView>>, name: string, title: string) {
+  (await openMenu(wrapper, name)).find((i) => i.textContent?.trim() === title)!.click();
+  await flushPromises();
+  await sleep(350);
+}
+// A button of the dialog open.
+const buttonOfDialog = (text: string) => [...document.querySelectorAll('.v-overlay--active button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
 
 describe('Routers view', () => {
   beforeEach(() => {
@@ -94,6 +136,7 @@ describe('Routers view', () => {
     server.running = null;
     server.ended = { status: 'succeeded' };
     withGoogle = false;
+    withOld = false;
     document.body.innerHTML = '';
   });
 
@@ -109,7 +152,7 @@ describe('Routers view', () => {
     expect(aws.find('.region-label').attributes('aria-label')).toBe('eu-west-1, Europe (Ireland)');
     // Installed by the CLI: no upgrade and no uninstallation from the dashboard.
     expect(gcp.find('button[aria-label^="Upgrade"]').exists()).toBe(false);
-    expect(gcp.find('button[aria-label^="Uninstall"]').exists()).toBe(false);
+    expect(await menuOf(wrapper, 'dmtr-dormeto-dev-europe-west2')).toEqual(['Pause…']);
     wrapper.unmount();
   });
 
@@ -170,15 +213,23 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
-  it('explains the uninstallation in a tooltip, and asks for confirmation before it', async () => {
+  it('explains the uninstallation in a tooltip in the row\'s menu, and asks for confirmation before it', async () => {
     const wrapper = await mountView();
-    const remove = wrapper.find('button[aria-label="Uninstall dmtr-dev-eu-west-3"]');
-    await hover(remove);
-    expect(document.body.textContent).toMatch(/asks for confirmation/i);
-    await remove.trigger('click');
+    const remove = (await openMenu(wrapper, 'dmtr-dev-eu-west-3')).find((i) => i.textContent?.trim() === 'Uninstall…')!;
+    expect(remove.classList).toContain('text-error');
+    remove.dispatchEvent(new MouseEvent('mouseenter'));
+    await nextTick();
+    await sleep(300);
+    expect(document.body.textContent).toMatch(/Uninstall dmtr-dev-eu-west-3: deletes every resource.*asks for confirmation/i);
+    remove.click();
     await flushPromises();
+    await sleep(350);
     expect(document.body.textContent).toContain('Uninstall dmtr-dev-eu-west-3?');
     expect(calls.some((c) => c.path === '/operations')).toBe(false);
+    buttonOfDialog('Uninstall').click();
+    await flushPromises();
+    const started = calls.find((c) => c.path === '/operations')!;
+    expect(JSON.parse(String(started.init!.body))).toEqual({ type: 'uninstall-router', router: 'dmtr-dev-eu-west-3' });
     wrapper.unmount();
   });
 
@@ -234,9 +285,13 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
-  it('opens the workload a "1 asleep" chip counts, and explains it in a tooltip', async () => {
+  it('opens the workload a "×1" asleep chip counts, named and explained in its tooltip', async () => {
     const wrapper = await mountView();
-    const chip = rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('.v-chip').find((c) => c.text() === '1 asleep')!;
+    const chip = rowOf(wrapper, 'dmtr-dev-eu-west-3').find('[data-test="state-count"]');
+    expect(chip.text()).toBe('×1');
+    expect(chip.attributes('aria-label')).toBe('1 workload asleep on dmtr-dev-eu-west-3: open it');
+    expect(chip.attributes('role')).toBe('button');
+    expect(chip.classes()).toContain('text-info');
     await hover(chip);
     expect(document.body.textContent).toContain('1 workload asleep on dmtr-dev-eu-west-3');
     await chip.trigger('click');
@@ -247,9 +302,10 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
-  it('opens the list of the workloads a "5 asleep" chip counts', async () => {
+  it('opens the list of the workloads a "×5" asleep chip counts', async () => {
     const wrapper = await mountView();
-    const chip = rowOf(wrapper, 'dmt-dev').findAll('.v-chip').find((c) => c.text() === '5 asleep')!;
+    const chip = rowOf(wrapper, 'dmt-dev').find('[data-test="state-count"]');
+    expect(chip.text()).toBe('×5');
     await hover(chip);
     expect(document.body.textContent).toContain('5 workloads asleep on dmt-dev');
     await chip.trigger('click');
@@ -259,31 +315,106 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
-  it('explains Pause and Resume in tooltips', async () => {
+  it('shows the paused workloads as one more chip of the same form: the pause icon and ×N in the pause\'s color', async () => {
     const wrapper = await mountView();
-    await hover(rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('button').find((b) => b.text() === 'Pause')!);
-    expect(document.body.textContent).toMatch(/never naps its workloads/);
-    await hover(rowOf(wrapper, 'dmtr-dev-eu-west-1').findAll('button').find((b) => b.text() === 'Resume')!);
-    expect(document.body.textContent).toMatch(/nap again when idle/);
+    const chip = rowOf(wrapper, 'dmt-dev').find('[data-test="paused-count"]');
+    expect(chip.text()).toBe('×2');
+    expect(chip.classes()).toContain('text-secondary');
+    expect(chip.findComponent({ name: 'VIcon' }).props('icon')).toBe(mdiPauseCircleOutline);
+    expect(chip.attributes('tabindex')).toBe('0');
+    expect(chip.attributes('aria-label')).toBe('2 workloads paused on dmt-dev: never napped until resumed; requests still wake them');
+    await hover(chip);
+    expect(document.querySelector('.v-overlay--active')?.textContent).toBe('2 workloads paused on dmt-dev: never napped until resumed; requests still wake them');
+    expect(rowOf(wrapper, 'dmtr-dev-eu-west-3').find('[data-test="paused-count"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
-  it('names the actions column, and keeps a router\'s actions on one line', async () => {
+  it('says no state, pause or health word in a cell: the icons are named by their words, the counts are ×N', async () => {
+    withOld = true;
     const wrapper = await mountView();
-    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    for (const name of ['dmtr-dev-eu-west-3', 'dmtr-dev-eu-west-1', 'dmt-dev', 'dmtr-old-eu-west-2']) {
+      expect(cellOf(wrapper, name, 'Health').text(), name).toBe('');
+      expect(cellOf(wrapper, name, 'Pause').text(), name).toBe('');
+      // A router known by its list answer only shows its count.
+      expect(cellOf(wrapper, name, 'Workloads').text(), name).toMatch(/^((×\d+)+|\d+)$/);
+    }
+    const names = (name: string, column: string) => cellOf(wrapper, name, column).findAll('[data-test="status-mark"]').map((m) => m.attributes('aria-label'));
+    expect(names('dmtr-dev-eu-west-3', 'Health')).toEqual(['ok']);
+    expect(names('dmtr-dev-eu-west-1', 'Health')).toEqual(['warning', 'alert since 3 h ago']);
+    expect(names('dmtr-old-eu-west-2', 'Health')).toEqual(['no health report']);
+    expect(names('dmtr-dev-eu-west-1', 'Pause')).toEqual(['paused']);
+    expect(names('dmt-dev', 'Pause')).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('explains Pause and Resume in tooltips in the rows\' menus', async () => {
+    const wrapper = await mountView();
+    const tip = async (name: string, title: string) => {
+      const item = (await openMenu(wrapper, name)).find((i) => i.textContent?.trim() === title)!;
+      item.dispatchEvent(new MouseEvent('mouseenter'));
+      await nextTick();
+      await sleep(300);
+      const text = document.body.textContent;
+      await closeMenu(wrapper, name);
+      return text;
+    };
+    expect(await tip('dmtr-dev-eu-west-3', 'Pause…')).toMatch(/never naps its workloads/);
+    expect(await tip('dmtr-dev-eu-west-1', 'Resume')).toMatch(/nap again when idle/);
+    wrapper.unmount();
+  });
+
+  it('pauses a router from its menu after asking a reason, and resumes one at once', async () => {
+    const wrapper = await mountView();
+    await choose(wrapper, 'dmtr-dev-eu-west-3', 'Pause…');
+    expect(document.querySelector('.v-overlay--active .v-card-title')?.textContent).toBe('Pause dmtr-dev-eu-west-3');
+    const reason = document.querySelector('.v-overlay--active input') as HTMLInputElement;
+    reason.value = 'load test';
+    reason.dispatchEvent(new Event('input'));
+    await flushPromises();
+    buttonOfDialog('Pause').click();
+    await flushPromises();
+    const paused = calls.find((c) => c.path === '/routers/dmtr-dev-eu-west-3/pause')!;
+    expect(JSON.parse(String(paused.init!.body))).toMatchObject({ reason: 'load test', keepAsleep: false });
+    await sleep(350);
+    await choose(wrapper, 'dmtr-dev-eu-west-1', 'Resume');
+    expect(calls.some((c) => c.path === '/routers/dmtr-dev-eu-west-1/resume' && c.init?.method === 'POST')).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('puts a router\'s actions in its row\'s menu, last: Pause or Resume for operators, Uninstall for administrators of what the manager installed', async () => {
+    withOld = true;
+    const admin = await mountView();
+    const headers = admin.findAll('thead th').map((th) => th.text());
+    expect(headers.at(-1)).toBe('Actions');
     expect(headers.indexOf('Actions')).toBe(headers.indexOf('Pause') + 1);
-    const actions = rowOf(wrapper, 'dmtr-dev-eu-west-3').findAll('td')[headers.indexOf('Actions')]!;
-    expect(actions.find('.flex-nowrap').findAll('button').length).toBe(2);
-    wrapper.unmount();
+    expect(admin.find('.dm-routers thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
+    expect(rowOf(admin, 'dmtr-dev-eu-west-3').find('[data-test="dm-row-menu"]').attributes('aria-label')).toBe('Actions for dmtr-dev-eu-west-3 (111122223333, eu-west-3)');
+    expect(await menuOf(admin, 'dmtr-dev-eu-west-3')).toEqual(['Pause…', 'Uninstall…']);
+    expect(await menuOf(admin, 'dmtr-dev-eu-west-1')).toEqual(['Resume', 'Uninstall…']);
+    expect(await menuOf(admin, 'dmt-dev')).toEqual(['Pause…']);
+    // No health report (before 0.16): no pause.
+    expect(await menuOf(admin, 'dmtr-old-eu-west-2')).toEqual(['Uninstall…']);
+    admin.unmount();
+    const operator = await mountView('/routers', 'operator');
+    expect(await menuOf(operator, 'dmtr-dev-eu-west-3')).toEqual(['Pause…']);
+    expect(await menuOf(operator, 'dmtr-dev-eu-west-1')).toEqual(['Resume']);
+    expect(await menuOf(operator, 'dmtr-old-eu-west-2')).toBeNull();
+    operator.unmount();
+    const viewer = await mountView('/routers', 'viewer');
+    expect(viewer.findAll('[data-test="dm-row-menu"]')).toHaveLength(0);
+    expect(viewer.find('.dm-routers [data-test="dm-table-menu"]').exists()).toBe(true);
+    viewer.unmount();
   });
 
-  it('shows a long health problem on one line, cut short, the whole of it in its tooltip', async () => {
+  it('says a warning\'s problems in the health icon\'s tooltip, not in the cell', async () => {
     const wrapper = await mountView();
-    const shown = rowOf(wrapper, 'dmtr-dev-eu-west-1').find('.health-problem');
-    expect(shown.classes()).toContain('text-truncate');
-    expect(shown.text()).toBe(DRIFT);
-    await hover(rowOf(wrapper, 'dmtr-dev-eu-west-1').find('[tabindex="0"]:has(.health-problem)'));
-    expect(document.body.textContent).toContain(`warning: ${DRIFT}`);
+    const mark = cellOf(wrapper, 'dmtr-dev-eu-west-1', 'Health').find('[data-test="status-mark"]');
+    expect(cellOf(wrapper, 'dmtr-dev-eu-west-1', 'Health').text()).not.toContain(DRIFT);
+    await hover(mark);
+    const tip = document.querySelector('.v-overlay--active')!;
+    expect(tip.querySelector('.dm-status__label')?.textContent).toBe('warning');
+    expect(tip.textContent).toContain(`warning: ${DRIFT}`);
+    expect(tip.textContent).toContain('alert since 3 h ago');
     wrapper.unmount();
   });
 
@@ -298,10 +429,40 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
-  it('dates an open alarm in the router\'s health cell', async () => {
+  it('marks an open alarm with a bell beside the health icon, dated in its name and its tooltip', async () => {
     const wrapper = await mountView();
-    expect(rowOf(wrapper, 'dmtr-dev-eu-west-1').text()).toContain('alert since 3 h ago');
-    expect(rowOf(wrapper, 'dmt-dev').text()).not.toContain('alert since');
+    const bell = cellOf(wrapper, 'dmtr-dev-eu-west-1', 'Health').findAll('[data-test="status-mark"]')[1]!;
+    expect(bell.attributes('aria-label')).toBe('alert since 3 h ago');
+    expect(bell.classes()).toContain('text-warning');
+    await hover(bell);
+    expect(document.querySelector('.v-overlay--active .dm-status__label')?.textContent).toBe('alert since 3 h ago');
+    expect(cellOf(wrapper, 'dmt-dev', 'Health').findAll('[data-test="status-mark"]')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('searches what the cells say: "paused" finds the paused router and the one with paused workloads', async () => {
+    const wrapper = await mountView();
+    await wrapper.find('.dm-routers [data-test="dm-table-search"] input').setValue('paused');
+    await flushPromises();
+    expect(wrapper.findAll('.dm-routers tbody tr').map((tr) => tr.find('.dm-router__name').text())).toEqual(['dmtr-dev-eu-west-1', 'dmt-dev']);
+    wrapper.unmount();
+  });
+
+  it('exports its routers with each column in words: where, version and build, health and its problems, workloads by state and paused, the pause', async () => {
+    const wrapper = await mountView();
+    await wrapper.find('.dm-routers [data-test="dm-table-menu"]').trigger('click');
+    await flushPromises();
+    (document.querySelector('.v-overlay--active [data-test="dm-table-export-csv"]') as HTMLElement).click();
+    await flushPromises();
+    const [name, , body] = vi.mocked(download).mock.calls.at(-1)!;
+    expect(name).toMatch(/^dormeto-routers-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect((body as string).split('\r\n')).toEqual([
+      'Router,Version,Health,Idle check,Workloads,Pause',
+      '"dmtr-dev-eu-west-3 (111122223333, eu-west-3)",0.22.6 (build 79c810cca8d3),ok,,1 asleep,',
+      `"dmtr-dev-eu-west-1 (111122223333, eu-west-1)",0.23.0 (build a1b2c3d4e5f6),warning: ${DRIFT} · alert since ${ALARM_SINCE},,0,Router paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test`,
+      '"dmt-dev (111122223333, eu-west-1)",0.22.6 (build fc69a52b9b43),ok,,"5 asleep, 2 paused",',
+      '',
+    ]);
     wrapper.unmount();
   });
 

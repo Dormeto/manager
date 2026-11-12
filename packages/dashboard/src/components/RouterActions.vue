@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// A router's actions: uninstall (administrators, routers the manager installed, after a confirmation), pause with a reason
-// and resume (operators). The parent runs them (router-operations.ts).
+// A router's actions on its own view: uninstall (administrators, routers the manager installed, after a confirmation), pause
+// with a reason and resume (operators). The parent runs them (router-operations.ts). Routers has them in each row's menu.
 import { ref } from 'vue';
 import { mdiDeleteOutline, mdiPause, mdiPlay } from '@mdi/js';
 import { pauseHelp, resumeHelp, uninstallHelp } from '../router-actions';
 import { useSession } from '../stores/session';
 import PauseDialog from './PauseDialog.vue';
+import UninstallDialog from './UninstallDialog.vue';
 import type { RouterInfo } from '../types';
 
 defineProps<{ router: RouterInfo }>();
@@ -33,19 +34,7 @@ const pausing = ref(false);
       </v-tooltip>
     </template>
   </div>
-  <v-dialog v-model="removing" max-width="460">
-    <v-card :title="`Uninstall ${router.name}?`">
-      <template #prepend>
-        <v-avatar color="error" variant="tonal" rounded="lg" size="36"><v-icon :icon="mdiDeleteOutline" size="20" /></v-avatar>
-      </template>
-      <v-card-text class="text-medium-emphasis">Every resource of the router is deleted. Refused while it has workloads: offboard them first.</v-card-text>
-      <v-card-actions class="px-4 pb-4">
-        <v-spacer />
-        <v-btn variant="text" @click="removing = false">Cancel</v-btn>
-        <v-btn color="error" variant="flat" @click="removing = false; emit('uninstall')">Uninstall</v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+  <UninstallDialog v-model="removing" :subject="router.name" @confirm="emit('uninstall')" />
   <PauseDialog v-model="pausing" :subject="router.name" router @submit="pausing = false; emit('pause', $event)" />
 </template>
 

@@ -13,14 +13,20 @@ Object.defineProperty(window, 'visualViewport', {
   value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
 });
 
+// A state as its icon in its color (tables design §3): no word beside it; the word is its name and its tooltip's first line.
 describe('StateChip', () => {
-  it('shows the state with its color', () => {
+  it('shows the state as its icon in its color, no word; the word is its accessible name, reached by the keyboard', () => {
     const wrapper = mount(StateChip, { props: { state: 'FAILED' }, global: { plugins: [createVuetify({ components })] } });
-    expect(wrapper.text()).toBe('FAILED');
+    const chip = wrapper.find('[data-test="state-chip"]');
+    expect(chip.text()).toBe('');
+    expect(chip.attributes('role')).toBe('img');
+    expect(chip.attributes('aria-label')).toBe('Failed');
+    expect(chip.attributes('tabindex')).toBe('0');
     expect(wrapper.html()).toContain('bg-error');
+    expect(wrapper.findComponent({ name: 'VTooltip' }).props('openOnFocus')).toBe(true);
   });
 
-  it('shows an icon for each state, and explains the state in a tooltip', async () => {
+  it('shows an icon for each state, and says the state then what it means in a tooltip', async () => {
     // As main.ts: the icons are SVG paths.
     const vuetify = () => createVuetify({ components, directives, icons: { defaultSet: 'mdi', aliases, sets: { mdi } } });
     const icons = new Set<string>();
@@ -34,7 +40,9 @@ describe('StateChip', () => {
     await wrapper.find('.v-chip').trigger('mouseenter');
     await nextTick();
     await new Promise((r) => setTimeout(r, 300));
-    expect(document.body.textContent).toMatch(/Asleep: .*the next request wakes it/);
+    const tip = document.querySelector('.v-overlay--active')!;
+    expect(tip.querySelector('.dm-state-chip__label')!.textContent).toBe('Asleep');
+    expect(tip.textContent).toMatch(/^AsleepThe backends are stopped.*the next request wakes it/);
     wrapper.unmount();
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stateHelp, stateSince } from '../src/state';
+import { stateMeaning, stateSince } from '../src/state';
 
 const run = { awakeSince: '2026-10-07T21:20:00.000Z', wakeStartedAt: '2026-10-07T21:18:00.000Z', failedAt: '2026-10-06T10:00:00.000Z', updatedAt: '2026-10-07T21:50:00.000Z' };
 
@@ -14,12 +14,13 @@ describe('workload state', () => {
     expect(stateSince({ ...run, state: 'UNKNOWN' })).toEqual({ label: 'State since', at: null });
   });
 
+  // A sentence under the state's name (the state chip's tooltip, tables design §3).
   it('explains each state', () => {
-    expect(stateHelp('AWAKE')).toMatch(/^Awake: requests go to the application/);
-    expect(stateHelp('NAPPING')).toMatch(/^Napping: /);
-    expect(stateHelp('ASLEEP')).toMatch(/^Asleep: .*the next request wakes it/);
-    expect(stateHelp('WAKING')).toMatch(/^Waking: /);
-    expect(stateHelp('FAILED')).toMatch(/^Failed: /);
-    expect(stateHelp('UNKNOWN')).toMatch(/^Unknown: /);
+    expect(stateMeaning('AWAKE')).toMatch(/^Requests go to the application/);
+    expect(stateMeaning('NAPPING')).toMatch(/^Requests go to the waker while the backends stop/);
+    expect(stateMeaning('ASLEEP')).toMatch(/^The backends are stopped.*the next request wakes it/);
+    expect(stateMeaning('WAKING')).toMatch(/^The backends are starting/);
+    expect(stateMeaning('FAILED')).toMatch(/^A wake or a nap did not finish/);
+    expect(stateMeaning('UNKNOWN')).toMatch(/^The router has not reported this workload's state yet/);
   });
 });

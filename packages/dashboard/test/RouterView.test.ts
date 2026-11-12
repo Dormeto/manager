@@ -108,9 +108,35 @@ describe('Router view', () => {
     expect(wrapper.find('[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.26.0"]').exists()).toBe(true);
     expect(text).toContain('controller: 2 errors in 24 hours');
     expect(text).toMatch(/alert since 10 min ago/);
-    expect(text).toContain('1 awake');
+    // The workloads by state as the Routers list shows them: the state's icon and ×N, named by the count and the state.
+    expect(wrapper.findAll('[data-test="state-count"]').map((c) => [c.text(), c.attributes('aria-label')])).toEqual([
+      ['×1', '1 workload awake on dmtr-dev-eu-west-3: open it'], ['×1', '1 workload asleep on dmtr-dev-eu-west-3: open it'],
+    ]);
     expect(text).toContain('111122223333');
     wrapper.unmount();
+  });
+
+  it('shows its health and alert, its pause and its paused workloads as the Routers list does: icons, no word beside them', async () => {
+    googleRouter = { ...GOOGLE_ROUTER, workloads: 3, workloadStates: { AWAKE: 3 }, paused: 3, pauses: [{ scope: 'router', by: 'ops@example.com', at: minutesAgo(30), reason: 'migration', until: null, keepAsleep: false }] };
+    try {
+      const installed = await mountView('dmtr-dev-eu-west-3');
+      const health = installed.find('.dm-hero [data-test="health-mark"]');
+      expect(health.text()).toBe('');
+      expect(health.findAll('[data-test="status-mark"]').map((m) => m.attributes('aria-label'))).toEqual(['warning', 'alert since 10 min ago']);
+      expect(installed.find('[data-test="paused-count"]').exists()).toBe(false);
+      installed.unmount();
+      const paused = await mountView(GCP);
+      expect(paused.find('.dm-hero [data-test="health-mark"] [data-test="status-mark"]').attributes('aria-label')).toBe('error');
+      const pause = paused.findAll('.dm-hero__chips [data-test="status-mark"]').find((m) => m.attributes('aria-label') === 'paused')!;
+      expect(pause.text()).toBe('');
+      const count = paused.find('[data-test="paused-count"]');
+      expect(count.text()).toBe('×3');
+      expect(count.attributes('aria-label')).toBe(`Every workload of ${GCP} is paused with it: never napped until it is resumed; requests still wake them`);
+      expect(paused.find('.dm-fact--wide').text()).not.toContain('paused');
+      paused.unmount();
+    } finally {
+      googleRouter = GOOGLE_ROUTER;
+    }
   });
 
   it('says where its configuration is changed: by the manager for one it installed, in its Terraform otherwise', async () => {

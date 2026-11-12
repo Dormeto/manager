@@ -1,9 +1,11 @@
 <script setup lang="ts">
-// "paused" or "excluded" next to a state, with who, when, why and the automatic resume of every pause in the tooltip.
+// A pause as its icon alone (tables design §3), beside a state: "paused" or "excluded" is its name and its tooltip's first
+// line, who, when, why and the automatic resume of every pause under it.
 import { computed } from 'vue';
 import { mdiCancel, mdiPauseCircleOutline } from '@mdi/js';
 import { useNow } from '../now';
 import { pauseLabel, pauseLine } from '../pause';
+import StatusMark from './StatusMark.vue';
 import type { Pause } from '../types';
 
 const props = defineProps<{ pauses?: Pause[] }>();
@@ -12,16 +14,12 @@ const label = computed(() => pauseLabel(props.pauses));
 </script>
 
 <template>
-  <v-tooltip v-if="label" location="top" max-width="420" open-on-focus>
-    <template #activator="{ props: activator }">
-      <v-chip v-bind="activator" :prepend-icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" variant="tonal" label tabindex="0" class="dm-pause">{{ label }}</v-chip>
-    </template>
+  <StatusMark v-if="label" :icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" :label="label" class="dm-pause">
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">{{ pauseLine(p, now) }}</div>
     <div class="text-body-small mt-1 dm-pause__note">Never napped while paused; requests still wake it.</div>
-  </v-tooltip>
+  </StatusMark>
 </template>
 
 <style scoped>
-.dm-pause { flex: none; }
 .dm-pause__note { opacity: 0.8; }
 </style>

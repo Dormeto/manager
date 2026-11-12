@@ -285,8 +285,8 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-url:hover .dm-url__host { text-decoration: underline; text-underline-offset: 3px; }
 .dm-url__host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-url__icon { flex: none; opacity: 0.7; }
-/* A paused chip under the state: the column stays narrow. */
-.dm-state { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+/* The state's icon, the pause's beside it: the column stays narrow. */
+.dm-state { display: inline-flex; align-items: center; gap: 6px; }
 .dm-mode { font: 500 0.72rem/1 var(--dm-mono); letter-spacing: 0.04em; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 
 /* Phones: each row a stacked card, its values on the right. */

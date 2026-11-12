@@ -7,14 +7,15 @@ const ICONS: Record<string, string> = {
 };
 export const stateIcon = (state: string): string => ICONS[state] ?? mdiHelpCircleOutline;
 
-const HELP: Record<string, string> = {
-  AWAKE: 'Awake: requests go to the application; it naps once idle for its idle window.',
-  NAPPING: 'Napping: requests go to the waker while the backends stop; a request meanwhile wakes it once the nap ends.',
-  ASLEEP: 'Asleep: the backends are stopped and requests go to the waker; the next request wakes it, unless the wake rules ignore or defer it.',
-  WAKING: 'Waking: the backends are starting; requests are held until the application answers, up to the wake timeout.',
-  FAILED: 'Failed: a wake or a nap did not finish; the next request or idle check tries again.',
+// What a state means, in a sentence under its name (the state chip's tooltip).
+const MEANING: Record<string, string> = {
+  AWAKE: 'Requests go to the application; it naps once idle for its idle window.',
+  NAPPING: 'Requests go to the waker while the backends stop; a request meanwhile wakes it once the nap ends.',
+  ASLEEP: 'The backends are stopped and requests go to the waker; the next request wakes it, unless the wake rules ignore or defer it.',
+  WAKING: 'The backends are starting; requests are held until the application answers, up to the wake timeout.',
+  FAILED: 'A wake or a nap did not finish; the next request or idle check tries again.',
 };
-export const stateHelp = (state: string): string => HELP[state] ?? 'Unknown: the router has not reported this workload\'s state yet.';
+export const stateMeaning = (state: string): string => MEANING[state] ?? 'The router has not reported this workload\'s state yet.';
 
 // In a few words, beside its share of the 7-day bar.
 const BRIEF: Record<string, string> = {

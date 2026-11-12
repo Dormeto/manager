@@ -1,19 +1,24 @@
 // Router management display helpers: pauses, router health, manual exclusions.
+import { mdiAlertOctagonOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiHelpCircleOutline, mdiLanDisconnect } from '@mdi/js';
 import { cloudOf } from '@dormeto/fleet/clouds';
 import { checkHealth, relative } from './format';
 import { resourceName } from './google';
-import type { ExclusionKind, ExclusionTarget, Pause } from './types';
+import type { AlarmInfo, ExclusionKind, ExclusionTarget, Pause, RouterInfo } from './types';
 
 export function pauseLabel(pauses: Pause[] | undefined): 'excluded' | 'paused' | null {
   if (!pauses?.length) return null;
   return pauses.some((p) => p.exclusionId) ? 'excluded' : 'paused';
 }
 
-export function pauseLine(p: Pause, now = Date.now()): string {
+// Who paused, when, why and the automatic resume; `when` says a date (relative to now by default).
+export function pauseLine(p: Pause, now = Date.now(), when = (iso: string) => relative(iso, now)): string {
   const who = p.exclusionId ? 'Excluded' : p.scope === 'router' ? 'Router paused' : 'Paused';
   const reason = p.exclusionId ? p.reason.replace(/^excluded: /, '') : p.reason;
-  return [`${who} by ${p.by} ${relative(p.at, now)}: ${reason}`, ...(p.until ? [`resumes ${relative(p.until, now)}`] : []), ...(p.keepAsleep ? ['asleep workloads left asleep'] : [])].join('; ');
+  return [`${who} by ${p.by} ${when(p.at)}: ${reason}`, ...(p.until ? [`resumes ${when(p.until)}`] : []), ...(p.keepAsleep ? ['asleep workloads left asleep'] : [])].join('; ');
 }
+
+// The pauses in words for an export and a search (a table's Pause column): their dates as ISO 8601.
+export const pausesText = (pauses: Pause[] | undefined): string => (pauses ?? []).map((p) => pauseLine(p, 0, (iso) => `at ${iso}`)).join(' · ');
 
 export type UntilChoice = 'none' | '1h' | '4h' | '1d' | '7d' | 'date';
 export const UNTIL_CHOICES: { value: UntilChoice; title: string }[] = [
@@ -35,6 +40,37 @@ export function untilFrom(choice: UntilChoice, now = Date.now(), date = ''): str
 
 const HEALTH: Record<string, string> = { ok: 'success', warning: 'warning', error: 'error' };
 export const healthColor = (status: string | undefined): string => (status && HEALTH[status]) || 'grey';
+const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warning: mdiAlertOutline, error: mdiAlertOctagonOutline };
+// A health status' or a problem level's icon.
+export const healthIcon = (level: string): string => HEALTH_ICONS[level] ?? mdiHelpCircleOutline;
+
+// A router's health as a mark (tables design §3): unreachable, its status, or none before router 0.16; its word is the label.
+export function healthMark(r: Pick<RouterInfo, 'error' | 'health'>): { icon: string; color?: string; label: string } {
+  if (r.error) return { icon: mdiLanDisconnect, color: 'error', label: 'unreachable' };
+  if (r.health) return { icon: healthIcon(r.health.status), color: healthColor(r.health.status), label: r.health.status };
+  return { icon: mdiHelpCircleOutline, label: 'no health report' };
+}
+// Why a router does not report, said where its health is.
+export const NOT_REPORTING = 'the manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager\'s event bus).';
+
+// A router's health in words for an export and a search (Routers' Health column): the status, each problem (its level when
+// it is not the status'), the open alert and since when (ISO 8601), the error's text, not reporting.
+export function healthText(r: Pick<RouterInfo, 'error' | 'health' | 'reporting'>, alarm?: Pick<AlarmInfo, 'level' | 'since'> | null): string {
+  const health = r.health;
+  const status = r.error
+    ? `unreachable: ${r.error}`
+    : health
+      ? [health.status, health.problems.map((p) => (p.level === health.status ? p.text : `${p.text} (${p.level})`)).join('; ')].filter(Boolean).join(': ')
+      : 'no health report: upgrade to 0.16 for health';
+  return [status, ...(alarm ? [`alert since ${alarm.since}`] : []), ...(r.reporting === false && !r.error ? ['not reporting'] : [])].join(' · ');
+}
+
+// A router's workloads in words (Routers' Workloads column): a count per state, then the paused ones; its count alone from a
+// router known by its list answer only.
+export function workloadsText(r: Pick<RouterInfo, 'workloads' | 'workloadStates' | 'paused'>): string {
+  if (!r.workloadStates) return r.workloads === undefined ? '' : String(r.workloads);
+  return [...Object.entries(r.workloadStates).map(([state, n]) => `${n} ${state.toLowerCase()}`), ...(r.paused ? [`${r.paused} paused`] : [])].join(', ');
+}
 
 // A router's status for the Overview: unreachable, its health, not reporting (a router known by its list answer only has
 // no health: its schedule alone could say ok while its checks fail), a late check, or ok.

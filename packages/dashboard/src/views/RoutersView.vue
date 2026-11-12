@@ -1,24 +1,29 @@
 <script setup lang="ts">
-// Routers (router management): version, health, idle check, workloads per state and pauses; pause and resume.
+// Routers (router management): version, health, idle check, workloads per state and pauses; each row's menu pauses,
+// resumes or uninstalls it, the table's exports the list (tables design §4, §5).
 import { ref } from 'vue';
-import { useDisplay } from 'vuetify';
-import { mdiAlertOctagonOutline, mdiAlertOutline, mdiBellRingOutline, mdiCheckCircleOutline, mdiLanDisconnect, mdiPlusCircleOutline, mdiRouterNetwork } from '@mdi/js';
+import { mdiDeleteOutline, mdiPause, mdiPlay, mdiPlusCircleOutline, mdiRouterNetwork } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { relative, rowCloud, stateColor } from '../format';
+import { relative, rowCloud } from '../format';
 import CloudMark from '../components/CloudMark.vue';
-import { healthColor } from '../pause';
+import { healthColor, healthText, pausesText, workloadsText } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
-import { workloadsHelp } from '../router-actions';
+import { pauseHelp, resumeHelp, uninstallHelp } from '../router-actions';
 import { useRouterOperations } from '../router-operations';
+import type { DmAction, DmHeader } from '../table';
 import type { Notice } from '../components/NoticeAlert.vue';
+import DmTable from '../components/DmTable.vue';
+import HealthMark from '../components/HealthMark.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import PauseChip from '../components/PauseChip.vue';
+import PauseDialog from '../components/PauseDialog.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import RegionLabel from '../components/RegionLabel.vue';
-import RouterActions from '../components/RouterActions.vue';
 import RouterVersion from '../components/RouterVersion.vue';
+import UninstallDialog from '../components/UninstallDialog.vue';
+import WorkloadCounts from '../components/WorkloadCounts.vue';
 import type { AlarmInfo, AlertsInfo, RouterInfo } from '../types';
 import IpListsPanel from '../components/IpListsPanel.vue';
 import WaitingPageCard from '../components/WaitingPageCard.vue';
@@ -31,13 +36,12 @@ import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 const session = useSession();
-const { smAndDown } = useDisplay();
 const routers = ref<RouterInfo[]>([]);
 const notice = ref<Notice | null>(null);
 const available = ref<string | null>(null);
 const installOpen = ref(false);
 const install = ref({ account: '', region: '' });
-// Open alarms of the watchdog (R6a), by router: dated in the health cell.
+// Open alarms of the watchdog (R6a), by router: a bell in the health cell.
 const alarms = ref<AlarmInfo[]>([]);
 const alarmOf = (r: RouterInfo) => alarms.value.find((a) => a.kind === 'router' && a.name === r.name);
 const { error, loading, nextAt, run } = usePoll(async () => {
@@ -58,18 +62,42 @@ function start(body: Record<string, unknown>, what: string) {
   return operation(body, what, routers.value.find((r) => r.name === body.router));
 }
 
-const headers = [
-  { title: 'Router', key: 'name' },
-  { title: 'Version', key: 'version' },
-  { title: 'Health', key: 'health', sortable: false },
-  { title: 'Idle check', key: 'lastScheduledCheckAt' },
-  { title: 'Workloads', key: 'workloads', sortable: false },
-  { title: 'Pause', key: 'pauses', sortable: false },
-  { title: 'Actions', key: 'actions', sortable: false, align: 'end' as const },
+// Each column's words: what search reads and an export prints (the marks' words, dates as ISO 8601). A router is named
+// with its account and region, which its cell shows under the name.
+const where = (r: RouterInfo) => [r.account, r.region].filter(Boolean).join(', ');
+const headers: DmHeader<RouterInfo>[] = [
+  { title: 'Router', key: 'name', text: (r) => (where(r) ? `${r.name} (${where(r)})` : r.name) },
+  { title: 'Version', key: 'version', text: (r) => (r.version ? `${r.version}${r.build ? ` (build ${r.build})` : ''}` : '') },
+  { title: 'Health', key: 'health', sortable: false, text: (r) => healthText(r, alarmOf(r)) },
+  { title: 'Idle check', key: 'lastScheduledCheckAt', text: (r) => r.lastScheduledCheckAt ?? '' },
+  { title: 'Workloads', key: 'workloads', sortable: false, text: workloadsText },
+  { title: 'Pause', key: 'pauses', sortable: false, text: (r) => pausesText(r.pauses) },
 ];
-// Presentation: a router's health as a color and an icon, the same reading as its chip.
+
+// A row's menu: pause (with a reason) or resume for operators, while the router reports its health (0.16 and later);
+// uninstall (after a confirmation) for administrators, of a router the manager installed.
+const target = ref<RouterInfo | null>(null);
+const pausing = ref(false);
+const removing = ref(false);
+function actions(r: RouterInfo): DmAction[] {
+  const pauses: DmAction[] = !session.canOperate || !r.health ? [] : r.pauses?.length
+    ? [{ title: 'Resume', icon: mdiPlay, help: resumeHelp(r.name), run: () => void resume(r) }]
+    : [{ title: 'Pause…', icon: mdiPause, help: pauseHelp(r.name), run: () => { target.value = r; pausing.value = true; } }];
+  const uninstall: DmAction[] = session.isAdmin && r.source === 'manager'
+    ? [{ title: 'Uninstall…', icon: mdiDeleteOutline, color: 'error', help: uninstallHelp(r.name), run: () => { target.value = r; removing.value = true; } }]
+    : [];
+  return [...pauses, ...uninstall];
+}
+function uninstall() {
+  const r = target.value!;
+  return start({ type: 'uninstall-router', router: r.name }, `Uninstallation of ${r.name}`);
+}
+function submitPause(body: { reason: string; until?: string; keepAsleep: boolean }) {
+  pausing.value = false;
+  return pause(target.value!, body);
+}
+// Presentation: a router's health as a color, the same reading as its health mark.
 const tone = (r: RouterInfo) => (r.error ? 'error' : r.health ? healthColor(r.health.status) : undefined);
-const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warning: mdiAlertOutline, error: mdiAlertOctagonOutline };
 </script>
 
 
@@ -88,7 +116,7 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
   <NoticeToast :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-card class="dm-routers">
-    <v-data-table :mobile="smAndDown" :headers="headers" :items="routers" :loading="loading && !routers.length" item-value="name" hide-default-footer>
+    <DmTable :headers="headers" :items="routers" :loading="loading && !routers.length" item-value="name" :actions="actions" :exported="{ name: 'routers', title: 'Routers' }">
       <template #loading><DmLoader label="Reading the routers…" :size="56" /></template>
       <template #no-data>
         <div class="dm-calm py-6">
@@ -109,50 +137,18 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
       <template #[`item.version`]="{ item }">
         <RouterVersion :router="item" :available="available" @upgrade="start({ type: 'upgrade-router', router: item.name }, `Upgrade of ${item.name} to ${available}`)" />
       </template>
-      <template #[`item.health`]="{ item }">
-        <div class="dm-health">
-          <v-chip v-if="item.error" color="error" variant="tonal" label :prepend-icon="mdiLanDisconnect">unreachable</v-chip>
-          <v-tooltip v-else-if="item.health" location="top" max-width="420" open-on-focus :disabled="!item.health.problems.length">
-            <template #activator="{ props }">
-              <span v-bind="props" class="dm-health__line" tabindex="0">
-                <v-chip :color="healthColor(item.health.status)" variant="tonal" label :prepend-icon="HEALTH_ICONS[item.health.status]">{{ item.health.status }}</v-chip>
-                <!-- The first problem on one line, cut short: the tooltip has them all, in full. -->
-                <span v-if="item.health.problems.length" class="health-problem text-truncate text-body-small text-medium-emphasis">{{ item.health.problems[0]!.text }}</span>
-                <span v-if="item.health.problems.length > 1" class="dm-health__more nowrap">+{{ item.health.problems.length - 1 }}</span>
-              </span>
-            </template>
-            <div v-for="p in item.health.problems" :key="p.text" class="text-body-medium dm-health__tip"><strong>{{ p.level }}</strong>: {{ p.text }}</div>
-          </v-tooltip>
-          <span v-else class="text-body-small text-medium-emphasis">upgrade to 0.16 for health</span>
-          <div v-if="alarmOf(item)" class="dm-health__alarm text-body-small" :class="`text-${alarmOf(item)!.level}`">
-            <v-icon :icon="mdiBellRingOutline" size="14" />alert since {{ relative(alarmOf(item)!.since, now) }}</div>
-          <div v-if="item.error" class="text-body-small text-error">{{ item.error }}</div>
-          <v-tooltip v-if="item.reporting === false && !item.error" location="top" max-width="380"
-            text="The manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager's event bus).">
-            <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" label class="mt-1" tabindex="0">not reporting</v-chip></template>
-          </v-tooltip>
-        </div>
-      </template>
+      <!-- The health's icon, a bell beside it for an open alert: the problems, the error and the rest in their tooltips. -->
+      <template #[`item.health`]="{ item }"><HealthMark :router="item" :alarm="alarmOf(item)" /></template>
       <template #[`item.lastScheduledCheckAt`]="{ item }"><span class="nowrap dm-num">{{ relative(item.lastScheduledCheckAt, now) }}</span></template>
       <template #[`item.workloads`]="{ item }">
-        <div class="dm-states">
-          <v-tooltip v-for="(n, state) in item.workloadStates ?? {}" :key="state" location="top" :text="workloadsHelp(item.name, String(state), n)">
-            <template #activator="{ props }">
-              <v-chip v-bind="props" :color="stateColor(String(state))" variant="tonal" size="small" label link class="dm-num"
-                @click="openWorkloads(item.name, String(state), n)">{{ n }} {{ String(state).toLowerCase() }}</v-chip>
-            </template>
-          </v-tooltip>
-          <span v-if="!item.workloadStates && item.workloads !== undefined" class="dm-num">{{ item.workloads }}</span>
-        </div>
-        <div v-if="item.paused" class="text-body-small text-medium-emphasis mt-1">{{ item.paused }} paused</div>
+        <WorkloadCounts v-if="item.workloadStates" :router="item" class="dm-states" @open="(state, n) => openWorkloads(item.name, state, n)" />
+        <span v-else-if="item.workloads !== undefined" class="dm-num">{{ item.workloads }}</span>
       </template>
       <template #[`item.pauses`]="{ item }"><PauseChip :pauses="item.pauses" /></template>
-      <template #[`item.actions`]="{ item }">
-        <RouterActions :router="item" @uninstall="start({ type: 'uninstall-router', router: item.name }, `Uninstallation of ${item.name}`)"
-          @pause="pause(item, $event)" @resume="resume(item)" />
-      </template>
-    </v-data-table>
+    </DmTable>
   </v-card>
+  <PauseDialog v-model="pausing" :subject="target?.name ?? ''" router @submit="submitPause" />
+  <UninstallDialog v-model="removing" :subject="target?.name ?? ''" @confirm="uninstall" />
   <div class="dm-defaults">
     <WorkloadDefaultsCard @notice="notice = $event" />
     <WorkloadTypesCard @notice="notice = $event" />
@@ -192,7 +188,6 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 .dm-routers :deep(.v-table__wrapper > table > thead > tr > th) { padding-inline: 12px !important; }
 .dm-routers :deep(.v-table__wrapper > table > * > tr > :first-child) { padding-inline-start: 18px !important; }
 .dm-routers :deep(.v-table__wrapper > table > * > tr > :last-child) { padding-inline-end: 16px !important; }
-.dm-routers :deep(.v-data-table-rows-loading > td), .dm-routers :deep(.v-data-table-rows-no-data > td) { height: auto !important; }
 
 .dm-router { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .dm-router__icon { flex: none; }
@@ -202,17 +197,8 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 .dm-router__name:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; border-radius: 4px; }
 .dm-router__where { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 0.78rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 
-.dm-health { min-width: 11rem; max-width: 15rem; }
-/* The chip, then the first problem beside it, or under it when long. */
-.dm-health__line { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; max-width: 100%; border-radius: 8px; }
-.dm-health__line > .v-chip { flex: none; }
-.dm-health__line:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
-.health-problem { display: inline-block; max-width: 10.5rem; min-width: 0; }
-.dm-health__more { font: 500 0.7rem/1 var(--dm-mono); padding: 3px 6px; border-radius: 6px; background: rgba(var(--v-theme-on-surface), 0.07); }
-.dm-health__alarm { display: flex; align-items: center; gap: 5px; margin-top: 6px; font-weight: 500; }
-.dm-health__tip + .dm-health__tip { margin-top: 6px; }
-
-.dm-states { display: flex; flex-wrap: wrap; gap: 4px; min-width: 10rem; max-width: 13rem; }
+/* Four chips on one line. */
+.dm-states { min-width: 14rem; max-width: 15rem; }
 .dm-mono-field :deep(input) { font-family: var(--dm-mono); }
 
 /* Phones: the table's rows become stacked blocks, one per router, its name first. */
@@ -221,6 +207,6 @@ const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warnin
 .dm-routers :deep(.v-data-table__tr--mobile:last-child > td:last-child) { border-bottom: 0 !important; }
 .dm-routers :deep(.v-data-table__tr--mobile .v-data-table__td-value) { min-width: 0; text-align: end; }
 .dm-routers :deep(.v-data-table__tr--mobile .dm-router__name) { white-space: normal; overflow-wrap: anywhere; }
-.dm-routers :deep(.v-data-table__tr--mobile :is(.dm-router, .dm-states, .dm-version, .dm-health__line, .dm-health__alarm)) { justify-content: flex-end; }
-@media (max-width: 600px) { .dm-health { min-width: 0; max-width: none; } .health-problem { max-width: 10rem; } .dm-states { min-width: 0; } }
+.dm-routers :deep(.v-data-table__tr--mobile :is(.dm-router, .dm-states, .dm-version)) { justify-content: flex-end; }
+@media (max-width: 600px) { .dm-states { min-width: 0; max-width: none; } }
 </style>

@@ -32,3 +32,11 @@ export const workloadsHelp = (router: string, state: string, count: number) =>
   count === 1
     ? `1 workload ${state.toLowerCase()} on ${router}: open it`
     : `${count} workloads ${state.toLowerCase()} on ${router}: open their list`;
+
+// The paused workloads' chip: every one of them while the router itself is paused.
+export const pausedHelp = (router: string, count: number, routerPaused: boolean) =>
+  routerPaused
+    ? `Every workload of ${router} is paused with it: never napped until it is resumed; requests still wake them`
+    : count === 1
+      ? `1 workload paused on ${router}: never napped until resumed; requests still wake it`
+      : `${count} workloads paused on ${router}: never napped until resumed; requests still wake them`;

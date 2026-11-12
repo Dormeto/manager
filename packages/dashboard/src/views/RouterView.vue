@@ -2,14 +2,14 @@
 // A router's own view, reached from Routers as a workload's is from Workloads: its version, health and alert, its
 // workloads by state, its pauses, its health figures and configuration (with where each setting is changed), its actions.
 import { computed, onMounted, ref } from 'vue';
-import { mdiAlertOctagonOutline, mdiAlertOutline, mdiArrowRight, mdiBellRingOutline, mdiCheckCircleOutline, mdiHeartPulse, mdiLanDisconnect, mdiPauseCircleOutline } from '@mdi/js';
+import { mdiArrowRight, mdiBellRingOutline, mdiHeartPulse, mdiPauseCircleOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { relative, rowCloud, stateColor } from '../format';
-import { healthColor, pauseLine } from '../pause';
+import { relative, rowCloud } from '../format';
+import { healthColor, healthIcon, pauseLine } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
-import { terraformHelp, workloadsHelp } from '../router-actions';
+import { terraformHelp } from '../router-actions';
 import { useRouterOperations } from '../router-operations';
 import type { Notice } from '../components/NoticeAlert.vue';
 import CloudMark from '../components/CloudMark.vue';
@@ -18,6 +18,7 @@ import DescriptionCard from '../components/DescriptionCard.vue';
 import WaitingPageCard from '../components/WaitingPageCard.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
+import HealthMark from '../components/HealthMark.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import PauseChip from '../components/PauseChip.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
@@ -26,6 +27,7 @@ import RouterActions from '../components/RouterActions.vue';
 import RouterDetails from '../components/RouterDetails.vue';
 import RouterVersion from '../components/RouterVersion.vue';
 import TerraformChip from '../components/TerraformChip.vue';
+import WorkloadCounts from '../components/WorkloadCounts.vue';
 import type { AlarmInfo, AlertsInfo, DescriptionInfo, RouterInfo } from '../types';
 import PageTitle from '../components/PageTitle.vue';
 
@@ -100,7 +102,6 @@ const headline = computed(() => {
   const n = r.health.problems.length;
   return n ? `${n} problem${n === 1 ? '' : 's'} to look at` : 'Healthy';
 });
-const HEALTH_ICONS: Record<string, string> = { ok: mdiCheckCircleOutline, warning: mdiAlertOutline, error: mdiAlertOctagonOutline };
 const healthTone = computed(() => (router.value?.error ? 'error' : router.value?.health ? healthColor(router.value.health.status) : undefined));
 </script>
 
@@ -132,8 +133,7 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
           </div>
           <div class="dm-hero__headline">{{ headline }}</div>
           <div class="dm-hero__chips">
-            <v-chip v-if="router.error" color="error" variant="tonal" label :prepend-icon="mdiLanDisconnect">unreachable</v-chip>
-            <v-chip v-else-if="router.health" :color="healthColor(router.health.status)" variant="tonal" label :prepend-icon="HEALTH_ICONS[router.health.status]">{{ router.health.status }}</v-chip>
+            <HealthMark :router="router" :alarm="alarm" />
             <TerraformChip v-if="router.source !== 'manager' && router.source !== 'cli'" :text="terraformHelp(router.name)" />
             <PauseChip :pauses="router.pauses" />
           </div>
@@ -149,18 +149,10 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
             </div>
             <div class="dm-fact dm-fact--wide">
               <div class="dm-fact__label">Workloads</div>
-              <div class="d-flex flex-wrap ga-1">
-                <v-tooltip v-for="(n, state) in router.workloadStates ?? {}" :key="state" location="top" :text="workloadsHelp(router.name, String(state), n)">
-                  <template #activator="{ props: tip }">
-                    <v-chip v-bind="tip" :color="stateColor(String(state))" variant="tonal" size="small" label link class="dm-num"
-                      @click="openWorkloads(router.name, String(state), n)">{{ n }} {{ String(state).toLowerCase() }}</v-chip>
-                  </template>
-                </v-tooltip>
-                <span v-if="!router.workloadStates" class="dm-fact__value">{{ router.workloads ?? '—' }}</span>
-              </div>
+              <WorkloadCounts v-if="router.workloadStates" :router="router" @open="(state, n) => openWorkloads(router!.name, state, n)" />
+              <div v-else class="dm-fact__value">{{ router.workloads ?? '—' }}</div>
               <div class="dm-fact__more">
                 <router-link :to="{ path: '/workloads', query: { router: router.name } }" class="dm-fact__link">All its workloads<v-icon :icon="mdiArrowRight" size="14" /></router-link>
-                <span v-if="router.paused" class="text-medium-emphasis"> · {{ router.paused }} paused</span>
               </div>
             </div>
           </div>
@@ -194,7 +186,7 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
               <div v-if="alarm" class="dm-alarm" :class="`text-${alarm.level}`"><v-icon :icon="mdiBellRingOutline" size="16" />alert since {{ relative(alarm.since, now) }}</div>
               <ul v-if="router.health.problems.length" class="dm-problems">
                 <li v-for="p in router.health.problems" :key="p.text" class="dm-problem" :class="`dm-problem--${p.level}`">
-                  <v-icon :icon="HEALTH_ICONS[p.level]" :color="p.level" size="18" class="dm-problem__icon" />
+                  <v-icon :icon="healthIcon(p.level)" :color="p.level" size="18" class="dm-problem__icon" />
                   <div class="text-body-medium">
                     <span class="dm-problem__level" :class="`text-${p.level}`">{{ p.level }}</span><span class="d-sr-only">: </span>
                     <div class="dm-problem__text">{{ p.text }}</div>
