@@ -5,6 +5,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import UsersView from '../src/views/UsersView.vue';
 import { useSession } from '../src/stores/session';
+import { download } from '../src/table-export';
 
 const calls: [string, string][] = [];
 const bodies: Record<string, unknown> = {};
@@ -32,6 +33,7 @@ vi.mock('../src/api', () => ({
     return { email: 'ops@example.com', mfa: false };
   }),
 }));
+vi.mock('../src/table-export', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/table-export')>()), download: vi.fn() }));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 Object.defineProperty(window, 'visualViewport', {
   configurable: true,
@@ -45,10 +47,13 @@ describe('Users', () => {
     const wrapper = mount(UsersView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
     await flushPromises();
     const row = (email: string) => wrapper.findAll('tbody tr').find((r) => r.text().includes(email))!;
-    expect(row('ops@example.com').text()).toContain('on');
-    expect(row('new@example.com').text()).toContain('off');
+    // The status and the two-step verification as icons (tables design §3): their words are their names and tooltips.
+    const marks = (email: string) => row(email).findAll('[data-test="status-mark"]');
+    expect(marks('ops@example.com').map((m) => m.attributes('aria-label'))).toEqual(['active', 'Two-step verification on']);
+    expect(marks('new@example.com')[1]!.attributes('aria-label')).toBe('Two-step verification off');
     // Review M4: Cognito could not say.
-    expect(row('odd@example.com').text()).toContain('unknown');
+    expect(marks('odd@example.com')[1]!.attributes('aria-label')).toBe('Two-step verification unknown');
+    for (const m of marks('ops@example.com')) expect(m.text()).toBe('');
     await row('ops@example.com').find('button').trigger('click');
     await flushPromises();
     const reset = [...document.querySelectorAll('.v-list-item')].find((i) => i.textContent?.includes('Reset two-step verification')) as HTMLElement;
@@ -172,6 +177,30 @@ describe('Users', () => {
     await row.find('button').trigger('click');
     await flushPromises();
     expect([...document.querySelectorAll('.v-list-item')].map((i) => i.textContent?.trim())).toContain('Make member');
+    wrapper.unmount();
+  });
+
+  it('exports its users with each column in words (the status and the two-step verification said), the menu left out', async () => {
+    const wrapper = await mountUsers();
+    // One's own row has no menu; the others' "⋮" names its user.
+    expect(wrapper.findAll('tbody tr').find((r) => r.text().includes('admin@example.com'))!.find('[data-test="dm-row-menu"]').exists()).toBe(false);
+    expect(wrapper.findAll('[data-test="dm-row-menu"]').map((b) => b.attributes('aria-label'))).toEqual(['ops@example.com', 'new@example.com', 'dev@example.com', 'odd@example.com'].map((e) => `Actions for ${e}`));
+    await wrapper.find('[data-test="dm-table-menu"]').trigger('click');
+    await flushPromises();
+    (document.querySelector('.v-overlay--active [data-test="dm-table-export-csv"]') as HTMLElement).click();
+    await flushPromises();
+    const [name, mime, body] = vi.mocked(download).mock.calls.at(-1)!;
+    expect(name).toMatch(/^dormeto-users-\d{4}-\d{2}-\d{2}\.csv$/);
+    expect(mime).toBe('text/csv;charset=utf-8');
+    expect((body as string).split('\r\n')).toEqual([
+      'Email,Role,Groups,Status,Two-step,Created',
+      'admin@example.com,admin,,active,on,',
+      'ops@example.com,operator,,active,on,',
+      'new@example.com,viewer,,active,off,',
+      'dev@example.com,member,payments,active,on,',
+      'odd@example.com,viewer,,active,unknown,',
+      '',
+    ]);
     wrapper.unmount();
   });
 

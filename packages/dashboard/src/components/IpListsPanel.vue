@@ -2,12 +2,15 @@
 // The manager's IP lists (R6b): downloaded once for every router by its list function, read by the routers from S3. What they are
 // is in the tooltip beside the title.
 import { onMounted, ref } from 'vue';
-import { mdiShieldSearch } from '@mdi/js';
+import { mdiAlertOutline, mdiCheckCircleOutline, mdiClockOutline, mdiShieldSearch } from '@mdi/js';
 import { api } from '../api';
 import { listSourceHref, relative } from '../format';
 import { useNow } from '../now';
+import type { DmHeader } from '../table';
 import DmLogo from './DmLogo.vue';
+import DmTable from './DmTable.vue';
 import InfoTip from './InfoTip.vue';
+import StatusMark from './StatusMark.vue';
 import type { IpListRow, IpListsInfo } from '../types';
 
 const now = useNow();
@@ -21,11 +24,12 @@ onMounted(async () => {
   }
 });
 const status = (l: IpListRow) => (l.error ? `${l.version ? 'last download failed' : 'never downloaded'}: ${l.error}` : l.version ? 'ok' : 'not downloaded yet');
-// The status dot's color: the same reading as the text beside it.
-const tone = (l: IpListRow) => (l.error ? 'warning' : l.version ? 'success' : 'none');
-const headers = [
-  { title: 'List', key: 'name' }, { title: 'Action', key: 'action' }, { title: 'Entries', key: 'entries', align: 'end' as const },
-  { title: 'Last download', key: 'fetchedAt' }, { title: 'Status', key: 'status', sortable: false },
+// The status as an icon (tables design §3), its words the icon's name and tooltip: downloaded, failed, or not yet.
+const mark = (l: IpListRow) => (l.error ? { icon: mdiAlertOutline, color: 'warning' } : l.version ? { icon: mdiCheckCircleOutline, color: 'success' } : { icon: mdiClockOutline, color: undefined });
+const headers: DmHeader<IpListRow>[] = [
+  { title: 'List', key: 'name' }, { title: 'Action', key: 'action' },
+  { title: 'Entries', key: 'entries', align: 'end', text: (l) => (l.entries === undefined ? '' : String(l.entries)) },
+  { title: 'Last download', key: 'fetchedAt', text: (l) => l.fetchedAt ?? '' }, { title: 'Status', key: 'status', sortable: false, text: status },
 ];
 </script>
 
@@ -46,7 +50,7 @@ const headers = [
         </InfoTip>
       </v-card-title>
     </v-card-item>
-    <v-data-table v-if="info.lists.length" :headers="headers" :items="info.lists" item-value="name" density="compact" hide-default-footer :items-per-page="-1" class="dm-iplists__table">
+    <DmTable v-if="info.lists.length" :headers="headers" :items="info.lists" item-value="name" density="compact" :exported="{ name: 'ip-lists', title: 'IP lists' }" class="dm-iplists__table">
       <template #[`item.name`]="{ item }">
         <a v-if="listSourceHref(item.url)" :href="listSourceHref(item.url) ?? undefined" target="_blank" rel="noopener" class="dm-iplists__name">{{ item.name }}</a><span v-else class="dm-iplists__name">{{ item.name }}</span>
       </template>
@@ -55,10 +59,8 @@ const headers = [
       </template>
       <template #[`item.entries`]="{ item }"><span class="dm-num">{{ item.entries === undefined ? '—' : item.entries.toLocaleString('en-US') }}</span></template>
       <template #[`item.fetchedAt`]="{ item }"><span class="nowrap dm-num">{{ relative(item.fetchedAt, now) }}</span></template>
-      <template #[`item.status`]="{ item }">
-        <span class="dm-iplists__status" :class="{ 'text-warning': item.error }"><span class="dm-iplists__dot" :class="`dm-iplists__dot--${tone(item)}`" aria-hidden="true" />{{ status(item) }}</span>
-      </template>
-    </v-data-table>
+      <template #[`item.status`]="{ item }"><StatusMark :icon="mark(item).icon" :color="mark(item).color" :label="status(item)" :size="18" /></template>
+    </DmTable>
     <v-card-text v-else class="dm-calm">
       <DmLogo state="sleep" :size="40" />
       <span class="text-medium-emphasis">No list: set ip_lists in the manager's Terraform.</span>
@@ -79,10 +81,6 @@ a.dm-iplists__name:hover { text-decoration: underline; text-underline-offset: 3p
 .dm-iplists__action { display: inline-block; padding: 3px 8px; border-radius: 6px; font: 500 0.7rem/1.2 var(--dm-mono); letter-spacing: 0.06em; text-transform: uppercase;
   color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), 0.1); }
 .dm-iplists__action--ignore { color: rgb(var(--v-theme-secondary)); background: rgba(var(--v-theme-secondary), 0.1); }
-.dm-iplists__status { display: inline-flex; align-items: center; gap: 8px; }
-.dm-iplists__dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: rgba(var(--v-theme-on-surface), 0.3); }
-.dm-iplists__dot--success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 3px rgba(var(--v-theme-success), 0.16); }
-.dm-iplists__dot--warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 3px rgba(var(--v-theme-warning), 0.16); }
 .dm-num { font-variant-numeric: tabular-nums; }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding-block: 24px !important; }
 </style>

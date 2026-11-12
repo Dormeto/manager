@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { useNow } from '../now';
-import { useDisplay } from 'vuetify';
 import { computed, ref } from 'vue';
 import {
   mdiAccountCancelOutline, mdiAccountCheckOutline, mdiAccountEyeOutline, mdiAccountOutline, mdiAccountGroupOutline, mdiAccountMultipleOutline, mdiAccountPlus, mdiAccountWrenchOutline, mdiCancel, mdiCheckCircleOutline,
-  mdiDotsVertical, mdiEmailFastOutline, mdiEmailSyncOutline, mdiLockReset, mdiShieldAccountOutline, mdiShieldAlertOutline, mdiShieldCheckOutline,
+  mdiEmailFastOutline, mdiEmailSyncOutline, mdiLockReset, mdiShieldAccountOutline, mdiShieldAlertOutline, mdiShieldCheckOutline,
   mdiShieldOffOutline, mdiShieldRefreshOutline,
 } from '@mdi/js';
 import { api } from '../api';
 import { relative } from '../format';
 import { useSession } from '../stores/session';
+import type { DmAction, DmHeader } from '../table';
 import DmLoader from '../components/DmLoader.vue';
+import DmTable from '../components/DmTable.vue';
+import StatusMark from '../components/StatusMark.vue';
 import GroupsCard from '../components/GroupsCard.vue';
 import type { Group } from '../groups';
 import NoticeAlert from '../components/NoticeAlert.vue';
@@ -22,7 +24,6 @@ import PageTitle from '../components/PageTitle.vue';
 interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa?: boolean | null; groups?: string[] }
 
 const now = useNow();
-const { smAndDown } = useDisplay();
 const session = useSession();
 const users = ref<User[]>([]);
 const loading = ref(false);
@@ -93,16 +94,18 @@ function saveGroups() {
   settingGroups.value = null;
   void run(`Groups of ${user.email} saved: they apply at their next sign-in, within an hour.`, () => api(`/users/${enc(user.email)}/groups`, { method: 'PUT', body: JSON.stringify({ groups: chosen }) }));
 }
-const headers = [
+const STATUS: Record<string, string> = { CONFIRMED: 'active', FORCE_CHANGE_PASSWORD: 'invited', RESET_REQUIRED: 'password reset' };
+// A user's status and two-step verification as their words: the marks' names and tooltips, what search reads, the exports.
+const statusWord = (u: User) => (u.enabled ? STATUS[u.status] ?? u.status : 'disabled');
+const mfaWord = (u: User) => (u.mfa ? 'on' : u.mfa === null ? 'unknown' : 'off');
+const headers: DmHeader<User>[] = [
   { title: 'Email', key: 'email' },
   { title: 'Role', key: 'role' },
-  { title: 'Groups', key: 'groups', sortable: false },
-  { title: 'Status', key: 'status' },
-  { title: 'Two-step', key: 'mfa' },
-  { title: 'Created', key: 'createdAt' },
-  { title: '', key: 'actions', sortable: false, align: 'end' as const },
+  { title: 'Groups', key: 'groups', sortable: false, text: (u) => (u.groups ?? []).join(', ') },
+  { title: 'Status', key: 'status', text: statusWord },
+  { title: 'Two-step', key: 'mfa', text: mfaWord },
+  { title: 'Created', key: 'createdAt', text: (u) => u.createdAt ?? '' },
 ];
-const STATUS: Record<string, string> = { CONFIRMED: 'active', FORCE_CHANGE_PASSWORD: 'invited', RESET_REQUIRED: 'password reset' };
 
 // Presentation: the initials on the brand's blue (as the navigation's), each role's color and icon, each state's mark.
 const initials = (email: string) => (email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?';
@@ -115,6 +118,23 @@ const statusMark = (u: User) => {
   return { color: 'warning', icon: u.status === 'FORCE_CHANGE_PASSWORD' ? mdiEmailFastOutline : mdiLockReset };
 };
 const mfaMark = (u: User) => (u.mfa ? { color: 'success', icon: mdiShieldCheckOutline } : u.mfa === null ? { color: 'warning', icon: mdiShieldAlertOutline } : { color: undefined, icon: mdiShieldOffOutline });
+// A user's menu (not one's own): the role and the groups, then the invitation, the two-step verification, disable or enable.
+function actions(u: User): DmAction[] {
+  if (u.email === session.email) return [];
+  return [
+    ...roles.filter((r) => r !== u.role).map((role) => ({
+      title: `Make ${role}`, icon: ROLE_ICON[role]!, group: 'Role',
+      run: () => void run(`${u.email} is now ${role}.`, () => api(`/users/${enc(u.email)}/role`, { method: 'PUT', body: JSON.stringify({ role }) })),
+    })),
+    { title: 'Groups…', icon: mdiAccountMultipleOutline, group: 'Role', run: () => { settingGroups.value = { user: u, groups: [...(u.groups ?? [])] }; } },
+    ...(u.status === 'FORCE_CHANGE_PASSWORD' ? [{ title: 'Resend the invitation', icon: mdiEmailSyncOutline,
+      run: () => void run(`Invitation sent again to ${u.email}.`, () => api(`/users/${enc(u.email)}/resend`, { method: 'POST' })) }] : []),
+    ...(u.mfa !== false ? [{ title: 'Reset two-step verification', icon: mdiShieldRefreshOutline, run: () => { resetting.value = u; } }] : []),
+    u.enabled
+      ? { title: 'Disable', icon: mdiAccountCancelOutline, color: 'error', run: () => void run(`${u.email} is disabled.`, () => api(`/users/${enc(u.email)}/disable`, { method: 'POST' })) }
+      : { title: 'Enable', icon: mdiAccountCheckOutline, run: () => void run(`${u.email} is enabled.`, () => api(`/users/${enc(u.email)}/enable`, { method: 'POST' })) },
+  ];
+}
 const rowProps = ({ item }: { item: User }) => ({ class: { 'dm-row--off': !item.enabled, 'dm-row--invited': invited(item) } });
 const exact = (iso: string | null) => (iso ? new Date(iso).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : undefined);
 // The team at a glance, above the table: counts of its rows, counting up when they arrive.
@@ -158,7 +178,7 @@ load();
     </div>
     <GroupsCard :groups="groups" :users="users" @notice="notice = $event" @changed="load" />
     <v-card class="dm-users">
-      <v-data-table :mobile="smAndDown" :headers="headers" :items="users" :loading="loading" item-value="email" :items-per-page="50" :row-props="rowProps">
+      <DmTable :headers="headers" :items="users" :loading="loading" item-value="email" :row-props="rowProps" :actions="actions" :exported="{ name: 'users', title: 'Users' }">
         <template v-if="!users.length" #loading><DmLoader label="Reading the users…" :size="48" /></template>
         <template #[`item.email`]="{ item }">
           <div class="dm-user">
@@ -174,34 +194,15 @@ load();
           <span class="dm-groups"><v-chip v-for="g in item.groups ?? []" :key="g" data-test="user-group" size="small" label variant="tonal">{{ g }}</v-chip></span>
         </template>
         <template #[`item.status`]="{ item }">
-          <v-chip :color="statusMark(item).color" variant="tonal" label :prepend-icon="statusMark(item).icon">{{ item.enabled ? STATUS[item.status] ?? item.status : 'disabled' }}</v-chip>
+          <StatusMark :icon="statusMark(item).icon" :color="statusMark(item).color" :label="statusWord(item)" />
         </template>
         <template #[`item.mfa`]="{ item }">
-          <span class="dm-mfa" :class="{ 'dm-mfa--off': !mfaMark(item).color }">
-            <v-icon :icon="mfaMark(item).icon" :color="mfaMark(item).color" size="18" />{{ item.mfa ? 'on' : item.mfa === null ? 'unknown' : 'off' }}
-          </span>
+          <StatusMark :icon="mfaMark(item).icon" :color="mfaMark(item).color" :label="`Two-step verification ${mfaWord(item)}`">
+            <div v-if="item.mfa === null" class="text-body-small">Cognito could not say.</div>
+          </StatusMark>
         </template>
         <template #[`item.createdAt`]="{ item }"><span class="dm-num nowrap text-medium-emphasis" :title="exact(item.createdAt)">{{ relative(item.createdAt, now) }}</span></template>
-        <template #[`item.actions`]="{ item }">
-          <v-menu v-if="item.email !== session.email" location="bottom end">
-            <template #activator="{ props }"><v-btn v-bind="props" :icon="mdiDotsVertical" variant="text" size="small" :aria-label="`Actions for ${item.email}`" /></template>
-            <v-list density="compact" min-width="250" class="dm-actions">
-              <v-list-subheader>Role</v-list-subheader>
-              <v-list-item v-for="role in roles.filter((r) => r !== item.role)" :key="role" :title="`Make ${role}`" :prepend-icon="ROLE_ICON[role]"
-                @click="run(`${item.email} is now ${role}.`, () => api(`/users/${enc(item.email)}/role`, { method: 'PUT', body: JSON.stringify({ role }) }))" />
-              <v-list-item title="Groups…" :prepend-icon="mdiAccountMultipleOutline" @click="settingGroups = { user: item, groups: [...(item.groups ?? [])] }" />
-              <v-divider class="my-1" />
-              <v-list-item v-if="item.status === 'FORCE_CHANGE_PASSWORD'" title="Resend the invitation" :prepend-icon="mdiEmailSyncOutline"
-                @click="run(`Invitation sent again to ${item.email}.`, () => api(`/users/${enc(item.email)}/resend`, { method: 'POST' }))" />
-              <v-list-item v-if="item.mfa !== false" title="Reset two-step verification" :prepend-icon="mdiShieldRefreshOutline" @click="resetting = item" />
-              <v-list-item v-if="item.enabled" title="Disable" base-color="error" :prepend-icon="mdiAccountCancelOutline"
-                @click="run(`${item.email} is disabled.`, () => api(`/users/${enc(item.email)}/disable`, { method: 'POST' }))" />
-              <v-list-item v-else title="Enable" :prepend-icon="mdiAccountCheckOutline"
-                @click="run(`${item.email} is enabled.`, () => api(`/users/${enc(item.email)}/enable`, { method: 'POST' }))" />
-            </v-list>
-          </v-menu>
-        </template>
-      </v-data-table>
+      </DmTable>
     </v-card>
 
     <v-dialog :model-value="resetting !== null" max-width="460" @update:model-value="resetting = null">
@@ -266,15 +267,7 @@ load();
 .dm-avatar--invited { background: transparent; color: rgb(var(--v-theme-warning)); border: 1.5px dashed rgba(var(--v-theme-warning), 0.8); }
 .dm-avatar--off { filter: grayscale(1); opacity: 0.45; }
 .dm-row--off .dm-user__email, .dm-row--off .dm-role { opacity: 0.5; }
-.dm-mfa { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; line-height: 1; font-size: 0.875rem; font-weight: 500; }
-.dm-mfa--off { color: rgba(var(--v-theme-on-surface), 0.6); }
 .dm-num { font-variant-numeric: tabular-nums; }
 .dm-groups { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.dm-users :deep(.v-data-table-rows-loading > td) { height: auto !important; }
-.dm-users :deep(.v-data-table-footer) { padding-inline: 12px; border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
-/* One column on a phone: the labels narrow, the values wide. */
-.dm-users :deep(.v-data-table__tr--mobile > td) { grid-template-columns: auto minmax(0, 1fr); column-gap: 16px; }
-.dm-users :deep(.v-data-table__tr--mobile .v-data-table__td-value) { min-width: 0; }
 .dm-dialog :deep(.v-card-title) { white-space: normal; line-height: 1.3; }
-.dm-actions :deep(.v-list-subheader) { font: 500 0.64rem/1 var(--dm-mono); letter-spacing: 0.12em; text-transform: uppercase; min-height: 30px; }
 </style>
