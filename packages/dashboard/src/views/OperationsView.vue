@@ -1,62 +1,82 @@
 <script setup lang="ts">
-// Operations (onboarding, R4b): onboardings, offboardings and router installations run by the workflow, with their steps.
-import { computed, ref, watch } from 'vue';
+// Operations (onboarding, R4b): onboardings, offboardings and router installations run by the workflow, as a table (tables
+// design §4): a row per operation, its status an icon, its steps under it (with the error and a manager update's build).
+import { computed, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import {
-  mdiAlertCircleOutline, mdiArrowDown, mdiArrowUp, mdiArrowUpBoldCircleOutline, mdiCancel, mdiCheck, mdiChevronDown, mdiClose, mdiDeleteOutline, mdiLinkVariant, mdiLinkVariantOff,
-  mdiMinus, mdiMinusCircleOutline, mdiOpenInNew, mdiPlayCircleOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUpdate,
+  mdiAlertCircleOutline, mdiArrowUpBoldCircleOutline, mdiCancel, mdiCheck, mdiCheckCircleOutline, mdiCircleSmall, mdiClose, mdiDeleteOutline, mdiLinkVariant,
+  mdiLinkVariantOff, mdiMinus, mdiMinusCircleOutline, mdiOpenInNew, mdiPlayCircleOutline, mdiPlusCircleOutline, mdiProgressClock, mdiRouterNetwork, mdiUpdate,
 } from '@mdi/js';
 import { api } from '../api';
 import { relative } from '../format';
 import { useNow } from '../now';
 import { operationBuildLink, operationKind, operationProgress, operationTitle } from '../operations';
 import { usePoll } from '../poll';
+import type { DmHeader } from '../table';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
+import DmTable from '../components/DmTable.vue';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
 import RegionLabel from '../components/RegionLabel.vue';
-import type { Operation, OperationType } from '../types';
+import StatusMark from '../components/StatusMark.vue';
+import type { Operation, OperationType, StepStatus } from '../types';
 import PageTitle from '../components/PageTitle.vue';
 
 const now = useNow();
 const operations = ref<Operation[]>([]);
-// An operation a notice links to (?id=) opens with its steps.
+// An operation a notice links to (?id=) opens with its steps; a refresh keeps the rows open (their ids).
 const route = useRoute();
 const expanded = ref<string[]>(typeof route.query.id === 'string' ? [route.query.id] : []);
-const page = ref(1);
 const { error, loading, nextAt, run } = usePoll(async () => {
   operations.value = (await api<{ operations: Operation[] }>('/operations')).operations;
 });
 const running = computed(() => operations.value.filter((o) => o.status === 'running').length);
-// Sorting and the page size, as the table had them: a key sorts ascending, then descending, then no more (newest first, as
-// the API lists them); 25 a page, or as many as chosen.
-type SortKey = 'status' | 'by' | 'createdAt';
-const SORTS: { key: SortKey; title: string }[] = [{ key: 'status', title: 'Status' }, { key: 'by', title: 'By' }, { key: 'createdAt', title: 'Started' }];
-const sortBy = ref<{ key: SortKey; order: 'asc' | 'desc' }[]>([]);
-const sortOf = (key: SortKey) => sortBy.value.find((s) => s.key === key)?.order;
-function sortOn(key: SortKey) {
-  const order = sortOf(key);
-  sortBy.value = !order ? [{ key, order: 'asc' }] : order === 'asc' ? [{ key, order: 'desc' }] : [];
-}
-const PER_PAGE = [{ title: '10', value: 10 }, { title: '25', value: 25 }, { title: '50', value: 50 }, { title: '100', value: 100 }, { title: 'All', value: -1 }];
-const perPage = ref(25);
-watch([sortBy, perPage], () => { page.value = 1; });
-const statusColor = (s: Operation['status']) => ({ running: 'primary', succeeded: 'success', failed: 'error' })[s];
 
-// Presentation: an icon per kind of operation, one per status.
+// What a target's cell shows: the account or project, the region, the router, or the manager's version.
+const targetParts = (o: Operation) => [o.target.account, o.target.region, o.target.router, ...(o.type === 'update-manager' ? [`manager ${o.target.version}`] : [])].filter(Boolean);
+// The progress in words: done/total, then the step running.
+function progressText(o: Operation) {
+  const { done, total, current } = operationProgress(o);
+  return [`${done}/${total}`, ...(current ? [current] : [])].join(' · ');
+}
+const collator = new Intl.Collator('en-US', { sensitivity: 'accent' });
+// Each column's words: what search reads and an export prints (an operation without its steps): the status' word and a
+// failure's error, the target's parts and the operation's id, the date as ISO 8601. Sorted newest first.
+const headers: DmHeader<Operation>[] = [
+  { title: 'Operation', key: 'type', text: (o) => `${operationKind(o)} · ${operationTitle(o)}`,
+    sortRaw: (a, b) => collator.compare(operationKind(a), operationKind(b)) || collator.compare(operationTitle(a), operationTitle(b)) },
+  { title: 'Target', key: 'target', sortable: false, text: (o) => [...targetParts(o), o.id].join(' · ') },
+  { title: 'Status', key: 'status', text: (o) => (o.status === 'failed' && o.error ? `failed: ${o.error}` : o.status) },
+  { title: 'Progress', key: 'progress', sortable: false, text: progressText },
+  { title: 'By', key: 'by' },
+  { title: 'Started', key: 'createdAt', value: (o) => Date.parse(o.createdAt) },
+];
+const NEWEST = [{ key: 'createdAt', order: 'desc' as const }];
+
+// Presentation: an icon per kind of operation; a status' and a step's mark (the running ones breathe).
 const KIND_ICONS: Record<OperationType, string> = {
   onboard: mdiPlusCircleOutline, offboard: mdiMinusCircleOutline, 'install-router': mdiRouterNetwork, 'upgrade-router': mdiArrowUpBoldCircleOutline,
   'uninstall-router': mdiDeleteOutline, exclude: mdiCancel, 'lift-exclusion': mdiPlayCircleOutline, 'connect-account': mdiLinkVariant, 'disconnect-account': mdiLinkVariantOff,
   'update-manager': mdiUpdate,
 };
-const STATUS_ICONS: Partial<Record<Operation['status'], string>> = { succeeded: mdiCheck, failed: mdiAlertCircleOutline };
-// An operation's steps, shown or hidden (the ids in expanded).
-const isOpen = (id: string) => expanded.value.includes(id);
-const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.filter((x) => x !== id) : [...expanded.value, id]; };
+const STATUS_MARKS: Record<Operation['status'], { icon: string; color: string }> = {
+  running: { icon: mdiProgressClock, color: 'primary' }, succeeded: { icon: mdiCheckCircleOutline, color: 'success' }, failed: { icon: mdiAlertCircleOutline, color: 'error' },
+};
+const STEP_MARKS: Record<StepStatus, { icon: string; color?: string }> = {
+  done: { icon: mdiCheck, color: 'success' }, skipped: { icon: mdiMinus }, running: { icon: mdiProgressClock, color: 'primary' }, pending: { icon: mdiCircleSmall },
+  failed: { icon: mdiClose, color: 'error' },
+};
+// Who started it, split before the @ of an email (the cell breaks a line there if need be); the exact time of a start.
+const byParts = (by: string) => {
+  const at = by.indexOf('@');
+  return at > 0 ? [by.slice(0, at), by.slice(at)] : [by, ''];
+};
+const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
+  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
+});
 </script>
 
 <template>
-  <!-- A list of cards, its content on their left: a centred column on a wide screen rather than cards wider than it. -->
   <div>
     <div class="d-flex flex-wrap align-center ga-4 mb-4">
       <PageTitle eyebrow="Organization" title="Operations">
@@ -71,170 +91,147 @@ const toggle = (id: string) => { expanded.value = isOpen(id) ? expanded.value.fi
       AWS or Google Cloud API calls. A step waits for a lock, a slot or a resource being created; a failed onboarding is undone.</p>
     <v-alert v-if="error" type="error" class="mb-4" :text="error" />
 
-    <div v-if="operations.length" class="dm-ops-tools">
-      <span class="dm-ops-tools__label">Sort</span>
-      <v-btn v-for="s in SORTS" :key="s.key" data-test="sort" size="small" :variant="sortOf(s.key) ? 'tonal' : 'text'" :color="sortOf(s.key) ? 'primary' : undefined"
-        :append-icon="sortOf(s.key) === 'asc' ? mdiArrowUp : sortOf(s.key) === 'desc' ? mdiArrowDown : undefined" :aria-pressed="Boolean(sortOf(s.key))"
-        :aria-label="`Sort by ${s.title.toLowerCase()}${sortOf(s.key) ? (sortOf(s.key) === 'asc' ? ', ascending' : ', descending') : ''}`" @click="sortOn(s.key)">{{ s.title }}</v-btn>
-      <v-spacer />
-      <v-select v-model="perPage" :items="PER_PAGE" label="Per page" density="compact" hide-details class="dm-ops-tools__size" />
-    </div>
-
-    <v-data-iterator v-model:page="page" :items="operations" item-value="id" :sort-by="sortBy" :items-per-page="perPage" :loading="loading && !operations.length">
-      <template #loader><v-card><DmLoader label="Reading the operations…" /></v-card></template>
-      <template #no-data>
-        <v-card>
-          <v-card-text class="dm-calm">
+    <v-card class="dm-operations">
+      <DmTable v-model:expanded="expanded" :headers="headers" :items="operations" :loading="loading && !operations.length" item-value="id" :sort-by="NEWEST"
+        :row-name="operationTitle" expandable expand-title="Steps" :exported="{ name: 'operations', title: 'Operations' }">
+        <template #loading><DmLoader label="Reading the operations…" :size="56" /></template>
+        <template #no-data>
+          <div class="dm-calm">
             <DmLogo state="sleep" :size="40" />
             <span class="text-medium-emphasis">No operation yet: onboardings, offboardings and router installations show here.</span>
-          </v-card-text>
-        </v-card>
-      </template>
-      <template #default="{ items }">
-        <ol class="dm-ops">
-          <li v-for="op in items" :key="op.raw.id">
-            <v-card class="dm-op" :class="`dm-op--${op.raw.status}`">
-              <div class="dm-op__head">
-                <v-avatar :color="statusColor(op.raw.status)" variant="tonal" rounded="lg" size="40" class="dm-op__icon"><v-icon :icon="KIND_ICONS[op.raw.type]" size="21" /></v-avatar>
-                <div class="dm-op__titles">
-                  <div class="dm-op__kind">{{ operationKind(op.raw) }}</div>
-                  <div class="dm-op__title">{{ operationTitle(op.raw) }}</div>
-                </div>
-                <v-chip :color="statusColor(op.raw.status)" variant="tonal" label class="dm-op__status" :prepend-icon="STATUS_ICONS[op.raw.status]">
-                  <span v-if="op.raw.status === 'running'" class="dm-pulse" aria-hidden="true" />{{ op.raw.status }}</v-chip>
+          </div>
+        </template>
+        <template #[`item.type`]="{ item }">
+          <div class="dm-op">
+            <v-avatar :color="STATUS_MARKS[item.status].color" variant="tonal" rounded="lg" size="36" class="dm-op__icon"><v-icon :icon="KIND_ICONS[item.type]" size="20" aria-hidden="true" /></v-avatar>
+            <div class="dm-op__titles">
+              <div class="dm-op__kind">{{ operationKind(item) }}</div>
+              <div class="dm-op__title">{{ operationTitle(item) }}</div>
+            </div>
+          </div>
+        </template>
+        <template #[`item.target`]="{ item }">
+          <div class="dm-op__target">
+            <div v-if="item.target.account || item.target.region" class="dm-op__where">
+              <span v-if="item.target.account" class="mono">{{ item.target.account }}</span>
+              <span v-if="item.target.region" class="dm-op__region"><RegionLabel :region="item.target.region" /><span class="mono">{{ item.target.region }}</span></span>
+            </div>
+            <div v-if="item.target.router" class="dm-op__router">{{ item.target.router }}</div>
+            <div v-if="item.type === 'update-manager'" class="dm-op__router">manager {{ item.target.version }}</div>
+            <div class="mono dm-op__id">{{ item.id }}</div>
+          </div>
+        </template>
+        <!-- The status' icon alone: its word the icon's name, a failure's error in its tooltip. -->
+        <template #[`item.status`]="{ item }">
+          <StatusMark :icon="STATUS_MARKS[item.status].icon" :color="STATUS_MARKS[item.status].color" :label="item.status" :pulse="item.status === 'running'">
+            <div v-if="item.status === 'failed' && item.error" class="dm-op__tip">{{ item.error }}</div>
+          </StatusMark>
+        </template>
+        <template #[`item.progress`]="{ item }">
+          <div class="dm-op__progress">
+            <div class="dm-op__meter">
+              <v-progress-linear :model-value="(100 * operationProgress(item).done) / (operationProgress(item).total || 1)" :color="STATUS_MARKS[item.status].color" height="4" rounded
+                bg-opacity="0.14" class="dm-op__bar" :aria-label="`${operationProgress(item).done} of ${operationProgress(item).total} steps`" />
+              <span class="dm-op__count">{{ operationProgress(item).done }}/{{ operationProgress(item).total }}</span>
+            </div>
+            <div v-if="operationProgress(item).current" class="dm-op__current text-body-small text-medium-emphasis">{{ operationProgress(item).current }}</div>
+          </div>
+        </template>
+        <!-- An email on two lines if need be, before its @. -->
+        <template #[`item.by`]="{ item }"><span class="dm-op__by">{{ byParts(item.by)[0] }}<wbr>{{ byParts(item.by)[1] }}</span></template>
+        <template #[`item.createdAt`]="{ item }">
+          <v-tooltip location="top" :text="exact(item.createdAt)" open-on-focus>
+            <template #activator="{ props: tip }"><time v-bind="tip" :datetime="item.createdAt" tabindex="0" class="dm-op__when nowrap">{{ relative(item.createdAt, now) }}</time></template>
+          </v-tooltip>
+        </template>
+        <!-- Under an operation's row: its error, its steps (a vertical stepper), a manager update's build. -->
+        <template #expanded-row="{ item, columns }">
+          <tr class="dm-op-steps">
+            <td :colspan="columns.length">
+              <div :id="`steps-${item.id}`" class="dm-op__steps">
+                <div v-if="item.error" class="dm-op__error text-error"><v-icon :icon="mdiAlertCircleOutline" size="16" aria-hidden="true" /><span>{{ item.error }}</span></div>
+                <ol class="dm-steps" :aria-label="`Steps of ${operationTitle(item)}`">
+                  <li v-for="step in item.steps" :key="step.name" class="dm-step" :class="`dm-step--${step.status}`">
+                    <StatusMark :icon="STEP_MARKS[step.status].icon" :color="STEP_MARKS[step.status].color" :label="step.status" :pulse="step.status === 'running'" :size="14" class="dm-step__mark" />
+                    <div class="dm-step__body">
+                      <div class="dm-step__line"><span class="dm-step__name">{{ step.name }}</span> <span v-if="(step.attempts ?? 0) > 1" class="text-body-small text-medium-emphasis">({{ step.attempts }} attempts)</span></div>
+                      <div v-if="step.detail" class="dm-step__detail">{{ step.detail }}</div>
+                    </div>
+                  </li>
+                </ol>
+                <a v-if="operationBuildLink(item)" :href="operationBuildLink(item)!" target="_blank" rel="noopener" class="dm-op__link text-body-small">View the build in CodeBuild<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
               </div>
-
-              <div class="dm-op__body">
-                <div class="dm-op__target">
-                  <span v-if="op.raw.target.account" class="mono">{{ op.raw.target.account }}</span>
-                  <span v-if="op.raw.target.region" class="dm-op__region"><RegionLabel :region="op.raw.target.region" /><span class="mono">{{ op.raw.target.region }}</span></span>
-                  <span v-if="op.raw.target.router" class="dm-op__router">{{ op.raw.target.router }}</span>
-                  <span v-if="op.raw.type === 'update-manager'" class="dm-op__router">manager {{ op.raw.target.version }}</span>
-                  <span class="mono dm-op__id">{{ op.raw.id }}</span>
-                </div>
-                <div class="dm-op__progress">
-                  <v-progress-linear :model-value="(100 * operationProgress(op.raw).done) / operationProgress(op.raw).total" :color="statusColor(op.raw.status)" height="4" rounded
-                    bg-opacity="0.14" class="dm-op__bar" :aria-label="`${operationProgress(op.raw).done} of ${operationProgress(op.raw).total} steps`" />
-                  <span class="dm-op__count">{{ operationProgress(op.raw).done }}/{{ operationProgress(op.raw).total }}</span>
-                </div>
-                <div v-if="operationProgress(op.raw).current" class="dm-op__current text-body-small text-medium-emphasis">{{ operationProgress(op.raw).current }}</div>
-                <div v-if="op.raw.error" class="dm-op__error text-body-small text-error">{{ op.raw.error }}</div>
-                <a v-if="operationBuildLink(op.raw)" :href="operationBuildLink(op.raw)!" target="_blank" rel="noopener" class="dm-op__link text-body-small">View the build in CodeBuild<v-icon :icon="mdiOpenInNew" size="14" class="ms-1" /></a>
-                <div class="dm-op__foot">
-                  <span><span class="dm-op__label">By</span> {{ op.raw.by }}</span>
-                  <span><span class="dm-op__label">Started</span> <span class="nowrap">{{ relative(op.raw.createdAt, now) }}</span></span>
-                  <v-spacer />
-                  <v-btn variant="text" size="small" class="dm-op__toggle" :class="{ 'is-open': isOpen(op.raw.id) }" :append-icon="mdiChevronDown"
-                    :aria-expanded="isOpen(op.raw.id)" :aria-controls="`steps-${op.raw.id}`" @click="toggle(op.raw.id)">Steps</v-btn>
-                </div>
-              </div>
-
-              <v-expand-transition>
-                <div v-if="isOpen(op.raw.id)" :id="`steps-${op.raw.id}`" class="dm-op__steps">
-                  <ol class="dm-steps">
-                    <li v-for="step in op.raw.steps" :key="step.name" class="dm-step" :class="`dm-step--${step.status}`">
-                      <span class="dm-step__mark" aria-hidden="true">
-                        <v-icon v-if="step.status === 'done'" :icon="mdiCheck" size="13" />
-                        <DmLogo v-else-if="step.status === 'running'" state="load" :size="20" :zzz="false" />
-                        <v-icon v-else-if="step.status === 'failed'" :icon="mdiClose" size="13" />
-                        <v-icon v-else-if="step.status === 'skipped'" :icon="mdiMinus" size="13" />
-                      </span>
-                      <div class="dm-step__body">
-                        <div class="dm-step__line">
-                          <span class="dm-step__name">{{ step.name }}</span>
-                          <span class="dm-step__status">{{ step.status }}</span>
-                          <span v-if="(step.attempts ?? 0) > 1" class="text-body-small text-medium-emphasis">({{ step.attempts }} attempts)</span>
-                        </div>
-                        <div v-if="step.detail" class="dm-step__detail">{{ step.detail }}</div>
-                      </div>
-                    </li>
-                  </ol>
-                </div>
-              </v-expand-transition>
-            </v-card>
-          </li>
-        </ol>
-      </template>
-      <template #footer="{ pageCount }">
-        <v-pagination v-if="pageCount > 1" v-model="page" :length="pageCount" density="comfortable" rounded="lg" class="mt-4" />
-      </template>
-    </v-data-iterator>
+            </td>
+          </tr>
+        </template>
+      </DmTable>
+    </v-card>
   </div>
 </template>
 
 <style scoped>
 .dm-lead { max-width: 68rem; font-size: 0.98rem; line-height: 1.55; text-wrap: pretty; }
-.dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 32px 16px !important; text-align: start; }
+.dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 16px; text-align: start; }
 
-/* Sorting and the page size, above the cards. */
-.dm-ops-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; }
-.dm-ops-tools__label { margin-inline-end: 4px; font: 500 0.64rem/1 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
-.dm-ops-tools__size { flex: 0 0 132px; }
-
-/* "running": a dot that breathes. */
+/* "N running" beside the title: a dot that breathes. */
 .dm-pulse { display: inline-block; flex: none; width: 7px; height: 7px; margin-inline-end: 7px; border-radius: 50%; background: currentColor; animation: dm-pulse 1.8s ease-in-out infinite; }
 @keyframes dm-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--v-theme-primary), 0.5); } 60% { box-shadow: 0 0 0 6px rgba(var(--v-theme-primary), 0); } }
 
-/* The operations: a column of cards, newest first; a status rail on the left edge. */
-.dm-ops { display: grid; gap: 16px; margin: 0; padding: 0; list-style: none; }
-.dm-op { position: relative; overflow: hidden; }
-.dm-op::before { content: ""; position: absolute; left: 0; top: 18px; bottom: 18px; width: 3px; border-radius: 0 3px 3px 0; background: rgba(var(--v-theme-on-surface), 0.12); }
-.dm-op--running::before { background: rgb(var(--v-theme-primary)); }
-.dm-op--failed::before { background: rgb(var(--v-theme-error)); }
-.dm-op--succeeded::before { background: rgba(var(--v-theme-success), 0.55); }
+/* The table: room to breathe, cells aligned on their first line. */
+.dm-operations :deep(.v-table__wrapper > table > tbody > tr:not(.v-data-table__tr--mobile):not(.dm-op-steps) > td:not(.v-data-table-column--no-padding)) { padding: 14px 12px !important; vertical-align: top; height: auto !important; }
+.dm-operations :deep(.v-table__wrapper > table > tbody > tr:not(.v-data-table__tr--mobile):not(.dm-op-steps) > td.v-data-table-column--no-padding) { padding-top: 8px !important; vertical-align: top; }
+.dm-operations :deep(.v-table__wrapper > table > thead > tr > th:not(.v-data-table-column--no-padding)) { padding-inline: 12px !important; }
+.dm-operations :deep(.v-table__wrapper > table > * > tr > :first-child) { padding-inline-start: 18px !important; }
+.dm-operations :deep(.v-table__wrapper > table > * > tr > :last-child) { padding-inline-end: 16px !important; }
 
-.dm-op__head { display: flex; align-items: center; gap: 14px; padding: 16px 18px 0 20px; }
+.dm-op { display: flex; align-items: center; gap: 12px; min-width: 11.5rem; }
 .dm-op__icon { flex: none; }
-.dm-op__titles { flex: 1; min-width: 0; }
-.dm-op__kind { font: 500 0.66rem/1.3 var(--dm-mono); letter-spacing: 0.12em; text-transform: uppercase; color: rgb(var(--v-theme-secondary)); }
-.dm-op__title { margin-top: 2px; font-size: 1.02rem; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; overflow-wrap: anywhere; }
-.dm-op__status { flex: none; align-self: flex-start; }
-
-.dm-op__body { padding: 10px 18px 12px 74px; }
-.dm-op__target { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
-.dm-op__region { display: inline-flex; align-items: center; gap: 6px; }
-.dm-op__router { font-weight: 500; color: rgba(var(--v-theme-on-surface), var(--v-high-emphasis-opacity)); }
-.dm-op__id { opacity: 0.7; overflow-wrap: anywhere; }
-.dm-op__progress { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-.dm-op__bar { flex: 1 1 auto; max-width: 320px; }
+.dm-op__titles { min-width: 0; }
+.dm-op__kind { font: 500 0.64rem/1.3 var(--dm-mono); letter-spacing: 0.12em; text-transform: uppercase; color: rgb(var(--v-theme-secondary)); }
+.dm-op__title { margin-top: 2px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; overflow-wrap: anywhere; }
+.dm-op__target { display: grid; gap: 2px; min-width: 9.5rem; font-size: 0.8rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
+.dm-op__where { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+.dm-op__region { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.dm-op__router { font-weight: 500; color: rgba(var(--v-theme-on-surface), var(--v-high-emphasis-opacity)); overflow-wrap: anywhere; }
+/* An id breaks after its hyphens. */
+.dm-op__id { font-size: 0.7rem; opacity: 0.7; }
+.dm-op__by { font-size: 0.88rem; }
+.dm-op__tip { max-width: 380px; overflow-wrap: anywhere; }
+.dm-op__progress { min-width: 8rem; max-width: 12rem; }
+.dm-op__meter { display: flex; align-items: center; gap: 10px; min-height: 20px; }
+.dm-op__bar { flex: 1 1 auto; }
 .dm-op__count { font: 500 0.78rem/1 var(--dm-mono); font-variant-numeric: tabular-nums; }
-.dm-op__current { margin-top: 6px; overflow-wrap: anywhere; }
-.dm-op__error { margin-top: 6px; overflow-wrap: anywhere; }
-.dm-op__link { display: inline-flex; align-items: center; margin-top: 6px; }
-.dm-op__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; margin-top: 8px; font-size: 0.82rem; }
-.dm-op__label { margin-inline-end: 4px; font: 500 0.64rem/1 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
-.dm-op__toggle { margin-inline-end: -8px; }
-.dm-op__toggle :deep(.v-btn__append) { transition: transform 0.3s var(--dm-ease); }
-.dm-op__toggle.is-open :deep(.v-btn__append) { transform: rotate(180deg); }
+.dm-op__current { margin-top: 4px; overflow-wrap: anywhere; }
+.dm-op__when { border-radius: 4px; }
+.dm-op__when:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
 
-/* The steps: a vertical stepper, a rail between the marks. */
-.dm-op__steps { border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); background: rgba(var(--v-theme-on-surface), 0.015); }
-.dm-steps { padding: 16px 18px 12px 74px; list-style: none; }
+/* Under the row: the error, the steps as a vertical stepper (a rail between the marks), the build's link. */
+.dm-op-steps > td { padding: 0 !important; height: auto !important; background: rgba(var(--v-theme-on-surface), 0.015); }
+.dm-op__steps { padding: 14px 18px 12px 66px; }
+.dm-op__error { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; font-size: 0.88rem; line-height: 1.45; overflow-wrap: anywhere; }
+.dm-op__error .v-icon { margin-top: 2px; }
+.dm-steps { margin: 0; padding: 0; list-style: none; }
 .dm-step { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; padding-bottom: 12px; }
 .dm-step:not(:last-child)::after { content: ""; position: absolute; left: 10px; top: 24px; bottom: 2px; width: 2px; border-radius: 1px; background: rgba(var(--v-theme-on-surface), 0.1); }
 .dm-step--done:not(:last-child)::after, .dm-step--skipped:not(:last-child)::after { background: rgba(var(--v-theme-success), 0.35); }
-.dm-step__mark { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid rgba(var(--v-theme-on-surface), 0.22); }
-.dm-step--done .dm-step__mark { border-color: transparent; background: rgba(var(--v-theme-success), 0.16); color: rgb(var(--v-theme-success)); }
-.dm-step--skipped .dm-step__mark { border-style: dashed; color: rgba(var(--v-theme-on-surface), 0.5); }
-.dm-step--failed .dm-step__mark { border-color: transparent; background: rgba(var(--v-theme-error), 0.18); color: rgb(var(--v-theme-error)); }
-.dm-step--running .dm-step__mark { border-color: transparent; }
-.dm-step__line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-height: 22px; padding-top: 1px; }
+.dm-steps :deep(.dm-step__mark) { width: 22px; height: 22px; border: 1.5px solid rgba(var(--v-theme-on-surface), 0.22); }
+.dm-steps .dm-step--done :deep(.dm-step__mark) { border-color: transparent; background: rgba(var(--v-theme-success), 0.16); }
+.dm-steps .dm-step--skipped :deep(.dm-step__mark) { border-style: dashed; }
+.dm-steps .dm-step--failed :deep(.dm-step__mark) { border-color: transparent; background: rgba(var(--v-theme-error), 0.18); }
+.dm-steps .dm-step--running :deep(.dm-step__mark) { border-color: transparent; background: rgba(var(--v-theme-primary), 0.14); }
+.dm-step__line { min-height: 22px; padding-top: 1px; }
 .dm-step__name { font-size: 0.92rem; font-weight: 500; }
-.dm-step__status { font: 500 0.64rem/1 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
-.dm-step--done .dm-step__status { color: rgb(var(--v-theme-success)); }
-.dm-step--running .dm-step__status { color: rgb(var(--v-theme-primary)); }
-.dm-step--failed .dm-step__status, .dm-step--failed .dm-step__name { color: rgb(var(--v-theme-error)); }
+.dm-step--failed .dm-step__name { color: rgb(var(--v-theme-error)); }
 .dm-step--pending .dm-step__name, .dm-step--skipped .dm-step__name { color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 .dm-step__detail { margin-top: 2px; font-size: 0.85rem; line-height: 1.45; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); overflow-wrap: anywhere; }
 .dm-step--failed .dm-step__detail { color: rgb(var(--v-theme-error)); }
+.dm-op__link { display: inline-flex; align-items: center; margin-top: 2px; }
 
 @media (max-width: 600px) {
-  .dm-op__head { padding: 14px 14px 0 16px; gap: 12px; flex-wrap: wrap; }
-  .dm-op__body { padding: 10px 14px 12px 16px; }
-  .dm-steps { padding: 14px 14px 10px 16px; }
+  .dm-op { min-width: 0; }
+  .dm-op__steps { padding: 12px 14px 10px 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dm-pulse { animation: none; }
-  .dm-op__toggle :deep(.v-btn__append) { transition: none; }
 }
 </style>

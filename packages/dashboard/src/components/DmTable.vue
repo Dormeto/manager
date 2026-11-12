@@ -9,7 +9,7 @@
 // and sends its options (page, size, sort) to the view, which also sends the search to its API.
 import { computed, ref, useAttrs, watch } from 'vue';
 import { useDisplay } from 'vuetify';
-import { mdiFileDelimitedOutline, mdiFilePdfBox, mdiMagnify } from '@mdi/js';
+import { mdiChevronDown, mdiChevronUp, mdiFileDelimitedOutline, mdiFilePdfBox, mdiMagnify } from '@mdi/js';
 import { cellText, EXPORT_LIMIT, searchRows, sortRows, type DmAction, type DmExport, type DmHeader, type DmOptions, type DmServer, type DmSort } from '../table';
 import { csv, download, fileName, pdf } from '../table-export';
 import DmActionsMenu, { type MenuAction } from './DmActionsMenu.vue';
@@ -33,9 +33,12 @@ const props = withDefaults(defineProps<{
   perPage?: number;
   noSearch?: boolean;
   server?: DmServer<T>;
+  // Each row's toggle opens its part under it (the `expanded-row` slot); `expandTitle` says what it opens: the toggles'
+  // column and each toggle's name (`<title> of <row's name>`).
   expandable?: boolean;
+  expandTitle?: string;
   selectable?: boolean;
-}>(), { loading: false, actions: undefined, rowName: undefined, tableActions: () => [], perPage: 50, noSearch: false, server: undefined, expandable: false, selectable: false });
+}>(), { loading: false, actions: undefined, rowName: undefined, tableActions: () => [], perPage: 50, noSearch: false, server: undefined, expandable: false, expandTitle: 'Details', selectable: false });
 
 const emit = defineEmits<{ 'update:options': [options: DmOptions] }>();
 const search = defineModel<string>('search', { default: '' });
@@ -58,6 +61,8 @@ const slots = defineSlots<{
 const attrs = useAttrs();
 const { smAndDown } = useDisplay();
 const ACTIONS = 'dm-actions';
+// Vuetify's key for the toggles' column: given here, it is not added after the Actions column.
+const EXPAND = 'data-table-expand';
 const OPTIONS = [{ value: 25, title: '25' }, { value: 50, title: '50' }, { value: 100, title: '100' }];
 
 // The view's class and style on the root (its scoped styles reach the table through it); its other attributes (density,
@@ -86,9 +91,10 @@ const size = (n: number) => (n === -1 ? Infinity : n);
 const footer = computed(() => total.value > Math.min(size(itemsPerPage.value), size(props.perPage)));
 const pageSizes = computed(() => (props.server ? OPTIONS : [...OPTIONS, { value: -1, title: 'All' }]));
 
-// Vuetify's headers: the view's (without what is DmTable's), then the Actions column.
+// Vuetify's headers: the view's (without what is DmTable's), the toggles of an expandable table, then the Actions column.
 const columns = computed(() => [
   ...props.headers.map(({ text: _text, export: _export, ...header }) => header),
+  ...(props.expandable ? [{ title: props.expandTitle, key: EXPAND, sortable: false, width: 48, cellProps: { class: 'dm-table__expand' } }] : []),
   { title: 'Actions', key: ACTIONS, sortable: false, align: 'end' as const, width: 56, cellProps: { class: 'dm-table__actions' } },
 ]);
 // The view's slots go to Vuetify's table but the toolbar and the empty state (DmTable says when the search matches nothing).
@@ -195,6 +201,13 @@ function options(o: DmOptions) {
         <span :class="{ 'd-sr-only': !mobile }">Actions</span>
         <DmActionsMenu v-if="!mobile" :lead="exports" :actions="tableActions" :busy="busy" label="Table actions" test="dm-table-menu" />
       </template>
+      <!-- An expandable table's toggles, named by what they open and the row (a phone's says its title). -->
+      <template v-if="expandable" #[`header.${EXPAND}`]><span :class="{ 'd-sr-only': !mobile }">{{ expandTitle }}</span></template>
+      <template v-if="expandable && !slots[`item.${EXPAND}`]" #[`item.${EXPAND}`]="{ item, internalItem, isExpanded, toggleExpand }">
+        <v-btn data-test="dm-row-expand" variant="text" size="small" :icon="mobile ? undefined : isExpanded(internalItem) ? mdiChevronUp : mdiChevronDown"
+          :append-icon="mobile ? (isExpanded(internalItem) ? mdiChevronUp : mdiChevronDown) : undefined" :text="mobile ? expandTitle : undefined"
+          :aria-label="`${expandTitle} of ${rowName(item as T)}`" :aria-expanded="isExpanded(internalItem)" @click.stop="toggleExpand(internalItem)" />
+      </template>
       <template #[`item.${ACTIONS}`]="{ item }">
         <DmActionsMenu v-if="rowActions(item as T).length" :actions="rowActions(item as T)" :label="`Actions for ${rowName(item as T)}`" test="dm-row-menu" />
       </template>
@@ -220,8 +233,10 @@ function options(o: DmOptions) {
 /* One column on a phone: the labels narrow, the values wide. */
 .dm-table :deep(.v-data-table__tr--mobile > td) { grid-template-columns: auto minmax(0, 1fr); column-gap: 16px; }
 .dm-table :deep(.v-data-table__tr--mobile .v-data-table__td-value) { min-width: 0; }
-/* A phone's row without actions: no empty Actions line. */
+/* A phone's row without actions: no empty Actions line, and the line under the row (Vuetify's, on its last cell) under the
+   cell before it. */
 .dm-table :deep(.v-data-table__tr--mobile > td.dm-table__actions:has(> .v-data-table__td-value:empty)) { display: none; }
+.dm-table :deep(.v-data-table__tr--mobile:not(:last-child):has(> td.dm-table__actions > .v-data-table__td-value:empty) > td:nth-last-child(2)) { border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity)); }
 @media (max-width: 600px) {
   .dm-table__toolbar { padding: 10px 12px; gap: 8px; }
   .dm-table__search { flex: 1 1 0; min-width: 0; }

@@ -316,6 +316,27 @@ describe('DmTable', () => {
     expect(w.findAll('.steps').map((s) => s.text())).toEqual(['steps of w0002']);
   });
 
+  it('an expandable table: each row\'s toggle, before the Actions column, named by what it opens and the row, says whether it is open', async () => {
+    const w = render({ expandable: true, expandTitle: 'Steps', expanded: [] }, { 'expanded-row': ({ item, columns }: { item: Row; columns: unknown[] }) => h('tr', h('td', { colspan: columns.length, class: 'steps' }, `steps of ${item.name}`)) });
+    // The Actions column stays last; the toggles' column is named for screen readers.
+    expect(w.findAll('thead th').map((th) => th.text()).slice(-2)).toEqual(['Steps', 'Actions']);
+    const toggle = () => w.findAll('tbody tr').find((r) => r.text().includes('w0002'))!.find('[data-test="dm-row-expand"]');
+    expect(toggle().attributes()).toMatchObject({ 'aria-label': 'Steps of w0002', 'aria-expanded': 'false' });
+    await toggle().trigger('click');
+    await flushPromises();
+    expect(w.emitted('update:expanded')!.at(-1)).toEqual([['w0002']]);
+    expect(w.findAll('.steps').map((s) => s.text())).toEqual(['steps of w0002']);
+    expect(toggle().attributes('aria-expanded')).toBe('true');
+    await toggle().trigger('click');
+    await flushPromises();
+    expect(w.emitted('update:expanded')!.at(-1)).toEqual([[]]);
+    expect(w.find('.steps').exists()).toBe(false);
+    w.unmount();
+    // Without a title: "Details".
+    const plain = render({ expandable: true });
+    expect(plain.find('[data-test="dm-row-expand"]').attributes('aria-label')).toBe('Details of w0000');
+  });
+
   it('puts a view\'s filters in the toolbar, left of the search; a view\'s cell where it gives one, the column\'s text elsewhere', async () => {
     const w = render({}, { toolbar: () => h('span', { class: 'my-filter' }, 'Needing attention'), 'item.name': ({ item }: { item: Row }) => h('a', { class: 'my-name' }, item.name) });
     const toolbar = w.find('.dm-table__toolbar');
