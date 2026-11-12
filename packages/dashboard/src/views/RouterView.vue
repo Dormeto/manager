@@ -6,7 +6,7 @@ import { mdiArrowRight, mdiBellRingOutline, mdiHeartPulse, mdiPauseCircleOutline
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { relative, rowCloud } from '../format';
-import { healthColor, healthIcon, pauseLine } from '../pause';
+import { healthColor, healthIcon, pauseLine, workloadsCount } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
 import { terraformHelp } from '../router-actions';
@@ -149,8 +149,9 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
             </div>
             <div class="dm-fact dm-fact--wide">
               <div class="dm-fact__label">Workloads</div>
-              <WorkloadCounts v-if="router.workloadStates" :router="router" @open="(state, n) => openWorkloads(router!.name, state, n)" />
-              <div v-else class="dm-fact__value">{{ router.workloads ?? '—' }}</div>
+              <WorkloadCounts :router="router" @open="(state, n) => openWorkloads(router!.name, state, n)">
+                <span v-if="workloadsCount(router) !== null || !router.workloadStates" class="dm-fact__value">{{ workloadsCount(router) ?? '—' }}</span>
+              </WorkloadCounts>
               <div class="dm-fact__more">
                 <router-link :to="{ path: '/workloads', query: { router: router.name } }" class="dm-fact__link">All its workloads<v-icon :icon="mdiArrowRight" size="14" /></router-link>
               </div>

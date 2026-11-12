@@ -5,9 +5,9 @@ import { ref } from 'vue';
 import { mdiDeleteOutline, mdiPause, mdiPlay, mdiPlusCircleOutline, mdiRouterNetwork } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { relative, rowCloud } from '../format';
+import { cloudMark, relative, rowCloud } from '../format';
 import CloudMark from '../components/CloudMark.vue';
-import { healthColor, healthText, pausesText, workloadsText } from '../pause';
+import { healthColor, healthText, pausesText, workloadsCount, workloadsText } from '../pause';
 import { useNow } from '../now';
 import { useSession } from '../stores/session';
 import { pauseHelp, resumeHelp, uninstallHelp } from '../router-actions';
@@ -62,17 +62,18 @@ function start(body: Record<string, unknown>, what: string) {
   return operation(body, what, routers.value.find((r) => r.name === body.router));
 }
 
-// Each column's words: what search reads and an export prints (the marks' words, dates as ISO 8601). A router is named
-// with its account and region, which its cell shows under the name.
-const where = (r: RouterInfo) => [r.account, r.region].filter(Boolean).join(', ');
+// Each column's words: what search reads and an export prints (the marks' words, dates as ISO 8601). A router is said with
+// what its cell shows under its name (its cloud, account, region and description's first line); its "⋮" by its name alone.
+const where = (r: RouterInfo) => [cloudMark(rowCloud(r)).label, r.account, r.region].filter(Boolean).join(', ');
 const headers: DmHeader<RouterInfo>[] = [
-  { title: 'Router', key: 'name', text: (r) => (where(r) ? `${r.name} (${where(r)})` : r.name) },
+  { title: 'Router', key: 'name', text: (r) => [`${r.name} (${where(r)})`, ...(r.summary ? [r.summary] : [])].join(' · ') },
   { title: 'Version', key: 'version', text: (r) => (r.version ? `${r.version}${r.build ? ` (build ${r.build})` : ''}` : '') },
   { title: 'Health', key: 'health', sortable: false, text: (r) => healthText(r, alarmOf(r)) },
   { title: 'Idle check', key: 'lastScheduledCheckAt', text: (r) => r.lastScheduledCheckAt ?? '' },
   { title: 'Workloads', key: 'workloads', sortable: false, text: workloadsText },
   { title: 'Pause', key: 'pauses', sortable: false, text: (r) => pausesText(r.pauses) },
 ];
+const routerName = (r: RouterInfo) => r.name;
 
 // A row's menu: pause (with a reason) or resume for operators, while the router reports its health (0.16 and later);
 // uninstall (after a confirmation) for administrators, of a router the manager installed.
@@ -116,7 +117,7 @@ const tone = (r: RouterInfo) => (r.error ? 'error' : r.health ? healthColor(r.he
   <NoticeToast :notice="notice" @close="notice = null" />
   <v-alert v-if="error" type="error" class="mb-4" :text="error" />
   <v-card class="dm-routers">
-    <DmTable :headers="headers" :items="routers" :loading="loading && !routers.length" item-value="name" :actions="actions" :exported="{ name: 'routers', title: 'Routers' }">
+    <DmTable :headers="headers" :items="routers" :loading="loading && !routers.length" item-value="name" :actions="actions" :row-name="routerName" :exported="{ name: 'routers', title: 'Routers' }">
       <template #loading><DmLoader label="Reading the routers…" :size="56" /></template>
       <template #no-data>
         <div class="dm-calm py-6">
@@ -141,8 +142,10 @@ const tone = (r: RouterInfo) => (r.error ? 'error' : r.health ? healthColor(r.he
       <template #[`item.health`]="{ item }"><HealthMark :router="item" :alarm="alarmOf(item)" /></template>
       <template #[`item.lastScheduledCheckAt`]="{ item }"><span class="nowrap dm-num">{{ relative(item.lastScheduledCheckAt, now) }}</span></template>
       <template #[`item.workloads`]="{ item }">
-        <WorkloadCounts v-if="item.workloadStates" :router="item" class="dm-states" @open="(state, n) => openWorkloads(item.name, state, n)" />
-        <span v-else-if="item.workloads !== undefined" class="dm-num">{{ item.workloads }}</span>
+        <!-- The states' chips, or the count where no state has one (0 for none); the paused chip either way. -->
+        <WorkloadCounts :router="item" class="dm-states" @open="(state, n) => openWorkloads(item.name, state, n)">
+          <span v-if="workloadsCount(item) !== null" class="dm-num">{{ workloadsCount(item) }}</span>
+        </WorkloadCounts>
       </template>
       <template #[`item.pauses`]="{ item }"><PauseChip :pauses="item.pauses" /></template>
     </DmTable>

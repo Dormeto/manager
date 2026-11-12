@@ -10,7 +10,7 @@ import { mdiPauseCircleOutline } from '@mdi/js';
 import RoutersView from '../src/views/RoutersView.vue';
 import { useSession } from '../src/stores/session';
 import { download } from '../src/table-export';
-import { expectEveryColumnSaid } from './table-columns';
+import { columnTexts, expectEveryColumnSaid } from './table-columns';
 
 vi.mock('../src/table-export', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/table-export')>()), download: vi.fn() }));
 const calls: { path: string; init?: RequestInit }[] = [];
@@ -62,11 +62,12 @@ vi.mock('../src/api', () => ({
       routers: [
         { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.22.6', build: '79c810cca8d3', workloads: 1, summary: 'Dev router of the shop team', workloadStates: { ASLEEP: 1 }, health: { status: 'ok', problems: [] },
           ...(server.running ? { operation: { id: server.running, type: 'upgrade-router' } } : {}) },
-        { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0,
+        { name: 'dmtr-dev-eu-west-1', region: 'eu-west-1', account: '111122223333', source: 'manager', version: '0.23.0', build: 'a1b2c3d4e5f6', workloads: 0, workloadStates: {},
           health: { status: 'warning', problems: [{ level: 'warning', text: DRIFT }] },
           pauses: [{ scope: 'router', reason: 'load test', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z' }] },
         { name: 'dmt-dev', region: 'eu-west-1', account: '111122223333', source: 'terraform', version: '0.22.6', build: 'fc69a52b9b43', workloads: 5, workloadStates: { ASLEEP: 5 }, paused: 2, health: { status: 'ok', problems: [] } },
-        ...(withOld ? [{ name: 'dmtr-old-eu-west-2', region: 'eu-west-2', account: '111122223333', source: 'manager', version: '0.15.2', build: '0a1b2c3d4e5f', workloads: 1 }] : []),
+        // Known by its count only (no state counts), with a workload paused; it does not report.
+        ...(withOld ? [{ name: 'dmtr-old-eu-west-2', region: 'eu-west-2', account: '111122223333', source: 'manager', version: '0.15.2', build: '0a1b2c3d4e5f', workloads: 3, paused: 1, reporting: false }] : []),
         ...(withGoogle ? [{ name: 'dmtr-dormeto-dev-europe-west2', cloud: 'gcp', region: 'europe-west2', account: 'dormeto-dev', source: 'cli', version: '0.40.0', build: 'b1c2d3e4f5a6', workloads: 2, workloadStates: { ASLEEP: 2 }, health: { status: 'ok', problems: [] } }] : []),
       ],
     };
@@ -154,6 +155,9 @@ describe('Routers view', () => {
     // Installed by the CLI: no upgrade and no uninstallation from the dashboard.
     expect(gcp.find('button[aria-label^="Upgrade"]').exists()).toBe(false);
     expect(await menuOf(wrapper, 'dmtr-dormeto-dev-europe-west2')).toEqual(['Pause…']);
+    // Its cloud in words where search and the exports read it.
+    expect(columnTexts(wrapper, 'routers', (routers: { name: string }[]) => routers.find((r) => r.name === 'dmtr-dormeto-dev-europe-west2')!).Router)
+      .toBe('dmtr-dormeto-dev-europe-west2 (Google Cloud, dormeto-dev, europe-west2)');
     wrapper.unmount();
   });
 
@@ -290,11 +294,17 @@ describe('Routers view', () => {
     const wrapper = await mountView();
     const chip = rowOf(wrapper, 'dmtr-dev-eu-west-3').find('[data-test="state-count"]');
     expect(chip.text()).toBe('×1');
-    expect(chip.attributes('aria-label')).toBe('1 workload asleep on dmtr-dev-eu-west-3: open it');
+    // Its name starts with what it shows (×1), then says what it is and does.
+    expect(chip.attributes('aria-label')).toBe('×1 asleep on dmtr-dev-eu-west-3: open it');
     expect(chip.attributes('role')).toBe('button');
+    expect(chip.attributes('tabindex')).toBe('0');
     expect(chip.classes()).toContain('text-info');
-    await hover(chip);
-    expect(document.body.textContent).toContain('1 workload asleep on dmtr-dev-eu-west-3');
+    // Reached by the keyboard, its tooltip opens on focus.
+    (chip.element as HTMLElement).focus();
+    await nextTick();
+    await sleep(300);
+    expect(document.activeElement).toBe(chip.element);
+    expect(document.querySelector('.v-overlay--active')?.textContent).toBe('1 workload asleep on dmtr-dev-eu-west-3: open it');
     await chip.trigger('click');
     await flushPromises();
     await sleep(50);
@@ -307,9 +317,11 @@ describe('Routers view', () => {
     const wrapper = await mountView();
     const chip = rowOf(wrapper, 'dmt-dev').find('[data-test="state-count"]');
     expect(chip.text()).toBe('×5');
+    expect(chip.attributes('aria-label')).toBe('×5 asleep on dmt-dev: open their list');
     await hover(chip);
     expect(document.body.textContent).toContain('5 workloads asleep on dmt-dev');
-    await chip.trigger('click');
+    // Enter opens them, as a click does.
+    await chip.trigger('keydown', { key: 'Enter' });
     await flushPromises();
     await sleep(50);
     expect(wrapper.router.currentRoute.value.fullPath).toBe('/workloads?router=dmt-dev&state=ASLEEP');
@@ -330,19 +342,31 @@ describe('Routers view', () => {
     wrapper.unmount();
   });
 
+  it('shows a router\'s count and its paused chip without state counts, and 0 for a router without workloads', async () => {
+    withOld = true;
+    const wrapper = await mountView();
+    const cell = cellOf(wrapper, 'dmtr-old-eu-west-2', 'Workloads');
+    expect(cell.text()).toBe('3×1');
+    expect(cell.find('[data-test="paused-count"]').attributes('aria-label')).toBe('1 workload paused on dmtr-old-eu-west-2: never napped until resumed; requests still wake it');
+    expect(cellOf(wrapper, 'dmtr-dev-eu-west-1', 'Workloads').text()).toBe('0');
+    const texts = columnTexts(wrapper, 'routers', (routers: { name: string }[]) => routers.find((r) => r.name === 'dmtr-old-eu-west-2')!);
+    expect(texts.Workloads).toBe('3; 1 of them paused');
+    wrapper.unmount();
+  });
+
   it('says no state, pause or health word in a cell: the icons are named by their words, the counts are ×N', async () => {
     withOld = true;
     const wrapper = await mountView();
     for (const name of ['dmtr-dev-eu-west-3', 'dmtr-dev-eu-west-1', 'dmt-dev', 'dmtr-old-eu-west-2']) {
       expect(cellOf(wrapper, name, 'Health').text(), name).toBe('');
       expect(cellOf(wrapper, name, 'Pause').text(), name).toBe('');
-      // A router known by its list answer only shows its count.
-      expect(cellOf(wrapper, name, 'Workloads').text(), name).toMatch(/^((×\d+)+|\d+)$/);
+      // A router known by its count only shows it (then its paused chip).
+      expect(cellOf(wrapper, name, 'Workloads').text(), name).toMatch(/^(\d+|×\d+)(×\d+)*$/);
     }
     const names = (name: string, column: string) => cellOf(wrapper, name, column).findAll('[data-test="status-mark"]').map((m) => m.attributes('aria-label'));
     expect(names('dmtr-dev-eu-west-3', 'Health')).toEqual(['ok']);
     expect(names('dmtr-dev-eu-west-1', 'Health')).toEqual(['warning', 'alert since 3 h ago']);
-    expect(names('dmtr-old-eu-west-2', 'Health')).toEqual(['no health report']);
+    expect(names('dmtr-old-eu-west-2', 'Health')).toEqual(['no health report', 'not reporting']);
     expect(names('dmtr-dev-eu-west-1', 'Pause')).toEqual(['paused']);
     expect(names('dmt-dev', 'Pause')).toEqual([]);
     wrapper.unmount();
@@ -377,6 +401,13 @@ describe('Routers view', () => {
     const paused = calls.find((c) => c.path === '/routers/dmtr-dev-eu-west-3/pause')!;
     expect(JSON.parse(String(paused.init!.body))).toMatchObject({ reason: 'load test', keepAsleep: false });
     await sleep(350);
+    // The one dialog, opened for another router, starts again from nothing.
+    await choose(wrapper, 'dmt-dev', 'Pause…');
+    expect(document.querySelector('.v-overlay--active .v-card-title')?.textContent).toBe('Pause dmt-dev');
+    expect((document.querySelector('.v-overlay--active input') as HTMLInputElement).value).toBe('');
+    buttonOfDialog('Cancel').click();
+    await flushPromises();
+    await sleep(350);
     await choose(wrapper, 'dmtr-dev-eu-west-1', 'Resume');
     expect(calls.some((c) => c.path === '/routers/dmtr-dev-eu-west-1/resume' && c.init?.method === 'POST')).toBe(true);
     wrapper.unmount();
@@ -389,7 +420,7 @@ describe('Routers view', () => {
     expect(headers.at(-1)).toBe('Actions');
     expect(headers.indexOf('Actions')).toBe(headers.indexOf('Pause') + 1);
     expect(admin.find('.dm-routers thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
-    expect(rowOf(admin, 'dmtr-dev-eu-west-3').find('[data-test="dm-row-menu"]').attributes('aria-label')).toBe('Actions for dmtr-dev-eu-west-3 (111122223333, eu-west-3)');
+    expect(rowOf(admin, 'dmtr-dev-eu-west-3').find('[data-test="dm-row-menu"]').attributes('aria-label')).toBe('Actions for dmtr-dev-eu-west-3');
     expect(await menuOf(admin, 'dmtr-dev-eu-west-3')).toEqual(['Pause…', 'Uninstall…']);
     expect(await menuOf(admin, 'dmtr-dev-eu-west-1')).toEqual(['Resume', 'Uninstall…']);
     expect(await menuOf(admin, 'dmt-dev')).toEqual(['Pause…']);
@@ -459,9 +490,9 @@ describe('Routers view', () => {
     expect(name).toMatch(/^dormeto-routers-\d{4}-\d{2}-\d{2}\.csv$/);
     expect((body as string).split('\r\n')).toEqual([
       'Router,Version,Health,Idle check,Workloads,Pause',
-      '"dmtr-dev-eu-west-3 (111122223333, eu-west-3)",0.22.6 (build 79c810cca8d3),ok,,1 asleep,',
-      `"dmtr-dev-eu-west-1 (111122223333, eu-west-1)",0.23.0 (build a1b2c3d4e5f6),warning: ${DRIFT} · alert since ${ALARM_SINCE},,0,Router paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test`,
-      '"dmt-dev (111122223333, eu-west-1)",0.22.6 (build fc69a52b9b43),ok,,"5 asleep, 2 paused",',
+      '"dmtr-dev-eu-west-3 (AWS, 111122223333, eu-west-3) · Dev router of the shop team",0.22.6 (build 79c810cca8d3),ok,,1 asleep,',
+      `"dmtr-dev-eu-west-1 (AWS, 111122223333, eu-west-1)",0.23.0 (build a1b2c3d4e5f6),warning: ${DRIFT} · alert since ${ALARM_SINCE},,0,Router paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test`,
+      '"dmt-dev (AWS, 111122223333, eu-west-1)",0.22.6 (build fc69a52b9b43),ok,,5 asleep; 2 of them paused,',
       '',
     ]);
     // A router with every fact (its idle check too): each column says it.

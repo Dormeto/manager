@@ -65,11 +65,20 @@ export function healthText(r: Pick<RouterInfo, 'error' | 'health' | 'reporting'>
   return [status, ...(alarm ? [`alert since ${alarm.since}`] : []), ...(r.reporting === false && !r.error ? ['not reporting'] : [])].join(' · ');
 }
 
-// A router's workloads in words (Routers' Workloads column): a count per state, then the paused ones; its count alone from a
-// router known by its list answer only.
+// A router's count of workloads where no state has one to show: 0 for none, its count when only that is known; null while its
+// states' counts say it.
+export function workloadsCount(r: Pick<RouterInfo, 'workloads' | 'workloadStates'>): number | null {
+  if (r.workloadStates && Object.keys(r.workloadStates).length) return null;
+  return r.workloadStates ? 0 : r.workloads ?? null;
+}
+
+// A router's workloads in words (Routers' Workloads column): a count per state, or its count alone, then how many of them
+// are paused (among those counts, not added to them).
 export function workloadsText(r: Pick<RouterInfo, 'workloads' | 'workloadStates' | 'paused'>): string {
-  if (!r.workloadStates) return r.workloads === undefined ? '' : String(r.workloads);
-  return [...Object.entries(r.workloadStates).map(([state, n]) => `${n} ${state.toLowerCase()}`), ...(r.paused ? [`${r.paused} paused`] : [])].join(', ');
+  const count = workloadsCount(r);
+  const counts = count === null ? Object.entries(r.workloadStates ?? {}).map(([state, n]) => `${n} ${state.toLowerCase()}`).join(', ') : String(count);
+  if (!r.paused) return counts;
+  return counts ? `${counts}; ${r.paused} of them paused` : `${r.paused} paused`;
 }
 
 // A router's status for the Overview: unreachable, its health, not reporting (a router known by its list answer only has

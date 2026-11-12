@@ -33,6 +33,10 @@ export const workloadsHelp = (router: string, state: string, count: number) =>
     ? `1 workload ${state.toLowerCase()} on ${router}: open it`
     : `${count} workloads ${state.toLowerCase()} on ${router}: open their list`;
 
+// A state's count chip's name: what it shows (×N) first, then the state and what a click does.
+export const countLabel = (router: string, state: string, count: number) =>
+  `×${count} ${state.toLowerCase()} on ${router}: ${count === 1 ? 'open it' : 'open their list'}`;
+
 // The paused workloads' chip: every one of them while the router itself is paused.
 export const pausedHelp = (router: string, count: number, routerPaused: boolean) =>
   routerPaused

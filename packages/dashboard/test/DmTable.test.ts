@@ -196,6 +196,16 @@ describe('DmTable', () => {
     expect(document.querySelector('.v-overlay-container')!.textContent).toContain('Pause it first: it is running an operation.');
   });
 
+  it('names a row\'s "⋮" by the view\'s rowName when it gives one, apart from the first column\'s export text', async () => {
+    const actions = (): DmAction[] => [{ title: 'Pause', icon: mdiPauseCircleOutline, run: () => {} }];
+    const where: DmHeader<Row>[] = [{ title: 'Name', key: 'name', text: (r) => `${r.name} (AWS, eu-west-3)` }, ...headers.slice(1)];
+    const named = render({ headers: where, actions, rowName: (r: Row) => r.name });
+    expect(named.findAll('[data-test="dm-row-menu"]').slice(0, 2).map((b) => b.attributes('aria-label'))).toEqual(['Actions for w0000', 'Actions for w0001']);
+    named.unmount();
+    const plain = render({ headers: where, actions });
+    expect(plain.find('[data-test="dm-row-menu"]').attributes('aria-label')).toBe('Actions for w0000 (AWS, eu-west-3)');
+  });
+
   it('a server table: its options go to the view, the search is the view\'s, an export reads every row through server.all, 5,000 at most, saying it was cut', async () => {
     const all = vi.fn(async (limit: number) => rows(Math.min(limit, 7200)));
     const w = render({ items: rows(50), server: { total: 7200, all }, search: 'w0001' });

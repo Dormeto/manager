@@ -108,9 +108,9 @@ describe('Router view', () => {
     expect(wrapper.find('[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.26.0"]').exists()).toBe(true);
     expect(text).toContain('controller: 2 errors in 24 hours');
     expect(text).toMatch(/alert since 10 min ago/);
-    // The workloads by state as the Routers list shows them: the state's icon and ×N, named by the count and the state.
+    // The workloads by state as the Routers list shows them: the state's icon and ×N, named by what they show and the state.
     expect(wrapper.findAll('[data-test="state-count"]').map((c) => [c.text(), c.attributes('aria-label')])).toEqual([
-      ['×1', '1 workload awake on dmtr-dev-eu-west-3: open it'], ['×1', '1 workload asleep on dmtr-dev-eu-west-3: open it'],
+      ['×1', '×1 awake on dmtr-dev-eu-west-3: open it'], ['×1', '×1 asleep on dmtr-dev-eu-west-3: open it'],
     ]);
     expect(text).toContain('111122223333');
     wrapper.unmount();

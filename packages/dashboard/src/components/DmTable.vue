@@ -24,6 +24,8 @@ const props = withDefaults(defineProps<{
   loading?: boolean;
   // A row's menu: none shows no button.
   actions?: (item: T) => DmAction[];
+  // A row's name, for its "⋮" (`Actions for <name>`): its first column's text by default.
+  rowName?: (item: T) => string;
   // The header's menu, after the exports.
   tableActions?: DmAction[];
   exported: DmExport;
@@ -33,7 +35,7 @@ const props = withDefaults(defineProps<{
   server?: DmServer<T>;
   expandable?: boolean;
   selectable?: boolean;
-}>(), { loading: false, actions: undefined, tableActions: () => [], perPage: 50, noSearch: false, server: undefined, expandable: false, selectable: false });
+}>(), { loading: false, actions: undefined, rowName: undefined, tableActions: () => [], perPage: 50, noSearch: false, server: undefined, expandable: false, selectable: false });
 
 const emit = defineEmits<{ 'update:options': [options: DmOptions] }>();
 const search = defineModel<string>('search', { default: '' });
@@ -111,8 +113,8 @@ const searching = computed(() => (search.value ?? '').trim());
 const noMatch = computed(() => !props.server && Boolean(searching.value) && props.items.length > 0 && rows.value.length === 0);
 const mobile = computed(() => smAndDown.value);
 
-// A row's name, for its "⋮" button: its first column's text.
-const rowName = (item: T) => (props.headers[0] ? cellText(props.headers[0], item) : '');
+// A row's name, for its "⋮" button: the view's, else its first column's text.
+const rowName = (item: T) => props.rowName?.(item) ?? (props.headers[0] ? cellText(props.headers[0], item) : '');
 const rowActions = (item: T) => props.actions?.(item) ?? [];
 
 // The exports.

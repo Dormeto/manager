@@ -53,11 +53,15 @@ describe('a router in words', () => {
       .toBe('warning: drift · alert since 2026-10-05T09:00:00.000Z · not reporting');
   });
 
-  it('says its workloads by state, then the paused ones', () => {
-    expect(workloadsText({ ...r, workloads: 5, workloadStates: { AWAKE: 3, ASLEEP: 1, FAILED: 1 }, paused: 1 })).toBe('3 awake, 1 asleep, 1 failed, 1 paused');
+  // The paused ones are among the states' counts: said apart, so the counts do not read as a sum.
+  it('says its workloads by state, then how many of them are paused', () => {
+    expect(workloadsText({ ...r, workloads: 5, workloadStates: { AWAKE: 3, ASLEEP: 1, FAILED: 1 }, paused: 1 })).toBe('3 awake, 1 asleep, 1 failed; 1 of them paused');
     expect(workloadsText({ ...r, workloads: 5, workloadStates: { ASLEEP: 5 }, paused: 0 })).toBe('5 asleep');
-    // A router known by its list answer only: its count.
+    // No workload: 0, not an empty cell.
+    expect(workloadsText({ ...r, workloads: 0, workloadStates: {}, paused: 0 })).toBe('0');
+    // A router known by its count only: its count, and its paused ones all the same.
     expect(workloadsText({ ...r, workloads: 4 })).toBe('4');
+    expect(workloadsText({ ...r, workloads: 3, paused: 1 })).toBe('3; 1 of them paused');
     expect(workloadsText({ ...r })).toBe('');
   });
 });

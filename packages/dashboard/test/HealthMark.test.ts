@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mount, type VueWrapper } from '@vue/test-utils';
 import { nextTick } from 'vue';
-import { mdiAlertOctagonOutline, mdiAlertOutline, mdiBellRingOutline, mdiCheckCircleOutline, mdiLanDisconnect } from '@mdi/js';
+import { mdiAlertOctagonOutline, mdiAlertOutline, mdiBellRingOutline, mdiCheckCircleOutline, mdiCloudOffOutline, mdiLanDisconnect } from '@mdi/js';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import HealthMark from '../src/components/HealthMark.vue';
@@ -17,7 +17,8 @@ Object.defineProperty(window, 'visualViewport', {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const base: RouterInfo = { name: 'dmtr-dev-eu-west-3', region: 'eu-west-3', account: '111122223333', source: 'manager', version: '0.40.0' };
-const alarm: AlarmInfo = { id: 'router#111122223333#eu-west-3', kind: 'router', name: 'dmtr-dev-eu-west-3', level: 'warning', since: new Date(Date.now() - 3 * 3_600_000).toISOString(), problems: [] };
+const WHY = 'the manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager\'s event bus).';
+const alarm: AlarmInfo ={ id: 'router#111122223333#eu-west-3', kind: 'router', name: 'dmtr-dev-eu-west-3', level: 'warning', since: new Date(Date.now() - 3 * 3_600_000).toISOString(), problems: [] };
 
 let wrapper: VueWrapper | undefined;
 afterEach(() => {
@@ -91,10 +92,46 @@ describe('HealthMark', () => {
     expect((await tip(w, 1))[0]).toBe('alert since 3 h ago');
   });
 
-  it('says in the tooltip that a router does not report, and why', async () => {
+  it('marks a router that does not report with a muted cloud beside the health icon, why in its tooltip and the health\'s', async () => {
     const w = render({ ...base, reporting: false, health: { status: 'ok', problems: [] } });
     expect(w.text()).toBe('');
-    expect(await tip(w)).toEqual(['ok', 'not reporting: the manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager\'s event bus).']);
+    expect(marks(w).map((m) => m.attributes('aria-label'))).toEqual(['ok', 'not reporting']);
+    expect(marks(w)[1]!.classes()).toContain('dm-status--plain');
+    expect(marks(w)[1]!.attributes('tabindex')).toBe('0');
+    expect(icons(w)).toEqual([mdiCheckCircleOutline, mdiCloudOffOutline]);
+    expect(await tip(w)).toEqual(['ok', `not reporting: ${WHY}`]);
+    await marks(w)[0]!.trigger('mouseleave');
+    await sleep(300);
+    expect(await tip(w, 1)).toEqual(['not reporting', 'The manager calls this router at each view: it does not send its state (a router older than 0.21, or without the manager\'s event bus).']);
+  });
+
+  // The marks and the health's tooltip for each combination of facts.
+  it.each<{ facts: string; router: RouterInfo; open?: AlarmInfo; names: string[]; lines: string[] }>([
+    {
+      facts: 'unreachable, with an open alert',
+      router: { ...base, error: 'Task timed out after 30.00 seconds', reporting: false }, open: alarm,
+      names: ['unreachable', 'alert since 3 h ago'], lines: ['unreachable', 'Task timed out after 30.00 seconds', 'alert since 3 h ago'],
+    },
+    {
+      facts: 'a warning with two problems, not reporting',
+      router: { ...base, reporting: false, health: { status: 'warning', problems: [{ level: 'warning', text: 'drift' }, { level: 'error', text: 'idle check late' }] } },
+      names: ['warning', 'not reporting'], lines: ['warning', 'warning: drift', 'error: idle check late', `not reporting: ${WHY}`],
+    },
+    {
+      facts: 'no health report, with an open alert',
+      router: { ...base, version: '0.15.2' }, open: alarm,
+      names: ['no health report', 'alert since 3 h ago'], lines: ['no health report', 'Upgrade to 0.16 for health.', 'alert since 3 h ago'],
+    },
+    {
+      facts: 'ok alone',
+      router: { ...base, reporting: true, health: { status: 'ok', problems: [] } },
+      names: ['ok'], lines: ['ok'],
+    },
+  ])('shows $facts as marks named by their words, everything in the health\'s tooltip', async ({ router, open, names, lines }) => {
+    const w = render(router, open);
+    expect(w.text()).toBe('');
+    expect(marks(w).map((m) => m.attributes('aria-label'))).toEqual(names);
+    expect(await tip(w)).toEqual(lines);
   });
 
   it('says a router before 0.16 has no health report, upgrading gives one', async () => {
