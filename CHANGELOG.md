@@ -228,6 +228,59 @@ answers `x-dormeto-failure` and `x-dormeto-retry-at` as AWS's does, and its stat
 now refuses a `keepAsleep` that is not true or false** (a change to a released action: a value such as `"false"` or `1`, once taken
 as it was, is a refusal now; the manager always sends a boolean). The router's own settings problem texts take the same
 `<key>: must be …` form, and the Google Cloud wake timeout says 60 to 1700 in one text.
+- **A Google Cloud router checks every workload in turn when its check runs out of time** (router 0.40.0, a fix): its check, which
+starts 8 workloads at a time and none after 240 s, started at the first workload by id every time, so on a crowded router the workloads
+late in id order were never checked: never napped by their idle window, a failed one never released, a stuck wake or nap never ended,
+a URL map's drift never repaired. It now starts after the last workload the previous check started, as an AWS router's does
+(`CheckBudgetReached`'s `next` names the first one left). Where it stopped is written in `router/check` as `cursor` right after the
+check's workloads, a write made only when it moves (a check cut short, or the first to reach every workload after one that did not),
+and again in the check's summary; it is absent once a check reached every workload. The `events` action's `check` holds it, and a
+record holding only the cursor (a check whose summary was never written) is answered `{ "cursor", "checkedAt": null,
+"lastScheduledCheckAt": null }`, which the manager's poll skips. Each check reads `router/check` once more, at its start. A cursor that
+cannot be written is logged `CheckCursorNotStored`, and one that cannot be read `CheckCursorUnread`, on an AWS router too: that check
+starts at the first workload.
+- **An AWS router skips a workload offboarded while its check ran** (router 0.40.0, a change to a released behaviour): a workload whose
+check fails because its offboarding removed it meanwhile is logged `CheckSkipped` (info, `{ workloadId, reason: 'offboarded' }`) and
+answered `{ "workloadId", "skipped": "offboarded" }` in the check's results, as a Google Cloud router's is, instead of a `CheckFailed`
+error line and `{ "workloadId", "error" }`; a workload still configured whose check fails stays a `CheckFailed`, and the check reads
+its configuration once more to tell. `CheckSkipped` now says two things on AWS: the whole check skipped while the previous one still
+runs (warn, `{ reason: 'previous check still running' }`, no `workloadId`), as before, and one workload offboarded under the check
+(info, with its `workloadId`).
+- **An AWS router shows a schedule it cannot read** (router 0.40.0, a change to a released answer): `status` answered a schedule whose
+next events the router cannot compute as no schedule (`schedule: null`) when its time zone was one the runtime refuses, and failed for
+any other error computing them, so the dashboard and `dormeto aws workloads schedule show` said "no schedule" for a workload that has
+one. It is now answered as stored, with no `next` event and its own `joinMinutes`, and logged `ScheduleSkipped`, as a Google Cloud
+router's is; the check still leaves such a schedule out, so its `maxNapDays` shows no maintenance wake due. A stored schedule that does
+not parse, or whose time is none, is still answered as none. The dashboard's schedule card then shows the time zone, the windows, Edit
+and Clear, and no next events; CLI 0.11.0 prints the schedule, with `unknown time zone "<zone>"; times in UTC` when its Go runtime
+does not know the zone either.
+- **AWS's router refuses the resume of a workload it does not know** (router 0.40.0, a change to a released action): `resume` with a
+`workloadId` the router has no configuration for is refused `not_found` (`workload not configured: <id>`), as a Google Cloud router's
+is, instead of answering `{ "resumed": false }`; the API answers it 404 `not_found` and audits the error, and `dormeto aws workloads
+resume <router>/<id>` says `<router>/<id>: workload not configured: <id>` and exits 1 instead of "resumed". An exclusion's lift of such a
+workload still answers `{ "resumed": false }`. An operator's pause left on a workload the router no longer knows (a Terraform destroy of
+its workload module removes its configuration, not its pause; an offboarding removes both) cannot be resumed while it is unconfigured,
+and holds the workload again if it is configured again.
+- **A pause's `woken` lists the wakes it started or set** (router 0.40.0): an AWS router no longer lists a napping workload whose pending
+wake was set before the pause, nor an asleep one whose wake another started first; a router pause's wakes put on its work queue still
+count. A Google Cloud router's already did.
+- **A Google Cloud router's `WakeRequested` and `PendingWake` log lines name who asked as `trigger: { kind, by }`** (router 0.40.0, a
+change to its log lines), as an AWS router's lines and its own waker's do: router 0.37.0's carried the kind alone, as `reason`. `by`
+is there when the manager or a pause names who asked. The `WakeRequested` a nap logs at its end for a pending wake keeps `reason:
+'pendingWake'`, on both clouds.
+- **Fixed, discovery of an AWS region whose CloudWatch fails:** a region whose CloudWatch request counts cannot be read (a
+throttling, a refusal) is scanned all the same (a change to a released behaviour): the target groups of the batch CloudWatch failed
+for keep their candidates' stored idle share (none for a candidate never read; the account's shares are read only then), and the
+failure is logged `CloudWatchIdleFailed` (warn, `{ account, region, targetGroups, error }`, once a batch of 500 target groups), as a
+Google Cloud project's candidates keep theirs when Monitoring fails (`GoogleIdleFailed`). Such a failure used to fail the region's
+scan: its pair was recorded with the error (`DiscoveryPairFailed`), the run was partial, and the region's candidates stayed as they
+were until a run CloudWatch answered (a new target group not listed, a removed one not marked gone, its hosts and tags not updated).
+- **An AWS onboarding whose workload is FAILED fails at its `verify` step:** as a Google Cloud onboarding does (a change to a released
+behaviour), `verify` refuses a workload the router's status says is `FAILED`, and the operation fails there with `verify: <name>
+FAILED`, its locks and slots released, instead of succeeding. Its `candidate` step does not run, so the candidate stays eligible
+until the next discovery run reads the router's rule; nothing is undone: the router keeps the workload it onboarded (Offboard
+removes it), listed at the router's next check. A route that is not the application's, or an issue, fails `verify` as before
+(`verify: route <route>, issues: …`).
 - **The dashboard's tables, one component:** Routers, Workloads, Discovery, Operations, Users, Audit, the IP lists and a workload's
 History of changes share one table: a search field reading what the columns say (Workloads' sent to the API as before), sort on the
 headers (Workloads and Discovery keep the API's order), pages of 25, 50, 100 or all rows (50 at first, all only up to 1,000 rows;
