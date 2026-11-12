@@ -18,7 +18,10 @@ const calls: { path: string; init?: RequestInit }[] = [];
 // The server's side: the onboarding running on the candidate (named by the candidates while it runs) and how it ended;
 // `list` answers the candidates' pages instead of the one candidate; `inFlight` counts the pages asked at once.
 type Page = { candidates: unknown[]; cursor: string | null };
+// `discovery`: GET /discovery's answer when a test gives one; `refuse`: the dismissal or restore requests that fail (by their
+// number, from 1).
 const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; routersLater?: Promise<void>; tags?: Record<string, string[]>; row?: Record<string, unknown>;
+  discovery?: () => Record<string, unknown>; refuse?: number[]; dismissals?: number; exclusions?: unknown[];
   list?: (query: URLSearchParams) => Page; inFlight: number; mostInFlight: number; later?: Promise<void> } = { running: null, ended: { status: 'succeeded' }, inFlight: 0, mostInFlight: 0 };
 const CHECK = { name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-11T10:00:00.000Z' };
 const candidate = () => ({
@@ -38,12 +41,18 @@ vi.mock('../src/api', () => ({
     }
     if (path.startsWith('/operations/')) return { id: path.slice('/operations/'.length), type: 'onboard', ...server.ended };
     if (path === '/exclusions' && init?.method === 'POST') return { candidates: 1, operation: { id: 'op-x' } };
-    if (path === '/discovery') return { lastRun: null, counts: { 'pending-onboarding': 1 } };
-    if (path === '/exclusions') return { exclusions: [] };
+    if (path === '/discovery') return server.discovery?.() ?? { lastRun: null, counts: { 'pending-onboarding': 1 } };
+    if (path === '/discovery/run') return { accepted: true };
+    if (path === '/exclusions') return { exclusions: server.exclusions ?? [] };
     if (path === '/routers' && server.routersLater) await server.routersLater;
     if (path === '/routers' && server.routers) return { routers: server.routers };
     if (path === '/routers') return { routers: [{ name: 'dmtr-dev-eu-west-3', account: '111122223333', region: 'eu-west-3', clusters: [CHECK] }] };
-    if (path === '/discovery/dismiss' || path === '/discovery/restore') return {};
+    if (path === '/discovery/dismiss' || path === '/discovery/restore') {
+      server.dismissals = (server.dismissals ?? 0) + 1;
+      if (server.refuse?.includes(server.dismissals)) throw new Error('ids must be a list of 1 to 100 candidate IDs');
+      const ids = JSON.parse(String(init!.body)).ids as string[];
+      return { candidates: ids.map((id) => ({ id })) };
+    }
     if (path.startsWith('/discovery/candidates?') && server.list) {
       server.inFlight += 1;
       server.mostInFlight = Math.max(server.mostInFlight, server.inFlight);
@@ -969,6 +978,154 @@ describe('Discovery view, its table: a row\'s actions, the export\'s reading, se
       wrapper.unmount();
     } finally {
       vi.useRealTimers();
+    }
+  });
+  // The API takes 100 ids a request; a selection now spans pages and searches.
+  it('dismisses more than 100 ticked rows by batches of 100, one request at a time; a batch refused says how many were done and keeps the others ticked', async () => {
+    server.list = pagesOf(numbered(150));
+    server.dismissals = 0;
+    const wrapper = await mountView();
+    const tickPage = async () => {
+      await wrapper.find('thead input[type="checkbox"]').trigger('click');
+      await nextTick();
+    };
+    await tickPage();
+    await button(wrapper, 'Next')!.trigger('click');
+    await flushPromises();
+    await tickPage();
+    await button(wrapper, 'Next')!.trigger('click');
+    await flushPromises();
+    await box(wrapper, 'host h100.example.com').trigger('click');
+    await nextTick();
+    await button(wrapper, 'Dismiss (101)')!.trigger('click');
+    await flushPromises();
+    dialogButton('Dismiss').click();
+    await flushPromises();
+    await sleep(20);
+    await flushPromises();
+    const sent = calls.filter((c) => c.path === '/discovery/dismiss').map((c) => (JSON.parse(c.init!.body as string).ids as string[]));
+    expect(sent.map((ids) => ids.length)).toEqual([100, 1]);
+    expect(new Set(sent.flat()).size).toBe(101);
+    expect(toast()?.textContent).toContain('101 candidates dismissed.');
+    wrapper.unmount();
+
+    // The second batch refused: the first 100 done, said so, the last one still ticked.
+    document.body.innerHTML = '';
+    calls.length = 0;
+    server.dismissals = 0;
+    server.refuse = [2];
+    const again = await mountView();
+    for (const go of [true, true, false]) {
+      await again.find('thead input[type="checkbox"]').trigger('click');
+      await nextTick();
+      if (go) {
+        await button(again, 'Next')!.trigger('click');
+        await flushPromises();
+      }
+    }
+    expect(button(again, 'Dismiss (150)')).toBeDefined();
+    await button(again, 'Dismiss (150)')!.trigger('click');
+    await flushPromises();
+    dialogButton('Dismiss').click();
+    await flushPromises();
+    await sleep(20);
+    await flushPromises();
+    expect(calls.filter((c) => c.path === '/discovery/dismiss')).toHaveLength(2);
+    expect(toast()?.textContent).toContain('100 of 150 candidates dismissed, then: ids must be a list of 1 to 100 candidate IDs. The 50 others stay ticked.');
+    expect(button(again, 'Dismiss (50)')).toBeDefined();
+    delete server.refuse;
+    again.unmount();
+  });
+
+  it('while a run it started is in progress, reads the run\'s state only, then the list once when it ends, quietly, the selection kept', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const at = '2026-10-07T06:00:00.000Z';
+      let run = { startedAt: at, finishedAt: '2026-10-07T06:00:47.000Z', trigger: 'schedule', status: 'ok', mode: 'organization', targets: [], lint: [] };
+      server.discovery = () => ({ lastRun: run, counts: { 'pending-onboarding': 70 } });
+      server.list = pagesOf(numbered(70));
+      const wrapper = await mountView();
+      await wrapper.find('[data-test="dm-table-search"] input').setValue('h0');
+      await sleep(450);
+      await flushPromises();
+      await box(wrapper, 'host h001.example.com').trigger('click');
+      await nextTick();
+      calls.length = 0;
+      await button(wrapper, 'Run now')!.trigger('click');
+      await flushPromises();
+      run = { ...run, startedAt: '2026-10-07T07:00:00.000Z', status: 'running', trigger: 'manual' };
+      // Running: three polls, the run's state only.
+      for (let i = 0; i < 3; i += 1) {
+        vi.advanceTimersByTime(5_000);
+        await flushPromises();
+      }
+      expect(calls.map((c) => c.path)).toEqual(['/discovery/run', '/discovery', '/discovery', '/discovery']);
+      // Ended: the list read once, without the loader, the row still ticked.
+      run = { ...run, status: 'ok', finishedAt: '2026-10-07T07:00:50.000Z' };
+      let release!: () => void;
+      server.later = new Promise<void>((r) => { release = r; });
+      vi.advanceTimersByTime(5_000);
+      await flushPromises();
+      expect((wrapper.findComponent(DmTable).props() as { loading: boolean }).loading).toBe(false);
+      release();
+      delete server.later;
+      await flushPromises();
+      await sleep(20);
+      await flushPromises();
+      vi.advanceTimersByTime(20_000);
+      await flushPromises();
+      expect(listed()).toEqual([{ status: 'pending-onboarding', limit: '200' }]);
+      expect(ticked(wrapper, 'host h001.example.com')).toBe(true);
+      expect(button(wrapper, 'Run now')!.attributes('disabled')).toBeUndefined();
+      wrapper.unmount();
+    } finally {
+      delete server.discovery;
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the ticked rows when an operation it watched ends and the list is read again', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const rows = numbered(5);
+      Object.assign(rows[0]!, { operation: { id: 'op-5', type: 'onboard' } });
+      server.list = pagesOf(rows);
+      server.ended = { status: 'succeeded' };
+      const wrapper = await mountView();
+      await box(wrapper, 'host h001.example.com').trigger('click');
+      await box(wrapper, 'host h002.example.com').trigger('click');
+      await nextTick();
+      // It ended, and h002 left the list.
+      server.list = pagesOf([{ ...rows[0]!, operation: undefined, status: 'managed' }, rows[1]!, rows[3]!, rows[4]!]);
+      vi.advanceTimersByTime(10_000);
+      await flushPromises();
+      await sleep(50);
+      await flushPromises();
+      expect(toast()?.textContent).toContain('Onboarding of tg-0 succeeded.');
+      expect(ticked(wrapper, 'host h001.example.com')).toBe(true);
+      expect(button(wrapper, 'Dismiss (1)')).toBeDefined();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('says an exclusion expired or its lift incomplete by an icon alone, the word its name and its tooltip', async () => {
+    const at = '2026-10-07T06:00:00.000Z';
+    server.exclusions = [
+      { id: 'x1', target: { kind: 'account', account: '111122223333', name: 'example' }, reason: 'migration', by: 'ops@example.com', at, expiresAt: '2026-10-08T06:00:00.000Z', expired: true },
+      { id: 'x2', target: { kind: 'target-group', arn: 'arn:tg/shop', account: '111122223333', region: 'eu-west-3', name: 'shop' }, reason: 'freeze', by: 'ops@example.com', at, lifting: true, paused: [{ router: 'dmt-dev', workloadId: 'w1' }] },
+    ];
+    try {
+      const wrapper = await mountView();
+      const items = wrapper.findAll('#exclusions .v-list-item');
+      const marks = items.map((i) => i.find('.v-list-item__append [data-test="status-mark"]'));
+      expect(marks.map((m) => m.attributes('aria-label'))).toEqual(['expired', 'lift incomplete']);
+      expect(marks.map((m) => m.attributes('tabindex'))).toEqual(['0', '0']);
+      expect(items.map((i) => i.find('.v-list-item__append').text())).toEqual(['Lift', 'Retry lift']);
+      expect(wrapper.find('#exclusions .v-chip').exists()).toBe(false);
+      wrapper.unmount();
+    } finally {
+      delete server.exclusions;
     }
   });
 });

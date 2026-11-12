@@ -107,7 +107,10 @@ describe('Router view', () => {
     expect(text).toContain('0.25.0');
     expect(wrapper.find('[aria-label="Upgrade dmtr-dev-eu-west-3 to 0.26.0"]').exists()).toBe(true);
     expect(text).toContain('controller: 2 errors in 24 hours');
-    expect(text).toMatch(/alert since 10 min ago/);
+    // The Health card's open alert: the bell a mark named "alert", "since 10 min ago" beside it (no word beside an icon).
+    const alarm = wrapper.find('.dm-health .dm-alarm');
+    expect(alarm.find('[data-test="status-mark"]').attributes('aria-label')).toBe('alert');
+    expect(alarm.text()).toBe('since 10 min ago');
     // The workloads by state as the Routers list shows them: the state's icon and ×N, named by what they show and the state.
     expect(wrapper.findAll('[data-test="state-count"]').map((c) => [c.text(), c.attributes('aria-label')])).toEqual([
       ['×1', '×1 awake on dmtr-dev-eu-west-3: open it'], ['×1', '×1 asleep on dmtr-dev-eu-west-3: open it'],

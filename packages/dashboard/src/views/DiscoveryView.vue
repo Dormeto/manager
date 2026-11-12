@@ -5,7 +5,7 @@
 // of the status and filters shown.
 import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
 import { mdiAlertCircleOutline, mdiAlertOutline, mdiCancel, mdiCheckCircleOutline, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
-  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
+  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOffOutline, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
@@ -142,9 +142,10 @@ const notice = ref<Notice | null>(null);
 let poll: number | undefined;
 // Onboardings and offboardings running on the candidates shown: the page is refreshed every 10 s while one runs, and a
 // toast says how each one ended (the candidate then moves to its status).
+// An operation that ended: the list read again, the rows ticked staying ticked but those that left it.
 const watch = operationWatch((n) => {
   notice.value = n;
-  void load();
+  void load({ selection: 'refresh' });
 });
 // Quiet (no loader: the rows are swapped when read), never two at once (a tick while one reads is skipped), and under a search
 // one tick in three: its whole list is read again (26 requests at most, where the cursor's page is one), and the toast of an
@@ -303,28 +304,34 @@ watchValue(search, (text) => {
   }, 400);
 });
 
-async function load({ selection = 'clear' }: { selection?: Selection } = {}) {
-  loading.value = true;
+type DiscoveryAnswer = { lastRun: RunRecord | null; refused?: RunRecord; counts: Partial<Record<Status, number>>; access?: { discoveryRole: string; commandRole: string } };
+// The last run, a refused one and the counts, from GET /discovery.
+function readRun(result: DiscoveryAnswer) {
+  roles.value = result.access ?? null;
+  lastRun.value = result.lastRun;
+  refused.value = result.refused ?? null;
+  counts.value = result.counts;
+  badge.fromCounts(result.counts);
+}
+// Everything read again; `quiet`: no loader (the run's end, read while the page is looked at).
+async function load({ selection = 'clear', quiet = false }: { selection?: Selection; quiet?: boolean } = {}) {
+  if (!quiet) loading.value = true;
   try {
     const [result, excluded, report] = await Promise.all([
-      api<{ lastRun: RunRecord | null; refused?: RunRecord; counts: Partial<Record<Status, number>>; access?: { discoveryRole: string; commandRole: string } }>('/discovery'),
+      api<DiscoveryAnswer>('/discovery'),
       api<{ exclusions: Exclusion[] }>('/exclusions'),
       api<AccessReport>('/discovery/access?limit=1000').catch(() => null),
     ]);
     access.value = report;
-    roles.value = result.access ?? null;
-    lastRun.value = result.lastRun;
-    refused.value = result.refused ?? null;
-    counts.value = result.counts;
+    readRun(result);
     exclusions.value = excluded.exclusions.sort((a, b) => b.at.localeCompare(a.at));
-    badge.fromCounts(result.counts);
     status.value ??= firstStatus(result.counts);
-    await reloadList(selection);
+    await reloadList(selection, quiet);
     error.value = '';
   } catch (err) {
     error.value = (err as Error).message;
   } finally {
-    loading.value = false;
+    if (!quiet) loading.value = false;
   }
 }
 
@@ -367,15 +374,26 @@ async function runNow() {
   }
   const refusedBefore = refused.value?.startedAt;
   // Until a new run finished (it shows as running while its accounts are scanned), or this one was refused; a run lasts
-  // 3 hours at most.
+  // 3 hours at most. Meanwhile the run's state alone, every 5 s (a tick while one is read skipped); at its end the rest once,
+  // quietly, the rows ticked staying ticked.
   const deadline = Date.now() + 3 * 3_600_000;
+  let asking = false;
   window.clearInterval(poll);
   poll = window.setInterval(async () => {
-    await load();
+    if (asking) return;
+    asking = true;
+    try {
+      readRun(await api<DiscoveryAnswer>('/discovery'));
+    } catch (err) {
+      error.value = (err as Error).message;
+    } finally {
+      asking = false;
+    }
     const finished = lastRun.value?.startedAt !== before && lastRun.value?.status !== 'running';
     if (finished || refused.value?.startedAt !== refusedBefore || Date.now() > deadline) {
       window.clearInterval(poll);
       running.value = false;
+      void load({ selection: 'refresh', quiet: true });
     }
   }, 5000);
 }
@@ -384,14 +402,35 @@ async function runNow() {
 // the rows that left the list.
 const afterAction = (row: boolean): Selection => (row ? 'refresh' : 'clear');
 
+// The API takes 100 ids a request: a selection beyond (it spans pages and searches) is sent by batches, one after the other.
+// A batch refused: those done are said, the others stay ticked.
+const BATCH = 100;
 async function changeDismissal(action: 'dismiss' | 'restore', ids = selected.value, row = false) {
+  const done: string[] = [];
+  const word = action === 'dismiss' ? 'dismissed' : 'restored';
+  let changed = 0;
   try {
-    await api(`/discovery/${action}`, { method: 'POST', body: JSON.stringify({ ids, ...(action === 'dismiss' && note.value ? { note: note.value } : {}) }) });
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const batch = ids.slice(i, i + BATCH);
+      const answer = await api<{ candidates?: unknown[] }>(`/discovery/${action}`, { method: 'POST', body: JSON.stringify({ ids: batch, ...(action === 'dismiss' && note.value ? { note: note.value } : {}) }) });
+      done.push(...batch);
+      changed += answer?.candidates?.length ?? batch.length;
+    }
     note.value = '';
     dismissDialog.value = false;
+    if (ids.length > BATCH) notice.value = { type: 'success', text: `${many(changed, 'candidate')} ${word}.` };
     await load({ selection: afterAction(row) });
   } catch (err) {
-    error.value = (err as Error).message;
+    if (!done.length) {
+      error.value = (err as Error).message;
+      return;
+    }
+    const left = ids.length - done.length;
+    note.value = '';
+    dismissDialog.value = false;
+    selected.value = selected.value.filter((id) => !done.includes(id));
+    notice.value = { type: 'error', text: `${done.length.toLocaleString('en-US')} of ${many(ids.length, 'candidate')} ${word}, then: ${(err as Error).message}. The ${left.toLocaleString('en-US')} other${left === 1 ? ' stays' : 's stay'} ticked.` };
+    await load({ selection: 'refresh' });
   }
 }
 // The dismiss dialog's: a row's candidate, else the selection.
@@ -764,8 +803,13 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         </v-list-item-subtitle>
         <template #append>
           <div class="d-flex flex-wrap align-center justify-end ga-2">
-            <v-chip v-if="e.expired" variant="tonal" label>expired</v-chip>
-            <v-chip v-if="e.lifting" color="warning" variant="tonal" label>lift incomplete</v-chip>
+            <!-- Its state as an icon alone (tables design §3), the word its name and its tooltip's first line. -->
+            <StatusMark v-if="e.expired" :icon="mdiTimerOffOutline" label="expired">
+              <div class="text-body-medium mt-1">Its expiry has passed.</div>
+            </StatusMark>
+            <StatusMark v-if="e.lifting" :icon="mdiAlertOutline" color="warning" label="lift incomplete">
+              <div class="text-body-medium mt-1">Lifted, some of its workloads not resumed yet: Retry lift tries again.</div>
+            </StatusMark>
             <v-btn v-if="session.canOperate" variant="tonal" size="small" @click="lift(e)">{{ e.lifting ? 'Retry lift' : 'Lift' }}</v-btn>
           </div>
         </template>

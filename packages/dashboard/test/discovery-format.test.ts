@@ -159,5 +159,7 @@ describe('Discovery status filters', () => {
   it('says a Google Cloud candidate\'s idle share is of its backend service, estimated from sampled metrics', () => {
     const text = idleText({ idleHours7d: 154, requests7d: 1234 }, 'gcp');
     expect(text.detail).toBe('154 of 168 hours without any request to its backend service (1,234 requests in 7 days).');
+    // The ~ the cell shows, in words for a screen reader (the bar's name).
+    expect(text.title).toBe('Idle about 92 % of the last 7 days');
   });
 });

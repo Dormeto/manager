@@ -414,7 +414,8 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <StateChip v-if="status" :state="status.state" :failure="status.failure" :cloud="gcp ? 'gcp' : 'aws'" />
           <v-chip v-if="hibernated" data-test="hibernated" size="small" variant="tonal" label>{{ gcp ? 'suspended' : 'hibernated' }}</v-chip>
           <PauseChip :pauses="pauses" />
-          <span v-if="since" class="dm-hero__since">{{ since.label }} <strong>{{ since.when }}</strong></span>
+          <!-- Since when, beside the state's icon: its word is the icon's name and tooltip (tables design §3). -->
+          <span v-if="since" class="dm-hero__since">since <strong>{{ since.when }}</strong></span>
           <a v-if="url" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
         </div>
         <!-- R11: its tags (Dormeto's own labels); administrators edit a manager workload's, a Terraform one's are set there. -->

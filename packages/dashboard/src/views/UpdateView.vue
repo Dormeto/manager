@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { mdiAlertOutline, mdiCheckCircleOutline, mdiOpenInNew, mdiProgressClock } from '@mdi/js';
+import { mdiAlertCircleOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiOpenInNew, mdiProgressClock } from '@mdi/js';
 import { api } from '../api';
 import { relative } from '../format';
 import CommandBlock from '../components/CommandBlock.vue';
@@ -11,6 +11,7 @@ import ReleaseNotes from '../components/ReleaseNotes.vue';
 import { useUpdateBadge } from '../stores/update';
 import { busy, codeParts, consoleLink, pollDelay, SILENT_MS, withoutOwnHeading, type NotInstalled, type Pending, type Section, type UpdateCheck, type UpdateState } from '../update';
 import PageTitle from '../components/PageTitle.vue';
+import StatusMark from '../components/StatusMark.vue';
 
 // Get started's "Updating the manager" (the CLI's ways) and "Upgrade" (the Terraform module's).
 const UPDATING = 'https://dormeto.com/get-started.html#update';
@@ -59,6 +60,8 @@ const build = computed(() => state.value?.build ?? null);
 const buildLink = computed(() => consoleLink(build.value?.consoleUrl));
 const finished = computed(() => (build.value?.by === 'dashboard' && build.value.action === 'apply' && build.value.status !== 'IN_PROGRESS' ? build.value : null));
 const succeeded = computed(() => finished.value?.status === 'SUCCEEDED');
+// A CodeBuild build's status as a mark: running, succeeded, or ended otherwise (failed, fault, stopped, timed out).
+const buildMark = (status: string) => (status === 'IN_PROGRESS' ? { icon: mdiProgressClock, color: 'primary' } : status === 'SUCCEEDED' ? { icon: mdiCheckCircleOutline, color: 'success' } : { icon: mdiAlertCircleOutline, color: 'error' });
 const failed = computed(() => (build.value && build.value.status !== 'IN_PROGRESS' && build.value.status !== 'SUCCEEDED' ? build.value : null));
 const failedStep = computed(() => failed.value?.steps[failed.value.steps.length - 1] ?? null);
 // What a failure left: an apply from this page may have changed the manager; a plan from this page changed nothing.
@@ -286,7 +289,9 @@ onBeforeUnmount(() => {
         <v-card-text>
           <template v-if="build">
             <div class="d-flex flex-wrap align-center ga-2 mb-2">
-              <v-chip label size="small" variant="tonal" :color="build.status === 'IN_PROGRESS' ? 'primary' : build.status === 'SUCCEEDED' ? 'success' : 'error'">{{ build.status }}</v-chip>
+              <!-- The build's status as its icon alone (tables design §3), CodeBuild's word, readable, its name. -->
+              <StatusMark class="dm-build-status" :icon="buildMark(build.status).icon" :color="buildMark(build.status).color" :label="build.status.toLowerCase().replace(/_/g, ' ')"
+                :pulse="build.status === 'IN_PROGRESS'" />
               <v-chip v-if="build.phase" label size="small" variant="tonal">{{ build.phase }}</v-chip>
               <span v-if="build.by === 'cli'" class="text-body-medium text-medium-emphasis">started from the CLI</span>
               <span v-else-if="build.action" class="text-body-medium text-medium-emphasis">{{ build.action }}{{ build.version ? ` ${build.version}` : '' }}</span>

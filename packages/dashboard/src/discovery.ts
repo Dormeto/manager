@@ -82,7 +82,8 @@ export const idleShare = (c: { idleHours7d: number | null }): string | null => (
 export function idleText(c: { idleHours7d: number; requests7d: number | null }, cloud: Cloud = 'aws'): { title: string; detail: string } {
   const requests = !c.requests7d ? 'no request' : `${c.requests7d.toLocaleString('en-US')} request${c.requests7d === 1 ? '' : 's'}`;
   return {
-    title: `Idle ${percent(c.idleHours7d, 168)} of the last 7 days`,
+    // Google Cloud's share is an estimate (Google samples its metrics): the cell's ~, said in words.
+    title: `Idle ${cloud === 'gcp' ? 'about ' : ''}${percent(c.idleHours7d, 168)} of the last 7 days`,
     detail: `${c.idleHours7d} of 168 hours without any request to its ${cloud === 'gcp' ? 'backend service' : 'target group'} (${requests} in 7 days).`,
   };
 }

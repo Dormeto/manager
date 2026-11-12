@@ -188,7 +188,8 @@ const healthTone = computed(() => (router.value?.error ? 'error' : router.value?
               </div>
             </template>
             <template v-else-if="router.health">
-              <div v-if="alarm" class="dm-alarm" :class="`text-${alarm.level}`"><v-icon :icon="mdiBellRingOutline" size="16" />alert since {{ relative(alarm.since, now) }}</div>
+              <!-- The open alert: the bell, its word its name, since when beside it. -->
+              <div v-if="alarm" class="dm-alarm" :class="`text-${alarm.level}`"><StatusMark :icon="mdiBellRingOutline" :color="alarm.level" label="alert" :size="16" />since {{ relative(alarm.since, now) }}</div>
               <ul v-if="router.health.problems.length" class="dm-problems">
                 <li v-for="p in router.health.problems" :key="p.text" class="dm-problem" :class="`dm-problem--${p.level}`">
                   <StatusMark :icon="healthIcon(p.level)" :color="p.level" :label="p.level" :size="18" class="dm-problem__icon" />

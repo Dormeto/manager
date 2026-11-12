@@ -47,9 +47,23 @@ const said = (text: string) => WORDS.find((w) => new RegExp(`(^|[^a-z-])${w.repl
 // What a view shows with a status word where an icon should stand alone, as `<where>: "<text>"`.
 function wordsShown(root: Element): string[] {
   const found: string[] = [];
-  const text = (el: Element) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const text = (el: Element | ChildNode) => (el.textContent ?? '').replace(/\s+/g, ' ').trim();
   // A mark (StatusMark, PauseChip, a health), a state chip: no text at all.
   for (const el of root.querySelectorAll('[data-test="status-mark"], [data-test="state-chip"]')) if (text(el)) found.push(`${el.getAttribute('data-test')} "${text(el)}"`);
+  // Beside a mark, not its own word again ("[icon] Awake since" says it twice): the text next to a mark, against the words of
+  // the marks of its parent (a pause mark may stand between the state and the sentence). Another fact may stand there (an
+  // audit result's recorded text beside its outcome's mark).
+  for (const el of root.querySelectorAll('[data-test="status-mark"], [data-test="state-chip"]')) {
+    const mark = el.closest('.v-chip') ?? el;
+    const parent = mark.parentElement;
+    if (!parent) continue;
+    const words = [...parent.querySelectorAll('[data-test="status-mark"], [data-test="state-chip"]')].map((m) => (m.getAttribute('aria-label') ?? '').toLowerCase()).filter(Boolean);
+    for (const node of [mark.previousSibling, mark.nextSibling, mark.previousElementSibling, mark.nextElementSibling]) {
+      if (!node || (node instanceof Element && node.matches('[data-test="status-mark"], [data-test="state-chip"], .v-chip, a, button'))) continue;
+      const beside = text(node as Element).toLowerCase();
+      if (words.some((w) => beside === w || beside.startsWith(`${w} `) || beside.endsWith(` ${w}`))) found.push(`beside ${el.getAttribute('aria-label')}: "${beside}"`);
+    }
+  }
   // The ×N chips: ×N only.
   for (const el of root.querySelectorAll('[data-test="state-count"], [data-test="paused-count"]')) if (!/^×\d+$/.test(text(el))) found.push(`${el.getAttribute('data-test')} "${text(el)}"`);
   // Any other chip saying a status by its word (the filters of a chip group and the closable ones aside: they choose a status,

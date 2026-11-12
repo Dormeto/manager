@@ -246,6 +246,8 @@ describe('Workload view', () => {
     const rows = Object.fromEntries(wrapper.findAll('tr').map((tr) => [tr.find('th').text(), tr.find('td').text()]));
     expect(rows['Awake since']).toBe('35 min ago');
     expect(rows['Last state change']).toBeUndefined();
+    // The header: the state's icon, then since when, its word only in the icon's name (tables design §3).
+    expect(wrapper.find('.dm-hero__since').text()).toBe('since 35 min ago');
     wrapper.unmount();
   });
 

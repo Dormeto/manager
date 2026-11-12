@@ -285,6 +285,12 @@ describe('Update', () => {
     expect(wrapper.text()).toContain('download');
     expect(wrapper.text()).toContain('apply');
     expect(wrapper.text()).toContain('BUILD');
+    // The build's status as its icon alone, the word its name (tables design §3); the phase a step's name, as it was.
+    const mark = wrapper.find('.dm-build-status');
+    expect(mark.attributes()).toMatchObject({ 'aria-label': 'in progress', tabindex: '0' });
+    expect(mark.classes()).toEqual(expect.arrayContaining(['text-primary', 'dm-status--pulse']));
+    expect(mark.text()).toBe('');
+    expect(wrapper.text()).not.toContain('IN_PROGRESS');
   });
 
   it('links the build to its page in the CodeBuild console, for a dashboard build as for a CLI build', async () => {
@@ -380,7 +386,9 @@ describe('Update', () => {
   it('shows a failed CLI build\'s status, step and tail, without the dashboard\'s sentences', async () => {
     h.answer = () => running({ by: 'cli', action: 'apply', status: 'FAILED', steps: ['download', 'terraform apply'], tail: ['Error: boom'] });
     await mountView();
-    expect(wrapper.text()).toContain('FAILED');
+    expect(wrapper.find('.dm-build-status').attributes('aria-label')).toBe('failed');
+    expect(wrapper.find('.dm-build-status').classes()).toContain('text-error');
+    expect(wrapper.text()).not.toContain('FAILED');
     expect(wrapper.text()).toContain('The step that failed: terraform apply');
     expect(wrapper.find('pre').text()).toBe('Error: boom');
     expect(wrapper.text()).not.toContain('The manager is as the failure left it');
