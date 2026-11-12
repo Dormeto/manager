@@ -161,6 +161,30 @@ describe('operations engine', () => {
     expect(s.invocations.filter(([, p]) => p.action === 'report')).toHaveLength(1);
   });
 
+  // B15 (cloud duplication design §4), as a Google Cloud onboarding's verify (engine-google.test.ts).
+  it('fails an onboarding at its verify step when the router says the workload is FAILED: the candidate left, the router keeping it, everything released', async () => {
+    const s = setup({ routers: [{ ...DEV_ROUTER, version: '0.37.0' }] });
+    s.router.state = 'FAILED';
+    const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {} }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    const stored = (await s.records.getOperation(op.id))!;
+    expect(stored.error).toBe('verify: Paris FAILED');
+    expect(stored.steps.slice(-3).map((x) => [x.name, x.status])).toEqual([['onboard', 'done'], ['verify', 'failed'], ['candidate', 'pending']]);
+    // No offboarding, no report: the router keeps the workload it onboarded, shown at its next check.
+    expect(s.invocations.map(([fn, p]) => [fn.split(':').at(-1), p.action])).toEqual([['dmt-dev-onboarder', 'preview'], ['dmt-dev-onboarder', 'onboard'], ['dmt-dev-controller', 'status']]);
+    expect([s.items.get(TG)!.eligibility, s.moves]).toEqual(['eligible', []]);
+    expect(await s.records.acquireLock(`LB#${LB}`, 'other', 60_000)).toBe(true);
+    expect(await s.records.claimActive(`TG#${TG}`, 'other', 60_000)).toEqual({ ok: true });
+  });
+
+  it('fails an onboarding at its verify step whose route is not the application\'s or that has issues, saying them', async () => {
+    const s = setup({ routers: [DEV_ROUTER] });
+    s.answers.status = () => ({ state: 'FAILED', name: 'Paris', route: 'waker', issues: ['the rule forwards to no waker'] });
+    const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {} }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
+    expect((await s.records.getOperation(op.id))!.error).toBe('verify: route waker, issues: the rule forwards to no waker');
+  });
+
   it('passes the tags of its input to the preview and the onboarding', async () => {
     const s = setup({ routers: [DEV_ROUTER] });
     const op = await s.engine.create('onboard', { candidateId: TG, name: 'Paris', settings: {}, tags: { team: 'payments' } }, 'ops@example.com');

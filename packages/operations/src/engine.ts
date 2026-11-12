@@ -1113,6 +1113,8 @@ export function createEngine(deps: EngineDeps) {
         if (!op.context.workloadId) await previewOf(op);
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
         if (status?.route !== 'app' || (status?.issues ?? []).length) throw new Error(`route ${status?.route}${status?.issues?.length ? `, issues: ${status.issues.join('; ')}` : ''}`);
+        // Not FAILED either, as on Google Cloud (googleVerify): the router keeps it, the operation fails here.
+        if (status.state === 'FAILED') throw new Error(`${op.context.name} FAILED`);
         return { status: 'done', detail: `${op.context.name} ${status.state}, route app${await reported(op)}` };
       }
       case 'pause': {
