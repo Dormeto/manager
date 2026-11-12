@@ -9,12 +9,15 @@ import GroupsCard from '../src/components/GroupsCard.vue';
 import HibernateDialog from '../src/components/HibernateDialog.vue';
 import IdleBar from '../src/components/IdleBar.vue';
 import OnboardDialog from '../src/components/OnboardDialog.vue';
+import OrganizationAccess from '../src/components/OrganizationAccess.vue';
 import RenameDialog from '../src/components/RenameDialog.vue';
 import StateBar from '../src/components/StateBar.vue';
 import TagsDialog from '../src/components/TagsDialog.vue';
 import OperationsView from '../src/views/OperationsView.vue';
 import RoutersView from '../src/views/RoutersView.vue';
 import WorkloadView from '../src/views/WorkloadView.vue';
+import type { Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from '../src/cloud-words';
 import { idleText } from '../src/discovery';
 import { failureTitle } from '../src/failures';
 import { backendHelp, backendLabel } from '../src/format';
@@ -113,7 +116,9 @@ describe('the Routers view', () => {
 const BEHAVIOUR: { file: string; text: string; why: string }[] = [
   { file: 'components/BackendKinds.vue', text: "props.cloud === 'gcp' ? null : backendIcon(kind)", why: 'a kind\'s icon element: AWS\'s product icon, an image' },
   { file: 'components/BackendKinds.vue', text: "props.cloud === 'gcp' ? backendMdi(kind) : null", why: 'a kind\'s icon element: Google Cloud\'s Material Design icon' },
+  { file: 'access.ts', text: 'if (isGoogle(row.account))', why: 'a project\'s line is the API\'s reasons as given (they name what is missing and the connect command), an account\'s is made from its roles' },
   { file: 'components/OnboardDialog.vue', text: 'props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)', why: 'the lines its Terraform keeps: an AWS candidate\'s only' },
+  { file: 'components/OnboardDialog.vue', text: '<template v-else-if="gcp">', why: 'what onboarding changes: Google Cloud\'s two steps (the waker in the URL map, the tag it binds) against AWS\'s one' },
   { file: 'components/OnboardDialog.vue', text: 'gcp.value ? MACHINE_TYPE : INSTANCE_TYPE', why: 'the pattern of a fallback type: a Compute Engine machine type, an EC2 instance type' },
   {
     file: 'components/OnboardDialog.vue', text: "gcp.value ? { kind: 'cloudsql-instance', id: d } : d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }",
@@ -121,12 +126,18 @@ const BEHAVIOUR: { file: string; text: string; why: string }[] = [
   },
   {
     file: 'views/DiscoveryView.vue',
-    text: 'isGoogle(c) ? [`backend service ${c.targetGroup}`, `URL map ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])] : [c.loadBalancer, c.listener, c.priority ? `priority ${c.priority}` : null, '
+    text: 'isGoogle(c) ? [`${words.target} ${c.targetGroup}`, `${words.loadBalancer} ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])] : [c.loadBalancer, c.listener, c.priority ? `priority ${c.priority}` : null, '
       + 'c.rules?.length > 1 ? `${c.rules.length} rules` : null].filter((s): s is string => Boolean(s))',
     why: 'where a candidate\'s rule is, exported: its backend service and URL map, or its load balancer, listener and priority',
   },
   { file: 'views/DiscoveryView.vue', text: 'isGoogle(c) ? c.backend.id : shortId(c.backend.id)', why: 'a backend\'s id, exported: a Google Cloud name whole, an ARN shortened' },
   { file: 'views/DiscoveryView.vue', text: '<div v-if="isGoogle(item)">', why: 'where a candidate\'s rule is: its backend service and URL map linked to the console, or its listener rule' },
+  { file: 'views/DiscoveryView.vue', text: '<span v-if="item.backend && isGoogle(item)">', why: 'a candidate\'s backend: Google Cloud\'s kind icon and resource path, or AWS\'s BackendLabel with its ARN' },
+  {
+    file: 'hibernation.ts', text: "if (cloud === 'gcp' || (m.url === null && m.readAt))",
+    why: 'what Inherit reads: a level the manager pushed (Google Cloud\'s, or an answer without its cloud and with no URL), or a URL the router fetches; their states differ',
+  },
+  { file: 'pause.ts', text: "if (cloudOf(c.account) === 'gcp')", why: 'which targets: a backend service and a URL map by their paths, or a target group and a load balancer by their ARNs (their nouns are the table\'s)' },
   { file: 'views/WorkloadView.vue', text: 'gcp.value ? backendConsoleUrl(b, project.value) : null', why: 'a backend\'s console link: Google Cloud\'s only' },
   {
     file: 'views/WorkloadView.vue',
@@ -138,6 +149,7 @@ const BEHAVIOUR: { file: string; text: string; why: string }[] = [
   { file: 'views/WorkloadView.vue', text: 'gcp ? null : backendArn(b, where)', why: 'a backend\'s ARN: AWS\'s only' },
   { file: 'views/WorkloadView.vue', text: 'gcp ? resourceName(b.id) : shortId(b.id)', why: 'a backend\'s name: its resource path\'s last segment, or its ARN shortened' },
   { file: 'views/WorkloadView.vue', text: 'gcp ? backendMdi(b.kind) : backendIcon(b.kind)', why: 'a backend\'s icon element, as BackendKinds\'' },
+  { file: 'views/WorkloadView.vue', text: '<v-icon v-if="gcp">', why: 'a backend\'s icon element: a Material Design icon, or AWS\'s product icon as an image' },
   { file: 'views/WorkloadView.vue', text: '<v-card v-if="gcp && status.backendService">', why: 'a Google Cloud workload\'s Load balancing card, an AWS one\'s Targets card' },
   { file: 'views/WorkloadView.vue', text: '<v-card-text v-if="!gcp && status.hibernation && !standalone">', why: 'an AWS workload without a standalone EC2 instance, which hibernation does not apply to' },
 ];
@@ -179,6 +191,7 @@ describe('the inline switches on the cloud', () => {
       { file: 'x.vue', line: 4, text: "if ('aws' !== cloud)" },
       { file: 'x.vue', line: 5, text: "{ aws: 'AWS', 'gcp': 'Google Cloud' }" },
       { file: 'x.vue', line: 9, text: '<p v-if="gcp">' },
+      { file: 'x.vue', line: 12, text: '<span v-if="isGoogle(c)">' },
       { file: 'x.vue', line: 13, text: "google ? 'a' : 'b'" },
       { file: 'x.vue', line: 13, text: 'gcp.value ? 1 : 2' },
     ]);
@@ -186,10 +199,41 @@ describe('the inline switches on the cloud', () => {
       { file: 'x.ts', line: 2, text: "(c === 'gcp' && wide) ? 'europe-west2 or global' : 'eu-west-1'" },
     ]);
   });
+
+  // Each form with a look-alike that is not one: what a script's switch is found by, then an element's.
+  it('are found as a switch, a word after && or ||, a .has() or an isGcp flag, an if returning texts, and a pair of any two elements', () => {
+    const script = (code: string) => scanFile('x.ts', code).map((f) => f.text);
+    const SCRIPTS: [string, string[]][] = [
+      ["const owner = (cloud: Cloud) => { switch (cloud) { case 'gcp': return 'Project'; default: return 'Account'; } };", ['switch (cloud)']],
+      ["const many = (kind: string) => { switch (kind) { case 'k8s': return 'pods'; default: return 'VMs'; } };", []],
+      ["const about = cloud === 'gcp' && 'about ';", ["cloud === 'gcp' && 'about '"]],
+      ['const holder = isAws || `role`;', ['isAws || `role`']],
+      ["const wide = cloud === 'gcp' && narrow;", []],
+      ["const holder = listed.has('gcp') ? 'account' : 'role';", ["listed.has('gcp') ? 'account' : 'role'"]],
+      ["const name = clouds.includes('aws') ? 'AWS' : 'Google Cloud';", ["clouds.includes('aws') ? 'AWS' : 'Google Cloud'"]],
+      ["const many = kinds.has('k8s') ? 'pods' : 'VMs';", []],
+      ["const tag = isGcp ? 'label' : 'tag';", ["isGcp ? 'label' : 'tag'"]],
+      ["const on = isActive ? 'on' : 'off';", []],
+      ["function targets(c: C) { if (cloudOf(c.account) === 'gcp') { const s = c.id; return [{ id: s, label: `Backend service ${s}` }]; } return []; }", ["if (cloudOf(c.account) === 'gcp')"]],
+      ["function name(c: C) { if (gcp) return compute(c); else return 'AWS'; }", ['if (gcp)']],
+      ['function line(c: C) { if (isGoogle(c)) return c.reasons.join(sep); return other(c); }', []],
+      ["function later(c: C) { if (gcp) { const f = () => 'x'; return f; } return null; }", []],
+    ];
+    for (const [code, found] of SCRIPTS) expect(script(code), code).toEqual(found);
+    const template = (body: string) => scanFile('x.vue', `<template>\n  ${body}\n</template>`).map((f) => f.text);
+    expect(template('<span v-if="gcp">Google</span><div v-else>AWS</div>')).toEqual(['<span v-if="gcp">']);
+    expect(template('<span v-if="ready">Google</span><div v-else>AWS</div>')).toEqual([]);
+    expect(template('<span v-if="gcp">Google</span><div>AWS</div>')).toEqual([]);
+  });
 });
 
 // Each cloud's words where the dashboard switches on the cloud, as they read: what the words table (src/cloud-words.ts) holds.
 describe('each cloud\'s words', () => {
+  it('are AWS\'s for a row that names no cloud, or one the dashboard does not know, as every switch said', () => {
+    for (const cloud of [null, undefined, 'azure', 'constructor'] as (Cloud | null | undefined)[]) expect(cloudWords(cloud), String(cloud)).toBe(cloudWords('aws'));
+    expect([cloudWords('aws').name, cloudWords('gcp').name]).toEqual(['AWS', 'Google Cloud']);
+  });
+
   it('name the kinds of backends, with their help', () => {
     const kinds = ['instance', 'asg', 'ecs', 'k8s', 'rds-instance', 'rds-cluster', 'cloudsql-instance', 'other'];
     expect(kinds.map((k) => backendLabel(k, 'aws'))).toEqual(['EC2 instance', 'Auto Scaling group', 'ECS service', 'Kubernetes workload', 'RDS instance', 'Aurora cluster', 'cloudsql-instance', 'other']);
@@ -301,6 +345,21 @@ describe('each cloud\'s words', () => {
     };
     expect(open('aws')).toContain('Dormeto\'s own labels, not AWS tags: the groups\' grants pick workloads by them. Nothing changes in AWS.');
     expect(open('gcp')).toContain('Dormeto\'s own labels, not Google Cloud labels: the groups\' grants pick workloads by them. Nothing changes in Google Cloud.');
+  });
+
+  it('link each listed cloud\'s procedure, the roles\' while the delegation policy is missing or nothing is listed', () => {
+    const project = { account: 'shop-prod', name: 'shop-prod', discovery: { ok: true as const }, command: { ok: false as const, reason: 'the command service account cannot act in shop-prod' } };
+    const links = (delegation: 'ok' | 'missing', accounts: (typeof project)[]) => {
+      const report = { counts: { ready: 0, discoveryMissing: 0, commandMissing: 1, unchecked: 0 }, accounts, cursor: null, delegation, checkedAt: null };
+      const w = mount(OrganizationAccess, { props: { report }, attachTo: document.body, global: { plugins: [vuetify()] } });
+      mounted.push(w);
+      return w.findAll('.v-card-actions a').map((a) => [a.text(), a.attributes('href')]);
+    };
+    const roles = ['How to set up the roles', 'https://dormeto.com/organization-access.html'];
+    const connection = ['How to connect Google Cloud', 'https://dormeto.com/configuration.html#connection'];
+    expect(links('ok', [])).toEqual([roles]);
+    expect(links('ok', [project])).toEqual([connection]);
+    expect(links('missing', [project])).toEqual([roles, connection]);
   });
 
   it('word the onboarding dialog\'s fields, its tags and what a copy leaves out', async () => {

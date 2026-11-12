@@ -10,7 +10,7 @@ const props = defineProps<{ modelValue: boolean; name: string; cloud?: Cloud }>(
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [string] }>();
 const name = ref('');
 watch(() => props.modelValue, (open) => { if (open) name.value = props.name; });
-const words = computed(() => cloudWords(props.cloud ?? 'aws'));
+const words = computed(() => cloudWords(props.cloud));
 </script>
 
 <template>

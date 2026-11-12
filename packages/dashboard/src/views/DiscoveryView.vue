@@ -179,7 +179,7 @@ const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
 const accountCloud = computed(() => cloudOf(account.value));
 const filtered = computed(() => accountCloud.value !== null);
 // The region typed within a project is Google Cloud's (or `global`), within an account AWS's.
-const regionHint = computed(() => cloudWords(accountCloud.value ?? 'aws').regionHint);
+const regionHint = computed(() => cloudWords(accountCloud.value).regionHint);
 
 // The list asked: the shown status, within the account (and region) applied, `limit` a page.
 const appliedCloud = computed(() => cloudOf(applied.value.account));
@@ -537,9 +537,12 @@ const RUN_MARKS: Record<RunRecord['status'], { icon: string; color?: string }> =
 };
 // In account, region and id order (the index's): no other sort on the server. Each column's words: what an export prints (a
 // status's word, where a rule is, the idle share with its ~ on Google Cloud, dates as ISO 8601).
-const ruleWhere = (c: Listed): string[] => (isGoogle(c)
-  ? [`backend service ${c.targetGroup}`, `URL map ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])]
-  : [c.loadBalancer, c.listener, c.priority ? `priority ${c.priority}` : null, c.rules?.length > 1 ? `${c.rules.length} rules` : null].filter((s): s is string => Boolean(s)));
+const ruleWhere = (c: Listed): string[] => {
+  const words = cloudWords(rowCloud(c));
+  return isGoogle(c)
+    ? [`${words.target} ${c.targetGroup}`, `${words.loadBalancer} ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])]
+    : [c.loadBalancer, c.listener, c.priority ? `priority ${c.priority}` : null, c.rules?.length > 1 ? `${c.rules.length} rules` : null].filter((s): s is string => Boolean(s));
+};
 const accountText = (c: Listed): string => {
   const cloud = cloudMark(rowCloud(c)).label;
   return c.accountName && c.accountName !== c.account ? `${c.accountName} (${cloud}, ${c.account})` : `${c.account} (${cloud})`;

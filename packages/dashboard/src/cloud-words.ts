@@ -1,10 +1,18 @@
-// The words the dashboard says differently on AWS and on Google Cloud: one table per cloud with the same keys (a key missing
-// from either fails the typecheck), read wherever a view or a helper used to switch on the cloud inline (cloud duplication
-// design §5). A word both clouds share stays where it is said. A switch on the cloud that chooses what to do (which call,
-// card, field or icon element) is not a word: test/CloudWords.test.ts lists those, and fails on a new inline word switch.
+// The words the dashboard says differently on AWS and on Google Cloud: one table per cloud, read wherever a view or a helper
+// used to switch on the cloud inline (cloud duplication design §5). Both tables have every key of CloudWords: one missing, or
+// one CloudWords lacks, fails the typecheck. The four tables by kind or setting (backendLabels, backendHelp, backendServices,
+// settings) are not alike: each cloud names only its own kinds and settings, keyed by the known ones (a misspelt key fails the
+// typecheck), and their readers fall back to AWS's kind (format.ts) or to the shared description (settings.ts); nothing checks
+// that a kind one cloud names is named by the other. A word both clouds share stays where it is said. A switch on the cloud that
+// chooses what to do (which call, card, field or icon element) is not a word: test/CloudWords.test.ts lists those, and fails on a
+// new inline word switch.
 import { mdiAws, mdiGoogleCloud } from '@mdi/js';
 import type { Cloud } from '@dormeto/fleet/clouds';
-import type { ExclusionKind, Settings } from './types';
+import type { Settings } from './types';
+
+// The kinds of backends the routers report, on either cloud.
+export type RouterBackendKind = 'instance' | 'asg' | 'ecs' | 'k8s' | 'rds-instance' | 'rds-cluster' | 'cloudsql-instance';
+type ByKind = Readonly<Partial<Record<RouterBackendKind, string>>>;
 
 export interface CloudWords {
   // The cloud's name, and its mark: Material Design Icons' AWS or Google Cloud mark.
@@ -16,15 +24,16 @@ export interface CloudWords {
   location: string;
   // The region Discovery's filter suggests within an account or a project.
   regionHint: string;
-  // What a candidate's requests go to, which discovery reads and onboarding names a workload after.
+  // What a candidate's requests go to, which discovery reads, onboarding names a workload after and an exclusion targets; what
+  // routes to it, its load balancer or URL map, with what excluding that one covers.
   target: string;
+  loadBalancer: string;
+  loadBalancerScope: string;
   // The kinds of backends: their names, what Dormeto does with them, their services. Google Cloud's name only its own kinds:
   // the others are AWS's (format.ts).
-  backendLabels: Readonly<Record<string, string>>;
-  backendHelp: Readonly<Record<string, string>>;
-  backendServices: Readonly<Record<string, string>>;
-  // What an exclusion targets.
-  exclusionKinds: Readonly<Record<ExclusionKind, string>>;
+  backendLabels: ByKind;
+  backendHelp: ByKind;
+  backendServices: ByKind;
   // The settings explained in the cloud's own words, the others as the settings say them (settings.ts).
   settings: Readonly<Partial<Record<keyof Settings, { help: string; range: string }>>>;
   // A wake that failed with nothing healthy behind the load balancer.
@@ -59,12 +68,14 @@ export interface CloudWords {
   // What offboarding a workload and waking it do.
   offboarding: string;
   waking: string;
-  // Organization access: why onboarding is refused, a row's chip (what it holds, with or without access), the procedure.
+  // Organization access: why onboarding is refused, what the manager holds there (a row's chip, with or without access, and
+  // the counts' "without the … role"), the procedure and its link's text.
   noCommand: string;
   accessHolder: string;
   accessOk: string;
   accessMissing: string;
   procedureUrl: string;
+  procedureText: string;
 }
 
 const AWS: CloudWords = {
@@ -74,6 +85,8 @@ const AWS: CloudWords = {
   location: 'AWS location',
   regionHint: 'eu-west-1',
   target: 'target group',
+  loadBalancer: 'load balancer',
+  loadBalancerScope: 'every rule on it',
   backendLabels: { instance: 'EC2 instance', asg: 'Auto Scaling group', ecs: 'ECS service', k8s: 'Kubernetes workload', 'rds-instance': 'RDS instance', 'rds-cluster': 'Aurora cluster' },
   backendHelp: {
     instance: 'started and stopped by Dormeto',
@@ -84,7 +97,6 @@ const AWS: CloudWords = {
     'rds-cluster': 'a companion database, stopped after the application and started before it',
   },
   backendServices: { instance: 'Amazon EC2', asg: 'Amazon EC2 Auto Scaling', ecs: 'Amazon ECS', k8s: 'Amazon EKS', 'rds-instance': 'Amazon RDS', 'rds-cluster': 'Amazon Aurora' },
-  exclusionKinds: { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' },
   settings: {},
   unhealthy: 'no healthy target',
   types: 'instance types',
@@ -119,6 +131,7 @@ const AWS: CloudWords = {
   accessMissing: 'missing',
   // The website's page, with the roles' Terraform modules and AWS CLI commands.
   procedureUrl: 'https://dormeto.com/organization-access.html',
+  procedureText: 'How to set up the roles',
 };
 
 // What Google fixes at 0 (G5's levels), said so.
@@ -131,13 +144,14 @@ const GOOGLE_CLOUD: CloudWords = {
   location: 'Google Cloud location',
   regionHint: 'europe-west2 or global',
   target: 'backend service',
+  loadBalancer: 'URL map',
+  loadBalancerScope: 'every backend service it names',
   backendLabels: { instance: 'Compute Engine VM', asg: 'Managed instance group', k8s: 'Kubernetes workload', 'cloudsql-instance': 'Cloud SQL instance' },
   backendHelp: {
     k8s: 'a Deployment or StatefulSet on Google Kubernetes Engine, scaled to zero replicas when it naps, back to its replicas when it wakes',
     'cloudsql-instance': 'a companion database, stopped after the application and started before it',
   },
   backendServices: { instance: 'Compute Engine', asg: 'Compute Engine managed instance group', k8s: 'Google Kubernetes Engine', 'cloudsql-instance': 'Cloud SQL' },
-  exclusionKinds: { 'target-group': 'backend service', 'load-balancer': 'URL map', account: 'project' },
   // No request held, no drain of its own; its waker is a Cloud Run service whose wakes go on across Cloud Tasks.
   settings: {
     waitSeconds: { help: 'The waker holds no request on Google Cloud: it answers the waiting page at once, and the page waits for the wake.', range: FIXED },
@@ -183,7 +197,9 @@ const GOOGLE_CLOUD: CloudWords = {
   accessMissing: 'missing access',
   // The Google Cloud connection on the website: the two service accounts, their scopes and grants, dormeto gcp connect.
   procedureUrl: 'https://dormeto.com/configuration.html#connection',
+  procedureText: 'How to connect Google Cloud',
 };
 
 const WORDS: Record<Cloud, CloudWords> = { aws: AWS, gcp: GOOGLE_CLOUD };
-export const cloudWords = (cloud: Cloud): CloudWords => WORDS[cloud];
+// A row that names no cloud (an older API's), or one this dashboard does not know: AWS's, as the switches said.
+export const cloudWords = (cloud: Cloud | null | undefined): CloudWords => (cloud && Object.hasOwn(WORDS, cloud) ? WORDS[cloud] : AWS);

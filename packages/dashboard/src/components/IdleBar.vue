@@ -9,7 +9,7 @@ import { idleColor, idleText } from '../discovery';
 const props = defineProps<{ idleHours7d: number; requests7d: number | null; cloud?: Cloud }>();
 const text = computed(() => idleText(props, props.cloud));
 const share = computed(() => Math.min(100, Math.max(0, (100 * props.idleHours7d) / 168)));
-const words = computed(() => cloudWords(props.cloud ?? 'aws'));
+const words = computed(() => cloudWords(props.cloud));
 </script>
 
 <template>

@@ -1,9 +1,10 @@
 // The inline switches on the cloud in the dashboard's sources, as the cloud-words test reads them (CloudWords.test.ts): a
-// conditional (`… ? … : …`) whose test is on the cloud, an `if` on the cloud that returns a text, an object keyed by both
-// clouds, and two elements of one tag shown one on a cloud test and the other otherwise (v-if, then v-else-if or v-else).
-// A test on the cloud: a comparison with 'aws' or 'gcp', or a view's flag for Google Cloud (`gcp`, `google`, `isGoogle(…)`).
-// Scripts and template expressions are read with TypeScript's parser, templates with Vue's, so a switch is found whatever its
-// layout.
+// conditional (`… ? … : …`) whose test is on the cloud; `<cloud test> && '…'` or `|| '…'`; an `if` on the cloud whose branch
+// returns a text, or anything holding one (an array, an object); a `switch` with a case 'aws' or 'gcp'; an object keyed by both
+// clouds; two sibling elements, the first shown on a cloud test (v-if, v-else-if) and the next otherwise (v-else-if, v-else).
+// A test on the cloud: a comparison with 'aws' or 'gcp', a `.has('gcp')` or `.includes('aws')`, or a flag for a cloud (`gcp`,
+// `google`, `isGoogle(…)`, `isGcp`, `isAws`). Scripts and template expressions are read with TypeScript's parser, templates with
+// Vue's, so a switch is found whatever its layout.
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
@@ -11,27 +12,34 @@ import { parse } from 'vue/compiler-sfc';
 
 export interface Switch { file: string; line: number; text: string }
 
-const FLAGS = new Set(['gcp', 'google', 'isGoogle']);
+const FLAGS = /^(gcp|google|is(Google|Gcp|GCP|Aws|AWS))$/;
 const EQUALITIES = new Set([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken]);
+const LOGICALS = new Set([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken]);
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
-const isCloud = (node: ts.Node) => ts.isStringLiteralLike(node) && (node.text === 'aws' || node.text === 'gcp');
+const isCloud = (node: ts.Node | undefined) => Boolean(node && ts.isStringLiteralLike(node) && (node.text === 'aws' || node.text === 'gcp'));
+const isMember = (node: ts.CallExpression) => ts.isPropertyAccessExpression(node.expression) && ['has', 'includes'].includes(node.expression.name.text);
 
 function testsCloud(node: ts.Node): boolean {
   if (ts.isBinaryExpression(node) && EQUALITIES.has(node.operatorToken.kind) && (isCloud(node.left) || isCloud(node.right))) return true;
-  if (ts.isIdentifier(node)) return FLAGS.has(node.text);
+  if (ts.isCallExpression(node) && isMember(node) && isCloud(node.arguments[0])) return true;
+  if (ts.isIdentifier(node)) return FLAGS.test(node.text);
   // `x.gcp` names a property, not the flag.
   if (ts.isPropertyAccessExpression(node)) return testsCloud(node.expression);
   return ts.forEachChild(node, testsCloud) ?? false;
 }
 
-const isText = (node: ts.Node | undefined) => Boolean(node && (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)));
-// `return '…'` or `{ return '…'; }`.
-function returnsText(node: ts.Statement): boolean {
-  const statement = ts.isBlock(node) && node.statements.length === 1 ? node.statements[0]! : node;
-  return ts.isReturnStatement(statement) && isText(statement.expression);
+const unwrap = (node: ts.Expression): ts.Expression => (ts.isParenthesizedExpression(node) ? unwrap(node.expression) : node);
+const isText = (node: ts.Node) => ts.isStringLiteralLike(node) || ts.isTemplateExpression(node);
+const holdsText = (node: ts.Node): boolean => isText(node) || (ts.forEachChild(node, holdsText) ?? false);
+// A branch's returns (not those of a function inside it) that hold a text.
+function returnsText(node: ts.Node | undefined): boolean {
+  if (!node || ts.isFunctionLike(node)) return false;
+  if (ts.isReturnStatement(node)) return Boolean(node.expression && holdsText(node.expression));
+  return ts.forEachChild(node, returnsText) ?? false;
 }
 const nameOf = (p: ts.ObjectLiteralElementLike) => (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name)) ? p.name.text : null);
 const keyedByClouds = (node: ts.ObjectLiteralExpression) => ['aws', 'gcp'].every((cloud) => node.properties.some((p) => nameOf(p) === cloud));
+const casesClouds = (node: ts.SwitchStatement) => node.caseBlock.clauses.some((c) => ts.isCaseClause(c) && isCloud(c.expression));
 
 // The switches of a script or of a template expression whose first line is `line`.
 function scanScript(file: string, code: string, line: number, found: Switch[]) {
@@ -39,7 +47,9 @@ function scanScript(file: string, code: string, line: number, found: Switch[]) {
   const add = (node: ts.Node, text = node.getText(source)) => found.push({ file, line: line + source.getLineAndCharacterOfPosition(node.getStart(source)).line, text: squash(text) });
   const visit = (node: ts.Node): void => {
     if (ts.isConditionalExpression(node) && testsCloud(node.condition)) add(node);
-    else if (ts.isIfStatement(node) && testsCloud(node.expression) && returnsText(node.thenStatement)) add(node, `if (${node.expression.getText(source)})`);
+    else if (ts.isBinaryExpression(node) && LOGICALS.has(node.operatorToken.kind) && testsCloud(node.left) && isText(unwrap(node.right))) add(node);
+    else if (ts.isIfStatement(node) && testsCloud(node.expression) && (returnsText(node.thenStatement) || returnsText(node.elseStatement))) add(node, `if (${node.expression.getText(source)})`);
+    else if (ts.isSwitchStatement(node) && casesClouds(node)) add(node, `switch (${node.expression.getText(source)})`);
     else if (ts.isObjectLiteralExpression(node) && keyedByClouds(node)) add(node);
     ts.forEachChild(node, visit);
   };
@@ -59,7 +69,7 @@ function scanTemplate(file: string, nodes: Node[], found: Switch[]) {
   elements.forEach((el, i) => {
     const shown = directive(el, 'if', 'else-if');
     const next = elements[i + 1];
-    if (shown?.exp && testsCloudIn(shown.exp.content) && next?.tag === el.tag && directive(next, 'else-if', 'else')) {
+    if (shown?.exp && testsCloudIn(shown.exp.content) && next && directive(next, 'else-if', 'else')) {
       found.push({ file, line: el.loc.start.line, text: `<${el.tag} v-${shown.name}="${squash(shown.exp.content)}">` });
     }
   });

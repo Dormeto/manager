@@ -75,7 +75,7 @@ const monthly = computed(() => {
 });
 // R9.5: Spot at Spot prices, the discounts when set.
 const estimates = computed(() => {
-  const words = cloudWords(props.cloud ?? 'aws');
+  const words = cloudWords(props.cloud);
   return `Estimates: ${words.name} list prices of what the naps stopped, ${words.spot}${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, `
     + `for the time asleep the baseline would have run.${words.priceNotes ? ` ${words.priceNotes}` : ''}`;
 });

@@ -46,7 +46,7 @@ export function forwardersLine(f: Forwarders | undefined): string | null {
 export const PROCEDURE_URL = cloudWords('aws').procedureUrl;
 const isGoogle = (account: string) => cloudOf(account) === 'gcp';
 // The words of an account's cloud.
-const wordsOf = (account: string) => cloudWords(cloudOf(account) ?? 'aws');
+const wordsOf = (account: string) => cloudWords(cloudOf(account));
 
 // Why onboarding is refused in an account (the API refuses it too): said before trying. Null: let through.
 export function onboardRefusal(report: AccessReport | null, account: string | undefined): string | null {
@@ -61,7 +61,10 @@ export function onboardRefusal(report: AccessReport | null, account: string | un
 // account, or either when both are listed.
 export function countsLine(c: AccessReport['counts'], clouds: Iterable<Cloud> = []): string {
   const listed = new Set(clouds);
-  const missing = (kind: string) => (!listed.has('gcp') ? `the ${kind} role` : listed.has('aws') ? `the ${kind} role or account` : `the ${kind} account`);
+  const shown = (['aws', 'gcp'] as const).filter((cloud) => listed.has(cloud));
+  // What a count misses, in the words of each cloud listed (AWS's when none is): role, account, or role or account.
+  const holders = (shown.length ? shown : ['aws' as const]).map((cloud) => cloudWords(cloud).accessHolder).join(' or ');
+  const missing = (kind: string) => `the ${kind} ${holders}`;
   const parts = [`${c.ready} ready`, ...(c.discoveryMissing ? [`${c.discoveryMissing} without ${missing('discovery')}`] : []), ...(c.commandMissing ? [`${c.commandMissing} without ${missing('command')}`] : []),
     ...(c.discoveryOnly ? [`${c.discoveryOnly} for discovery only`] : []), ...(c.unchecked ? [`${c.unchecked} not checked yet`] : [])];
   return `${parts.join(', ')}.`;

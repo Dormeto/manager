@@ -1,7 +1,7 @@
 // Router management display helpers: pauses, router health, manual exclusions.
 import { mdiAlertOctagonOutline, mdiAlertOutline, mdiCheckCircleOutline, mdiClockAlertOutline, mdiCloudOffOutline, mdiHelpCircleOutline, mdiLanDisconnect } from '@mdi/js';
 import { cloudOf } from '@dormeto/fleet/clouds';
-import { cloudWords } from './cloud-words';
+import { cloudWords, type CloudWords } from './cloud-words';
 import { checkHealth, relative } from './format';
 import { resourceName } from './google';
 import type { AlarmInfo, ExclusionKind, ExclusionTarget, Pause, RouterInfo } from './types';
@@ -101,22 +101,30 @@ export interface TargetOption {
   label: string;
 }
 
+// A kind of exclusion target in its cloud's words: a target group or a backend service, a load balancer or a URL map, an account
+// or a project.
+const kindNoun = (kind: ExclusionKind, words: CloudWords): string => (kind === 'target-group' ? words.target : kind === 'load-balancer' ? words.loadBalancer : words.owner.toLowerCase());
+const capitalised = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
+
 // What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account. On Google
 // Cloud: its backend service, its URL map (by their paths) and its project.
 export function exclusionTargets(c: { targetGroupArn?: string | null; targetGroup: string | null; loadBalancerArn?: string; loadBalancer: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string }): TargetOption[] {
+  const words = cloudWords(cloudOf(c.account));
+  const label = (kind: ExclusionKind, name: string, scope?: string) => `${capitalised(kindNoun(kind, words))} ${name}${scope ? ` (${scope})` : ''}`;
+  const account = { kind: 'account' as const, account: c.account, label: label('account', c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`, 'never read again') };
   if (cloudOf(c.account) === 'gcp') {
     const service = c.backendService ?? c.id;
     return [
-      ...(service ? [{ kind: 'target-group' as const, path: service, label: `Backend service ${c.targetGroup ?? resourceName(service)}` }] : []),
-      ...(c.urlMap ? [{ kind: 'load-balancer' as const, path: c.urlMap, label: `URL map ${c.loadBalancer || resourceName(c.urlMap)} (every backend service it names)` }] : []),
-      { kind: 'account' as const, account: c.account, label: `Project ${c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`} (never read again)` },
+      ...(service ? [{ kind: 'target-group' as const, path: service, label: label('target-group', c.targetGroup ?? resourceName(service)) }] : []),
+      ...(c.urlMap ? [{ kind: 'load-balancer' as const, path: c.urlMap, label: label('load-balancer', c.loadBalancer || resourceName(c.urlMap), words.loadBalancerScope) }] : []),
+      account,
     ];
   }
   return [
-    ...(c.targetGroupArn ? [{ kind: 'target-group' as const, arn: c.targetGroupArn, label: `Target group ${c.targetGroup ?? c.targetGroupArn}` }] : []),
-    ...(c.loadBalancerArn?.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: `Load balancer ${c.loadBalancer} (every rule on it)` }] : []),
-    { kind: 'account' as const, account: c.account, label: `Account ${c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`} (never read again)` },
+    ...(c.targetGroupArn ? [{ kind: 'target-group' as const, arn: c.targetGroupArn, label: label('target-group', c.targetGroup ?? c.targetGroupArn) }] : []),
+    ...(c.loadBalancerArn?.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: label('load-balancer', c.loadBalancer, words.loadBalancerScope) }] : []),
+    account,
   ];
 }
 
-export const exclusionText = (t: ExclusionTarget): string => [`${cloudWords(cloudOf(t.account) ?? 'aws').exclusionKinds[t.kind]} ${t.name}`, t.account, ...(t.region ? [t.region] : [])].join(' · ');
+export const exclusionText = (t: ExclusionTarget): string => [`${kindNoun(t.kind, cloudWords(cloudOf(t.account)))} ${t.name}`, t.account, ...(t.region ? [t.region] : [])].join(' · ');

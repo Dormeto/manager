@@ -1,6 +1,6 @@
 // Display helpers: relative times, durations, state colors and labels.
 import { cloudOf, type Cloud } from '@dormeto/fleet/clouds';
-import { cloudWords } from './cloud-words';
+import { cloudWords, type RouterBackendKind } from './cloud-words';
 import { partitionOf } from './regions';
 
 export function relative(iso: string | null | undefined, now = Date.now()): string {
@@ -39,7 +39,8 @@ export const rowCloud = (row: { cloud?: Cloud; account?: string }): Cloud => row
 export const ownerLabel = (cloud: Cloud): string => cloudWords(cloud).owner;
 
 // A kind of backend in its cloud's words; a kind Google Cloud has not falls back to AWS's.
-const kindWord = (table: 'backendLabels' | 'backendHelp' | 'backendServices', kind: string, cloud: Cloud): string | undefined => cloudWords(cloud)[table][kind] ?? cloudWords('aws')[table][kind];
+const kindWord = (table: 'backendLabels' | 'backendHelp' | 'backendServices', kind: string, cloud: Cloud): string | undefined =>
+  cloudWords(cloud)[table][kind as RouterBackendKind] ?? cloudWords('aws')[table][kind as RouterBackendKind];
 export const backendLabel = (kind: string, cloud: Cloud = 'aws'): string => kindWord('backendLabels', kind, cloud) ?? kind;
 // What Dormeto does with a kind of backend, for its tooltip.
 export const backendHelp = (kind: string, cloud: Cloud = 'aws'): string => {

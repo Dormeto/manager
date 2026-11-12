@@ -13,7 +13,7 @@ const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Tags] }>();
 const rows = ref<TagRow[]>([]);
 watch(() => props.modelValue, (open) => { if (open) rows.value = rowsOf(props.tags); });
 const problem = computed(() => rowsProblem(rows.value));
-const words = computed(() => cloudWords(props.cloud ?? 'aws'));
+const words = computed(() => cloudWords(props.cloud));
 </script>
 
 <template>

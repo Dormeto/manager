@@ -3,7 +3,9 @@
 // reason and the procedure (a project's: the Google Cloud connection). Run now checks again.
 import { computed, ref } from 'vue';
 import { mdiAlertCircle, mdiCheck, mdiCheckCircle, mdiChevronDown, mdiClose, mdiCloseCircle, mdiFlashOffOutline, mdiOpenInNew, mdiShieldAlertOutline } from '@mdi/js';
+import type { Cloud } from '@dormeto/fleet/clouds';
 import CloudMark from './CloudMark.vue';
+import { cloudWords } from '../cloud-words';
 import { rowCloud } from '../format';
 import { accessHelp, accessLine, accessStatus, chipLabel, procedureLink, type AccessReport } from '../access';
 
@@ -14,10 +16,8 @@ const notReady = computed(() => props.report.counts.discoveryMissing + props.rep
 // The procedures of the clouds listed: the roles' for an AWS account (or the delegation policy), the connection's for a project.
 const links = computed(() => {
   const clouds = new Set(props.report.accounts.map((a) => rowCloud(a)));
-  return [
-    ...(props.report.delegation === 'missing' || clouds.has('aws') || !clouds.size ? [{ href: procedureLink('aws'), text: 'How to set up the roles' }] : []),
-    ...(clouds.has('gcp') ? [{ href: procedureLink('gcp'), text: 'How to connect Google Cloud' }] : []),
-  ];
+  const shown = (cloud: Cloud) => clouds.has(cloud) || (cloud === 'aws' && (props.report.delegation === 'missing' || !clouds.size));
+  return (['aws', 'gcp'] as const).filter(shown).map((cloud) => ({ href: procedureLink(cloud), text: cloudWords(cloud).procedureText }));
 });
 // The status icon: the counts and event-driven refresh are in its tooltip; the panel lists only what needs attention.
 const status = computed(() => accessStatus(props.report));

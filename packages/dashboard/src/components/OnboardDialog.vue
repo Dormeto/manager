@@ -18,7 +18,7 @@ import { terraformSnippet } from '../terraform';
 // one offered then chosen already.
 const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean }>();
 const gcp = computed(() => props.cloud === 'gcp');
-const words = computed(() => cloudWords(props.cloud ?? 'aws'));
+const words = computed(() => cloudWords(props.cloud));
 const waiting = computed(() => gcp.value && props.routers === null);
 const several = computed(() => gcp.value && (Boolean(props.chooseRouter) || (props.routers?.length ?? 0) > 1));
 const router = ref<string | null>(null);
