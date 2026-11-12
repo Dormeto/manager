@@ -236,6 +236,35 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+// The end of an account's step and a project's (one rule for both clouds): a pair skipped counted under its reason; a pair
+// that answered moves its region's scan state (its empty runs counted); the candidates its pairs change (a failed pair's
+// left as they are, lifecycle.ts), compared with those stored; the step's result, its pairs as reported.
+const skipOf = (skipped: { reason: string; pairs: number }[]) => (reason: string) => {
+  const entry = skipped.find((x) => x.reason === reason);
+  if (entry) entry.pairs += 1;
+  else skipped.push({ reason, pairs: 1 });
+};
+const scannedRegion = (regions: AccountScan['regions'], region: string, rules: ScannedRule[], at: string) => {
+  regions[region] = { scannedAt: at, emptyRuns: rules.length ? 0 : (regions[region]?.emptyRuns ?? 0) + 1, skippedRuns: 0 };
+};
+function stepEnd({ previous, stored = previous, results, reported = results, skipped, error, inventory, config, now }: {
+  previous: Map<string, Candidate>; stored?: Map<string, Candidate>; results: PairResult[]; reported?: PairResult[];
+  skipped: { reason: string; pairs: number }[]; error: string | undefined; inventory: OrgInventory; config: DiscoveryConfig; now: number;
+}): { changed: Candidate[]; result: AccountResult; ok: boolean } {
+  const changed = nextCandidates({ previous, results, inventory, config, now }).filter((c) => {
+    const before = stored.get(c.id);
+    return !before || canonical(before) !== canonical(c);
+  });
+  const result: AccountResult = {
+    pairs: reported.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms })),
+    skipped,
+    ...(error ? { error } : {}),
+    lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
+    written: changed.length,
+  };
+  return { changed, result, ok: !error && results.every((r) => r.ok) };
+}
+
 // One account of a run: its role, its regions (8 at a time, an empty one every 7th run only), the candidates that
 // changed written, its result recorded with its scan state. A failed account changes none of its candidates.
 // only: a refresh of these regions (forwarded events, packaging design §5): the access checks, the run's result and the
@@ -288,11 +317,7 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   const regions = { ...(state?.regions ?? {}) };
   const results: PairResult[] = [];
   const skipped: { reason: string; pairs: number }[] = [];
-  const skip = (reason: string) => {
-    const entry = skipped.find((x) => x.reason === reason);
-    if (entry) entry.pairs += 1;
-    else skipped.push({ reason, pairs: 1 });
-  };
+  const skip = skipOf(skipped);
   const toScan: string[] = [];
   const own = { accounts: inventory.accounts.filter((a) => a.id === account), ous: inventory.ous };
   const perimeter: string[] = [];
@@ -340,7 +365,7 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
     try {
       const rules = synthetic ? syntheticRules(account, region) : await deps.scan(credentials, { account, region });
       results.push({ account, region, ok: true, rules, ms: now() - started });
-      regions[region] = { scannedAt: at, emptyRuns: rules.length ? 0 : (regions[region]?.emptyRuns ?? 0) + 1, skippedRuns: 0 };
+      scannedRegion(regions, region, rules, at);
     } catch (err) {
       results.push({ account, region, ok: false, error: errorText(err), rules: [], ms: now() - started });
       log.warn('DiscoveryPairFailed', { account, region, error: errorText(err) });
@@ -364,27 +389,16 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
     for (const region of new Set([...previous.values()].map((c) => c.region))) results.push({ account, region, ok: false, error, rules: [], ms: 0 });
   }
 
-  const next = nextCandidates({ previous, results, inventory, config, now: now() });
-  const changed = next.filter((c) => {
-    const before = stored.get(c.id);
-    return !before || canonical(before) !== canonical(c);
-  });
+  const { changed, result, ok } = stepEnd({ previous, stored, results, reported, skipped, error, inventory, config, now: now() });
   if (only) await deps.store.replaceCandidates(changed, [...stored.values()]);
   else await deps.store.putCandidates(changed);
   if (superseded.length) {
     await deps.store.deleteCandidates(supersededCandidates);
     log.info('DiscoveryCandidatesMerged', { account, count: superseded.length });
   }
-  const result: AccountResult = {
-    pairs: reported.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms })),
-    skipped,
-    ...(error ? { error } : {}),
-    lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
-    written: changed.length,
-  };
   if (only && state) await deps.store.putAccountScan({ ...state, regions });
   else await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(synthetic ? { synthetic: true } : {}), ...(access ? { access } : {}) });
-  return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+  return { account, ok, written: changed.length };
 }
 
 // A Google Cloud project's step (Google Cloud manager design §7.2): no AWS role, one scan of all its regions as the discovery
@@ -425,11 +439,10 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
   const results: PairResult[] = [];
   const skipped: { reason: string; pairs: number }[] = [];
   const own = { accounts: inventory.accounts.filter((a) => a.id === account), ous: inventory.ous };
+  const skip = skipOf(skipped);
   for (const p of targetPairs(config, own, { [account]: known })) {
     if (!p.scan) {
-      const entry = skipped.find((x) => x.reason === p.reason);
-      if (entry) entry.pairs += 1;
-      else skipped.push({ reason: p.reason, pairs: 1 });
+      skip(p.reason);
       continue;
     }
     const pair = scan?.regions.find((r) => r.region === p.region);
@@ -439,24 +452,13 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
     }
     const rules = scan.rules.filter((r) => r.region === p.region);
     results.push({ account, region: p.region, ok: true, rules, ms });
-    regions[p.region] = { scannedAt: at, emptyRuns: rules.length ? 0 : (regions[p.region]?.emptyRuns ?? 0) + 1, skippedRuns: 0 };
+    scannedRegion(regions, p.region, rules, at);
   }
 
-  const previous = new Map(stored.map((c) => [c.id, c]));
-  const changed = nextCandidates({ previous, results, inventory, config, now: now() }).filter((c) => {
-    const before = previous.get(c.id);
-    return !before || canonical(before) !== canonical(c);
-  });
+  const { changed, result, ok } = stepEnd({ previous: new Map(stored.map((c) => [c.id, c])), results, skipped, error, inventory, config, now: now() });
   await deps.store.putCandidates(changed);
-  const result: AccountResult = {
-    pairs: results.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms })),
-    skipped,
-    ...(error ? { error } : {}),
-    lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
-    written: changed.length,
-  };
   await deps.store.putAccountScan({ account, scannedAt: at, regions, runId, result, ...(access ? { access } : {}) });
-  return { account, ok: !error && results.every((r) => r.ok), written: changed.length };
+  return { account, ok, written: changed.length };
 }
 
 // A project's access (Google Cloud manager design §7.4): `discovery` is ok when its scan's lists answered (Compute Engine
