@@ -1,5 +1,5 @@
-// The README's Terraform example installs the newest released manager. The release scripts don't rewrite it: this test
-// fails at a release until the README names the new version.
+// The README's Terraform example installs the newest released manager. The release tool (vision's dormeto-release)
+// rewrites it in the release commit: this test fails when the README and the CHANGELOG's newest section disagree.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
