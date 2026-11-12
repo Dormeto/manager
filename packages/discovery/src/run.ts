@@ -15,7 +15,7 @@ import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
 import { loadInventory, type OrganizationsPort } from './org.js';
 import type { DiscoveryStore } from './store.js';
 import { SYNTHETIC_REGIONS, isSynthetic, syntheticInventory, syntheticRules } from './synthetic.js';
-import type { AccessRow, AccessState, AccessSummary, AccountResult, AccountScan, Candidate, Connection, DiscoveryConfig, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
+import type { AccessRow, AccessState, AccessSummary, AccountResult, AccountScan, Candidate, Connection, DiscoveryConfig, IdleShare, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
 
 const HOUR_MS = 3_600_000;
 // A region without any rule in EMPTY_RUNS successive scans is scanned once every SKIP_RUNS + 1 runs.
@@ -48,7 +48,8 @@ export interface RunDeps {
   discoveryOnly?(credentials: unknown): Promise<boolean>;
   // Whether a CloudTrail trail logs the management writes of the region (event refresh, packaging design §5).
   trails?(credentials: unknown, region: string): Promise<boolean>;
-  scan(credentials: unknown, where: { account: string; region: string }): Promise<ScannedRule[]>;
+  // storedIdle: the account's stored idle shares, by candidate, for the target groups CloudWatch fails for.
+  scan(credentials: unknown, where: { account: string; region: string }, options?: { storedIdle: () => Promise<Map<string, IdleShare>> }): Promise<ScannedRule[]>;
   now?: () => number;
   concurrency?: number; // regions of an account scanned at once (8)
   runLimitMs?: number; // a run not finished after this is abandoned (3 hours: the state machine's limit)
@@ -360,10 +361,14 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
     access = { ...access, trails, ...(trailsError ? { trailsError } : {}) };
   }
 
+  // The account's stored idle shares, read once and only when a region's CloudWatch fails (the cloud duplication design's
+  // B9): its target groups keep theirs, and the region is scanned all the same.
+  let shares: Promise<Map<string, IdleShare>> | undefined;
+  const storedIdle = () => (shares ??= deps.store.accountCandidates(account).then((all) => new Map(all.map((c) => [c.id, { idleHours7d: c.idleHours7d ?? null, requests7d: c.requests7d ?? null }]))));
   await pool(toScan, deps.concurrency ?? 8, async (region) => {
     const started = now();
     try {
-      const rules = synthetic ? syntheticRules(account, region) : await deps.scan(credentials, { account, region });
+      const rules = synthetic ? syntheticRules(account, region) : await deps.scan(credentials, { account, region }, { storedIdle });
       results.push({ account, region, ok: true, rules, ms: now() - started });
       scannedRegion(regions, region, rules, at);
     } catch (err) {

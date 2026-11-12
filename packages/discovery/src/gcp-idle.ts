@@ -5,7 +5,7 @@
 // fails (Monitoring turned off, a refusal, a timeout) keeps the stored idle share of the candidates of its metric type
 // (nulls for one never read), as AWS keeps it when CloudWatch fails, and is logged once; it never fails the scan.
 import type { GooglePort } from './google.js';
-import type { ScannedRule } from './types.js';
+import type { IdleShare, ScannedRule } from './types.js';
 
 type LbKind = NonNullable<ScannedRule['lb']>['kind'];
 type Call = GooglePort['call'];
@@ -22,7 +22,6 @@ export const METRICS: Record<LbKind, { metric: string; inRegion: boolean }> = {
   'cross-region-internal': { metric: 'loadbalancing.googleapis.com/https/internal/request_count', inRegion: false },
 };
 
-export interface IdleShare { idleHours7d: number | null; requests7d: number | null }
 export interface IdleCandidate { id: string; backendService: string; urlMap: string; region: string; kind?: LbKind }
 interface Series { resource?: { labels?: Record<string, string> }; points?: { interval?: { startTime?: string }; value?: { int64Value?: string | number; doubleValue?: number } }[] }
 interface Answer { timeSeries?: Series[]; nextPageToken?: string }

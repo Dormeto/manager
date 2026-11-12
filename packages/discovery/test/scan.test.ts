@@ -69,6 +69,33 @@ describe('scanRegion', () => {
     expect(calls.metricQueries).toBe(5);
   });
 
+  // B9 (cloud duplication design §4): as Google Cloud's Monitoring (gcp-idle.ts), a CloudWatch that fails never fails the region.
+  it('keeps the stored idle share of the target groups CloudWatch fails for, says it once a batch, and scans on', async () => {
+    const { ports } = scanPorts();
+    ports.cloudwatch = { async getMetricData() { throw Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' }); } };
+    const warned: [string, object | undefined][] = [];
+    let reads = 0;
+    const storedIdle = async () => {
+      reads += 1;
+      return new Map([[TGS.shop!.TargetGroupArn!, { idleHours7d: 120, requests7d: 40 }]]);
+    };
+    const found = byKey(await scanRegion(ports, WHERE, { now: NOW, storedIdle, log: { warn: (event, data) => warned.push([event, data]) } }));
+    expect(Object.keys(found)).toHaveLength(12);
+    expect([found.shop!.idleHours7d, found.shop!.requests7d]).toEqual([120, 40]);
+    // Never read before: none.
+    expect([found['demo-app']!.idleHours7d, found['demo-app']!.requests7d]).toEqual([null, null]);
+    expect(warned).toEqual([['CloudWatchIdleFailed', { ...WHERE, targetGroups: 5, error: 'ThrottlingException: Rate exceeded' }]]);
+    expect(reads).toBe(1);
+    // Without the stored shares (the estimate's scan), none either.
+    expect(byKey(await scanRegion(ports, WHERE, { now: NOW })).shop!.idleHours7d).toBeNull();
+  });
+
+  it('reads the stored idle shares only when CloudWatch fails', async () => {
+    let reads = 0;
+    const found = byKey(await scanRegion(scanPorts({ hourly: { 'targetgroup/shop/1': [5, 0, 3] } }).ports, WHERE, { now: NOW, storedIdle: async () => { reads += 1; return new Map(); } }));
+    expect([found.shop!.idleHours7d, reads]).toEqual([166, 0]);
+  });
+
   it('gives a managed group the backend of its application target group, for backend type filters', async () => {
     const found = byKey(await scanRegion(scanPorts().ports, WHERE, { now: NOW }));
     expect(found['demo-app']!.backend).toEqual({ kind: 'instance', id: 'i-demo', arn: 'arn:aws:ec2:eu-west-1:111122223333:instance/i-demo' });

@@ -1,7 +1,7 @@
 // One account and region: every rule of the application load balancers, with what Dormeto could do with it (managed,
 // eligible, ineligible and why), its host names and tags, and how idle its target group was over the last 7 days.
 // Ported from the router discovery (router lambda/src/lib/candidates.mjs).
-import type { BackendKind, RuleRef, ScannedRule } from './types.js';
+import type { BackendKind, IdleShare, RuleRef, ScannedRule } from './types.js';
 import { EKS_ACTIONS, clustersOf, kubernetesBackend, type Cluster, type KubernetesBackend, type KubernetesPorts } from './kubernetes.js';
 
 const WORKLOAD_TAG = 'dormeto:workload';
@@ -178,29 +178,36 @@ const REASONS: Record<string, string> = {
 export const lbDimension = (arn: string) => arn.split(':loadbalancer/')[1] ?? arn;
 export const tgDimension = (arn: string) => arn.split(':').at(-1) ?? arn;
 
-// Hourly request sums of the last 7 days per target group: idle hours = hours without data or with 0 requests.
-async function idleHours(cloudwatch: NonNullable<ScanPorts['cloudwatch']>, pairs: { lb: string; tg: string }[], now: () => number) {
+// Hourly request sums of the last 7 days per target group: idle hours = hours without data or with 0 requests. A batch
+// CloudWatch fails for (a throttling, a refusal) is given to `failed` and left out.
+async function idleHours(cloudwatch: NonNullable<ScanPorts['cloudwatch']>, pairs: { lb: string; tg: string }[], now: () => number, failed: (targetGroups: string[], err: unknown) => void) {
   const end = Math.floor(now() / HOUR_MS) * HOUR_MS;
   const start = end - IDLE_WINDOW_HOURS * HOUR_MS;
   const out = new Map<string, { idleHours7d: number; requests7d: number }>();
   for (const batch of chunks(pairs, 500)) {
-    const { MetricDataResults = [] } = await cloudwatch.getMetricData({
-      StartTime: new Date(start),
-      EndTime: new Date(end),
-      MetricDataQueries: batch.map((p, i) => ({
-        Id: `q${i}`,
-        ReturnData: true,
-        MetricStat: {
-          Metric: {
-            Namespace: 'AWS/ApplicationELB',
-            MetricName: 'RequestCount',
-            Dimensions: [{ Name: 'LoadBalancer', Value: lbDimension(p.lb) }, { Name: 'TargetGroup', Value: tgDimension(p.tg) }],
+    let MetricDataResults: { Id?: string; Values?: number[] }[];
+    try {
+      ({ MetricDataResults = [] } = await cloudwatch.getMetricData({
+        StartTime: new Date(start),
+        EndTime: new Date(end),
+        MetricDataQueries: batch.map((p, i) => ({
+          Id: `q${i}`,
+          ReturnData: true,
+          MetricStat: {
+            Metric: {
+              Namespace: 'AWS/ApplicationELB',
+              MetricName: 'RequestCount',
+              Dimensions: [{ Name: 'LoadBalancer', Value: lbDimension(p.lb) }, { Name: 'TargetGroup', Value: tgDimension(p.tg) }],
+            },
+            Period: 3600,
+            Stat: 'Sum',
           },
-          Period: 3600,
-          Stat: 'Sum',
-        },
-      })),
-    });
+        })),
+      }));
+    } catch (err) {
+      failed(batch.map((p) => p.tg), err);
+      continue;
+    }
     for (const result of MetricDataResults) {
       const pair = batch[Number((result.Id ?? '').slice(1))];
       if (!pair) continue;
@@ -237,8 +244,11 @@ interface Row {
   app?: TargetGroup; // the one application target group it forwards to
 }
 
-// onClusters: the region's clusters as read (the estimate lists those it cannot read).
-export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now, onClusters }: { now?: () => number; onClusters?: (clusters: Cluster[]) => void } = {}): Promise<ScannedRule[]> {
+// onClusters: the region's clusters as read (the estimate lists those it cannot read). storedIdle: the idle share stored for
+// each candidate, by id, read only when CloudWatch fails.
+export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now, onClusters, storedIdle, log }: {
+  now?: () => number; onClusters?: (clusters: Cluster[]) => void; storedIdle?: () => Promise<Map<string, IdleShare>>; log?: { warn(event: string, data?: object): void };
+} = {}): Promise<ScannedRule[]> {
   const { elbv2 } = ports;
   const lbs = (await all<LoadBalancer>((i) => elbv2.describeLoadBalancers(i), 'LoadBalancers')).filter((lb) => lb.Type === 'application');
   const rows: Row[] = [];
@@ -307,8 +317,15 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
 
   const measured = candidates.filter((c) => c.eligibility !== 'ineligible' && c.targetGroupArn);
   const pairs = [...new Map(measured.map((c) => [c.targetGroupArn!, { lb: c.loadBalancerArn ?? '', tg: c.targetGroupArn! }])).values()];
-  const idle = pairs.length && ports.cloudwatch ? await idleHours(ports.cloudwatch, pairs, now) : new Map();
-  for (const c of measured) Object.assign(c, idle.get(c.targetGroupArn!) ?? {});
+  // The target groups CloudWatch failed for keep their candidates' stored idle share (none for one never read), said once a
+  // batch: the region is scanned all the same, as Google Cloud's Monitoring failing (gcp-idle.ts).
+  const unread = new Set<string>();
+  const idle = pairs.length && ports.cloudwatch ? await idleHours(ports.cloudwatch, pairs, now, (targetGroups, err) => {
+    for (const tg of targetGroups) unread.add(tg);
+    log?.warn('CloudWatchIdleFailed', { ...where, targetGroups: targetGroups.length, error: `${(err as Error)?.name ?? 'Error'}: ${(err as Error)?.message ?? String(err)}`.slice(0, 300) });
+  }) : new Map();
+  const kept = unread.size ? (await storedIdle?.()) ?? new Map<string, IdleShare>() : new Map<string, IdleShare>();
+  for (const c of measured) Object.assign(c, unread.has(c.targetGroupArn!) ? kept.get(c.id) ?? {} : idle.get(c.targetGroupArn!) ?? {});
   return candidates;
 }
 

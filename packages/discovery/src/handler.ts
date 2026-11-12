@@ -95,10 +95,10 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     assumeRole: assumeDiscovery,
     ...(accessCheck ? { assumeCommand: commandCheck(invokeCheck) } : {}),
     enabledRegions: (credentials) => enabledRegionsOf(ec2For(credentials as Credentials, region)),
-    scan: async (credentials, where) => scanRegion({
+    scan: async (credentials, where, options) => scanRegion({
       ...scanPorts(regionalClients(credentials as Credentials, where.region)),
       kubernetes: kubernetesPorts(credentials as Credentials, where.region, undefined, undefined, await proxyPrefix(where)),
-    }, where),
+    }, where, { storedIdle: options?.storedIdle, log }),
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),

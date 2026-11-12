@@ -112,6 +112,35 @@ describe('runDiscovery', () => {
     expect(run.targets.filter((t) => t.status === 'ok').length).toBe(3);
   });
 
+  // B9 (cloud duplication design §4): a region whose CloudWatch fails keeps its candidates' stored idle share and is scanned.
+  it('gives a region\'s scan the account\'s stored idle shares, read once and only when a scan asks for them', async () => {
+    const s = setup({ cfg: config({ regions: ['eu-west-1', 'eu-west-3'], filters: [filter('a', [{ accountIds: [A.id] }])] }) });
+    await s.ready;
+    await s.store.putCandidates([{
+      ...rule({ id: `rule-${A.id}-eu-west-1`, account: A.id, region: 'eu-west-1', idleHours7d: 42, requests7d: 7 }), accountName: 'tools', ouPath: A.ouPath, scope: 'in', scopeReason: 'in',
+      status: 'pending-onboarding', statusReason: 'eligible', firstSeenAt: '2026-10-03T12:00:00.000Z', lastSeenAt: '2026-10-03T12:00:00.000Z', history: [],
+    }]);
+    const reads: string[] = [];
+    const accountCandidates = s.store.accountCandidates.bind(s.store);
+    s.deps.store = { ...s.store, accountCandidates: (account: string) => { reads.push(account); return accountCandidates(account); } };
+    // The region whose CloudWatch failed gives its candidate the share stored; the other reads its own.
+    s.deps.scan = async (_c, where, options) => {
+      const id = `rule-${where.account}-${where.region}`;
+      const kept = where.region === 'eu-west-1' ? (await options!.storedIdle()).get(id) : { idleHours7d: 168, requests7d: 0 };
+      return [rule({ id, account: where.account, region: where.region, ...kept })];
+    };
+    const run = await runDiscovery(s.deps, { source: 'manual' });
+    expect([run.status, run.targets.map((t) => t.status)]).toEqual(['ok', ['ok', 'ok']]);
+    const after = Object.fromEntries((await s.store.listCandidates()).map((c) => [c.region, [c.idleHours7d, c.requests7d]]));
+    expect(after).toEqual({ 'eu-west-1': [42, 7], 'eu-west-3': [168, 0] });
+    // Once for the shares, once for the candidates the step writes.
+    expect(reads).toEqual([A.id, A.id]);
+    reads.length = 0;
+    s.deps.scan = async (_c, where) => [rule({ id: `rule-${where.account}-${where.region}`, account: where.account, region: where.region })];
+    await runDiscovery(s.deps, { source: 'manual' });
+    expect(reads).toEqual([A.id]);
+  });
+
   it('scans at most 8 pairs at a time', async () => {
     const regions = Array.from({ length: 20 }, (_, i) => `eu-test-${i + 1}`);
     const s = setup({ cfg: config({ regions, filters: [filter('a', [{ accountIds: [A.id] }])] }), delayMs: 5 });

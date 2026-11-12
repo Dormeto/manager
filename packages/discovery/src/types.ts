@@ -83,6 +83,9 @@ export interface RuleRef {
 
 // A candidate: an application target group with every rule forwarding to it (id = target group ARN), or a rule that
 // forwards to no single application target group (id = rule ARN).
+// A candidate's idle share over the last 7 days: its idle hours and its requests, null when never read.
+export interface IdleShare { idleHours7d: number | null; requests7d: number | null }
+
 export interface ScannedRule {
   id: string; // target group ARN, or rule ARN
   account: string;
