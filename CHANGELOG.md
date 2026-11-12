@@ -280,7 +280,8 @@ behaviour), `verify` refuses a workload the router's status says is `FAILED`, an
 FAILED`, its locks and slots released, instead of succeeding. Its `candidate` step does not run, so the candidate stays eligible
 until the next discovery run reads the router's rule; nothing is undone: the router keeps the workload it onboarded (Offboard
 removes it), listed at the router's next check. A route that is not the application's, or an issue, fails `verify` as before
-(`verify: route <route>, issues: …`).
+(`verify: route <route>, issues: …`; the route and the issues are said first: a FAILED workload still on the waker fails with
+`verify: route waker`).
 - **Fixed, a Google Cloud workload's 7-day bar:** its tooltip's requests line says `backend service`, as the rest of the dashboard
 does, where it said `target group` (a workload's page and its Workloads row).
 - **The dashboard's tables, one component:** Routers, Workloads, Discovery, Operations, Users, Audit, the IP lists and a workload's
@@ -288,7 +289,7 @@ History of changes share one table: a search field reading what the columns say 
 headers (Workloads and Discovery keep the API's order), pages of 25, 50, 100 or all rows (50 at first, all only up to 1,000 rows;
 Workloads and the History 25 a page, Workloads without "all"; Discovery its Previous and Next along the API's cursor), and an Actions
 column, last: each row's "⋮" opens that row's actions (a destructive one in red, a disabled one saying why in its tooltip), the
-header's "⋮" the table's, with Export CSV and Export PDF; a page's search fields and menus are named by their table ("Search routers",
+header's "⋮" the table's (a phone's, and a scrolling table's whose rows have no action, at the toolbar's end), with Export CSV and Export PDF; a page's search fields and menus are named by their table ("Search routers",
 "Table actions: IP lists"). An export holds the rows of the search and filters in force, every page (Workloads and Discovery read the
 API's pages one at a time, 5,000 rows at most; the CSV's last line and the PDF's heading lines say where it was cut or stopped), each
 column in words (a status' word, dates as ISO 8601, money as a number with its currency in the column's title, `Saved (30 days, $)`,
@@ -297,7 +298,7 @@ spreadsheet would run as a formula (`=`, `+`, `-`, `@`, a tab or a carriage retu
 A4 landscape with the view's title, the date with its time zone, the search and filters and page numbers, each column as wide as its
 longest word (a wide table in a smaller font), no row split across two pages, made in the browser by jsPDF and jsPDF-AutoTable
 (loaded when asked; a character its standard font cannot print shows as `?`, the PDF says how many). The files are named
-`dormeto-<view>-<YYYY-MM-DD>.csv|pdf`. A table wider than its card keeps its Actions column in view at its end when its rows have
+`dormeto-<view>-<YYYY-MM-DD>.csv|pdf`. A table wider than its card scrolls sideways, keeping its Actions column in view at its end when its rows have
 actions.
 - **Statuses as their icons alone:** a workload's state, a pause, a router's health (and the Overview's routers card), an operation's
 status and its steps', an audit result, a user's status and two-step verification, a discovery candidate's status, Discovery's last run
