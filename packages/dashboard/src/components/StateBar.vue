@@ -3,7 +3,8 @@
 // of its view's header, in the history's colors, awake first and asleep last with the short states between them. Its tooltip gives each state's share of the time with history,
 // its time and what it means, the time without history, the hours without requests (discovery), the base cost of what the
 // naps stop, what they saved in the last 30 days and a month's saving at that rate (user request). With a title and a
-// note, the bar of all workloads. block: as wide as its parent; legend: each state's share under the bar.
+// note, the bar of all workloads. block: as wide as its parent; legend: each state's share under the bar. facts: a Workloads
+// row's since when, wake mode and wakes (M37, state.ts' runFacts), a labelled line each after the states, in its name too.
 import { computed } from 'vue';
 import { idleText } from '../discovery';
 import { cloudWords } from '../cloud-words';
@@ -25,7 +26,8 @@ const props = withDefaults(defineProps<{
   legend?: boolean;
   height?: number;
   cloud?: Cloud; // the workload's: whose list prices
-}>(), { states: null, idleHours7d: null, requests7d: null, savings: null, title: 'Last 7 days', note: null, width: 100, block: false, legend: false, height: 8, cloud: 'aws' });
+  facts?: { label: string; value: string }[];
+}>(), { states: null, idleHours7d: null, requests7d: null, savings: null, title: 'Last 7 days', note: null, width: 100, block: false, legend: false, height: 8, cloud: 'aws', facts: () => [] });
 
 // The narrowest a state is drawn, in percent of the bar: a few minutes of waking in a week stay visible.
 const MIN_WIDTH = 1;
@@ -58,7 +60,7 @@ const legendItems = computed(() => {
 const title = computed(() => (rows.value.length
   ? `${props.title}${unknown.value ? ', of the time with history' : ''}`
   : 'No history yet: it starts when the manager first sees the workload.'));
-const label = computed(() => `${props.title}: ${weekText(props.states?.totals)}`);
+const label = computed(() => [`${props.title}: ${weekText(props.states?.totals)}`, ...props.facts.map((f) => `${f.label}: ${f.value}`)].join('; '));
 const base = computed(() => {
   const h = props.savings?.hourly;
   return typeof h === 'number' ? `Base cost of what the naps stop: ${usd(h)} an hour · ${usd(h * MONTH_HOURS)} a month` : null;
@@ -103,6 +105,9 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
         </tr>
       </tbody></table>
       <div v-if="rows.length && unknown" class="mt-1 note">No history for {{ longDuration(unknown) }} of the 7 days.</div>
+      <div v-if="facts.length" class="mt-1">
+        <div v-for="f in facts" :key="f.label" data-test="state-fact"><span class="fact__label">{{ f.label }}:</span> {{ f.value }}</div>
+      </div>
       <div v-if="base" class="mt-1">{{ base }}</div>
       <div v-if="saved" :class="{ 'mt-1': !base }">{{ saved }}</div>
       <div v-if="monthly">{{ monthly }}</div>
@@ -144,5 +149,6 @@ const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: 
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .note { opacity: 0.8; }
+.fact__label { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) { .segment { animation: none; } }
 </style>

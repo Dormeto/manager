@@ -130,6 +130,29 @@ describe('StateBar', () => {
     wrapper.unmount();
   });
 
+  // M37 (user request): what a Workloads row's Since, Wake mode and Wakes columns said, given by the view.
+  it('says the facts it is given, one labelled line each after the states, and in its accessible name; none given, none said', async () => {
+    const facts = [{ label: 'Asleep since', value: '2 h ago (Oct 9, 2026, 10:00:00 AM UTC)' }, { label: 'Wake mode', value: 'browser' }];
+    const lines = () => [...document.querySelectorAll('.v-tooltip [data-test="state-fact"]')].map((l) => l.textContent?.trim());
+    const wrapper = render({ states: STATES, facts });
+    expect(wrapper.find('[data-test="state-bar"]').attributes('aria-label'))
+      .toBe('Last 7 days: awake 17 %, waking <1 %, asleep 83 %; Asleep since: 2 h ago (Oct 9, 2026, 10:00:00 AM UTC); Wake mode: browser');
+    expect(await hover(wrapper)).toMatch(/asleep83 %.*Asleep since: 2 h ago/i);
+    expect(lines()).toEqual(['Asleep since: 2 h ago (Oct 9, 2026, 10:00:00 AM UTC)', 'Wake mode: browser']);
+    wrapper.unmount();
+    // Without history yet, the facts are still said.
+    const fresh = render({ states: null, facts });
+    expect(await hover(fresh)).toContain('No history yet');
+    expect(lines()).toEqual(['Asleep since: 2 h ago (Oct 9, 2026, 10:00:00 AM UTC)', 'Wake mode: browser']);
+    expect(fresh.find('[data-test="state-bar"]').attributes('aria-label')).toBe('Last 7 days: no history yet; Asleep since: 2 h ago (Oct 9, 2026, 10:00:00 AM UTC); Wake mode: browser');
+    fresh.unmount();
+    const plain = render({ states: STATES });
+    await hover(plain);
+    expect(lines()).toEqual([]);
+    expect(plain.find('[data-test="state-bar"]').attributes('aria-label')).toBe('Last 7 days: awake 17 %, waking <1 %, asleep 83 %');
+    plain.unmount();
+  });
+
   it('says when there is no history yet, and draws nothing', async () => {
     for (const states of [null, { ...STATES, totals: { UNKNOWN: 604_800 } }]) {
       const wrapper = render({ states });

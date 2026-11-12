@@ -12,6 +12,11 @@ export function relative(iso: string | null | undefined, now = Date.now()): stri
   return future ? `in ${text}` : `${text} ago`;
 }
 
+// The exact time behind a relative one, in the browser's time zone (a tooltip's: Audit's, Operations', a 7-day bar's).
+export const exactTime = (iso: string): string => new Date(iso).toLocaleString('en-US', {
+  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
+});
+
 // A duration of days as days and hours (6 d 2 h), a shorter one as duration() does.
 export function longDuration(seconds: number): string {
   if (seconds < 86_400) return duration(Math.round(seconds));

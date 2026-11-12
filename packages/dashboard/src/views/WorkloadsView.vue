@@ -7,7 +7,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { mdiCalendarClock, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
-import { backendLabel, checkHealth, cloudMark, percent, relative, rowCloud, usd } from '../format';
+import { backendLabel, checkHealth, cloudMark, exactTime, percent, relative, rowCloud, usd } from '../format';
 import CloudMark from '../components/CloudMark.vue';
 import BackendKinds from '../components/BackendKinds.vue';
 import StateBar from '../components/StateBar.vue';
@@ -15,7 +15,7 @@ import { barSavings } from '../costs';
 import { failureTitle } from '../failures';
 import { stateLabel } from '../history';
 import { pausesText } from '../pause';
-import { stateSince, weekText } from '../state';
+import { runFacts, weekText } from '../state';
 import { useCountUp } from '../count-up';
 import type { DmExport, DmHeader, DmServer } from '../table';
 import DmTable from '../components/DmTable.vue';
@@ -130,13 +130,10 @@ const headers: DmHeader<WorkloadSummary>[] = [
   { title: 'Router', key: 'router', sortable: false },
   { title: 'Tags', key: 'tags', sortable: false, text: (w) => tagsList(w.tags).map((t) => t.text).join(', ') },
   { title: 'State', key: 'state', sortable: false, text: stateText },
-  { title: 'Since', key: 'since', sortable: false, text: (w) => stateSince(w).at ?? w.updatedAt ?? '' },
+  // Its week, then since when, its wake mode and its wakes (M37: the bar's tooltip says them), the date as ISO 8601.
   { title: 'Last 7 days', key: 'states7d', align: 'end', sortable: false,
-    text: (w) => [weekText(w.states7d?.totals), ...(typeof w.idleHours7d === 'number' ? [`idle ${percent(w.idleHours7d, 168)}`] : [])].join(' · ') },
+    text: (w) => [weekText(w.states7d?.totals), ...(typeof w.idleHours7d === 'number' ? [`idle ${percent(w.idleHours7d, 168)}`] : []), ...runFacts(w, (iso) => iso).map((f) => `${f.label}: ${f.value}`)].join(' · ') },
   { title: 'URL', key: 'url', sortable: false },
-  { title: 'Wake mode', key: 'wakeMode', sortable: false },
-  { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end', value: (w) => w.stats7d?.wakes ?? null, sortable: false, text: (w) => (w.stats7d ? String(w.stats7d.wakes) : '') },
-  { title: 'Wakes (total)', key: 'wakeCount', align: 'end', sortable: false },
   // Exported as a number a spreadsheet adds up, the currency in the column's title.
   { title: 'Saved (30 days)', exportTitle: 'Saved (30 days, $)', key: 'saved', align: 'end', value: (w) => w.costs?.saved.usd ?? null, sortable: false,
     text: (w) => (!w.costs ? '' : !w.costs.saved.usd && w.costs.saved.unpricedHours ? 'not priced' : w.costs.saved.usd.toFixed(2)) },
@@ -179,8 +176,8 @@ watch(search, () => {
   clearTimeout(typing);
   typing = setTimeout(() => { page.value = 1; void run(); }, 300);
 });
-// Since when it is in its state (the run's last write moves without a state change too).
-const since = (w: WorkloadSummary) => relative(stateSince(w).at ?? w.updatedAt, now.value);
+// The 7-day bar's facts (M37: they had columns): since when it is in its state, how long ago and the exact time.
+const facts = (w: WorkloadSummary) => runFacts(w, (iso) => `${relative(iso, now.value)} (${exactTime(iso)})`);
 // What its naps saved in the last 30 days, as its 7-day bar says it (nothing priced is not $0).
 const saved = (s: { usd: number; unpricedHours: number } | undefined) => (!s ? '—' : !s.usd && s.unpricedHours ? 'not priced' : usd(s.usd));
 // The fleet's figures count up when they arrive.
@@ -273,13 +270,11 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       </template>
       <template #[`item.state`]="{ item }"><span class="dm-state"><StateChip :state="item.state" :failure="item.failure" :cloud="rowCloud(item)" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.states7d`]="{ item }">
-        <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :savings="barSavings(item.costs)" :cloud="rowCloud(item)" />
+        <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :savings="barSavings(item.costs)" :cloud="rowCloud(item)" :facts="facts(item)" />
       </template>
-      <template #[`item.since`]="{ item }"><span class="nowrap dm-num text-medium-emphasis">{{ since(item) }}</span></template>
       <template #[`item.url`]="{ item }">
         <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="dm-url" :title="item.url"><span class="dm-url__host">{{ host(item.url) }}</span><v-icon :icon="mdiOpenInNew" size="x-small" class="dm-url__icon" /></a>
       </template>
-      <template #[`item.wakeMode`]="{ item }"><span class="dm-mode">{{ item.wakeMode }}</span></template>
       <template #[`item.saved`]="{ item }"><span :class="['nowrap', { 'text-medium-emphasis': !item.costs || (!item.costs.saved.usd && item.costs.saved.unpricedHours) }]">{{ saved(item.costs?.saved) }}</span></template>
     </DmTable>
   </v-card>
@@ -333,7 +328,6 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-url__icon { flex: none; opacity: 0.7; }
 /* The state's icon, the pause's beside it: the column stays narrow. */
 .dm-state { display: inline-flex; align-items: center; gap: 6px; }
-.dm-mode { font: 500 0.72rem/1 var(--dm-mono); letter-spacing: 0.04em; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 
 /* Phones: each row a stacked card, its values on the right. */
 .dm-workloads :deep(.v-data-table__tr--mobile) { border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }

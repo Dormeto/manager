@@ -5,6 +5,14 @@ https://releases.dormeto.com/manager/ (install: https://dormeto.com/get-started.
 member accounts' roles or the delegation policy must be applied again (the access and organization modules, or the AWS
 CLI script, of the same release).
 
+## Unreleased
+
+- **Workloads, four columns fewer:** Since, Wake mode, Wakes (7 days) and Wakes (total) are gone; a row's "Last 7 days" bar says
+them in its tooltip, a labelled line each after the states (`Asleep since: 2 h ago (Nov 13, 2026, 08:02:00 AM GMT+1)`, `Wake mode`,
+`Wakes in the last 7 days`, `Wakes in total`), and in its name for screen readers; a fact the row does not have is left out. The
+column's CSV and PDF text carries them too, the date as ISO 8601 (`awake 17 %, asleep 83 % · idle 89 % · Asleep since:
+2026-10-09T10:00:00.000Z · Wake mode: browser · …`).
+
 ## 0.24.0 — 2026-11-12
 
 Router 0.40.0. Access: nothing to apply again (the access and organization modules, the AWS CLI script, the routers'

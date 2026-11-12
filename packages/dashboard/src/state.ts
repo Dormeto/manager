@@ -51,3 +51,19 @@ export function stateSince(run: Run): { label: string; at: string | null } {
   const at = { AWAKE: run.awakeSince, WAKING: run.wakeStartedAt, FAILED: run.failedAt, NAPPING: run.updatedAt, ASLEEP: run.updatedAt }[run.state] ?? null;
   return { label: `${LABEL[run.state] ?? 'State'} since`, at };
 }
+
+// M37 (user request): a Workloads row's facts beside its week, in its 7-day bar's tooltip and name and in that column's text
+// (they had columns of their own): since when it is in its state (its last write when the state's own time is not known, as
+// the Since column said), its wake mode, its wakes in the last 7 days and in all; each one it has, `when` saying the date.
+type Facts = Run & { wakeMode?: string; wakeCount?: number; stats7d?: Partial<Record<'wakes' | 'ignored' | 'deferred', number>> | null };
+export function runFacts(run: Facts, when: (iso: string) => string): { label: string; value: string }[] {
+  const since = stateSince(run);
+  const at = since.at ?? run.updatedAt;
+  const count = (n: number) => n.toLocaleString('en-US');
+  return [
+    ...(at ? [{ label: since.label, value: when(at) }] : []),
+    ...(run.wakeMode ? [{ label: 'Wake mode', value: run.wakeMode }] : []),
+    ...(typeof run.stats7d?.wakes === 'number' ? [{ label: 'Wakes in the last 7 days', value: count(run.stats7d.wakes) }] : []),
+    ...(typeof run.wakeCount === 'number' ? [{ label: 'Wakes in total', value: count(run.wakeCount) }] : []),
+  ];
+}

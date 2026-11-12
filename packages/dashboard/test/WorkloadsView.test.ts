@@ -9,6 +9,7 @@ import WorkloadsView from '../src/views/WorkloadsView.vue';
 import StateBar from '../src/components/StateBar.vue';
 import { useSession } from '../src/stores/session';
 import { barSavings } from '../src/costs';
+import { exactTime } from '../src/format';
 import { download, PDF_COLUMNS_MAX } from '../src/table-export';
 import DmTable from '../src/components/DmTable.vue';
 import { expectEveryColumnSaid } from './table-columns';
@@ -173,7 +174,8 @@ describe('Workloads view', () => {
   });
 
   it('dates a failed workload from its failure, not from the last write of its run', async () => {
-    const failed = { ...SHOP, state: 'FAILED', failedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() };
+    const failedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const failed = { ...SHOP, state: 'FAILED', failedAt, updatedAt: new Date(Date.now() - 5 * 60_000).toISOString() };
     const { api } = await import('../src/api');
     const original = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async (path: string) => (path === '/workloads/states' ? FLEET : { workloads: [failed], total: 1, errors: [] }) as never);
@@ -183,10 +185,50 @@ describe('Workloads view', () => {
     await router.push('/workloads');
     const wrapper = mount(WorkloadsView, { global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
     await flushPromises();
-    const headers = wrapper.findAll('thead th').map((th) => th.text());
-    expect(wrapper.findAll('tbody tr')[0]!.findAll('td')[headers.indexOf('Since')]!.text()).toBe('2 h ago');
+    const bar = wrapper.find('tbody tr').findComponent(StateBar);
+    expect((bar.props('facts') as { label: string; value: string }[])[0]).toEqual({ label: 'Failed since', value: `2 h ago (${exactTime(failedAt)})` });
     wrapper.unmount();
     vi.mocked(api).mockImplementation(original);
+  });
+
+  // M37 (user request): "remove the 2 "Wakes (..)", "Wake mode", and "Since" columns, move information to the progressbar in
+  // the column "Last 7 days"".
+  it('says since when, the wake mode and the wakes in the 7-day bar of each row, not in columns of their own; a fact it lacks, left out', async () => {
+    const at = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const full = { ...SHOP, updatedAt: at, stats7d: { wakes: 4, ignored: 0, deferred: 0 } };
+    // No wake mode, no wakes, no statistics, no date of its state.
+    const bare: Record<string, unknown> = { ...SHOP, workloadId: 'b2', name: 'Bare', stats7d: null };
+    delete bare.wakeMode;
+    delete bare.wakeCount;
+    const { api } = await import('../src/api');
+    vi.mocked(api).mockImplementation((async (path: string) => { paths.push(path); return path === '/workloads/states' ? FLEET : { workloads: [full, bare], total: 2, errors: [] }; }) as never);
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/workloads', component: WorkloadsView }, { path: '/workloads/:router/:id', component: { render: () => null } }, { path: '/routers/:name', component: { render: () => null } }] });
+    await router.push('/workloads');
+    const wrapper = mount(WorkloadsView, { attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), pinia, router] } });
+    await flushPromises();
+    const headers = wrapper.findAll('thead th').map((th) => th.text());
+    for (const gone of ['Since', 'Wake mode', 'Wakes (7 days)', 'Wakes (total)']) expect(headers).not.toContain(gone);
+    expect(headers).toContain('Last 7 days');
+    const since = `2 h ago (${exactTime(at)})`;
+    const [one, two] = wrapper.findAll('tbody tr').map((tr) => tr.find('[data-test="state-bar"]'));
+    expect(one!.attributes('aria-label')).toBe(`Last 7 days: awake 17 %, asleep 83 %; Asleep since: ${since}; Wake mode: browser; Wakes in the last 7 days: 4; Wakes in total: 3`);
+    expect(two!.attributes('aria-label')).toBe('Last 7 days: awake 17 %, asleep 83 %');
+    const lines = async (bar: typeof one) => {
+      await bar!.trigger('mouseenter');
+      await sleep(300);
+      const said = [...document.querySelectorAll('.v-overlay--active [data-test="state-fact"]')].map((l) => l.textContent?.trim());
+      await bar!.trigger('mouseleave');
+      await sleep(300);
+      return said;
+    };
+    expect(await lines(one)).toEqual([`Asleep since: ${since}`, 'Wake mode: browser', 'Wakes in the last 7 days: 4', 'Wakes in total: 3']);
+    expect(await lines(two)).toEqual([]);
+    expect(document.body.textContent).not.toMatch(/null|undefined|NaN/);
+    // The fleet's bar says none of a row's facts.
+    expect(wrapper.find('[data-test="workloads-header"] [data-test="state-bar"]').attributes('aria-label')).toMatch(/^All 2 workloads, last 7 days: awake 17 %, asleep 83 %$/);
+    wrapper.unmount();
   });
 
   // R11: tags, and the filter by tags.
@@ -417,11 +459,11 @@ describe('Workloads view, its table', () => {
     expect(lists()).toHaveLength(50);
     expect(lists().at(-1)).toBe('/workloads?limit=100&offset=4900&idle=1&states=1');
     expect(lines).toHaveLength(1 + 5_000 + 1);
-    expect(lines.at(-1)).toBe('"The first 5,000 rows of 7,200: narrow the search or the filters to export the others.",,,,,,,,,,,,');
+    expect(lines.at(-1)).toBe('"The first 5,000 rows of 7,200: narrow the search or the filters to export the others.",,,,,,,,');
     wrapper.unmount();
   });
 
-  it('exports each column in words: the account and its cloud, the workload, its backends, router, tags, state and pause, since when, its week, URL, wakes and savings', async () => {
+  it('exports each column in words: the account and its cloud, the workload, its backends, router, tags, state and pause, its week with since when, its wake mode and wakes (M37), URL and savings', async () => {
     const paused = { scope: 'workload', by: 'ops@example.com', at: '2026-10-07T06:00:00.000Z', reason: 'load test' };
     const full = { ...SHOP, url: 'https://shop.example.com/', tags: { team: 'payments', env: 'staging' }, stats7d: { wakes: 4, ignored: 0, deferred: 0 }, pauses: [paused], scheduled: true,
       updatedAt: '2026-10-09T10:00:00.000Z', costs: { ...SHOP.costs, saved: { usd: 41.5, hours: 120, unpricedHours: 0 } } };
@@ -429,10 +471,12 @@ describe('Workloads view, its table', () => {
     const wrapper = await mountAt('/workloads');
     expect(await exportCsv(wrapper)).toEqual([
       // Money as a number, its currency in the column's title.
-      'Account or project,Workload,Backend,Router,Tags,State,Since,Last 7 days,URL,Wake mode,Wakes (7 days),Wakes (total),"Saved (30 days, $)"',
+      'Account or project,Workload,Backend,Router,Tags,State,Last 7 days,URL,"Saved (30 days, $)"',
       '111122223333 (AWS),Shop (a4dffc5bf369a297) · Storefront of the shop team · has a schedule,"Auto Scaling group, RDS instance",dmt-dev,"env=staging, team=payments",'
-        + 'Asleep · Paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test,2026-10-09T10:00:00.000Z,"awake 17 %, asleep 83 % · idle 89 %",https://shop.example.com/,browser,4,3,41.50',
-      'dormeto-dev (Google Cloud),Demo VM (b5eed0c6a470b3a8),"Compute Engine VM, Cloud SQL instance",dmtr-dormeto-dev-europe-west2,,Asleep,,"awake 17 %, asleep 83 % · idle 89 %",,browser,,3,0.00',
+        + 'Asleep · Paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test,'
+        + '"awake 17 %, asleep 83 % · idle 89 % · Asleep since: 2026-10-09T10:00:00.000Z · Wake mode: browser · Wakes in the last 7 days: 4 · Wakes in total: 3",https://shop.example.com/,41.50',
+      // A fact it lacks (no date of its state, no statistics) is left out.
+      'dormeto-dev (Google Cloud),Demo VM (b5eed0c6a470b3a8),"Compute Engine VM, Cloud SQL instance",dmtr-dormeto-dev-europe-west2,,Asleep,"awake 17 %, asleep 83 % · idle 89 % · Wake mode: browser · Wakes in total: 3",,0.00',
     ]);
     expectEveryColumnSaid(wrapper, 'workloads', full);
     // No action on a row: no "⋮" but the table's.

@@ -3,7 +3,7 @@ import { useNow } from '../now';
 import { ref } from 'vue';
 import { mdiAlertCircleOutline, mdiCancel, mdiCheckCircleOutline } from '@mdi/js';
 import { api } from '../api';
-import { relative } from '../format';
+import { exactTime, relative } from '../format';
 import type { DmHeader } from '../table';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
@@ -33,10 +33,7 @@ const headers: DmHeader<Entry>[] = [
 // Cut on one line at these widths, the full text in a tooltip.
 const CUT = { action: '9.5rem', target: '16rem' } as const;
 
-// Presentation: the exact time behind the relative one, the initials on the brand's blue (as the navigation's).
-const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
-  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
-});
+// Presentation: the exact time behind the relative one (exactTime), the initials on the brand's blue (as the navigation's).
 const emailParts = (email: string) => {
   const at = email.indexOf('@');
   return at > 0 ? [email.slice(0, at), email.slice(at)] : [email, ''];
@@ -67,7 +64,7 @@ const detail = (e: Entry) => (outcome(e) === 'error' ? e.result.replace(/^error:
         <div class="dm-calm"><DmLogo state="sleep" :size="40" /><span class="text-medium-emphasis">No action recorded in the last 90 days.</span></div>
       </template>
       <template #[`item.at`]="{ item }">
-        <v-tooltip location="top" :text="exact(item.at)" open-on-focus>
+        <v-tooltip location="top" :text="exactTime(item.at)" open-on-focus>
           <template #activator="{ props }"><time v-bind="props" :datetime="item.at" tabindex="0" class="dm-when nowrap">{{ relative(item.at, now) }}</time></template>
         </v-tooltip>
       </template>

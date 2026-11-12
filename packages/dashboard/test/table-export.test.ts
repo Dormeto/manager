@@ -89,7 +89,7 @@ describe('pdf', () => {
     expect(text).not.toContain('cannot print');
   });
 
-  it('keeps every column wide enough for a word, though long unbreakable cells (addresses, dates) fill the page (Workloads\' 13 columns)', async () => {
+  it('keeps every column wide enough for a word, though long unbreakable cells (addresses, dates) fill the page (13 columns, the Workloads table before M37)', async () => {
     const headers = ['Account or project', 'Workload', 'Backend', 'Router', 'Tags', 'State', 'Since', 'Last 7 days', 'URL', 'Wake mode', 'Wakes (7 days)', 'Wakes (total)', 'Saved (30 days)'];
     const row = ['192546169435 (AWS)', 'booking-staging (309d8d56319d8ee9) · has a schedule', 'Kubernetes workload', 'dmtr-dev', 'env=dev, team=payments', 'Napping',
       '2026-11-12T13:10:31.446Z', 'awake 20 %, waking <1 %, napping <1 %, asleep 80 % · idle 74 %', 'https://booking-staging.example.com/', 'any', '22', '180', '$45.8'];
@@ -99,7 +99,7 @@ describe('pdf', () => {
     for (const word of ['awake', 'waking', 'napping', 'asleep', 'idle']) expect(text).toMatch(new RegExp(`\\([^)]*\\b${word}\\b[^)]*\\)`));
   });
 
-  it('breaks no word inside a narrow column of a wide table (Workloads\' 13): a column is as wide as its longest word, in a smaller font', async () => {
+  it('breaks no word inside a narrow column of a wide table (13 columns, the Workloads table before M37): a column is as wide as its longest word, in a smaller font', async () => {
     const headers = ['Account or project', 'Workload', 'Backend', 'Router', 'Tags', 'State', 'Since', 'Last 7 days', 'URL', 'Wake mode', 'Wakes (7 days)', 'Wakes (total)', 'Saved (30 days, $)'];
     const row = ['192546169435 (AWS)', 'booking-staging (309d8d56319d8ee9) · has a schedule', 'Kubernetes workload', 'dmtr-dormeto-dev-europe-west2', 'env=staging, team=payments',
       'Awake · Paused by avery.haddad@example.com at 2026-11-11T11:10:56.446Z: Training session all week', '2026-11-12T13:10:31.446Z',

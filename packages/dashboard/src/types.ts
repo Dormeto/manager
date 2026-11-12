@@ -65,8 +65,8 @@ export interface WorkloadSummary {
   summary?: string; // the description's first line (manager 0.19.0), when it has one
   state: string;
   url: string | null;
-  wakeMode: string;
-  wakeCount: number;
+  wakeMode?: string; // absent when its router's row has none (the fleet's workloadOf drops it), as wakeCount
+  wakeCount?: number;
   awakeSince: string | null;
   wakeStartedAt: string | null;
   failedAt: string | null;

@@ -8,7 +8,7 @@ import {
   mdiLinkVariantOff, mdiMinus, mdiMinusCircleOutline, mdiOpenInNew, mdiPlayCircleOutline, mdiPlusCircleOutline, mdiProgressClock, mdiRouterNetwork, mdiUpdate,
 } from '@mdi/js';
 import { api } from '../api';
-import { relative } from '../format';
+import { exactTime, relative } from '../format';
 import { useNow } from '../now';
 import { operationBuildLink, operationKind, operationProgress, operationTitle } from '../operations';
 import { usePoll } from '../poll';
@@ -80,14 +80,11 @@ const STEP_MARKS: Record<StepStatus, { icon: string; color?: string }> = {
   done: { icon: mdiCheck, color: 'success' }, skipped: { icon: mdiMinus }, running: { icon: mdiProgressClock, color: 'primary' }, pending: { icon: mdiCircleSmall },
   failed: { icon: mdiClose, color: 'error' },
 };
-// Who started it, split before the @ of an email (the cell breaks a line there if need be); the exact time of a start.
+// Who started it, split before the @ of an email (the cell breaks a line there if need be); a start's exact time is exactTime's.
 const byParts = (by: string) => {
   const at = by.indexOf('@');
   return at > 0 ? [by.slice(0, at), by.slice(at)] : [by, ''];
 };
-const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
-  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
-});
 </script>
 
 <template>
@@ -154,7 +151,7 @@ const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
         <!-- An email on two lines if need be, before its @. -->
         <template #[`item.by`]="{ item }"><span class="dm-op__by">{{ byParts(item.by)[0] }}<wbr>{{ byParts(item.by)[1] }}</span></template>
         <template #[`item.createdAt`]="{ item }">
-          <v-tooltip location="top" :text="exact(item.createdAt)" open-on-focus>
+          <v-tooltip location="top" :text="exactTime(item.createdAt)" open-on-focus>
             <template #activator="{ props: tip }"><time v-bind="tip" :datetime="item.createdAt" tabindex="0" class="dm-op__when nowrap">{{ relative(item.createdAt, now) }}</time></template>
           </v-tooltip>
         </template>
