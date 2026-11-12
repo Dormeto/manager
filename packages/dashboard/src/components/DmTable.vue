@@ -129,25 +129,28 @@ const busy = ref(false);
 const failure = ref('');
 const count = (n: number) => n.toLocaleString('en-US');
 const exportable = computed(() => props.headers.filter((h) => h.export !== false));
-async function exportRows(): Promise<{ list: T[]; note: string | null }> {
-  if (!props.server) return { list: rows.value, note: null };
+// A client table's rows, with the view's note when they are a part of a list; a server table's, read through `all`, and
+// the line saying they were cut (at the limit, or where the view's reading stopped).
+async function exportRows(viewNote: string | null): Promise<{ list: T[]; note: string | null }> {
+  if (!props.server) return { list: rows.value, note: viewNote };
   const { total: matching, all: read } = props.server;
   // Without a total, one row more than the limit tells there are others.
-  const all = await read(matching === null ? EXPORT_LIMIT + 1 : EXPORT_LIMIT);
+  const answer = await read(matching === null ? EXPORT_LIMIT + 1 : EXPORT_LIMIT);
+  const [all, stopped] = Array.isArray(answer) ? [answer, null] : [answer.rows, answer.note];
   const of = matching === null ? null : Math.max(matching, all.length);
   const rest = 'narrow the search or the filters to export the others.';
-  const note = (of ?? all.length) <= EXPORT_LIMIT ? null : of === null ? `The first ${count(EXPORT_LIMIT)} rows: ${rest}` : `The first ${count(EXPORT_LIMIT)} rows of ${count(of)}: ${rest}`;
-  return { list: all.slice(0, EXPORT_LIMIT), note };
+  const cut = (of ?? all.length) <= EXPORT_LIMIT ? null : of === null ? `The first ${count(EXPORT_LIMIT)} rows: ${rest}` : `The first ${count(EXPORT_LIMIT)} rows of ${count(of)}: ${rest}`;
+  return { list: all.slice(0, EXPORT_LIMIT), note: stopped ?? cut };
 }
 async function exportAs(kind: 'csv' | 'pdf') {
   busy.value = true;
   failure.value = '';
   // What the export says is what was in force when it was asked, though a server table's rows take a while to read.
   const query = searching.value;
-  const { name, title, filters = [] } = props.exported;
+  const { name, title, filters = [], note: viewNote = null } = props.exported;
   const kept = exportable.value;
   try {
-    const { list, note } = await exportRows();
+    const { list, note } = await exportRows(viewNote);
     const titles = kept.map((h) => h.title);
     const cells = list.map((item) => kept.map((h) => cellText(h, item)));
     if (kind === 'csv') {
@@ -239,6 +242,8 @@ function options(o: DmOptions) {
 .dm-table :deep(.v-data-table__tr--mobile:not(:last-child):has(> td.dm-table__actions > .v-data-table__td-value:empty) > td:nth-last-child(2)) { border-bottom: thin solid rgba(var(--v-border-color), var(--v-border-opacity)); }
 @media (max-width: 600px) {
   .dm-table__toolbar { padding: 10px 12px; gap: 8px; }
+  /* A view's filters on their line, the search and the table's "⋮" on the next (the search not squeezed to its icon). */
+  .dm-table__tools { flex: 1 1 100%; }
   .dm-table__search { flex: 1 1 0; min-width: 0; }
 }
 </style>

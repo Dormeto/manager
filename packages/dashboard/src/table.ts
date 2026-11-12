@@ -27,12 +27,15 @@ export interface DmHeader<T> {
 // (`help`, its tooltip). Consecutive actions of one `group` go together, the group's name above them, a line between groups.
 export interface DmAction { title: string; icon: string; color?: string; disabled?: boolean; help?: string; group?: string; run: () => void }
 
-// The file's name (its view part), the PDF's title, and the PDF's lines for the filters in force.
-export interface DmExport { name: string; title: string; filters?: string[] }
+// The file's name (its view part), the PDF's title, and the PDF's lines for the filters in force; `note`, a client table's
+// rows being a part of a list (read up to a limit): the line the file ends with (the CSV's last, the PDF's).
+export interface DmExport { name: string; title: string; filters?: string[]; note?: string }
 
 // A server table: the rows matching the search and filters, in all (null: not known, a list read by cursor); `all` reads
-// every one for an export, `limit` at most.
-export interface DmServer<T> { total: number | null; all: (limit: number) => Promise<T[]> }
+// every one for an export, `limit` at most, or the rows read and why the reading stopped before the list's end (`note`:
+// the line the file ends with).
+export interface DmServer<T> { total: number | null; all: (limit: number) => Promise<T[] | DmRead<T>> }
+export interface DmRead<T> { rows: T[]; note: string }
 
 export interface DmSort { key: string; order?: 'asc' | 'desc' | boolean }
 

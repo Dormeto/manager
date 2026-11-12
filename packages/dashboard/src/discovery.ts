@@ -122,6 +122,26 @@ export function cursorPages() {
   };
 }
 
+// A whole list read by its cursor (an export, a search), one page at a time, until its end ('list'), `limit` rows
+// ('limit', the rows beyond dropped), a cursor given twice ('cursor'), or ceil(limit / page) + 25 requests ('requests'):
+// a scoped user's pages can come back empty (the API filters them after its query), and a list must not be read forever.
+export interface CursorRead<T> { rows: T[]; requests: number; end: 'list' | 'limit' | 'cursor' | 'requests' }
+export async function readCursor<T>(ask: (cursor: string | null) => Promise<{ rows: T[]; cursor: string | null }>, limit: number, page: number): Promise<CursorRead<T>> {
+  const most = Math.ceil(limit / page) + 25;
+  const rows: T[] = [];
+  const seen = new Set<string>();
+  for (let cursor: string | null = null, requests = 1; ; requests += 1) {
+    const answer = await ask(cursor);
+    rows.push(...answer.rows);
+    if (!answer.cursor) return { rows, requests, end: 'list' };
+    if (rows.length >= limit) return { rows: rows.slice(0, limit), requests, end: 'limit' };
+    if (seen.has(answer.cursor)) return { rows, requests, end: 'cursor' };
+    if (requests >= most) return { rows, requests, end: 'requests' };
+    seen.add(answer.cursor);
+    cursor = answer.cursor;
+  }
+}
+
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;
 // The discovery package's own list (Kubernetes workloads included): a criterion takes any kind it finds.
 export const BACKEND_KINDS: BackendKind[] = [...DISCOVERY_BACKEND_KINDS];

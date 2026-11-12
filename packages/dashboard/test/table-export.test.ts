@@ -1,6 +1,6 @@
 // The tables' exports (tables design §5): the CSV's bytes, the file's name, the byte order mark at download, the PDF's text.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { csv, download, fileName, pdf, winAnsi } from '../src/table-export';
+import { csv, download, fileName, pdf, PDF_COLUMN_MIN, PDF_COLUMNS_MAX, winAnsi } from '../src/table-export';
 
 describe('csv', () => {
   it('writes RFC 4180: a header line, commas between cells, CRLF after each line', () => {
@@ -97,6 +97,21 @@ describe('pdf', () => {
     const text = new TextDecoder('windows-1252').decode(await (await pdf({ title: 'Workloads', lines: [], headers, rows: [row, paused] })).arrayBuffer());
     // Each word of the week whole on its line, not cut into pieces of two or three letters.
     for (const word of ['awake', 'waking', 'napping', 'asleep', 'idle']) expect(text).toMatch(new RegExp(`\\([^)]*\\b${word}\\b[^)]*\\)`));
+  });
+
+  it('fits as many columns as a page holds at their narrowest, and says in the console when a table holds more', async () => {
+    // A4 landscape, 36 pt margins: 769.89 pt printed; 44 pt a column at least.
+    expect(PDF_COLUMN_MIN).toBe(44);
+    expect(PDF_COLUMNS_MAX).toBe(17);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const wide = (n: number) => pdf({ title: 'Wide', lines: [], headers: Array.from({ length: n }, (_, i) => `Column ${i}`),
+      rows: [Array.from({ length: n }, () => 'https://a-long-address-without-a-break.example.com/and/a/path')] });
+    await wide(PDF_COLUMNS_MAX);
+    const fitted = log.mock.calls.filter((c) => String(c[0]).includes('could not fit page')).length;
+    await wide(PDF_COLUMNS_MAX + 1);
+    const overflowed = log.mock.calls.filter((c) => String(c[0]).includes('could not fit page')).length;
+    log.mockRestore();
+    expect([fitted, overflowed]).toEqual([0, 1]);
   });
 
   it('says how many characters its font cannot print, shown as ?, which the CSV keeps', async () => {

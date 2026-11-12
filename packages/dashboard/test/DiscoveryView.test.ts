@@ -19,7 +19,7 @@ const calls: { path: string; init?: RequestInit }[] = [];
 // `list` answers the candidates' pages instead of the one candidate; `inFlight` counts the pages asked at once.
 type Page = { candidates: unknown[]; cursor: string | null };
 const server: { running: string | null; ended: { status: string; error?: string }; backend?: unknown; routers?: unknown[]; routersLater?: Promise<void>; tags?: Record<string, string[]>; row?: Record<string, unknown>;
-  list?: (query: URLSearchParams) => Page; inFlight: number; mostInFlight: number } = { running: null, ended: { status: 'succeeded' }, inFlight: 0, mostInFlight: 0 };
+  list?: (query: URLSearchParams) => Page; inFlight: number; mostInFlight: number; later?: Promise<void> } = { running: null, ended: { status: 'succeeded' }, inFlight: 0, mostInFlight: 0 };
 const CHECK = { name: 'eks-demo', reachable: true, allowed: false, missing: ['get nodes'], checkedAt: '2026-10-11T10:00:00.000Z' };
 const candidate = () => ({
   id: 'c-1', status: 'pending-onboarding', statusReason: 'eligible', account: '111122223333', accountName: 'example', region: 'eu-west-3',
@@ -49,6 +49,8 @@ vi.mock('../src/api', () => ({
       server.mostInFlight = Math.max(server.mostInFlight, server.inFlight);
       // A page asked while another is still on its way would be counted here.
       await Promise.resolve();
+      // A page that takes its time, while the test looks at the table loading.
+      if (server.later) await server.later;
       server.inFlight -= 1;
       return server.list(new URLSearchParams(path.split('?')[1]));
     }
@@ -125,7 +127,13 @@ const pagesOf = (rows: unknown[]) => (q: URLSearchParams): Page => {
   const end = start + Number(q.get('limit'));
   return { candidates: rows.slice(start, end), cursor: end < rows.length ? String(end) : null };
 };
-const numbered = (n: number) => Array.from({ length: n }, (_, i) => ({ ...candidate(), id: `c-${i}`, conditions: `host h${String(i).padStart(3, '0')}.example.com` }));
+const numbered = (n: number) => Array.from({ length: n }, (_, i) => ({ ...candidate(), id: `c-${i}`, conditions: `host h${String(i).padStart(3, '0')}.example.com`, targetGroup: `tg-${i}`, targetGroupArn: `arn:tg/tg-${i}` }));
+// A row's checkbox, and whether it is ticked.
+const box = (wrapper: View, host: string) => rowOf(wrapper, host).find('input[type="checkbox"]');
+const ticked = (wrapper: View, host: string) => (box(wrapper, host).element as HTMLInputElement).checked;
+const button = (wrapper: View, text: string) => wrapper.findAll('button').find((b) => b.text() === text);
+// A button of the dialog open.
+const dialogButton = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.v-overlay--active button')].find((b) => b.textContent?.trim() === text)!;
 
 describe('Discovery view, both clouds', () => {
   it('filters by an AWS account or a Google Cloud project, and by a region of that cloud only', async () => {
@@ -603,3 +611,216 @@ describe('Discovery view, its table', () => {
     wrapper.unmount();
   });
 });
+
+describe('Discovery view, its table: a row\'s actions, the export\'s reading, search, the pager (review round 1)', () => {
+  beforeEach(() => {
+    calls.length = 0;
+    server.running = null;
+    server.ended = { status: 'succeeded' };
+    server.mostInFlight = 0;
+    delete server.backend;
+    document.body.innerHTML = '';
+  });
+  afterEach(() => {
+    delete server.list;
+    delete server.later;
+  });
+  const listed = () => calls.filter((c) => c.path.startsWith('/discovery/candidates?')).map((c) => Object.fromEntries(new URLSearchParams(c.path.split('?')[1])));
+
+  it('acts on a row from its menu without touching the selection: Exclude… cancelled or confirmed, Dismiss…, the rows ticked stay ticked', async () => {
+    server.list = pagesOf(numbered(5));
+    const wrapper = await mountView();
+    await box(wrapper, 'host h000.example.com').trigger('click');
+    await box(wrapper, 'host h001.example.com').trigger('click');
+    await nextTick();
+    expect(button(wrapper, 'Dismiss (2)')).toBeDefined();
+    // Cancelled: nothing changes.
+    await choose(wrapper, 'host h003.example.com', 'Exclude…');
+    let dialog = document.querySelector('.v-dialog.v-overlay--active')!;
+    expect(dialog.textContent).toContain('tg-3');
+    expect(dialog.textContent).not.toContain('tg-0');
+    dialogButton('Cancel').click();
+    await flushPromises();
+    await sleep(350);
+    expect([ticked(wrapper, 'host h000.example.com'), ticked(wrapper, 'host h001.example.com'), ticked(wrapper, 'host h003.example.com')]).toEqual([true, true, false]);
+    expect(button(wrapper, 'Dismiss (2)')).toBeDefined();
+    // Confirmed: the row's target alone is excluded; the two stay ticked.
+    await choose(wrapper, 'host h003.example.com', 'Exclude…');
+    dialog = document.querySelector('.v-dialog.v-overlay--active')!;
+    (dialog.querySelectorAll('input[type="radio"]')[0] as HTMLInputElement).click();
+    await nextTick();
+    const reason = dialog.querySelector('input[type="text"]') as HTMLInputElement;
+    reason.value = 'shared';
+    reason.dispatchEvent(new Event('input'));
+    await nextTick();
+    dialogButton('Exclude').click();
+    await flushPromises();
+    await sleep(50);
+    await flushPromises();
+    const sent = calls.find((c) => c.path === '/exclusions' && c.init?.method === 'POST')!;
+    expect(JSON.parse(sent.init!.body as string)).toMatchObject({ target: { kind: 'target-group', arn: 'arn:tg/tg-3' }, reason: 'shared' });
+    expect([ticked(wrapper, 'host h000.example.com'), ticked(wrapper, 'host h001.example.com')]).toEqual([true, true]);
+    expect(button(wrapper, 'Dismiss (2)')).toBeDefined();
+    // Dismiss… from a row: that rule alone, said so; the two stay ticked.
+    await choose(wrapper, 'host h004.example.com', 'Dismiss…');
+    expect(document.querySelector('.v-dialog.v-overlay--active')!.textContent).toContain('The rule host h004.example.com will stay dismissed');
+    dialogButton('Dismiss').click();
+    await flushPromises();
+    await sleep(50);
+    await flushPromises();
+    expect(JSON.parse(calls.find((c) => c.path === '/discovery/dismiss')!.init!.body as string)).toEqual({ ids: ['c-4'] });
+    expect([ticked(wrapper, 'host h000.example.com'), ticked(wrapper, 'host h001.example.com')]).toEqual([true, true]);
+    wrapper.unmount();
+  });
+
+  it('keeps a page\'s rows when its header ticks them all after rows of another page', async () => {
+    server.list = pagesOf(numbered(70));
+    const wrapper = await mountView();
+    await box(wrapper, 'host h001.example.com').trigger('click');
+    await nextTick();
+    await button(wrapper, 'Next')!.trigger('click');
+    await flushPromises();
+    await wrapper.find('thead input[type="checkbox"]').trigger('click');
+    await nextTick();
+    expect(button(wrapper, 'Dismiss (21)')).toBeDefined();
+    await button(wrapper, 'Previous')!.trigger('click');
+    await flushPromises();
+    expect([ticked(wrapper, 'host h001.example.com'), ticked(wrapper, 'host h002.example.com')]).toEqual([true, false]);
+    await button(wrapper, 'Dismiss (21)')!.trigger('click');
+    await flushPromises();
+    dialogButton('Dismiss').click();
+    await flushPromises();
+    const ids = JSON.parse(calls.find((c) => c.path === '/discovery/dismiss')!.init!.body as string).ids as string[];
+    expect(ids).toHaveLength(21);
+    expect(ids).toContain('c-1');
+    expect(ids).toContain('c-50');
+    expect(ids).toContain('c-69');
+    wrapper.unmount();
+  });
+
+  it('stops an export when the API gives a page\'s cursor twice, saying so in the file', async () => {
+    server.list = (q) => ({ candidates: q.get('cursor') ? [] : [candidate()], cursor: 'again' });
+    const wrapper = await mountView();
+    calls.length = 0;
+    const lines = await exportCsv(wrapper);
+    expect(listed().map((q) => q.cursor ?? null)).toEqual([null, 'again']);
+    expect(lines).toHaveLength(1 + 1 + 1);
+    expect(lines.at(-1)).toBe('"1 row read, then the API gave the same page twice: the reading stopped there.",,,,,,,');
+    wrapper.unmount();
+  });
+
+  it('reads on through empty pages (a scoped user\'s, the API filters after its query), and stops after ceil(limit / page) + 25 requests', async () => {
+    // 30 empty pages, then the rows.
+    server.list = (q) => {
+      const n = Number(q.get('cursor') ?? 0);
+      return n < 30 ? { candidates: [], cursor: String(n + 1) } : { candidates: numbered(2), cursor: null };
+    };
+    let wrapper = await mountView();
+    calls.length = 0;
+    let lines = await exportCsv(wrapper);
+    expect(listed()).toHaveLength(31);
+    expect(lines).toHaveLength(1 + 2);
+    wrapper.unmount();
+    // Empty pages without end: 26 requests for 5,001 rows of 200, and 25 more.
+    server.list = (q) => ({ candidates: [], cursor: String(Number(q.get('cursor') ?? 0) + 1) });
+    document.body.innerHTML = '';
+    wrapper = await mountView();
+    calls.length = 0;
+    lines = await exportCsv(wrapper);
+    expect(listed()).toHaveLength(51);
+    expect(lines).toEqual(['Status,Rule,Account or project,Region,Backend,Idle (7 days),Reason,First seen',
+      '"0 rows read in 51 requests, the most an export makes: narrow the search or the filters to export the others.",,,,,,,']);
+    wrapper.unmount();
+  });
+
+  it('exports within the filters the table shows, not those still being typed', async () => {
+    server.list = pagesOf(numbered(3));
+    const wrapper = await mountView();
+    await wrapper.findAll('.dm-filter').find((f) => f.text().includes('Account or project'))!.find('input').setValue('111122223333');
+    // Within the 400 ms pause: the table still shows every account.
+    calls.length = 0;
+    await exportCsv(wrapper);
+    expect(listed()[0]!.account).toBeUndefined();
+    expect(((wrapper.findComponent(DmTable).props() as { exported: { filters: string[] } }).exported).filters).toEqual(['Status: To onboard']);
+    await sleep(450);
+    await flushPromises();
+    calls.length = 0;
+    await exportCsv(wrapper);
+    expect(listed()[0]!.account).toBe('111122223333');
+    wrapper.unmount();
+  });
+
+  it('keeps its pager reachable while a page loads: Previous and Next ignore a click then, the range a status, the pager a named navigation', async () => {
+    server.list = pagesOf(numbered(120));
+    const wrapper = await mountView();
+    const pager = wrapper.find('nav.dm-candidates__foot');
+    expect(pager.attributes('aria-label')).toBe('Pages of candidates');
+    expect(pager.find('[role="status"]').text()).toBe('1–50 of 1 (at the last change)');
+    let release!: () => void;
+    server.later = new Promise<void>((r) => { release = r; });
+    await button(wrapper, 'Next')!.trigger('click');
+    await nextTick();
+    // Loading: the buttons stay enabled (the focus stays), a click is ignored.
+    expect(button(wrapper, 'Next')!.attributes('disabled')).toBeUndefined();
+    expect(button(wrapper, 'Previous')!.attributes('disabled')).toBeUndefined();
+    const asked = listed().length;
+    await button(wrapper, 'Next')!.trigger('click');
+    await button(wrapper, 'Previous')!.trigger('click');
+    await nextTick();
+    expect(listed()).toHaveLength(asked);
+    release();
+    delete server.later;
+    await flushPromises();
+    expect(wrapper.find('nav.dm-candidates__foot [role="status"]').text()).toMatch(/^51–100 /);
+    expect(button(wrapper, 'Previous')!.attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('searches every candidate of the status within the filters: read by the cursor, shown as one list with the table\'s pages, the selection kept; cleared, the cursor\'s pages again', async () => {
+    server.list = pagesOf(numbered(70));
+    const wrapper = await mountView();
+    await box(wrapper, 'host h001.example.com').trigger('click');
+    await nextTick();
+    calls.length = 0;
+    await wrapper.find('[data-test="dm-table-search"] input').setValue('h06');
+    await sleep(450);
+    await flushPromises();
+    // The status' candidates read by the API's largest pages; the matching ones shown, the cursor's pager gone.
+    expect(listed()).toEqual([{ status: 'pending-onboarding', limit: '200' }]);
+    expect(wrapper.findAll('tbody tr').map((r) => r.text().match(/host h\d+/)?.[0])).toEqual(Array.from({ length: 10 }, (_, i) => `host h06${i}`));
+    expect(wrapper.find('nav.dm-candidates__foot').exists()).toBe(false);
+    expect(button(wrapper, 'Dismiss (1)')).toBeDefined();
+    await box(wrapper, 'host h065.example.com').trigger('click');
+    await nextTick();
+    expect(button(wrapper, 'Dismiss (2)')).toBeDefined();
+    // Its export: those rows.
+    const lines = await exportCsv(wrapper);
+    expect(lines).toHaveLength(1 + 10);
+    // Cleared: the cursor's first page again, the selection kept.
+    await wrapper.find('[data-test="dm-table-search"] input').setValue('');
+    await sleep(450);
+    await flushPromises();
+    expect(wrapper.findAll('tbody tr')).toHaveLength(50);
+    expect(wrapper.find('nav.dm-candidates__foot').exists()).toBe(true);
+    expect(ticked(wrapper, 'host h001.example.com')).toBe(true);
+    expect(button(wrapper, 'Dismiss (2)')).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it('says when a search reads only the first 5,000 candidates, on the page and in the export', async () => {
+    server.list = pagesOf(numbered(5_300));
+    const wrapper = await mountView();
+    calls.length = 0;
+    await wrapper.find('[data-test="dm-table-search"] input').setValue('example');
+    await sleep(450);
+    await flushPromises();
+    expect(listed()).toHaveLength(26);
+    const said = 'Searched among the first 5,000 candidates of this status: narrow the filters to search the others.';
+    expect(wrapper.find('[data-test="discovery-search-cut"]').text()).toBe(said);
+    const lines = await exportCsv(wrapper);
+    expect(lines).toHaveLength(1 + 5_000 + 1);
+    expect(lines.at(-1)).toBe(`"${said}",,,,,,,`);
+    wrapper.unmount();
+  });
+});
+

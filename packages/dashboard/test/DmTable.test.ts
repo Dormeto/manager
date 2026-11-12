@@ -254,6 +254,33 @@ describe('DmTable', () => {
     expect(lines.at(-1)).toBe('w4999,awake,4999,');
   });
 
+  it('ends an export with the line a server table\'s reading gives when it stopped before the list\'s end, in the CSV and the PDF', async () => {
+    const stopped = '12 rows read in 51 requests, the most an export makes: narrow the search or the filters to export the others.';
+    const all = vi.fn(async () => ({ rows: rows(12), note: stopped }));
+    const w = render({ items: rows(12), server: { total: null, all } });
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-csv"]');
+    const lines = csvLines();
+    expect(lines).toHaveLength(1 + 12 + 1);
+    expect(lines.at(-1)).toBe(`"${stopped}",,,`);
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-pdf"]');
+    const doc = vi.mocked(pdf).mock.calls[0]![0];
+    expect(doc.rows).toHaveLength(12);
+    expect(doc.lines).toContain(stopped);
+  });
+
+  it('ends a client table\'s export with the view\'s note when it gives one (the rows it holds are a part of a list)', async () => {
+    const note = 'Searched among the first 5,000 candidates of this status: narrow the filters to search the others.';
+    const w = render({ items: rows(6), exported: { ...exported, note } });
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-csv"]');
+    expect(csvLines().at(-1)).toBe(`"${note}",,,`);
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-pdf"]');
+    expect(vi.mocked(pdf).mock.calls[0]![0].lines).toContain(note);
+  });
+
   it('says when an export fails, and the table stays', async () => {
     const all = vi.fn(async () => { throw new Error('throttled'); });
     const w = render({ items: rows(50), server: { total: 120, all } });

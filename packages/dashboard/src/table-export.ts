@@ -55,6 +55,15 @@ export function winAnsi(text: string): string {
 // How many characters of a text the font prints as "?".
 const unprintable = (text: string) => [...text.normalize('NFC')].filter((c) => !printable(c)).length;
 
+// A PDF page: A4 landscape (841.89 pt wide) and its margins, 769.89 pt printed across.
+const PAGE_WIDTH = 841.89;
+const MARGIN = 36;
+// The narrowest a PDF column is: a short word's width (8 letters of the 8 pt font and its padding). Where long addresses
+// and dates fill the page, the columns of short words would otherwise be cut to a few letters a line. The bound: a page
+// holds 17 such columns; the widest table, Workloads, exports 13 (its test checks it); a table of more would overflow.
+export const PDF_COLUMN_MIN = 44;
+export const PDF_COLUMNS_MAX = Math.floor((PAGE_WIDTH - 2 * MARGIN) / PDF_COLUMN_MIN);
+
 // A4 landscape: the title, the lines (when, the search and filters in force), the table, and page numbers.
 // A line says how many characters the font could not print, which the CSV keeps.
 export async function pdf(doc: { title: string; lines: string[]; headers: string[]; rows: string[][] }): Promise<Blob> {
@@ -64,7 +73,7 @@ export async function pdf(doc: { title: string; lines: string[]; headers: string
     ? '1 character this PDF\'s font cannot print is shown as ?; the CSV export keeps it.'
     : `${missed} characters this PDF's font cannot print are shown as ?; the CSV export keeps them.`];
   const file = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
-  const margin = 36;
+  const margin = MARGIN;
   file.setProperties({ title: winAnsi(doc.title), creator: 'Dormeto' });
   file.setFont('helvetica', 'bold');
   file.setFontSize(15);
@@ -84,9 +93,7 @@ export async function pdf(doc: { title: string; lines: string[]; headers: string
     body: doc.rows.map((row) => row.map(winAnsi)),
     startY: y + 4,
     margin: { top: margin, right: margin, bottom: margin + 10, left: margin },
-    // A column keeps a short word's width at least (8 letters): where long addresses and dates fill the page, the columns of
-    // short words would otherwise be cut to a few letters a line.
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4, overflow: 'linebreak', valign: 'top', minCellWidth: 44 },
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4, overflow: 'linebreak', valign: 'top', minCellWidth: PDF_COLUMN_MIN },
     headStyles: { fillColor: [3, 75, 128], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 247, 250] },
   });

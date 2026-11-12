@@ -3,7 +3,7 @@
 // at a time, paged on the server by its cursor (scale design §5), starting with the statuses people act on. The candidates'
 // table (tables design §4, §5): a selection that outlives a page turned, each row's menu, the exports of every candidate
 // of the status and filters shown.
-import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue, type Ref } from 'vue';
 import { mdiAlertCircleOutline, mdiCancel, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
   mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOutline } from '@mdi/js';
 import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
@@ -22,11 +22,11 @@ import type { Exclusion } from '../types';
 import type { Notice } from '../components/NoticeAlert.vue';
 import NoticeToast from '../components/NoticeToast.vue';
 import { operationLabel, operationWatch } from '../operation-watch';
-import { cursorPages, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText } from '../discovery';
+import { cursorPages, readCursor, visibleStatuses, firstStatus, idleShare, latestOnly, ruleLines, statusColor, statusLabel, targetText, type CursorRead } from '../discovery';
 import { backendLabel, cloudMark, relative, rowCloud, shortId } from '../format';
 import { googleRouterTooOld, lbText, urlMapConsoleUrl } from '../google';
 import { useCountUp } from '../count-up';
-import type { DmAction, DmExport, DmHeader, DmServer } from '../table';
+import { EXPORT_LIMIT, type DmAction, type DmExport, type DmHeader, type DmRead, type DmServer } from '../table';
 import BackendKinds from '../components/BackendKinds.vue';
 import BackendLabel from '../components/BackendLabel.vue';
 import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
@@ -49,7 +49,7 @@ const badge = useDiscoveryBadge();
 // running on it.
 type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string }; operation?: { id: string; type: 'onboard' | 'offboard' } };
 const PAGE = 50;
-// An export reads the API's largest pages (scale design §5), one at a time.
+// An export and a search read the API's largest pages (scale design §5), one at a time.
 const EXPORT_PAGE = 200;
 const lastRun = ref<RunRecord | null>(null);
 // Organization access of the last run (packaging design §3), and the roles set in the manager's Terraform.
@@ -63,6 +63,8 @@ const error = ref('');
 const status = ref<Status | null>(null);
 const account = ref('');
 const region = ref('');
+// The filters the list shows: those typed, once typing pauses (an export and its PDF read these, not a filter half typed).
+const applied = ref({ account: '', region: '' });
 const page = ref(0);
 const pages = cursorPages();
 const hasNext = ref(false);
@@ -70,21 +72,40 @@ const hasNext = ref(false);
 const latest = latestOnly();
 // A Run now refused since the last run (another run was in progress).
 const refused = ref<RunRecord | null>(null);
-// The candidates chosen, by id, on any page seen (tables design §5); each as it was last read, for the selection's actions.
+// Search (tables design §5): the API has no text search, so a search reads every candidate of the status within the
+// filters (by the cursor, 5,000 at most, said when cut); the table filters them on what its columns say and pages them.
+// Cleared, the cursor's pages again.
+const search = ref('');
+const searched = ref('');
+const searchMode = computed(() => searched.value !== '');
+const everything = ref<Listed[]>([]);
+const everythingCut = ref<string | null>(null);
+const reading = ref(false);
+// The rows the table holds: the search's whole list, or the cursor's page.
+const listed = computed(() => (searchMode.value ? everything.value : candidates.value));
+// The candidates chosen, by id, on any page or list seen (tables design §5); each as it was last read, for the selection's
+// actions.
 const selected = ref<string[]>([]);
 const picked = ref<Record<string, Listed>>({});
-const chosen = computed(() => selected.value.map((id) => candidates.value.find((c) => c.id === id) ?? picked.value[id]).filter((c): c is Listed => Boolean(c)));
+const chosen = computed(() => selected.value.map((id) => listed.value.find((c) => c.id === id) ?? picked.value[id]).filter((c): c is Listed => Boolean(c)));
+// The rows chosen in the list about to be replaced, kept as they were read.
+function keepChosen() {
+  for (const c of chosen.value) picked.value[c.id] = c;
+}
 const dismissDialog = ref(false);
 const note = ref('');
 const exclusions = ref<Exclusion[]>([]);
 const onboardOpen = ref(false);
+// A row's action acts on its candidate alone, the selection left as it is: `target` while its dialog is open. The dialogs
+// and their messages read `acting`: the row's candidate, else the one selected.
+const target = ref<Listed | null>(null);
+const acting = computed(() => target.value ?? single.value);
 // A Kubernetes candidate (R10.5): its owner and switch for the dialog, and its router's last check of its cluster.
-const singleKubernetes = computed(() => {
-  const backend = single.value?.backend as { kind?: string; kubernetes?: KubernetesCandidate } | null | undefined;
+const actingKubernetes = computed(() => {
+  const backend = acting.value?.backend as { kind?: string; kubernetes?: KubernetesCandidate } | null | undefined;
   return backend?.kind === 'k8s' ? backend.kubernetes ?? null : null;
 });
 const backendKind = (c: Listed) => (c.backend as { kind?: string } | null | undefined)?.kind;
-const singleBackendKind = computed(() => (single.value ? backendKind(single.value) : undefined));
 const clusterAccess = ref<ClusterCheck | null>(null);
 // A Google Cloud candidate's routers of 0.40.0 and later (an older one can't be acted through): its region's, or for a
 // `global` one every router of the project, the dialog asking which; null while a `global` one's are read (the dialog waits).
@@ -95,8 +116,8 @@ watchValue(onboardOpen, async (open) => {
   clusterAccess.value = null;
   projectRouters.value = [];
   chooseRouter.value = false;
-  const c = single.value;
-  const kubernetes = singleKubernetes.value;
+  const c = acting.value;
+  const kubernetes = actingKubernetes.value;
   if (!open || !c || (!kubernetes && !isGoogle(c))) return;
   if (!kubernetes && c.region === 'global') projectRouters.value = null;
   const routers = (await api<{ routers: RouterInfo[] }>('/routers').catch(() => ({ routers: [] as RouterInfo[] }))).routers;
@@ -109,6 +130,10 @@ watchValue(onboardOpen, async (open) => {
   clusterAccess.value = routers.find((r) => r.account === c.account && r.region === c.region)?.clusters?.find((x) => x.name === kubernetes.cluster) ?? null;
 });
 const excludeOpen = ref(false);
+// A row's dialog closed (done or cancelled): the next action is the selection's again.
+watchValue([onboardOpen, excludeOpen, () => dismissDialog.value], (open) => {
+  if (!open.some(Boolean)) target.value = null;
+});
 const notice = ref<Notice | null>(null);
 let poll: number | undefined;
 // Onboardings and offboardings running on the candidates shown: the page is refreshed every 10 s while one runs, and a
@@ -121,7 +146,7 @@ let following: number | undefined;
 function follow() {
   if (following !== undefined || !watch.active) return;
   following = window.setInterval(() => {
-    if (watch.active) return void loadPage({ selection: 'refresh' });
+    if (watch.active) return void reloadList('refresh').catch((err: Error) => { error.value = err.message; });
     window.clearInterval(following);
     following = undefined;
   }, 10_000);
@@ -136,21 +161,33 @@ const filtered = computed(() => accountCloud.value !== null);
 // The region typed within a project is Google Cloud's (or `global`), within an account AWS's.
 const regionHint = computed(() => (accountCloud.value === 'gcp' ? 'europe-west2 or global' : 'eu-west-1'));
 
-// The list asked: the shown status, within the account (and region) when given, `limit` a page.
-const regionSent = computed(() => filtered.value && Boolean(accountCloud.value && isCandidateRegion(accountCloud.value, region.value)));
+// The list asked: the shown status, within the account (and region) applied, `limit` a page.
+const appliedCloud = computed(() => cloudOf(applied.value.account));
+const regionSent = computed(() => Boolean(appliedCloud.value && isCandidateRegion(appliedCloud.value, applied.value.region)));
 function listQuery(limit: number): URLSearchParams | null {
   if (!status.value) return null;
   const query = new URLSearchParams({ status: status.value, limit: String(limit) });
-  if (filtered.value) {
-    query.set('account', account.value);
-    if (regionSent.value) query.set('region', region.value);
+  if (appliedCloud.value) {
+    query.set('account', applied.value.account);
+    if (regionSent.value) query.set('region', applied.value.region);
   }
   return query;
 }
 
-// What a page's answer does to the selection: another list starts it again ('clear'), a page turned keeps it ('keep'), a
-// refresh of the page drops the rows that left it ('refresh').
+// What a list's answer does to the selection: another list starts it again ('clear'), a page turned or a search keeps it
+// ('keep'), a refresh of the list drops the rows that left it ('refresh').
 type Selection = 'clear' | 'keep' | 'refresh';
+function select(selection: Selection, before: Listed[], after: Listed[]) {
+  if (selection === 'clear') {
+    selected.value = [];
+    picked.value = {};
+  } else if (selection === 'refresh') {
+    const left = new Set(before.filter((c) => !after.some((x) => x.id === c.id)).map((c) => c.id));
+    selected.value = selected.value.filter((id) => !left.has(id));
+  }
+  watch.refreshed(after.flatMap((c) => (c.operation ? [{ ...c.operation, subject: subjectOf(c) }] : [])));
+  follow();
+}
 // One page of the shown status, within the account (and region) when given.
 async function loadPage({ selection = 'clear' }: { selection?: Selection } = {}) {
   const query = listQuery(PAGE);
@@ -163,35 +200,79 @@ async function loadPage({ selection = 'clear' }: { selection?: Selection } = {})
   pages.loaded(at, answer.value.cursor);
   hasNext.value = pages.hasNext(at);
   const before = candidates.value;
-  // The rows chosen on the page left, kept as they were read.
-  for (const c of before) if (selected.value.includes(c.id)) picked.value[c.id] = c;
+  keepChosen();
   candidates.value = answer.value.candidates;
-  if (selection === 'clear') {
-    selected.value = [];
-    picked.value = {};
-  } else if (selection === 'refresh') {
-    const left = new Set(before.filter((c) => !candidates.value.some((x) => x.id === c.id)).map((c) => c.id));
-    selected.value = selected.value.filter((id) => !left.has(id));
-  }
-  watch.refreshed(candidates.value.flatMap((c) => (c.operation ? [{ ...c.operation, subject: subjectOf(c) }] : [])));
-  follow();
+  select(selection, before, candidates.value);
 }
 
-// An export (tables design §5): every candidate of the status shown within the filters, following the cursor one page at a
-// time, `limit` at most. The API does not count a filtered list, nor what a scoped user sees: the table reads one more
-// than it keeps to know there are others.
-async function readAll(limit: number): Promise<Listed[]> {
+// Every candidate of the shown status within the filters applied (an export, a search), the cursor followed one page at a
+// time, bounded (readCursor): `limit` at most.
+function readCandidates(limit: number): Promise<CursorRead<Listed>> | null {
   const query = listQuery(EXPORT_PAGE);
-  if (!query) return [];
-  const rows: Listed[] = [];
-  for (;;) {
-    const answer = await api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${query}`);
-    rows.push(...answer.candidates);
-    if (!answer.cursor || rows.length >= limit) return rows.slice(0, limit);
-    query.set('cursor', answer.cursor);
-  }
+  if (!query) return null;
+  return readCursor<Listed>(async (cursor) => {
+    const asked = new URLSearchParams(query);
+    if (cursor) asked.set('cursor', cursor);
+    const answer = await api<{ candidates: Listed[]; cursor: string | null }>(`/discovery/candidates?${asked}`);
+    return { rows: answer.candidates, cursor: answer.cursor };
+  }, limit, EXPORT_PAGE);
+}
+const many = (n: number, what: string) => `${n.toLocaleString('en-US')} ${what}${n === 1 ? '' : 's'}`;
+
+// An export (tables design §5): the API does not count a filtered list, nor what a scoped user sees: the table asks one
+// row more than it keeps to know there are others. A reading stopped by its bounds says so at the file's end.
+async function readAll(limit: number): Promise<Listed[] | DmRead<Listed>> {
+  const read = await readCandidates(limit);
+  if (!read) return [];
+  if (read.end === 'cursor') return { rows: read.rows, note: `${many(read.rows.length, 'row')} read, then the API gave the same page twice: the reading stopped there.` };
+  if (read.end === 'requests') return { rows: read.rows, note: `${many(read.rows.length, 'row')} read in ${read.requests} requests, the most an export makes: narrow the search or the filters to export the others.` };
+  return read.rows;
 }
 const server = computed<DmServer<Listed>>(() => ({ total: null, all: readAll }));
+
+// A search's list: every candidate, 5,000 at most (one more read to know there are others), what cut it said above the
+// table and at the end of its export. Answers of an earlier reading are dropped.
+let readings = 0;
+async function loadSearch(selection: Selection = 'keep') {
+  const mine = ++readings;
+  reading.value = true;
+  try {
+    const answer = await latest(() => readCandidates(EXPORT_LIMIT + 1) ?? Promise.resolve(null));
+    if (!answer?.value) return;
+    const read = answer.value;
+    const before = everything.value;
+    keepChosen();
+    everything.value = read.rows.slice(0, EXPORT_LIMIT);
+    everythingCut.value = read.rows.length > EXPORT_LIMIT
+      ? `Searched among the first ${many(EXPORT_LIMIT, 'candidate')} of this status: narrow the filters to search the others.`
+      : read.end === 'cursor' ? `Searched among the ${many(read.rows.length, 'candidate')} read, then the API gave the same page twice: the reading stopped there.`
+        : read.end === 'requests' ? `Searched among the ${many(read.rows.length, 'candidate')} read in ${read.requests} requests, the most a search makes: narrow the filters to search the others.`
+          : null;
+    select(selection, before, everything.value);
+  } finally {
+    if (mine === readings) reading.value = false;
+  }
+}
+// The list shown read again: the search's, or the cursor's page.
+function reloadList(selection: Selection) {
+  return searchMode.value ? loadSearch(selection) : loadPage({ selection });
+}
+// A search typed: applied once typing pauses; the whole list read when one starts, the cursor's page again when it ends.
+let searchTyping: number | undefined;
+watchValue(search, (text) => {
+  window.clearTimeout(searchTyping);
+  searchTyping = window.setTimeout(() => {
+    const next = (text ?? '').trim();
+    if (Boolean(next) === searchMode.value) {
+      searched.value = next;
+      return;
+    }
+    keepChosen();
+    searched.value = next;
+    if (next) everything.value = [];
+    reloadList('keep').catch((err: Error) => { error.value = err.message; });
+  }, 400);
+});
 
 async function load({ selection = 'clear' }: { selection?: Selection } = {}) {
   loading.value = true;
@@ -209,7 +290,7 @@ async function load({ selection = 'clear' }: { selection?: Selection } = {}) {
     exclusions.value = excluded.exclusions.sort((a, b) => b.at.localeCompare(a.at));
     badge.fromCounts(result.counts);
     status.value ??= firstStatus(result.counts);
-    await loadPage({ selection });
+    await reloadList(selection);
     error.value = '';
   } catch (err) {
     error.value = (err as Error).message;
@@ -225,6 +306,7 @@ function show(next: Status | null) {
   restart();
 }
 function restart() {
+  applied.value = { account: account.value, region: region.value };
   page.value = 0;
   pages.reset();
   load();
@@ -235,8 +317,10 @@ function restartSoon() {
   window.clearTimeout(typing);
   typing = window.setTimeout(restart, 400);
 }
-// Another page of the same list: the selection stays.
+// Another page of the same list: the selection stays. A click while a page loads is ignored (the buttons stay enabled, so
+// the keyboard's focus stays on them).
 function turn(by: number) {
+  if (loading.value) return;
   page.value += by;
   load({ selection: 'keep' });
 }
@@ -267,28 +351,37 @@ async function runNow() {
   }, 5000);
 }
 
-async function changeDismissal(action: 'dismiss' | 'restore') {
+// After an action, the list read again: the selection's leaves nothing ticked; a row's leaves the selection as it was, but
+// the rows that left the list.
+const afterAction = (row: boolean): Selection => (row ? 'refresh' : 'clear');
+
+async function changeDismissal(action: 'dismiss' | 'restore', ids = selected.value, row = false) {
   try {
-    await api(`/discovery/${action}`, { method: 'POST', body: JSON.stringify({ ids: selected.value, ...(action === 'dismiss' && note.value ? { note: note.value } : {}) }) });
-    selected.value = [];
+    await api(`/discovery/${action}`, { method: 'POST', body: JSON.stringify({ ids, ...(action === 'dismiss' && note.value ? { note: note.value } : {}) }) });
     note.value = '';
     dismissDialog.value = false;
-    await load();
+    await load({ selection: afterAction(row) });
   } catch (err) {
     error.value = (err as Error).message;
   }
 }
+// The dismiss dialog's: a row's candidate, else the selection.
+function dismiss() {
+  const c = target.value;
+  return changeDismissal('dismiss', c ? [c.id] : selected.value, Boolean(c));
+}
 
 // Manual exclusions: a target group (a backend service), load balancer (a URL map) or account (a project) kept away from Dormeto (operators).
-const excludeOptions = computed(() => (single.value ? exclusionTargets(single.value) : []));
+const excludeOptions = computed(() => (acting.value ? exclusionTargets(acting.value) : []));
+const selectionExcludable = computed(() => Boolean(single.value && exclusionTargets(single.value).length));
 
 async function exclude(body: object) {
+  const row = Boolean(target.value);
   excludeOpen.value = false;
   try {
     const result = await api<{ candidates: number; operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify(body) });
     notice.value = { type: 'success', text: `Excluded: ${result.candidates} candidate${result.candidates === 1 ? '' : 's'} updated; its managed workloads are being paused (operation ${result.operation.id}).`, operation: result.operation.id };
-    selected.value = [];
-    await load();
+    await load({ selection: afterAction(row) });
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
   }
@@ -316,7 +409,7 @@ const offboardable = computed(() => Boolean(single.value) && canOffboard(single.
 // An onboarding or offboarding running on a candidate, in words.
 const runningText = (c: Listed & { operation: NonNullable<Listed['operation']> }) => `${operationLabel(c.operation.type, subjectOf(c))} is running`;
 
-async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<string, unknown>, c: Listed, subject: string) {
+async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<string, unknown>, c: Listed, subject: string, row: boolean) {
   try {
     const { operation } = await api<{ operation: { id: string } }>('/operations', { method: 'POST', body: JSON.stringify(body) });
     notice.value = { type: 'success', text: `${operationLabel(body.type, subject)} started (operation ${operation.id}).`, operation: operation.id };
@@ -324,20 +417,21 @@ async function startOperation(body: { type: 'onboard' | 'offboard' } & Record<st
     c.operation = { id: operation.id, type: body.type };
     watch.watch(operation.id, body.type, subject);
     follow();
-    selected.value = [];
+    if (!row) selected.value = [];
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
   }
 }
 
 async function onboard(form: { name?: string; settings: Record<string, unknown>; databases: { kind: string; id: string }[]; tags?: Record<string, string> }) {
+  const row = Boolean(target.value);
+  const c = acting.value!;
   onboardOpen.value = false;
-  const c = single.value!;
-  await startOperation({ type: 'onboard', candidateId: c.id, ...form }, c, form.name ?? subjectOf(c));
+  await startOperation({ type: 'onboard', candidateId: c.id, ...form }, c, form.name ?? subjectOf(c), row);
 }
 
-async function offboard() {
-  const c = single.value!;
+// The one selected, or a row's (its menu's Offboard).
+async function offboard(c: Listed = single.value!, row = false) {
   // The router the workload is on, as the candidate names it: a global Google Cloud load balancer has no region to find it by.
   const named = c.workload?.router;
   const routers = named ? [] : (await api<{ routers: RouterInfo[] }>('/routers')).routers;
@@ -346,7 +440,7 @@ async function offboard() {
     notice.value = { type: 'error', text: `no router of the manager in ${c.account}/${c.region}` };
     return;
   }
-  await startOperation({ type: 'offboard', router, workloadId: c.workloadId }, c, subjectOf(c));
+  await startOperation({ type: 'offboard', router, workloadId: c.workloadId }, c, subjectOf(c), row);
 }
 
 onMounted(load);
@@ -354,6 +448,7 @@ onBeforeUnmount(() => {
   window.clearInterval(poll);
   window.clearInterval(following);
   window.clearTimeout(typing);
+  window.clearTimeout(searchTyping);
 });
 
 const failed = computed(() => lastRun.value?.targets.filter((t) => t.status === 'error') ?? []);
@@ -394,21 +489,22 @@ const headers: DmHeader<Listed>[] = [
 ];
 // A row's "⋮" named by its rule (its first column is its status).
 const ruleName = (c: Listed) => c.conditions;
-// The PDF's title and lines: the status and the filters in force.
+// The PDF's title and lines: the status and the filters the table shows; a search's list cut, the line the file ends with.
 const exported = computed<DmExport>(() => ({
   name: 'discovery', title: 'Discovery candidates',
   filters: [
     ...(status.value ? [`Status: ${statusLabel(status.value)}`] : []),
-    ...(filtered.value ? [`Account or project: ${account.value}`] : []),
-    ...(regionSent.value ? [`Region: ${region.value}`] : []),
+    ...(appliedCloud.value ? [`Account or project: ${applied.value.account}`] : []),
+    ...(regionSent.value ? [`Region: ${applied.value.region}`] : []),
   ],
+  ...(searchMode.value && everythingCut.value ? { note: everythingCut.value } : {}),
 }));
 
-// A row's menu (operators): what the selection's buttons offer for that candidate alone, which it then is. A running
-// onboarding or offboarding says so instead, and an onboarding the API would refuse says why.
-function act(c: Listed, run: () => void) {
-  selected.value = [c.id];
-  run();
+// A row's menu (operators): what the selection's buttons offer, for that candidate alone; the selection stays as it is. A
+// running onboarding or offboarding says so instead, and an onboarding the API would refuse says why.
+function act(c: Listed, dialog: Ref<boolean>) {
+  target.value = c;
+  dialog.value = true;
 }
 function actions(c: Listed): DmAction[] {
   if (!session.canOperate) return [];
@@ -419,14 +515,14 @@ function actions(c: Listed): DmAction[] {
   } else {
     if (c.status === 'pending-onboarding') {
       const refusal = onboardRefusal(access.value, c.account);
-      out.push({ title: 'Onboard…', icon: mdiPlusCircleOutline, disabled: Boolean(refusal), help: refusal ?? undefined, run: () => act(c, () => { onboardOpen.value = true; }) });
+      out.push({ title: 'Onboard…', icon: mdiPlusCircleOutline, disabled: Boolean(refusal), help: refusal ?? undefined, run: () => act(c, onboardOpen) });
     }
-    if (canOffboard(c)) out.push({ title: 'Offboard', icon: mdiLogoutVariant, run: () => act(c, () => void offboard()) });
+    if (canOffboard(c)) out.push({ title: 'Offboard', icon: mdiLogoutVariant, run: () => void offboard(c, true) });
   }
-  if (exclusionTargets(c).length) out.push({ title: 'Exclude…', icon: mdiCancel, color: 'error', run: () => act(c, () => { excludeOpen.value = true; }) });
+  if (exclusionTargets(c).length) out.push({ title: 'Exclude…', icon: mdiCancel, color: 'error', run: () => act(c, excludeOpen) });
   out.push(c.status === 'dismissed'
-    ? { title: 'Restore', icon: mdiEyeOutline, run: () => act(c, () => void changeDismissal('restore')) }
-    : { title: 'Dismiss…', icon: mdiEyeOffOutline, run: () => act(c, () => { dismissDialog.value = true; }) });
+    ? { title: 'Restore', icon: mdiEyeOutline, run: () => void changeDismissal('restore', [c.id], true) }
+    : { title: 'Dismiss…', icon: mdiEyeOffOutline, run: () => act(c, dismissDialog) });
   return out;
 }
 const first = computed(() => page.value * PAGE + (candidates.value.length ? 1 : 0));
@@ -522,11 +618,12 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       </v-chip-group>
     </div>
     <v-divider v-if="status" />
-    <!-- The candidates of the status shown, a page at a time by the API's cursor (its own footer): the filters and the
-         selection's actions in the toolbar, each row's actions in its "⋮", the exports in the header's. The API has no text
-         search: the account and region filters are the table's. -->
-    <DmTable v-model:selected="selected" class="dm-candidates__table" :headers="headers" :items="candidates" :loading="loading" item-value="id" :selectable="session.canOperate"
-      :actions="actions" :row-name="ruleName" :server="server" :exported="exported" no-search>
+    <!-- The candidates of the status shown, a page at a time by the API's cursor (its own footer); while a search is in
+         force, every one read and searched as one list with the table's pages. The filters and the selection's actions in
+         the toolbar, each row's actions in its "⋮", the exports in the header's. -->
+    <v-alert v-if="searchMode && everythingCut" data-test="discovery-search-cut" type="info" variant="tonal" density="compact" class="mx-4 mt-3" :text="everythingCut" />
+    <DmTable v-model:selected="selected" v-model:search="search" class="dm-candidates__table" :headers="headers" :items="listed" :loading="loading || reading" item-value="id"
+      :selectable="session.canOperate" :actions="actions" :row-name="ruleName" :server="searchMode ? undefined : server" :exported="exported">
       <template #toolbar>
         <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
         <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
@@ -541,8 +638,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
             <template #activator="{ props }"><span v-bind="props"><v-btn :prepend-icon="mdiPlusCircleOutline" variant="tonal" disabled>Onboard…</v-btn></span></template>
           </v-tooltip>
           <v-btn v-else-if="onboardable" :prepend-icon="mdiPlusCircleOutline" color="primary" variant="flat" @click="onboardOpen = true">Onboard…</v-btn>
-          <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" color="warning" variant="tonal" @click="offboard">Offboard</v-btn>
-          <v-btn v-if="excludeOptions.length" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
+          <v-btn v-if="offboardable && !single?.operation" :prepend-icon="mdiLogoutVariant" color="warning" variant="tonal" @click="offboard()">Offboard</v-btn>
+          <v-btn v-if="selectionExcludable" :prepend-icon="mdiCancel" color="error" variant="tonal" @click="excludeOpen = true">Exclude…</v-btn>
           <v-btn v-if="selectedDismissed" :prepend-icon="mdiEyeOutline" variant="tonal" @click="changeDismissal('restore')">Restore ({{ selected.length }})</v-btn>
           <v-btn v-else :prepend-icon="mdiEyeOffOutline" variant="tonal" @click="dismissDialog = true">Dismiss ({{ selected.length }})</v-btn>
         </div>
@@ -609,14 +706,15 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
           <span class="text-medium-emphasis">No candidate here.</span>
         </div>
       </template>
-      <template #bottom>
+      <!-- The cursor's pager (a search's list has the table's own): a click while a page loads is ignored. -->
+      <template v-if="!searchMode" #bottom>
         <v-divider />
-        <div class="dm-candidates__foot">
-          <span class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!filtered && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
+        <nav class="dm-candidates__foot" aria-label="Pages of candidates">
+          <span role="status" class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!appliedCloud && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
           <v-spacer />
-          <v-btn variant="text" :prepend-icon="mdiChevronLeft" :disabled="page === 0 || loading" @click="turn(-1)">Previous</v-btn>
-          <v-btn variant="text" :append-icon="mdiChevronRight" :disabled="!hasNext || loading" @click="turn(1)">Next</v-btn>
-        </div>
+          <v-btn variant="text" :prepend-icon="mdiChevronLeft" :disabled="page === 0" @click="turn(-1)">Previous</v-btn>
+          <v-btn variant="text" :append-icon="mdiChevronRight" :disabled="!hasNext" @click="turn(1)">Next</v-btn>
+        </nav>
       </template>
     </DmTable>
   </v-card>
@@ -649,7 +747,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="single?.conditions ?? ''" :default-name="single?.targetGroup ?? null" :kubernetes="singleKubernetes" :access="clusterAccess" :aws-tags="single?.tags" :cloud="single && isGoogle(single) ? 'gcp' : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="(single?.backend as { kind?: string } | null | undefined)?.kind ?? null" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="acting?.conditions ?? ''" :default-name="acting?.targetGroup ?? null" :kubernetes="actingKubernetes" :access="clusterAccess" :aws-tags="acting?.tags" :cloud="acting && isGoogle(acting) ? 'gcp' : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="acting ? backendKind(acting) ?? null : null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">
@@ -660,13 +758,13 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <v-card-title>Dismiss candidates</v-card-title>
       </v-card-item>
       <v-card-text>
-        <p class="mb-4">The {{ selected.length }} selected rule{{ selected.length === 1 ? '' : 's' }} will stay dismissed, whatever later scans find, until restored.</p>
+        <p class="mb-4">{{ target ? `The rule ${target.conditions}` : `The ${selected.length} selected rule${selected.length === 1 ? '' : 's'}` }} will stay dismissed, whatever later scans find, until restored.</p>
         <v-text-field v-model="note" label="Note (why)" maxlength="256" counter />
       </v-card-text>
       <v-card-actions class="px-6 pb-5">
         <v-spacer />
         <v-btn variant="text" @click="dismissDialog = false">Cancel</v-btn>
-        <v-btn color="primary" variant="flat" @click="changeDismissal('dismiss')">Dismiss</v-btn>
+        <v-btn color="primary" variant="flat" @click="dismiss()">Dismiss</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>

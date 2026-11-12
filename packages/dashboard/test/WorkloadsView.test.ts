@@ -9,7 +9,7 @@ import WorkloadsView from '../src/views/WorkloadsView.vue';
 import StateBar from '../src/components/StateBar.vue';
 import { useSession } from '../src/stores/session';
 import { barSavings } from '../src/costs';
-import { download } from '../src/table-export';
+import { download, PDF_COLUMNS_MAX } from '../src/table-export';
 import DmTable from '../src/components/DmTable.vue';
 import { expectEveryColumnSaid } from './table-columns';
 
@@ -291,7 +291,7 @@ describe('Workloads view, its table', () => {
   // The API's list: a page of `all` at the offset and limit asked, how many match, and how many pages were asked at once.
   let inFlight = 0;
   let mostInFlight = 0;
-  async function serve(all: unknown[]) {
+  async function serve(all: unknown[], { counted = true } = {}) {
     const { api } = await import('../src/api');
     vi.mocked(api).mockImplementation((async (path: string) => {
       paths.push(path);
@@ -303,7 +303,7 @@ describe('Workloads view, its table', () => {
       inFlight -= 1;
       const q = new URLSearchParams(path.split('?')[1]);
       const offset = Number(q.get('offset'));
-      return { workloads: all.slice(offset, offset + Number(q.get('limit'))), total: all.length, errors: [], ...(q.get('routers') === '1' ? { routers: [] } : {}) };
+      return { workloads: all.slice(offset, offset + Number(q.get('limit'))), ...(counted ? { total: all.length } : {}), errors: [], ...(q.get('routers') === '1' ? { routers: [] } : {}) };
     }) as never);
   }
   const numbered = (n: number) => Array.from({ length: n }, (_, i) => ({ ...SHOP, workloadId: `w${String(i).padStart(4, '0')}`, name: `W${String(i).padStart(4, '0')}`, summary: undefined }));
@@ -380,6 +380,24 @@ describe('Workloads view, its table', () => {
     expect(lines).toHaveLength(1 + 250);
     expect([lines[1]!.split(',')[1], lines[250]!.split(',')[1]]).toEqual(['W0000 (w0000)', 'W0249 (w0249)']);
     expect((wrapper.findComponent(DmTable).props() as { exported: unknown }).exported).toEqual({ name: 'workloads', title: 'Workloads', filters: ['Needing attention'] });
+    wrapper.unmount();
+  });
+
+  it('reads on to a short page when the API gives no total', async () => {
+    await serve(numbered(250), { counted: false });
+    const wrapper = await mountAt('/workloads');
+    paths.length = 0;
+    const lines = await exportCsv(wrapper);
+    expect(lists()).toEqual([0, 100, 200].map((offset) => `/workloads?limit=100&offset=${offset}&idle=1&states=1`));
+    expect(lines).toHaveLength(1 + 250);
+    wrapper.unmount();
+  });
+
+  it('fits its columns on a PDF page at their narrowest', async () => {
+    await serve([SHOP]);
+    const wrapper = await mountAt('/workloads');
+    const { headers } = wrapper.findComponent(DmTable).props() as { headers: { export?: boolean }[] };
+    expect(headers.filter((h) => h.export !== false).length).toBeLessThanOrEqual(PDF_COLUMNS_MAX);
     wrapper.unmount();
   });
 

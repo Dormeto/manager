@@ -92,7 +92,7 @@ function listPath(f: Filters, limit: number, offset: number, routers = false): s
   const tags = f.tags.map((tag) => `&tag=${encodeURIComponent(tag)}`).join('');
   return `/workloads?${query}${tags}`;
 }
-type ListAnswer = { workloads: WorkloadSummary[]; total: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] };
+type ListAnswer = { workloads: WorkloadSummary[]; total?: number; errors: { router: string; message: string }[]; routers?: RouterInfo[] };
 const { error, loading, nextAt, refreshedAt, run } = usePoll(async () => {
   // Router health every minute is enough (the warning is about checks late by 15 minutes), in the same request.
   const withRouters = Date.now() - routersCheckedAt > 60_000;
@@ -141,7 +141,8 @@ const headers: DmHeader<WorkloadSummary>[] = [
 const workloadKey = (w: WorkloadSummary) => `${w.router}/${w.workloadId}`;
 
 // An export (tables design §5): every workload matching the search and filters as they are when it is asked, the API's
-// pages one at a time (the size the view asks at most, with each one's week), `limit` at most.
+// pages one at a time (the size the view asks at most, with each one's week), `limit` at most: until a short page, or all
+// those the API counts when it says how many.
 const EXPORT_PAGE = 100;
 async function readAll(limit: number): Promise<WorkloadSummary[]> {
   const asked = filters();
@@ -149,7 +150,7 @@ async function readAll(limit: number): Promise<WorkloadSummary[]> {
   for (let offset = 0; rows.length < limit; offset += EXPORT_PAGE) {
     const result = await api<ListAnswer>(listPath(asked, EXPORT_PAGE, offset));
     rows.push(...result.workloads);
-    if (result.workloads.length < EXPORT_PAGE || rows.length >= (result.total ?? rows.length)) break;
+    if (result.workloads.length < EXPORT_PAGE || (typeof result.total === 'number' && rows.length >= result.total)) break;
   }
   return rows.slice(0, limit);
 }
@@ -344,8 +345,6 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
   .dm-strip__figures > * { flex: 1 1 0; min-width: 0; }
 }
 @media (max-width: 600px) {
-  /* The count and the tags on a line, the search and the table's "⋮" on the next. */
-  .dm-workloads :deep(.dm-table__tools) { flex: 1 1 100%; }
   .dm-toolbar__tags { flex: 1 1 100%; min-width: 0; }
   .dm-url { max-width: 11rem; }
   .dm-strip__body { padding: 16px; }

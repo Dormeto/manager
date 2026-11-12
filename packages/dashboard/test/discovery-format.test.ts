@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKEND_KINDS, DIMENSIONS, STATUSES, visibleStatuses, cursorPages, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
+import { BACKEND_KINDS, DIMENSIONS, STATUSES, visibleStatuses, cursorPages, readCursor, firstStatus, latestOnly, idleColor, idleShare, idleText, ruleLines, statusChanges, statusColor, statusHelp, statusLabel, statusTransitions, targetText } from '../src/discovery';
 
 describe('discovery format', () => {
   it('has a label and a color for every status, pending ones first', () => {
@@ -88,6 +88,31 @@ describe('Discovery view paging', () => {
     expect([pages.hasNext(1), pages.cursor(2)]).toEqual([false, null]);
     pages.reset();
     expect([pages.cursor(1), pages.hasNext(0)]).toEqual([null, false]);
+  });
+
+  // An export or a search reads a list by its cursor (tables design §5): bounded, one page at a time.
+  it('reads a list by its cursor one page at a time: to its end, to a limit, to a cursor given twice, or to ceil(limit / page) + 25 requests', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const asked: (string | null)[] = [];
+    const list = (pages: { rows: number[]; cursor: string | null }[]) => async (cursor: string | null) => {
+      asked.push(cursor);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return pages[cursor === null ? 0 : Number(cursor)]!;
+    };
+    // To its end.
+    expect(await readCursor(list([{ rows: [1, 2], cursor: '1' }, { rows: [], cursor: '2' }, { rows: [3], cursor: null }]), 10, 2)).toEqual({ rows: [1, 2, 3], requests: 3, end: 'list' });
+    expect([asked, most]).toEqual([[null, '1', '2'], 1]);
+    // To the limit: the rows beyond it dropped.
+    expect(await readCursor(list([{ rows: [1, 2], cursor: '1' }, { rows: [3, 4], cursor: '2' }, { rows: [5], cursor: null }]), 3, 2)).toEqual({ rows: [1, 2, 3], requests: 2, end: 'limit' });
+    // A cursor given twice.
+    expect(await readCursor(async (cursor) => ({ rows: cursor ? [] : [1], cursor: 'again' }), 10, 2)).toEqual({ rows: [1], requests: 2, end: 'cursor' });
+    // Pages empty without end: ceil(10 / 2) + 25 = 30 requests.
+    let n = 0;
+    expect(await readCursor(async () => ({ rows: [], cursor: String(++n) }), 10, 2)).toEqual({ rows: [], requests: 30, end: 'requests' });
   });
 
 });
