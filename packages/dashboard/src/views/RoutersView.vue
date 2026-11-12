@@ -188,8 +188,8 @@ const tone = (r: RouterInfo) => (r.error ? 'error' : r.health ? healthColor(r.he
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; }
 
 /* The table: room to breathe, cells aligned on their first line. */
-.dm-routers :deep(.v-table__wrapper > table > tbody > tr:not(.v-data-table__tr--mobile) > td) { padding: 14px 12px !important; vertical-align: top; height: auto !important; }
-.dm-routers :deep(.v-table__wrapper > table > thead > tr > th) { padding-inline: 12px !important; }
+.dm-routers :deep(.v-table__wrapper > table > tbody > tr:not(.v-data-table__tr--mobile) > td) { padding: 14px 10px !important; vertical-align: top; height: auto !important; }
+.dm-routers :deep(.v-table__wrapper > table > thead > tr > th) { padding-inline: 10px !important; }
 .dm-routers :deep(.v-table__wrapper > table > * > tr > :first-child) { padding-inline-start: 18px !important; }
 .dm-routers :deep(.v-table__wrapper > table > * > tr > :last-child) { padding-inline-end: 16px !important; }
 

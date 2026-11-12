@@ -403,6 +403,36 @@ describe('DmTable', () => {
     expect(await table.reveal('nope')).toBe(false);
   });
 
+  it('keeps its Actions column in view when the table must scroll sideways: the column marked, the table said to scroll', async () => {
+    // The observers the table watches its width with, called as a browser would.
+    const observers: (() => void)[] = [];
+    const Before = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class { constructor(run: () => void) { observers.push(run); } observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+    try {
+      const w = render({ actions: () => [{ title: 'Pause…', icon: mdiPauseCircleOutline, run: () => {} }] });
+      await flushPromises();
+      expect(w.find('thead th:last-child').classes()).toContain('dm-table__actions');
+      expect(w.find('tbody tr td:last-child').classes()).toContain('dm-table__actions');
+      const wrapper = w.find('.v-table__wrapper').element as HTMLElement;
+      const size = (scroll: number, client: number) => {
+        Object.defineProperty(wrapper, 'scrollWidth', { configurable: true, value: scroll });
+        Object.defineProperty(wrapper, 'clientWidth', { configurable: true, value: client });
+        for (const run of observers) run();
+      };
+      size(950, 950);
+      await nextTick();
+      expect(w.find('.dm-table').classes()).not.toContain('dm-table--scrolls');
+      size(1240, 950);
+      await nextTick();
+      expect(w.find('.dm-table').classes()).toContain('dm-table--scrolls');
+      size(1200, 1214);
+      await nextTick();
+      expect(w.find('.dm-table').classes()).not.toContain('dm-table--scrolls');
+    } finally {
+      globalThis.ResizeObserver = Before;
+    }
+  });
+
   it('calls a server\'s all as its method (a view\'s server object may read its own fields)', async () => {
     const server = { total: 3, rows: rows(3), async all(this: { rows: Row[] }, limit: number) { return this.rows.slice(0, limit); } };
     const w = render({ items: rows(3), server });

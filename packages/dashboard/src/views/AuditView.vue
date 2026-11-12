@@ -31,12 +31,16 @@ const headers: DmHeader<Entry>[] = [
   { title: 'Result', key: 'result' },
 ];
 // Cut on one line at these widths, the full text in a tooltip.
-const CUT = { action: '14rem', target: '24rem' } as const;
+const CUT = { action: '9.5rem', target: '16rem' } as const;
 
 // Presentation: the exact time behind the relative one, the initials on the brand's blue (as the navigation's).
 const exact = (iso: string) => new Date(iso).toLocaleString('en-US', {
   year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
 });
+const emailParts = (email: string) => {
+  const at = email.indexOf('@');
+  return at > 0 ? [email.slice(0, at), email.slice(at)] : [email, ''];
+};
 const initials = (email: string) => (email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?';
 // A result's outcome as an icon (tables design §3), its word the icon's name: an error, a refusal, or done ("ok", or what
 // was done). Beside it what the result says besides that word: an error's message, what a write changed.
@@ -63,22 +67,23 @@ const detail = (e: Entry) => (outcome(e) === 'error' ? e.result.replace(/^error:
         <div class="dm-calm"><DmLogo state="sleep" :size="40" /><span class="text-medium-emphasis">No action recorded in the last 90 days.</span></div>
       </template>
       <template #[`item.at`]="{ item }">
-        <v-tooltip location="top" :text="exact(item.at)">
-          <template #activator="{ props }"><time v-bind="props" :datetime="item.at" class="dm-when nowrap">{{ relative(item.at, now) }}</time></template>
+        <v-tooltip location="top" :text="exact(item.at)" open-on-focus>
+          <template #activator="{ props }"><time v-bind="props" :datetime="item.at" tabindex="0" class="dm-when nowrap">{{ relative(item.at, now) }}</time></template>
         </v-tooltip>
       </template>
       <template #[`item.who`]="{ item }">
         <div class="dm-who">
           <v-avatar size="28" class="dm-avatar">{{ initials(item.who) }}</v-avatar>
           <div class="dm-who__text">
-            <div class="dm-who__email">{{ item.who }}</div>
+            <!-- An email on two lines if need be, before its @. -->
+            <div class="dm-who__email">{{ emailParts(item.who)[0] }}<wbr>{{ emailParts(item.who)[1] }}</div>
             <div class="dm-who__role">{{ item.role }}</div>
           </div>
         </div>
       </template>
       <template v-for="(width, key) in CUT" :key="key" #[`item.${key}`]="{ item }">
         <v-tooltip location="top" max-width="600" open-on-focus>
-          <template #activator="{ props }"><span v-bind="props" data-test="audit-cell" class="audit-cell text-truncate" :class="key === 'target' ? 'mono audit-cell--target' : 'audit-cell--action'" :style="{ maxWidth: key === 'target' ? `min(${width}, 22vw)` : width }" tabindex="0">{{ item[key] }}</span></template>
+          <template #activator="{ props }"><span v-bind="props" data-test="audit-cell" class="audit-cell text-truncate" :class="key === 'target' ? 'mono audit-cell--target' : 'audit-cell--action'" :style="{ maxWidth: key === 'target' ? `min(${width}, 16vw)` : width }" tabindex="0">{{ item[key] }}</span></template>
           <span class="audit-tip" :class="{ mono: key === 'target' }">{{ item[key] }}</span>
         </v-tooltip>
       </template>
@@ -101,13 +106,14 @@ const detail = (e: Entry) => (outcome(e) === 'error' ? e.result.replace(/^error:
 .audit-cell--action { font-weight: 500; }
 .audit-cell--target { opacity: 0.85; }
 .audit-tip { overflow-wrap: anywhere; }
-.dm-when { font-variant-numeric: tabular-nums; color: rgba(var(--v-theme-on-surface), 0.72); cursor: default; }
+.dm-when { font-variant-numeric: tabular-nums; color: rgba(var(--v-theme-on-surface), 0.72); cursor: default; border-radius: 4px; }
+.dm-when:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; }
 .dm-who { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 0; }
 .dm-who__text { min-width: 0; }
-.dm-who__email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.875rem; }
+.dm-who__email { font-size: 0.875rem; }
 .dm-who__role { font: 500 0.6rem/1.5 var(--dm-mono); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }
 .dm-avatar { flex: none; background: linear-gradient(155deg, rgb(69, 137, 202), rgb(3, 75, 128)); color: rgb(255, 255, 255); font-size: 0.66rem; font-weight: 600; }
-.dm-result { display: flex; align-items: flex-start; gap: 8px; max-width: 36rem; padding: 6px 0; font-size: 0.875rem; line-height: 1.45; white-space: normal;
+.dm-result { display: flex; align-items: flex-start; gap: 8px; min-width: 10rem; max-width: 36rem; padding: 6px 0; font-size: 0.875rem; line-height: 1.45; white-space: normal;
   overflow-wrap: anywhere; user-select: text; }
 .dm-result__icon { margin-top: 2px; }
 .dm-result__tip { overflow-wrap: anywhere; }

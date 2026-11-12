@@ -304,7 +304,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-toolbar__count { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); margin-right: 4px; }
 .dm-toolbar__count .dm-num { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
 .dm-toolbar__tags { flex: 0 1 320px; min-width: 200px; }
-.dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 8rem; }
 
 /* The table: cells a little tighter, aligned on their middle; numbers in columns. */
 .dm-workloads :deep(.v-table__wrapper > table > thead > tr > th) { padding: 8px !important; }
@@ -325,7 +325,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 /* A long router name breaks at its hyphens, never inside a word. */
 .dm-router { display: inline-block; min-width: 5.8rem; max-width: 7.5rem; line-height: 1.3; }
 .dm-wl__name:focus-visible, .dm-link:focus-visible, .dm-url:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; border-radius: 4px; }
-.dm-url { display: inline-flex; align-items: center; gap: 4px; max-width: 7.5rem; color: rgb(var(--v-theme-primary)); text-decoration: none; font-size: 0.86rem; }
+.dm-url { display: inline-flex; align-items: center; gap: 4px; max-width: 5.5rem; color: rgb(var(--v-theme-primary)); text-decoration: none; font-size: 0.86rem; }
 .dm-url:hover .dm-url__host { text-decoration: underline; text-underline-offset: 3px; }
 .dm-url__host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-url__icon { flex: none; opacity: 0.7; }

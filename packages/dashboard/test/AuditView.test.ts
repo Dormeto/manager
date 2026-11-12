@@ -36,6 +36,17 @@ describe('Audit', () => {
     expect(document.querySelector('.v-overlay-container')?.textContent).toContain(TARGET);
   });
 
+  it('says when, its exact time in a tooltip a keyboard opens too', async () => {
+    wrapper = mount(AuditView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
+    await flushPromises();
+    const when = wrapper.find('time');
+    expect(when.attributes()).toMatchObject({ datetime: OK.at, tabindex: '0' });
+    (when.element as HTMLElement).focus();
+    const tip = () => document.getElementById(when.attributes('aria-describedby') ?? '');
+    for (const end = Date.now() + 2000; !tip()?.classList.contains('v-overlay--active') && Date.now() < end;) await sleep(10);
+    expect(tip()?.textContent).toMatch(/Oct 9, 2026/);
+  });
+
   it('says each result\'s outcome as an icon, its word its name; an error\'s text whole in red beside it, wrapping and selectable, as before the redesign (PR #1)', async () => {
     const MESSAGE = 'AccessDenied: User: arn:aws:sts::000000000000:assumed-role/dmt-dev-manager-api/x is not authorized to perform: lambda:InvokeFunction';
     entries = [

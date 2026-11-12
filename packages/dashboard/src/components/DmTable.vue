@@ -7,7 +7,7 @@
 // A client table is filtered, sorted and cut into pages here (then shown by Vuetify's server table, which does neither):
 // the screen and the exports read the same rows in the same order. A server table (`server`) shows the page it is given
 // and sends its options (page, size, sort) to the view, which also sends the search to its API.
-import { computed, nextTick, ref, useAttrs, useId, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useAttrs, useId, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { mdiChevronDown, mdiChevronUp, mdiFileDelimitedOutline, mdiFilePdfBox, mdiMagnify } from '@mdi/js';
 import { cellText, EXPORT_LIMIT, searchRows, sortRows, type DmAction, type DmExport, type DmHeader, type DmOptions, type DmServer, type DmSort } from '../table';
@@ -98,8 +98,25 @@ const pageSizes = computed(() => (props.server ? OPTIONS : [...OPTIONS, { value:
 const columns = computed(() => [
   ...props.headers.map(({ text: _text, export: _export, ...header }) => header),
   ...(props.expandable ? [{ title: props.expandTitle, key: EXPAND, sortable: false, width: 48, cellProps: { class: 'dm-table__expand' } }] : []),
-  { title: 'Actions', key: ACTIONS, sortable: false, align: 'end' as const, width: 56, cellProps: { class: 'dm-table__actions' } },
+  { title: 'Actions', key: ACTIONS, sortable: false, align: 'end' as const, width: 56, headerProps: { class: 'dm-table__actions' }, cellProps: { class: 'dm-table__actions' } },
 ]);
+
+// A table wider than its card scrolls sideways: its Actions column then stays in view at the end (the view's columns wrap
+// or cut first, so that most tables never scroll).
+const root = ref<HTMLElement | null>(null);
+const scrolls = ref(false);
+let observer: ResizeObserver | undefined;
+onMounted(() => {
+  const wrapper = root.value?.querySelector<HTMLElement>('.v-table__wrapper');
+  if (!wrapper) return;
+  const check = () => { scrolls.value = wrapper.scrollWidth > wrapper.clientWidth + 1; };
+  observer = new ResizeObserver(check);
+  observer.observe(wrapper);
+  const table = wrapper.querySelector('table');
+  if (table) observer.observe(table);
+  check();
+});
+onBeforeUnmount(() => observer?.disconnect());
 // The view's slots go to Vuetify's table but the toolbar and the empty state (DmTable says when the search matches nothing).
 // Read at each render, not cached: the slots object is not reactive, and a view's slot comes and goes (a loading slot given
 // only before the first rows would otherwise stay, and Vuetify show it instead of the rows at each reload).
@@ -213,7 +230,7 @@ function options(o: DmOptions) {
 </script>
 
 <template>
-  <div class="dm-table" v-bind="rootAttrs">
+  <div ref="root" class="dm-table" :class="{ 'dm-table--scrolls': scrolls }" v-bind="rootAttrs">
     <div v-if="!noSearch || slots.toolbar || mobile" class="dm-table__toolbar">
       <div class="dm-table__tools"><slot name="toolbar" /></div>
       <!-- Cleared, the search is empty text, never null (a server table's view sends it to its API). -->
@@ -263,6 +280,11 @@ function options(o: DmOptions) {
 /* The loading and empty rows as tall as their content; the footer under a line. */
 .dm-table :deep(.v-data-table-rows-loading > td), .dm-table :deep(.v-data-table-rows-no-data > td) { height: auto !important; }
 .dm-table :deep(.v-data-table-footer) { padding-inline: 12px; border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
+/* A table that scrolls sideways: its Actions column stays at the end, over the columns passing under it. */
+.dm-table--scrolls :deep(.v-table__wrapper > table > * > tr:not(.v-data-table__tr--mobile) > .dm-table__actions) {
+  position: sticky; inset-inline-end: 0; z-index: 2; background: rgb(var(--v-theme-surface)); box-shadow: -10px 0 12px -12px rgba(0, 0, 0, 0.45); }
+.v-theme--dark .dm-table--scrolls :deep(.v-table__wrapper > table > * > tr:not(.v-data-table__tr--mobile) > .dm-table__actions) {
+  background: color-mix(in srgb, rgb(var(--v-theme-background)) 95%, white); box-shadow: -10px 0 12px -12px rgba(0, 0, 0, 0.9); }
 /* One column on a phone: the labels narrow, the values wide. */
 .dm-table :deep(.v-data-table__tr--mobile > td) { grid-template-columns: auto minmax(0, 1fr); column-gap: 16px; }
 .dm-table :deep(.v-data-table__tr--mobile .v-data-table__td-value) { min-width: 0; }

@@ -688,7 +688,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       </template>
       <template #[`item.conditions`]="{ item }">
         <div class="dm-rule">
-          <div class="dm-rule__host">{{ item.conditions }}</div>
+          <!-- A host breaks after its dots (and its hyphens) rather than inside a word. -->
+          <div class="dm-rule__host"><template v-for="(part, i) in item.conditions.split('.')" :key="i">{{ i ? '.' : '' }}<wbr v-if="i">{{ part }}</template></div>
           <div v-if="isGoogle(item)" class="dm-rule__where" data-test="google-rule">
             backend service <component :is="mapLink(item) ? 'a' : 'span'" :href="mapLink(item) ?? undefined" target="_blank" rel="noopener" class="mono">{{ item.targetGroup }}</component>
             · URL map <component :is="mapLink(item) ? 'a' : 'span'" :href="mapLink(item) ?? undefined" target="_blank" rel="noopener" class="mono">{{ item.loadBalancer }}</component>
@@ -842,17 +843,17 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
 /* The table's own footer: where the page is in the list, and the cursor's Previous and Next. */
 .dm-candidates__foot { display: flex; align-items: center; gap: 8px; padding: 8px 16px; }
 .dm-candidates__loader { padding: 28px 16px; }
-.dm-candidates__table :deep(th) { white-space: nowrap; padding-inline: 10px !important; }
-.dm-candidates__table :deep(td) { padding: 10px !important; vertical-align: middle; }
+.dm-candidates__table :deep(th) { padding-inline: 8px !important; }
+.dm-candidates__table :deep(td) { padding: 10px 8px !important; vertical-align: middle; }
 .dm-candidates__table :deep(th:first-child), .dm-candidates__table :deep(td:first-child) { padding-left: 16px !important; }
-.dm-candidates__table :deep(.backend-label .mono) { display: inline-block; max-width: 144px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
-.dm-rule { min-width: 176px; max-width: 300px; }
-.dm-rule__host { font-weight: 500; overflow-wrap: anywhere; }
+.dm-candidates__table :deep(.backend-label .mono) { display: inline-block; max-width: 104px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.dm-rule { min-width: 140px; max-width: 280px; }
+.dm-rule__host { font-weight: 500; overflow-wrap: break-word; }
 .dm-rule__where { margin-top: 2px; font-size: 0.78rem; opacity: 0.62; }
 .dm-reason { min-width: 90px; max-width: 260px; }
-.dm-idle { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.dm-idle { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .dm-idle__share { min-width: 3.4em; text-align: right; font: 500 0.74rem/1 var(--dm-mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
-.dm-idle :deep(.idle-bar) { width: 60px; margin-left: 0; }
+.dm-idle :deep(.idle-bar) { width: 44px; margin-left: 0; }
 .dm-idle :deep(.v-progress-linear) { border-radius: 999px; }
 .dm-idle :deep(.v-progress-linear__background) { opacity: 0.14; }
 .dm-idle :deep(.v-progress-linear__determinate) { border-radius: 999px; }
