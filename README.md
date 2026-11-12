@@ -165,7 +165,7 @@ It writes a summary and a Markdown and JSON report; the options, phases, reports
 
 ```hcl
 module "dormeto" {
-  source          = "https://releases.dormeto.com/manager/0.22.0/terraform-aws-dormeto-0.22.0.zip//modules/manager"
+  source          = "https://releases.dormeto.com/manager/0.24.0/terraform-aws-dormeto-0.24.0.zip//modules/manager"
   env             = "prod"
   organization_id = "o-exampleorgid"
   admin_emails    = ["you@example.com"]
