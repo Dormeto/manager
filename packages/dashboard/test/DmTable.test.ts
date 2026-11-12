@@ -2,7 +2,7 @@
 // the table's menu with the exports), a server table's export over every page.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
-import { h, nextTick, type Component } from 'vue';
+import { defineComponent, h, nextTick, type Component } from 'vue';
 import { mdiDeleteOutline, mdiPauseCircleOutline, mdiRefresh } from '@mdi/js';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
@@ -230,6 +230,47 @@ describe('DmTable', () => {
     expect(download).not.toHaveBeenCalled();
     expect(w.text()).toContain('The export failed: throttled');
     expect(w.findAll('tbody tr')).toHaveLength(50);
+  });
+
+  it('shows its rows while loading again: a view\'s loading slot given only before the first rows is no longer used', async () => {
+    // As Users and Audit: `<template v-if="!users.length" #loading>`.
+    const Host = defineComponent({
+      props: { items: { type: Array, required: true }, loading: Boolean },
+      setup: (p) => () => h(DmTable as unknown as Component, { headers, items: p.items, itemValue: 'name', exported, loading: p.loading },
+        p.items.length ? {} : { loading: () => h('div', { class: 'reading' }, 'Reading…') }),
+    });
+    wrapper = mount(Host, { props: { items: [], loading: true }, attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
+    await flushPromises();
+    expect(wrapper.find('.reading').exists()).toBe(true);
+    await wrapper.setProps({ items: rows(3), loading: false });
+    await flushPromises();
+    expect(names(wrapper)).toEqual(['w0000', 'w0001', 'w0002']);
+    await wrapper.setProps({ loading: true });
+    await flushPromises();
+    expect(names(wrapper)).toEqual(['w0000', 'w0001', 'w0002']);
+    expect(wrapper.find('.v-data-table-rows-loading').exists()).toBe(false);
+  });
+
+  it('warns in development of a column with a cell of its own but no text and no field: search and exports would read nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render({ headers: [...headers, { title: 'Health', key: 'health' }] }, { 'item.health': () => h('span', '✓'), 'item.name': ({ item }: { item: Row }) => h('b', item.name) });
+    await flushPromises();
+    const said = warn.mock.calls.map((c) => String(c[0]));
+    warn.mockRestore();
+    expect(said.filter((m) => m.includes('DmTable'))).toEqual([expect.stringContaining('"Health" (health)')]);
+  });
+
+  it('says in the PDF the search in force when the export was asked, though it changed while the rows were read', async () => {
+    let release: (rows: Row[]) => void = () => {};
+    const all = vi.fn(() => new Promise<Row[]>((r) => { release = r; }));
+    const w = render({ items: rows(50), server: { total: 120, all }, search: 'napping', exported: { ...exported, filters: ['Router: dmtr-a'] } });
+    await openTableMenu(w);
+    (document.querySelector('.v-overlay--active [data-test="dm-table-export-pdf"]') as HTMLElement).click();
+    await flushPromises();
+    await w.setProps({ search: 'awake', exported: { ...exported, filters: ['Router: dmtr-b'] } });
+    release(rows(120));
+    await flushPromises();
+    expect(vi.mocked(pdf).mock.calls[0]![0].lines.slice(1)).toEqual(['Search: “napping”', 'Router: dmtr-a']);
   });
 
   it('a selectable table: the rows chosen, kept as their values', async () => {

@@ -37,6 +37,9 @@ describe('StatusMark', () => {
     const tip = document.querySelector('.v-overlay--active')!;
     expect(tip.querySelector('.dm-status__label')!.textContent).toBe('last download failed: HTTP 503');
     expect(tip.querySelector('.more')!.textContent).toBe('Kept: the version of 2 h ago.');
+    // Said once to a screen reader: the word is the name; the tooltip's first line, which repeats it, is hidden from it.
+    expect(tip.querySelector('.dm-status__label')!.getAttribute('aria-hidden')).toBe('true');
+    expect(tip.querySelector('.more')!.closest('[aria-hidden="true"]')).toBeNull();
   });
 
   it('breathes while running (none when motion is reduced, by the style sheet)', () => {

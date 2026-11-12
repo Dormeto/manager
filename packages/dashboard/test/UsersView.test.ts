@@ -6,6 +6,7 @@ import * as components from 'vuetify/components';
 import UsersView from '../src/views/UsersView.vue';
 import { useSession } from '../src/stores/session';
 import { download } from '../src/table-export';
+import { expectEveryColumnSaid } from './table-columns';
 
 const calls: [string, string][] = [];
 const bodies: Record<string, unknown> = {};
@@ -201,6 +202,19 @@ describe('Users', () => {
       'odd@example.com,viewer,,active,unknown,',
       '',
     ]);
+    wrapper.unmount();
+  });
+
+  it('says every column of a user in words, and sorts the status and the two-step verification on those words', async () => {
+    const wrapper = await mountUsers();
+    type U = { email: string; createdAt: string | null };
+    expect(expectEveryColumnSaid(wrapper, 'users', (users: U[]) => ({ ...users.find((u) => u.email === 'dev@example.com')!, createdAt: '2026-10-01T08:00:00.000Z' })))
+      .toEqual({ Email: 'dev@example.com', Role: 'member', Groups: 'payments', Status: 'active', 'Two-step': 'on', Created: '2026-10-01T08:00:00.000Z' });
+    const header = (title: string) => wrapper.findAll('thead th').find((th) => th.text() === title)!.find('.v-data-table-header__content');
+    const mfa = () => wrapper.findAll('tbody tr').map((r) => r.findAll('[data-test="status-mark"]')[1]!.attributes('aria-label'));
+    await header('Two-step').trigger('click');
+    await flushPromises();
+    expect(mfa()).toEqual(['off', 'on', 'on', 'on', 'unknown'].map((w) => `Two-step verification ${w}`));
     wrapper.unmount();
   });
 

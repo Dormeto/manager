@@ -10,6 +10,7 @@ import { mdiPauseCircleOutline } from '@mdi/js';
 import RoutersView from '../src/views/RoutersView.vue';
 import { useSession } from '../src/stores/session';
 import { download } from '../src/table-export';
+import { expectEveryColumnSaid } from './table-columns';
 
 vi.mock('../src/table-export', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/table-export')>()), download: vi.fn() }));
 const calls: { path: string; init?: RequestInit }[] = [];
@@ -463,6 +464,8 @@ describe('Routers view', () => {
       '"dmt-dev (111122223333, eu-west-1)",0.22.6 (build fc69a52b9b43),ok,,"5 asleep, 2 paused",',
       '',
     ]);
+    // A router with every fact (its idle check too): each column says it.
+    expectEveryColumnSaid(wrapper, 'routers', (routers: { name: string }[]) => ({ ...routers.find((r) => r.name === 'dmtr-dev-eu-west-1')!, lastScheduledCheckAt: '2026-11-12T10:00:00.000Z' }));
     wrapper.unmount();
   });
 

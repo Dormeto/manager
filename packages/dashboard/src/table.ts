@@ -50,11 +50,14 @@ export function cellText<T>(header: DmHeader<T>, item: T): string {
   return value == null ? '' : String(value);
 }
 
+// A text as search compares it: its accents removed (decomposed, the combining marks dropped), in lower case.
+const fold = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+
 // The rows whose cells say the query (any column, case and accents aside, the whole query in one cell).
 export function searchRows<T>(rows: T[], headers: DmHeader<T>[], query: string | null | undefined): T[] {
-  const words = (query ?? '').trim().toLocaleLowerCase();
+  const words = fold((query ?? '').trim());
   if (!words) return rows;
-  return rows.filter((row) => headers.some((h) => cellText(h, row).toLocaleLowerCase().includes(words)));
+  return rows.filter((row) => headers.some((h) => fold(cellText(h, row)).includes(words)));
 }
 
 // The value a column sorts on (Vuetify's reading of a header).

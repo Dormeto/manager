@@ -6,6 +6,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import AuditView from '../src/views/AuditView.vue';
 import { download } from '../src/table-export';
+import { expectEveryColumnSaid } from './table-columns';
 
 const TARGET = 'dmt-dev/demo-rds dmt-dev/demo-ecs dmt-dev/demo-asg arn:aws:elasticloadbalancing:eu-west-1:000000000000:targetgroup/demo/0123456789abcdef';
 const OK = { id: '1', at: '2026-10-09T10:00:00.000Z', who: 'ops@example.com', role: 'operator', action: 'operation-router-upgrade', target: TARGET, result: 'ok' };
@@ -60,6 +61,11 @@ describe('Audit', () => {
     // A result that is only its word: the icon alone.
     expect(refused!.text()).toBe('');
     expect(ok!.text()).toBe('');
+    // The error's message in the mark's tooltip too, under its word.
+    await failed!.find('[data-test="status-mark"]').trigger('mouseenter');
+    await nextTick();
+    await sleep(300);
+    expect(document.querySelector('.v-overlay--active.v-tooltip')!.textContent).toBe(`error${MESSAGE}`);
     entries = [OK];
   });
 
@@ -79,6 +85,7 @@ describe('Audit', () => {
       `2026-10-09T10:00:00.000Z,ops@example.com (operator),operation-router-upgrade,${TARGET},ok`,
       '',
     ]);
+    expectEveryColumnSaid(wrapper, 'audit', (rows: { id: string }[]) => rows.find((e) => e.id === '1')!);
     entries = [OK];
   });
 });

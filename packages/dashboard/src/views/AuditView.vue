@@ -85,7 +85,9 @@ const detail = (e: Entry) => (outcome(e) === 'error' ? e.result.replace(/^error:
       <template #[`item.result`]="{ item }">
         <!-- The outcome's icon; an error's message beside it whole, in red, wrapping and selectable (a chip's text is not), as before the redesign. -->
         <div data-test="audit-result" class="dm-result" :class="{ 'dm-result--error text-error': outcome(item) === 'error' }">
-          <StatusMark :icon="MARKS[outcome(item)].icon" :color="MARKS[outcome(item)].color" :label="outcome(item)" :size="16" class="dm-result__icon" />
+          <StatusMark :icon="MARKS[outcome(item)].icon" :color="MARKS[outcome(item)].color" :label="outcome(item)" :size="16" class="dm-result__icon">
+            <div v-if="outcome(item) === 'error'" class="dm-result__tip">{{ detail(item) }}</div>
+          </StatusMark>
           <span v-if="detail(item)" class="dm-result__text">{{ detail(item) }}</span>
         </div>
       </template>
@@ -108,6 +110,7 @@ const detail = (e: Entry) => (outcome(e) === 'error' ? e.result.replace(/^error:
 .dm-result { display: flex; align-items: flex-start; gap: 8px; max-width: 36rem; padding: 6px 0; font-size: 0.875rem; line-height: 1.45; white-space: normal;
   overflow-wrap: anywhere; user-select: text; }
 .dm-result__icon { margin-top: 2px; }
+.dm-result__tip { overflow-wrap: anywhere; }
 .dm-calm { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 32px 0; }
 /* One column on a phone: the cut cells take the row's width, not more. */
 .dm-audit :deep(.v-data-table__tr--mobile) .audit-cell { max-width: 100% !important; }

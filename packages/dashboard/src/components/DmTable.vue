@@ -89,9 +89,24 @@ const columns = computed(() => [
   { title: 'Actions', key: ACTIONS, sortable: false, align: 'end' as const, width: 56, cellProps: { class: 'dm-table__actions' } },
 ]);
 // The view's slots go to Vuetify's table but the toolbar and the empty state (DmTable says when the search matches nothing).
-const forwarded = computed(() => Object.keys(slots).filter((name) => name !== 'toolbar' && name !== 'no-data'));
+// Read at each render, not cached: the slots object is not reactive, and a view's slot comes and goes (a loading slot given
+// only before the first rows would otherwise stay, and Vuetify show it instead of the rows at each reload).
+const forwarded = () => Object.keys(slots).filter((name) => name !== 'toolbar' && name !== 'no-data');
 // A column with a text and no cell of the view's shows its text.
-const textCells = computed(() => props.headers.filter((h) => h.text && !slots[`item.${h.key}`]));
+const textCells = () => props.headers.filter((h) => h.text && !slots[`item.${h.key}`]);
+// In development, a column with a cell of its own but no text, its rows without its field: search and the exports would
+// read nothing there.
+if (import.meta.env.DEV) {
+  const warned = new Set<string>();
+  watch(() => props.items[0], (row) => {
+    if (!row) return;
+    for (const h of props.headers) {
+      if (h.export === false || h.text || !slots[`item.${h.key}`] || h.key in row || warned.has(h.key)) continue;
+      warned.add(h.key);
+      console.warn(`DmTable: the column "${h.title}" (${h.key}) has a cell of its own but no text, and its rows no field ${h.key}: search and the exports read nothing there; give it text(item).`);
+    }
+  }, { immediate: true });
+}
 const searching = computed(() => (search.value ?? '').trim());
 const noMatch = computed(() => !props.server && Boolean(searching.value) && props.items.length > 0 && rows.value.length === 0);
 const mobile = computed(() => smAndDown.value);
@@ -107,32 +122,37 @@ const count = (n: number) => n.toLocaleString('en-US');
 const exportable = computed(() => props.headers.filter((h) => h.export !== false));
 async function exportRows(): Promise<{ list: T[]; note: string | null }> {
   if (!props.server) return { list: rows.value, note: null };
-  const all = await props.server.all(EXPORT_LIMIT);
-  const of = Math.max(props.server.total, all.length);
+  const { total: matching, all: read } = props.server;
+  const all = await read(EXPORT_LIMIT);
+  const of = Math.max(matching, all.length);
   const note = of > EXPORT_LIMIT ? `The first ${count(EXPORT_LIMIT)} rows of ${count(of)}: narrow the search or the filters to export the others.` : null;
   return { list: all.slice(0, EXPORT_LIMIT), note };
 }
 async function exportAs(kind: 'csv' | 'pdf') {
   busy.value = true;
   failure.value = '';
+  // What the export says is what was in force when it was asked, though a server table's rows take a while to read.
+  const query = searching.value;
+  const { name, title, filters = [] } = props.exported;
+  const kept = exportable.value;
   try {
     const { list, note } = await exportRows();
-    const titles = exportable.value.map((h) => h.title);
-    const cells = list.map((item) => exportable.value.map((h) => cellText(h, item)));
+    const titles = kept.map((h) => h.title);
+    const cells = list.map((item) => kept.map((h) => cellText(h, item)));
     if (kind === 'csv') {
       // The cut said on a last line, the other cells empty (each line has every column).
       const lines = note ? [...cells, [note, ...titles.slice(1).map(() => '')]] : cells;
-      download(fileName(props.exported.name, 'csv'), 'text/csv;charset=utf-8', csv(titles, lines));
+      download(fileName(name, 'csv'), 'text/csv;charset=utf-8', csv(titles, lines));
       return;
     }
     const when = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
     const lines = [
       `Exported ${when} · ${count(list.length)} row${list.length === 1 ? '' : 's'}`,
-      ...(searching.value ? [`Search: “${searching.value}”`] : []),
-      ...(props.exported.filters ?? []),
+      ...(query ? [`Search: “${query}”`] : []),
+      ...filters,
       ...(note ? [note] : []),
     ];
-    download(fileName(props.exported.name, 'pdf'), 'application/pdf', await pdf({ title: props.exported.title, lines, headers: titles, rows: cells }));
+    download(fileName(name, 'pdf'), 'application/pdf', await pdf({ title, lines, headers: titles, rows: cells }));
   } catch (err) {
     failure.value = `The export failed: ${(err as Error).message}`;
   } finally {
@@ -163,8 +183,8 @@ function options(o: DmOptions) {
     <v-data-table-server v-model="selected" v-model:page="page" v-model:items-per-page="itemsPerPage" v-model:sort-by="sortBy" v-model:expanded="expanded"
       :headers="columns" :items="shown" :items-length="total" :item-value="itemValue" :loading="loading" :mobile="mobile" :items-per-page-options="pageSizes"
       :hide-default-footer="!footer" :show-select="selectable" :show-expand="expandable" v-bind="tableAttrs" @update:options="options">
-      <template v-for="name in forwarded" :key="name" #[name]="scope"><slot :name="name" v-bind="scope ?? {}" /></template>
-      <template v-for="h in textCells" :key="h.key" #[`item.${h.key}`]="{ item }">{{ cellText(h, item as T) }}</template>
+      <template v-for="name in forwarded()" :key="name" #[name]="scope"><slot :name="name" v-bind="scope ?? {}" /></template>
+      <template v-for="h in textCells()" :key="h.key" #[`item.${h.key}`]="{ item }">{{ cellText(h, item as T) }}</template>
       <!-- The column's name for screen readers (and a phone's cells, which show it); the "⋮" on a wide screen. -->
       <template #[`header.${ACTIONS}`]>
         <span :class="{ 'd-sr-only': !mobile }">Actions</span>

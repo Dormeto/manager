@@ -95,15 +95,16 @@ function saveGroups() {
   void run(`Groups of ${user.email} saved: they apply at their next sign-in, within an hour.`, () => api(`/users/${enc(user.email)}/groups`, { method: 'PUT', body: JSON.stringify({ groups: chosen }) }));
 }
 const STATUS: Record<string, string> = { CONFIRMED: 'active', FORCE_CHANGE_PASSWORD: 'invited', RESET_REQUIRED: 'password reset' };
-// A user's status and two-step verification as their words: the marks' names and tooltips, what search reads, the exports.
+// A user's status and two-step verification as their words: the marks' names and tooltips, what search reads and sorts
+// on, the exports.
 const statusWord = (u: User) => (u.enabled ? STATUS[u.status] ?? u.status : 'disabled');
 const mfaWord = (u: User) => (u.mfa ? 'on' : u.mfa === null ? 'unknown' : 'off');
 const headers: DmHeader<User>[] = [
   { title: 'Email', key: 'email' },
   { title: 'Role', key: 'role' },
   { title: 'Groups', key: 'groups', sortable: false, text: (u) => (u.groups ?? []).join(', ') },
-  { title: 'Status', key: 'status', text: statusWord },
-  { title: 'Two-step', key: 'mfa', text: mfaWord },
+  { title: 'Status', key: 'status', value: statusWord, text: statusWord },
+  { title: 'Two-step', key: 'mfa', value: mfaWord, text: mfaWord },
   { title: 'Created', key: 'createdAt', text: (u) => u.createdAt ?? '' },
 ];
 

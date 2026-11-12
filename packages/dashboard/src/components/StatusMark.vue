@@ -12,7 +12,8 @@ withDefaults(defineProps<{ icon: string; color?: string; label: string; pulse?: 
       <span v-bind="{ ...$attrs, ...tip }" data-test="status-mark" class="dm-status" :class="[color ? `text-${color}` : 'dm-status--plain', { 'dm-status--pulse': pulse }]" role="img"
         :aria-label="label" tabindex="0"><v-icon :icon="icon" :size="size" aria-hidden="true" /></span>
     </template>
-    <div class="dm-status__label">{{ label }}</div>
+    <!-- The name says the word already: its line here is for the eye, the other lines are described. -->
+    <div class="dm-status__label" aria-hidden="true">{{ label }}</div>
     <slot />
   </v-tooltip>
 </template>

@@ -4,6 +4,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import IpListsPanel from '../src/components/IpListsPanel.vue';
 import { download } from '../src/table-export';
+import { expectEveryColumnSaid } from './table-columns';
 
 const answer: { value: unknown } = { value: null };
 vi.mock('../src/api', () => ({ api: vi.fn(async () => answer.value) }));
@@ -73,5 +74,6 @@ describe('IpListsPanel', () => {
       'aws,ignore,,,not downloaded yet',
       '',
     ]);
+    expectEveryColumnSaid(wrapper, 'ip-lists', (lists: { name: string }[]) => lists.find((l) => l.name === 'ipsum')!);
   });
 });

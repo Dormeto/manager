@@ -12,9 +12,14 @@ describe('csv', () => {
       .toBe('A\r\n"compute 10%, databases 20%"\r\n"say ""hi"""\r\n"two\nlines"\r\n"cr\rhere"\r\n');
   });
 
-  it('prefixes a cell starting with =, +, - or @ with a quote, so a spreadsheet never runs it as a formula', () => {
-    expect(csv(['A', 'B'], [['=HYPERLINK("x")', '+1'], ['-2', '@SUM(A1)'], ['a=b', 'x-y']]))
-      .toBe('A,B\r\n"\'=HYPERLINK(""x"")",\'+1\r\n\'-2,\'@SUM(A1)\r\na=b,x-y\r\n');
+  it('prefixes a cell starting with =, +, -, @, a tab or a carriage return with a quote, so a spreadsheet never runs it as a formula', () => {
+    expect(csv(['A', 'B'], [['=HYPERLINK("x")', '+A1'], ['-cmd', '@SUM(A1)'], ['\tx', '\r=1+1'], ['a=b', 'x-y']]))
+      .toBe('A,B\r\n"\'=HYPERLINK(""x"")",\'+A1\r\n\'-cmd,\'@SUM(A1)\r\n\'\tx,"\'\r=1+1"\r\na=b,x-y\r\n');
+  });
+
+  it('leaves a plain number as it is, a negative or signed figure included: it stays a number in a spreadsheet', () => {
+    expect(csv(['A', 'B', 'C', 'D'], [['-2', '+3.5', '-1,234.5', '-0.25'], ['-2e3', '+', '-', '- 2']]))
+      .toBe('A,B,C,D\r\n-2,+3.5,"-1,234.5",-0.25\r\n\'-2e3,\'+,\'-,\'- 2\r\n');
   });
 
   it('writes the header line alone for an empty table', () => {
@@ -56,7 +61,7 @@ describe('download', () => {
     expect(clicked).toEqual([{ name: 'dormeto-users-2026-11-12.csv', href: 'blob:test/1' }]);
     expect(blobs[0]!.type).toBe('text/csv;charset=utf-8');
     expect((await bytes(blobs[0]!)).slice(0, 3)).toEqual([0xef, 0xbb, 0xbf]);
-    expect(new TextDecoder('utf-8', { ignoreBOM: true }).decode(await blobs[0]!.arrayBuffer())).toBe('﻿Name\r\né\r\n');
+    expect(new TextDecoder('utf-8', { ignoreBOM: true }).decode(await blobs[0]!.arrayBuffer())).toBe('\uFEFFName\r\né\r\n');
     expect(document.querySelector('a[download]')).toBeNull();
     vi.runAllTimers();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test/1');
@@ -80,6 +85,17 @@ describe('pdf', () => {
     // A4 landscape, in points.
     expect(text).toMatch(/\/MediaBox \[0 0 841\.8\d* 595\.2\d*\]/);
     for (const s of ['(Users)', '(Exported Nov 12, 2026 — 2 rows)', '(Search: “ops”)', '(Email)', '(ops@example.com)', '(member)', '(Page 1 of 1)']) expect(text).toContain(s);
+    // Every character printable: no line about the others.
+    expect(text).not.toContain('cannot print');
+  });
+
+  it('says how many characters its font cannot print, shown as ?, which the CSV keeps', async () => {
+    const read = async (rows: string[][]) => new TextDecoder('windows-1252').decode(await (await pdf({ title: 'Users', lines: [], headers: ['Email', 'Name'], rows })).arrayBuffer());
+    const many = await read([['ops@example.com', '山田 太郎'], ['dev@example.com', 'Ölçü ✓']]);
+    expect(many).toContain('(?? ??)');
+    expect(many).toContain('(Ölçü ?)');
+    expect(many).toContain('(5 characters this PDF\'s font cannot print are shown as ?; the CSV export keeps them.)');
+    expect(await read([['ops@example.com', 'ok ✓']])).toContain('(1 character this PDF\'s font cannot print is shown as ?; the CSV export keeps it.)');
   });
 });
 
@@ -88,5 +104,9 @@ describe('winAnsi', () => {
   it('writes the typographic characters as the PDF font\'s own, the others as a plain equivalent', () => {
     expect(winAnsi('a — b … “c” ’ é × ·')).toBe('a \x97 b \x85 \x93c\x94 \x92 é × ·');
     expect(winAnsi('x → y ≥ 2 ≤ 3 ✓')).toBe('x -> y >= 2 <= 3 ?');
+  });
+
+  it('composes a letter and its accent first: a decomposed é is the font\'s é, not "e?"', () => {
+    expect(winAnsi('Cafe\u0301 Zu\u0308rich')).toBe('Café Zürich');
   });
 });
