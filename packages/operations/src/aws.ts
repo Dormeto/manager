@@ -27,6 +27,7 @@ import {
 } from '@aws-sdk/client-eventbridge';
 import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import { createHash } from 'node:crypto';
+import { codedError, routerCaller, type LambdaSend } from '@dormeto/fleet/router-call';
 import type { Blueprint } from './blueprint.js';
 import type { EksPort } from './cluster-access.js';
 import { isProject } from '@dormeto/fleet/clouds';
@@ -115,18 +116,12 @@ export function kubeProxyPorts(credentials: Credentials, region: string): KubePr
   });
 }
 
-// A synchronous call of a router's function (controller or onboarder): refusals asked as answers (routers 0.37.0 and
-// later: no Lambda error for the router's health, vision refusals design §1) and thrown back as errors with their message
-// and code, as a function error is (a router before 0.37.0 throws its refusals).
-export function functionInvoker(send: (input: { FunctionName: string; Payload: Uint8Array }) => Promise<{ Payload?: Uint8Array; FunctionError?: string }>) {
-  return async (functionArn: string, payload: Record<string, unknown>): Promise<any> => {
-    const out = await send({ FunctionName: functionArn, Payload: new Uint8Array(Buffer.from(JSON.stringify({ ...payload, refusals: true }))) });
-    const answer = JSON.parse(out.Payload?.length ? Buffer.from(out.Payload).toString('utf8') : 'null');
-    if (out.FunctionError) throw new Error((answer as { errorMessage?: string } | null)?.errorMessage ?? out.FunctionError);
-    const refused = (answer as { refused?: { code?: string; message?: string } } | null)?.refused;
-    if (refused) throw Object.assign(new Error(refused.message ?? 'refused'), { code: refused.code });
-    return answer;
-  };
+// A synchronous call of a router's function (controller or onboarder), through @dormeto/fleet's router caller: refusals
+// asked as answers (routers 0.37.0 and later: no Lambda error for the router's health, vision refusals design §1) and thrown
+// back as errors with their message and code, as a function error is (a router before 0.37.0 throws its refusals).
+const calls = routerCaller({ error: codedError });
+export function functionInvoker(send: LambdaSend) {
+  return async (functionArn: string, payload: Record<string, unknown>): Promise<any> => calls.aws(send, functionArn, payload);
 }
 
 // DmtCommandRole of the target account; credentials cached until 5 minutes before they expire.

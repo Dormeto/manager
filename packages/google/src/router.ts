@@ -4,15 +4,15 @@
 // when it refuses the token (401 or 403: an HTML page, Google's JSON error or nothing) or knows no such service (an HTML
 // or empty 404).
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
-// The API and the fleet's poll call routers through it; the poll reads the version of a router too old to poll from its
-// health (GET /v1/health, which every router version answers), the same way.
+// The fleet's router caller (the API's and the operations' calls) and its poll call routers through it; the poll reads the
+// version of a router too old to poll from its health (GET /v1/health, which every router version answers), the same way.
 import { errorOf, GoogleError, redacted } from './errors.js';
 import type { Bounds } from './fetch.js';
-import type { Google, GoogleConnection } from './google.js';
+import type { Google } from './google.js';
 
-// The router version the manager needs (/v1/actions, the journal, the check summary).
-// Declared again as GOOGLE_ROUTER_MINIMUM in @dormeto/fleet/clouds (the dashboard reads that one; fleet depends on this
-// package, never the reverse): packages/fleet/test/router-minimum.test.ts pins the two equal.
+// The router version the manager needs (/v1/actions, the journal, the check summary), named when a router has no /v1/actions.
+// Declared again as GOOGLE_ROUTER_MINIMUM in @dormeto/fleet/clouds, with the rule of a router too old and the install
+// command (fleet depends on this package, never the reverse): packages/fleet/test/router-minimum.test.ts pins the two equal.
 export const ROUTER_MINIMUM = '0.40.0';
 
 // A call's refusal: the manager's accounts can't reach the router, or the router has no /v1/actions.
@@ -22,17 +22,11 @@ export type RouterRefusal = 'no_access' | 'router_too_old';
 export type Refusal = RouterRefusal | 'router_unknown';
 
 // The commands that fix what the manager can't do on Google Cloud, as the API answers them and the fleet's poll records
-// them. The operator's AWS profile is theirs to fill in.
+// them (a router too old's, the install command, is @dormeto/fleet/clouds'). The operator's AWS profile is theirs to fill in.
 export const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
-// The version named is the pinned one, never below the minimum (a dev release pins the AWS router's).
-export const installCommand = (project: string, region: string, pinned: string | undefined) =>
-  `dormeto gcp routers install --project ${project} --region ${region}${pinned ? ` --version ${routerTooOld(pinned) ? ROUTER_MINIMUM : pinned}` : ''}`;
 // said: what Google answered (see `googleSaid`), so the cause can be seen from the poll's error and the API's 409.
 export const accessMissingText = (host: string, env: string, said?: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}${said ? ` (${said})` : ''}`;
 export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
-// version: '' when it is unknown (the router answered that it has no /v1/actions).
-export const tooOldText = (version: string, project: string, region: string, pinned: string | undefined) =>
-  `router ${version || `older than ${ROUTER_MINIMUM}`} can't report to the manager: ${installCommand(project, region, pinned)}`;
 
 export class RouterCallError extends Error {
   // status: the HTTP status, 0 when nothing came back; google: Google's own answer to the controller URL, not the
@@ -54,17 +48,6 @@ export class RouterCallError extends Error {
     this.token = token;
     if (refusal) this.refusal = refusal;
   }
-}
-
-// A known version below the minimum, by major.minor.patch alone (a dev router's 0.40.0-dev.1 meets 0.40.0, 0.39.0-dev.3
-// doesn't; the registry keeps the version as the router reports it); an unknown one ('' or not a version) is called, and
-// its answer says.
-export function routerTooOld(version: string): boolean {
-  const v = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
-  if (!v) return false;
-  const floor = ROUTER_MINIMUM.split('.').map(Number);
-  for (let i = 0; i < 3; i++) if (Number(v[i + 1]) !== floor[i]) return Number(v[i + 1]) < floor[i]!;
-  return false;
 }
 
 const ok = (status: number) => status >= 200 && status <= 299;
@@ -181,31 +164,4 @@ export async function callRouter(google: Pick<Google, 'request'>, router: { cont
 export async function routerHealth(google: Pick<Google, 'request'>, router: { controller: string }, { timeoutMs }: { timeoutMs: number }): Promise<RouterHealth> {
   const origin = new URL(router.controller).origin;
   return bounded(timeoutMs, (bounds) => healthOf(google, origin, bounds));
-}
-
-// A router the manager acts on (Google Cloud manager design §6.2): the connection and its Google instance as read now
-// (null while there is none), the router as the registry holds it (version: as the router reports it, '' when unknown).
-// A router the manager can't use is refused before any call: a version before 0.40.0, no controller known yet, no
-// connection. The payload is sent with `refusals: true` (without it a router answers a workload it doesn't know with its
-// REST JSON 404, which reads as a router too old). The answer is the router's body, a `{refused}` answer as it is: each
-// caller maps it. A failure is a RouterCallError, its `refusal` set when the manager's side can fix it.
-export async function actOnRouter(
-  current: { connection: GoogleConnection; google: Pick<Google, 'request'> } | null,
-  router: { controller?: string; account?: string; region: string; version?: string },
-  payload: Record<string, unknown>,
-  { timeoutMs, env, routerVersion }: { timeoutMs: number; env: string; routerVersion?: string | undefined },
-): Promise<unknown> {
-  const [project, region, version] = [router.account ?? '', router.region, router.version ?? ''];
-  if (routerTooOld(version)) throw new RouterCallError(tooOldText(version, project, region, routerVersion), { refusal: 'router_too_old' });
-  const host = current?.connection.project ?? '<host>';
-  if (!router.controller) throw new RouterCallError(controllerUnknownText(host, env), { refusal: 'router_unknown' });
-  if (!current) throw new RouterCallError(accessMissingText(host, env), { refusal: 'no_access' });
-  try {
-    return await callRouter(current.google, { controller: router.controller }, { ...payload, refusals: true }, { timeoutMs });
-  } catch (err) {
-    if (!(err instanceof RouterCallError)) throw err;
-    if (err.refusal === 'no_access') throw new RouterCallError(accessMissingText(host, env, err.said), { refusal: err.refusal });
-    if (err.refusal === 'router_too_old') throw new RouterCallError(tooOldText('', project, region, routerVersion), { refusal: err.refusal });
-    throw err;
-  }
 }

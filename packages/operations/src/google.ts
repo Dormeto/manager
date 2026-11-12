@@ -1,26 +1,16 @@
 // The engine's calls on Google Cloud (Google Cloud manager design §5.1, §8): a router's controller through the command
 // account's ID token, and the tag bindings, both through the connection's Google instance. Refusals come back as the
-// errors the steps already read: the router's with its `code`, as `functionInvoker`'s; the manager's own (no access, a
-// router too old or not found yet) with their text, and their refusal as the `code` too.
-import { actOnRouter, bindTag, RouterCallError, sqlRegionOf, tagValueOf, unbindTag, type Google, type GoogleConnection, type Tags } from '@dormeto/google';
+// errors the steps already read (@dormeto/fleet's router caller, as `functionInvoker`'s): the router's with its `code`; the
+// manager's own (no access, a router too old or not found yet) with their text, and their refusal as the `code` too.
+import { bindTag, sqlRegionOf, tagValueOf, unbindTag, type Google, type GoogleConnection, type Tags } from '@dormeto/google';
+import { codedError, routerCaller, type GoogleRouter } from '@dormeto/fleet/router-call';
 
 type Source = { current(): Promise<{ connection: GoogleConnection; google: Google } | null> };
-export type GoogleRouter = { account?: string; region: string; controller?: string; version?: string };
 
 // `invoke(router, payload, { timeoutMs })`: the router's answer; a `{refused}` answer thrown as an Error with its `code`.
 export function googleInvoker(source: Source, { env, routerVersion }: { env: string; routerVersion?: string | undefined }) {
-  return async (router: GoogleRouter, payload: Record<string, unknown>, { timeoutMs }: { timeoutMs: number }): Promise<any> => {
-    let answer: unknown;
-    try {
-      answer = await actOnRouter(await source.current(), router, payload, { timeoutMs, env, routerVersion });
-    } catch (err) {
-      if (err instanceof RouterCallError) throw Object.assign(new Error(err.message), err.refusal ? { code: err.refusal } : {});
-      throw err;
-    }
-    const refused = (answer as { refused?: { code?: string; message?: string } } | null)?.refused;
-    if (refused) throw Object.assign(new Error(refused.message ?? 'refused'), { code: refused.code });
-    return answer;
-  };
+  const calls = routerCaller({ google: { current: () => source.current(), env, routerVersion }, error: codedError });
+  return async (router: GoogleRouter, payload: Record<string, unknown>, { timeoutMs }: { timeoutMs: number }): Promise<any> => calls.gcp(router, payload, { timeoutMs });
 }
 
 // The tag functions as the command account of the connection's current Google instance; a tag value that can't be read

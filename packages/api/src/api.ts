@@ -6,10 +6,11 @@ import {
   type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type RunRecord, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
-import { GoogleError, type Google, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
+import { GoogleError, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
+import type { Refusal } from '@dormeto/google/router';
 // The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
-import { actOnRouter, installCommand, RouterCallError, routerTooOld, tooOldText, type Refusal } from '@dormeto/google/router';
-import { cloudOf, googlePath, googleScopeOf, googleServicePath, isAccount, isCandidateRegion, isProject, isRegion, type Cloud } from '@dormeto/fleet/clouds';
+import { cloudOf, googlePath, googleScopeOf, googleServicePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
+import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
@@ -146,56 +147,21 @@ export class RouterError extends Error {
 // What each refusal is for the caller; unsupported stays a router error (the routes that know the action say "upgrade").
 const REFUSALS: Partial<Record<RefusalCode, [number, string]>> = { invalid: [400, 'bad_request'], not_found: [404, 'not_found'], conflict: [409, 'conflict'] };
 
-// The calls of a router's controller: a synchronous one asks for refusals as answers (no Lambda error for the router's
-// health) and reads one back as a RouterError with its code; a thrown error (a router before 0.37.0, a failure) is one
-// without. An asynchronous call is sent as it is: nothing reads its answer, and a refusal there stays an error.
-export type ControllerSend = (router: Router, input: { FunctionName: string; InvocationType: 'Event' | 'RequestResponse'; Payload: Uint8Array })
-  => Promise<{ Payload?: Uint8Array; FunctionError?: string }>;
-// A Google Cloud router's calls (Google Cloud manager design §6.2): the connection's Google instance, and what the
-// refusals' commands name.
-export interface GoogleCalls {
-  // The connection's record and its Google instance (one per execution environment), null while there is none.
-  current(): Promise<{ connection: GoogleConnection; google: Pick<Google, 'request'> } | null>;
-  env: string; // the manager's environment
-  routerVersion?: string; // the router version the manager installs and upgrades to
-  timeoutMs?: number; // each call's bound (10 s: a cold Cloud Run start)
-}
-export const GOOGLE_CALL_MS = 10_000;
-
-
-// A refusal answered (refusals: true), as a router error with its code; any other answer as it is.
-function refusalOf(answer: unknown): unknown {
-  const refused = (answer as { refused?: { code?: RefusalCode; message?: string } } | null)?.refused;
-  if (refused) throw new RouterError(refused.message ?? 'refused', refused.code);
-  return answer;
-}
-
-// A Google Cloud router: the payload to its controller's /v1/actions with the command account's ID token, which answers
-// as the AWS controller does. A router the manager can't use is refused before any call: a version before 0.40.0, no
-// connection, or no controller known yet. Every call asks for refusals (without them a router answers a workload it doesn't
-// know with its REST JSON 404, which reads as a router too old). Google has no asynchronous call: an asynchronous one is
-// sent the same way and its answer not read.
-async function googleInvoke(calls: GoogleCalls | undefined, router: Router, payload: Record<string, unknown>, options: { async?: boolean }): Promise<unknown> {
-  let answer: unknown;
-  try {
-    answer = await actOnRouter((await calls?.current()) ?? null, { ...router, version: router.installed?.version ?? '' }, payload, { timeoutMs: calls?.timeoutMs ?? GOOGLE_CALL_MS, env: calls?.env ?? '', routerVersion: calls?.routerVersion });
-  } catch (err) {
-    if (!(err instanceof RouterCallError)) throw err;
-    throw new RouterError(err.message, undefined, err.refusal);
-  }
-  return options.async ? null : refusalOf(answer);
-}
+// The calls of a router's controller (@dormeto/fleet's router caller): a synchronous one asks for refusals as answers (no
+// Lambda error for the router's health) and reads one back as a RouterError with its code; a thrown error (a router before
+// 0.37.0, a failure) is one without. An asynchronous call is sent as it is: nothing reads its answer, and a refusal there
+// stays an error. A Google Cloud router (Google Cloud manager design §6.2) is called at its controller's /v1/actions with the
+// command account's ID token, and answers as the AWS controller does; one the manager can't use is refused before any call,
+// as a RouterError with its refusal: a version before 0.40.0, no connection, or no controller known yet. Every Google Cloud
+// call asks for refusals (without them a router answers a workload it doesn't know with its REST JSON 404, which reads as a
+// router too old); Google has no asynchronous call: an asynchronous one is sent the same way and its answer not read.
+export type ControllerSend = (router: Router, input: Parameters<LambdaSend>[0]) => ReturnType<LambdaSend>;
 
 export function routerInvoker(send: ControllerSend, google?: GoogleCalls): Invoke {
-  return async (router, payload, options = {}) => {
-    if (router.cloud === 'gcp') return googleInvoke(google, router, payload, options);
-    const body = options.async ? payload : { ...payload, refusals: true };
-    const out = await send(router, { FunctionName: router.controller, InvocationType: options.async ? 'Event' : 'RequestResponse', Payload: new Uint8Array(Buffer.from(JSON.stringify(body))) });
-    if (options.async) return null;
-    const answer = JSON.parse(out.Payload?.length ? Buffer.from(out.Payload).toString('utf8') : 'null');
-    if (out.FunctionError) throw new RouterError((answer as { errorMessage?: string } | null)?.errorMessage ?? out.FunctionError);
-    return refusalOf(answer);
-  };
+  const caller = routerCaller({ google, error: (message, { code, refusal }) => new RouterError(message, code as RefusalCode | undefined, refusal) });
+  return async (router, payload, options = {}) => (router.cloud === 'gcp'
+    ? caller.gcp({ ...router, version: router.installed?.version ?? '' }, payload, options)
+    : caller.aws((input) => send(router, input), router.controller, payload, options));
 }
 
 // A request the API refuses: status code and machine-readable error.

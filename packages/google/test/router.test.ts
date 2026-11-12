@@ -2,44 +2,10 @@
 // POSTed to the controller's /v1/actions with the command account's ID token for the controller's origin, the whole call
 // bounded; Google's refusal of the token is the refusal no_access, a router without /v1/actions is too old.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { accessMissingText, actOnRouter, brokenConnection, callRouter, createGoogle, GoogleError, installCommand, RouterCallError, routerHealth, routerTooOld, tooOldText, type GoogleConnection } from '../src/index.js';
+import { accessMissingText, brokenConnection, callRouter, GoogleError, RouterCallError, routerHealth } from '../src/index.js';
+import { ACTIONS, COMMAND, CONTROLLER, fakeGoogle, html, json, jwt, silent, T0 } from './fake-google.js';
 
-const T0 = Date.parse('2026-11-09T12:00:00Z');
-const COMMAND = 'dmt-dev-command@dormeto-host.iam.gserviceaccount.com';
-const CONTROLLER = 'https://dmtr-europe-west2-controller-abc123-nw.a.run.app';
-const ACTIONS = `${CONTROLLER}/v1/actions`;
 const ROUTER = { controller: CONTROLLER };
-
-const connection: GoogleConnection = {
-  project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws-121014831971', scopes: ['projects/dormeto-host'],
-  serviceAccounts: { discovery: 'dmt-dev-discovery@dormeto-host.iam.gserviceaccount.com', command: COMMAND },
-  routers: [{ project: 'dormeto-dev', region: 'europe-west2' }], googleAdded: [], connectedAt: '2026-11-09T10:00:00.000Z', connectedBy: 'admin@example.com', cli: '0.14.0',
-};
-const credentials = { accessKeyId: 'ASIAEXAMPLE', secretAccessKey: 'secret', sessionToken: 'the-session-token' };
-
-type Seen = { url: string; method: string; headers: Record<string, string>; body: string; signal?: AbortSignal };
-const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-// An answer that never comes: rejected when its request is aborted, as fetch's.
-const silent = (req: Seen) => new Promise<Response>((_resolve, reject) => { req.signal!.addEventListener('abort', () => reject(req.signal!.reason)); });
-const html = (status: number, title: string) => new Response(`<html><head><title>${status} ${title}</title></head><body><h1>Error: ${title}</h1></body></html>`, { status, headers: { 'content-type': 'text/html' } });
-const jwt = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
-
-// Google's token endpoints, then the controller as `controller` answers it.
-function fakeGoogle(controller: (req: Seen) => Response | Promise<Response>, tokens?: (req: Seen) => Response | Promise<Response> | undefined) {
-  let n = 0;
-  const seen: Seen[] = [];
-  const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const req: Seen = { url: String(input), method: init?.method ?? 'GET', headers: { ...(init?.headers as Record<string, string>) }, body: String(init?.body ?? ''), ...(init?.signal ? { signal: init.signal } : {}) };
-    seen.push(req);
-    const own = tokens?.(req);
-    if (own) return own;
-    if (req.url === 'https://sts.googleapis.com/v1/token') return json(200, { access_token: `federated-${++n}`, expires_in: 3600 });
-    if (req.url.endsWith(':generateIdToken')) return json(200, { token: jwt({ aud: (JSON.parse(req.body) as { audience: string }).audience, exp: Math.floor(T0 / 1000) + 3600, n: ++n }) });
-    return controller(req);
-  });
-  const google = createGoogle({ connection, credentials, fetch: fetch as typeof globalThis.fetch, now: () => T0 });
-  return { google, seen, to: (url: string) => seen.filter((s) => s.url === url) };
-}
 
 const failure = (promise: Promise<unknown>) => promise.then(() => { throw new Error('answered'); }, (e: unknown) => e as RouterCallError);
 
@@ -326,68 +292,10 @@ describe('brokenConnection', () => {
   });
 });
 
-describe('routerTooOld', () => {
-  it('is a known version below 0.40.0; an unknown version is called', () => {
-    expect(['0.39.0', '0.9.12', '0.39.9-rc.1'].map(routerTooOld)).toEqual([true, true, true]);
-    expect(['0.40.0', '0.40.0-rc.1', '1.0.0', '', 'dev'].map(routerTooOld)).toEqual([false, false, false, false, false]);
-  });
-
-  it('compares major.minor.patch only: a dev router of 0.40.0 meets the minimum, one of 0.39.0 doesn\'t', () => {
-    expect(['0.40.0-dev.1', '0.41.0-dev.2', '0.39.0-dev.3', '0.39.12-dev.1'].map(routerTooOld)).toEqual([false, false, true, true]);
-  });
-});
-
+// The connect command, as the API answers a missing access and the poll records it; the router caller's refusals and the
+// texts of a router too old are the fleet's (packages/fleet/test/router-call.test.ts, clouds.test.ts).
 describe('the refusals\' texts', () => {
-
-  it('names the install command with the pinned version but never below the router minimum', () => {
-    expect(installCommand('dormeto-dev', 'europe-west2', '0.37.0')).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0');
-    expect(installCommand('dormeto-dev', 'europe-west2', '0.41.0')).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.41.0');
-    expect(installCommand('dormeto-dev', 'europe-west2', undefined)).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2');
-    expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.37.0')).toContain('--version 0.40.0');
-  });
-  it('name the command that fixes each, as the API answers them and the poll records them', () => {
+  it('names the connect command that fixes a missing access, as the API answers it and the poll records it', () => {
     expect(accessMissingText('dormeto-host', 'dev')).toBe('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
-    expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')).toBe('router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0');
-    expect(tooOldText('', 'dormeto-dev', 'europe-west2', undefined)).toBe('router older than 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2');
-  });
-});
-
-describe('actOnRouter', () => {
-  const router = { controller: CONTROLLER, account: 'dormeto-dev', region: 'europe-west2', version: '0.40.0' };
-  const opts = { timeoutMs: 10_000, env: 'dev', routerVersion: '0.40.0' };
-  const failing = (promise: Promise<unknown>) => promise.then(() => { throw new Error('answered'); }, (e: unknown) => e as RouterCallError);
-
-  it('sends the payload with refusals asked and answers the body, a refusal as it is', async () => {
-    const g = fakeGoogle(() => json(200, { refused: { code: 'not_found', message: 'workload not configured: w' } }));
-    expect(await actOnRouter({ connection, google: g.google }, router, { action: 'status', workloadId: 'w' }, opts)).toEqual({ refused: { code: 'not_found', message: 'workload not configured: w' } });
-    expect(JSON.parse(g.to(ACTIONS)[0]!.body)).toEqual({ action: 'status', workloadId: 'w', refusals: true });
-  });
-
-  it('refuses a router before 0.40.0 without calling it', async () => {
-    const g = fakeGoogle(() => json(200, {}));
-    const err = await failing(actOnRouter({ connection, google: g.google }, { ...router, version: '0.39.0' }, { action: 'status' }, opts));
-    expect([err.refusal, err.message]).toEqual(['router_too_old', tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')]);
-    expect(g.seen).toEqual([]);
-  });
-
-  it('refuses a router without a controller as unknown and a missing connection as no access', async () => {
-    const g = fakeGoogle(() => json(200, {}));
-    const { controller: _, ...unplaced } = router;
-    expect((await failing(actOnRouter({ connection, google: g.google }, unplaced, { action: 'status' }, opts))).refusal).toBe('router_unknown');
-    const err = await failing(actOnRouter(null, router, { action: 'status' }, opts));
-    expect([err.refusal, err.message]).toEqual(['no_access', accessMissingText('<host>', 'dev')]);
-  });
-
-  it('turns Google refusing the token into no_access with its words, and a router without /v1/actions into too old', async () => {
-    const denied = await failing(actOnRouter({ connection, google: fakeGoogle(() => html(403, 'Forbidden')).google }, router, { action: 'status' }, opts));
-    expect(denied.refusal).toBe('no_access');
-    expect(denied.message).toMatch(/^the manager's accounts can't reach the router: dormeto gcp connect --project dormeto-host .* \(Google: /);
-    const old = await failing(actOnRouter({ connection, google: fakeGoogle(() => json(404, { error: 'not-found' })).google }, router, { action: 'status' }, opts));
-    expect([old.refusal, old.message]).toEqual(['router_too_old', tooOldText('', 'dormeto-dev', 'europe-west2', '0.40.0')]);
-  });
-
-  it('throws any other failure as it is, without a refusal', async () => {
-    const err = await failing(actOnRouter({ connection, google: fakeGoogle(() => json(500, { error: 'boom' })).google }, router, { action: 'status' }, opts));
-    expect([err.message, err.refusal]).toEqual(['boom', undefined]);
   });
 });

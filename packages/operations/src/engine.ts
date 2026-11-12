@@ -1,8 +1,9 @@
 // Operations engine (vision docs/specs/2026-10-05-onboarding-design.md, R4b): an operation is a list of steps run one at a
 // time by the Step Functions workflow (`next` until done, waiting as asked), each step idempotent; `fail` releases what the
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
-import { GoogleError, installCommand, routerTooOld, tagTargets, tooOldText, type TagTarget, type Tags } from '@dormeto/google';
-import { cloudOf, googlePath, isAccount, isRegion } from '@dormeto/fleet/clouds';
+import { GoogleError, tagTargets, type TagTarget, type Tags } from '@dormeto/google';
+import { cloudOf, googlePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
+import { GOOGLE_CALL_MS } from '@dormeto/fleet/router-call';
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
@@ -136,10 +137,9 @@ const GOOGLE_PLANS: Partial<Record<WorkflowType, string[]>> = {
 const onGoogle = (target: Record<string, string>) => cloudOf(target.account ?? '') === 'gcp';
 const planOf = (type: WorkflowType, target: Record<string, string>) => (onGoogle(target) ? GOOGLE_PLANS[type] : undefined) ?? PLANS[type];
 // A Google Cloud router's calls (§6.2, §8): its controller serves the onboarder's three too, each within 300 s (the
-// operations function runs 360 s), the others within 10 s (a cold Cloud Run start).
+// operations function runs 360 s), the others within GOOGLE_CALL_MS, 10 s (a cold Cloud Run start).
 const GOOGLE_ONBOARDER_ACTIONS = new Set(['preview', 'onboard', 'offboard']);
 const GOOGLE_ONBOARDER_MS = 300_000;
-const GOOGLE_CALL_MS = 10_000;
 // A project number: Resource Manager's `projects/<number>`, which the tag bindings' parents name.
 const PROJECT_NUMBER = /^\d{1,20}$/;
 const labelsOf = (targets: TagTarget[]) => targets.map((t) => t.label).join(', ');

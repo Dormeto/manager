@@ -3,9 +3,30 @@
 export type Cloud = 'aws' | 'gcp';
 
 // The router version the manager needs on Google Cloud (/v1/actions, the journal, the check summary): the manager's calls and
-// the dashboard's Routers view both read this floor. Declared again as ROUTER_MINIMUM in @dormeto/google (which can't import
-// this package): packages/fleet/test/router-minimum.test.ts pins the two equal.
+// the dashboard's Routers view both read this floor. Declared again as ROUTER_MINIMUM in @dormeto/google, whose transport
+// names it when a router has no /v1/actions (it can't import this package): packages/fleet/test/router-minimum.test.ts pins
+// the two equal.
 export const GOOGLE_ROUTER_MINIMUM = '0.40.0';
+
+// A Google Cloud router too old for the manager: a known version below the minimum, by major.minor.patch alone (a dev
+// router's 0.40.0-dev.1 meets 0.40.0, 0.39.0-dev.3 doesn't; the registry keeps the version as the router reports it); an
+// unknown one ('' or not a version) is called, and its answer says.
+export function routerTooOld(version: string): boolean {
+  const v = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!v) return false;
+  const floor = GOOGLE_ROUTER_MINIMUM.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (Number(v[i + 1]) !== floor[i]) return Number(v[i + 1]) < floor[i]!;
+  return false;
+}
+// The command that installs or upgrades a Google Cloud router (the CLI's: the manager never does), as the API, the operations,
+// the fleet's poll and the dashboard name it. The version named is the pinned one, never below the minimum (a dev release pins
+// the AWS router's).
+export const installCommand = (project: string, region: string, pinned?: string | null): string =>
+  `dormeto gcp routers install --project ${project} --region ${region}${pinned ? ` --version ${routerTooOld(pinned) ? GOOGLE_ROUTER_MINIMUM : pinned}` : ''}`;
+// A router too old for the manager, and the command that fixes it; version: '' when it is unknown (the router answered that
+// it has no /v1/actions).
+export const tooOldText = (version: string, project: string, region: string, pinned: string | undefined): string =>
+  `router ${version || `older than ${GOOGLE_ROUTER_MINIMUM}`} can't report to the manager: ${installCommand(project, region, pinned)}`;
 
 const ACCOUNT = /^\d{12}$/;
 // A project ID: 6 to 30 characters, lowercase letters, digits and hyphens, starting with a letter, not ending with a hyphen.

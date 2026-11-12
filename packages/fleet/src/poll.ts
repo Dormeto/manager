@@ -10,10 +10,12 @@
 // in the registry, so that the advised `dormeto gcp routers install` clears too-old within 10 minutes. What a poll did not
 // do, and where the journal was read up to, is its RS# item's poll.
 import type { Google, GoogleConnection } from '@dormeto/google';
-import { accessMissingText, callRouter, controllerUnknownText, RouterCallError, routerHealth, routerTooOld, tooOldText } from '@dormeto/google/router';
+import { accessMissingText, callRouter, controllerUnknownText, RouterCallError, routerHealth } from '@dormeto/google/router';
 import { CHUNK_WORKLOADS_MAX, timely } from './clean.js';
+import { routerTooOld, tooOldText } from './clouds.js';
 import { eachAtOnce, type RouterEvent } from './ingest.js';
 import type { InstalledRouter, Registry } from './registry.js';
+import { GOOGLE_CALL_MS } from './router-call.js';
 import type { FleetStore, RouterPoll } from './store.js';
 
 export const POLL_AT_ONCE = 10;
@@ -22,8 +24,6 @@ export const POLL_BUDGET_MS = 50_000;
 // are two services): the journal is read again from 5 minutes before the newest `at`, above a Firestore transaction's 270 s.
 export const OVERLAP_MS = 5 * 60_000;
 const EVENTS_LIMIT = 500;
-// Each call's bound: a cold Cloud Run start (design §6.2).
-const CALL_MS = 10_000;
 // Google's own 404s in a row that unregister a router.
 const MISSES_MAX = 2;
 // How often a router too old to poll has its version read from its health.
@@ -113,7 +113,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     const call = async (payload: Json): Promise<Json> => {
       let answer: Json | null;
       try {
-        answer = (await callRouter(run.google, router, { ...payload, refusals: true }, { timeoutMs: CALL_MS })) as Json | null;
+        answer = (await callRouter(run.google, router, { ...payload, refusals: true }, { timeoutMs: GOOGLE_CALL_MS })) as Json | null;
       } catch (err) {
         if (err instanceof RouterCallError && err.google && err.status === 404) gone = true;
         else if (err instanceof RouterCallError && !err.token && err.status !== 0) poll.misses = 0;
@@ -190,7 +190,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
       ...(was?.tooOld !== undefined ? { tooOld: was.tooOld } : {}), versionAt: at,
     };
     try {
-      const { version } = await routerHealth(run.google, router, { timeoutMs: CALL_MS });
+      const { version } = await routerHealth(run.google, router, { timeoutMs: GOOGLE_CALL_MS });
       if (version !== router.version) {
         if (await registry.update({ ...router, version })) {
           log?.info('RouterVersionRead', { router: router.name, account: router.account, region: router.region, from: router.version, version });

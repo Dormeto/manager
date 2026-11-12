@@ -1,4 +1,4 @@
-import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
+import { routerTooOld } from '@dormeto/fleet/clouds';
 
 // Google Cloud in the dashboard: the console's pages for a router's controller and a workload's resources (from their resource
 // paths, `projects/<project>/zones/<zone>/instances/<name>`), and the CLI commands that install and uninstall a router, which
@@ -7,14 +7,10 @@ const CONSOLE = 'https://console.cloud.google.com';
 const part = encodeURIComponent;
 
 // A Google Cloud router the manager can't act through (no /v1/actions before 0.40.0): a known version below it, by
-// major.minor.patch (a dev router's 0.40.0-dev.1 meets it), or one the API found too old; an unknown version is let through.
+// major.minor.patch (a dev router's 0.40.0-dev.1 meets it; the API's rule), or one the API found too old; an unknown version
+// is let through.
 export function googleRouterTooOld(router: { version?: string | null; refusal?: string }): boolean {
-  if (router.refusal === 'router_too_old') return true;
-  const v = /^(\d+)\.(\d+)\.(\d+)/.exec(router.version ?? '')?.slice(1).map(Number);
-  if (!v) return false;
-  const floor = GOOGLE_ROUTER_MINIMUM.split('.').map(Number);
-  for (let i = 0; i < 3; i += 1) if (v[i] !== floor[i]) return v[i]! < floor[i]!;
-  return false;
+  return router.refusal === 'router_too_old' || routerTooOld(router.version ?? '');
 }
 const withProject = (project: string) => `?project=${part(project)}`;
 
@@ -61,9 +57,8 @@ export function urlMapConsoleUrl(urlMap: string, lb: { kind: string; region?: st
 export const controllerConsoleUrl = (project: string, region: string): string => `${CONSOLE}/run/detail/${part(region)}/dmtr-${region}-controller/metrics${withProject(project)}`;
 
 // Routers are installed, upgraded and uninstalled by the CLI, which changes the project's IAM policy through its own checks.
-// The version named is the pinned one, never below the router minimum (a dev release pins the AWS router's).
-export const installCommand = (project: string, region: string, version?: string | null): string =>
-  `dormeto gcp routers install --project ${project} --region ${region}${version ? ` --version ${googleRouterTooOld({ version }) ? GOOGLE_ROUTER_MINIMUM : version}` : ''}`;
+// The install command is the API's: the version named is the pinned one, never below the router minimum.
+export { installCommand } from '@dormeto/fleet/clouds';
 export const uninstallCommand = (project: string, region: string): string => `dormeto gcp routers uninstall --project ${project} --region ${region}`;
 
 const LB_KINDS: Record<string, string> = {
