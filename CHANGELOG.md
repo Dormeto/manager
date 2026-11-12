@@ -281,6 +281,8 @@ FAILED`, its locks and slots released, instead of succeeding. Its `candidate` st
 until the next discovery run reads the router's rule; nothing is undone: the router keeps the workload it onboarded (Offboard
 removes it), listed at the router's next check. A route that is not the application's, or an issue, fails `verify` as before
 (`verify: route <route>, issues: …`).
+- **Fixed, a Google Cloud workload's 7-day bar:** its tooltip's requests line says `backend service`, as the rest of the dashboard
+does, where it said `target group` (a workload's page and its Workloads row).
 - **The dashboard's tables, one component:** Routers, Workloads, Discovery, Operations, Users, Audit, the IP lists and a workload's
 History of changes share one table: a search field reading what the columns say (Workloads' sent to the API as before), sort on the
 headers (Workloads and Discovery keep the API's order), pages of 25, 50, 100 or all rows (50 at first, all only up to 1,000 rows;

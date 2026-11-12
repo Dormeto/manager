@@ -50,6 +50,19 @@ describe('StateBar', () => {
     wrapper.unmount();
   });
 
+  it('says what the requests went to in the workload\'s cloud: an AWS one\'s target group, a Google Cloud one\'s backend service', async () => {
+    const said = [];
+    for (const cloud of ['aws', 'gcp']) {
+      const wrapper = render({ states: STATES, idleHours7d: 150, requests7d: 12, cloud });
+      said.push((await hover(wrapper)).match(/Requests: [^.]*\./)?.[0]);
+      wrapper.unmount();
+    }
+    expect(said).toEqual([
+      'Requests: 150 of 168 hours without any request to its target group (12 requests in 7 days).',
+      'Requests: 150 of 168 hours without any request to its backend service (12 requests in 7 days).',
+    ]);
+  });
+
   it('says the base cost of what the naps stop, what they saved in the last 30 days, and a month\'s saving at that rate (user request)', async () => {
     const savings = { saved: { usd: 3.2, hours: 600, unpricedHours: 20 }, monthly: 11.169, hourly: 0.017 };
     const wrapper = render({ states: STATES, savings });

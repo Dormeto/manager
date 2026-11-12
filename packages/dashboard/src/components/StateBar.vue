@@ -79,7 +79,8 @@ const estimates = computed(() => {
   return `Estimates: ${words.name} list prices of what the naps stopped, ${words.spot}${props.savings?.discounts ? `, after discounts (${discountText(props.savings.discounts)})` : ''}, `
     + `for the time asleep the baseline would have run.${words.priceNotes ? ` ${words.priceNotes}` : ''}`;
 });
-const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }).detail}` : null));
+// What the requests went to in the workload's cloud: its target group, or its backend service.
+const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }, props.cloud ?? 'aws').detail}` : null));
 </script>
 
 <template>
