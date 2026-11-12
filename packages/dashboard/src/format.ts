@@ -64,9 +64,8 @@ export function backendArn(backend: { kind: string; id: string; arn?: string }, 
   return resource ? `arn:${partitionOf(where.region)}:${resource}${backend.id}` : null;
 }
 
-// The service of a kind of backend in its cloud, for its tooltip; backendService, AWS's.
+// The service of a kind of backend in its cloud, for its tooltip.
 export const backendServiceOf = (kind: string, cloud: Cloud): string => kindWord('backendServices', kind, cloud) ?? kind;
-export const backendService = (kind: string): string => backendServiceOf(kind, 'aws');
 
 // A Kubernetes workload's owner from its id (<cluster>/<namespace>/<kind>/<name>): "Deployment demo/web".
 export function kubernetesOwner(id: string): string {

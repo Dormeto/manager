@@ -14,7 +14,7 @@ import { backendArn, backendKinds, backendLabel, backendServiceOf, duration, lis
 import { backendConsoleUrl, googleResourcePath, lbText, resourceName, urlMapConsoleUrl } from '../google';
 import { equivalents, rounded } from '../energy';
 import { useSession } from '../stores/session';
-import { pauseLine, type TargetOption } from '../pause';
+import { capitalised, pauseLine, type TargetOption } from '../pause';
 import ExcludeDialog from '../components/ExcludeDialog.vue';
 import PauseChip from '../components/PauseChip.vue';
 import PauseDialog from '../components/PauseDialog.vue';
@@ -292,9 +292,9 @@ const urlMapLink = computed(() => (status.value?.urlMap ? urlMapConsoleUrl(googl
 // Where the workload is: the ARNs of its backends and targets.
 const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
 const excludeOptions = computed<TargetOption[]>(() => (gcp.value && status.value?.backendService
-  ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, status.value.region ?? ''), label: `Backend service ${resourceName(status.value.backendService)} (this workload)` }]
+  ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, status.value.region ?? ''), label: `${capitalised(words.value.target)} ${resourceName(status.value.backendService)} (this workload)` }]
   : status.value?.targetGroupArn
-  ? [{ kind: 'target-group', arn: status.value.targetGroupArn, label: `Target group ${shortId(status.value.targetGroupArn.replace(/\/[0-9a-f]+$/, ''))} (this workload)` }]
+  ? [{ kind: 'target-group', arn: status.value.targetGroupArn, label: `${capitalised(cloudWords('aws').target)} ${shortId(status.value.targetGroupArn.replace(/\/[0-9a-f]+$/, ''))} (this workload)` }]
   : []));
 
 async function change(action: 'pause' | 'resume', body?: object) {

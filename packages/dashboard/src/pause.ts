@@ -104,7 +104,7 @@ export interface TargetOption {
 // A kind of exclusion target in its cloud's words: a target group or a backend service, a load balancer or a URL map, an account
 // or a project.
 const kindNoun = (kind: ExclusionKind, words: CloudWords): string => (kind === 'target-group' ? words.target : kind === 'load-balancer' ? words.loadBalancer : words.owner.toLowerCase());
-const capitalised = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
+export const capitalised = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
 
 // What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account. On Google
 // Cloud: its backend service, its URL map (by their paths) and its project.

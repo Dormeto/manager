@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mdiAws, mdiGoogleCloud } from '@mdi/js';
-import { attentionMore, cloudMark, ownerLabel, rowCloud, backendArn, backendHelp, backendKinds, backendLabel, backendService, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor, usd } from '../src/format';
+import { attentionMore, cloudMark, ownerLabel, rowCloud, backendArn, backendHelp, backendKinds, backendLabel, backendServiceOf, kubernetesOwner, switchText, targetInfo, checkHealth, concurrencyText, nameRule, duration, listSourceHref, percent, refreshLabel, relative, routeColor, routeLabel, ruleText, shortId, stateColor, usd } from '../src/format';
 
 describe('format', () => {
   const now = Date.parse('2026-10-04T12:00:00Z');
@@ -127,7 +127,7 @@ describe('backendArn', () => {
     expect(backendArn({ kind: 'rds-instance', id: 'shop-db' }, where)).toBe('arn:aws:rds:eu-west-1:121014831971:db:shop-db');
     expect(backendArn({ kind: 'rds-cluster', id: 'shop' }, where)).toBe('arn:aws:rds:eu-west-1:121014831971:cluster:shop');
     expect(backendArn({ kind: 'rds-instance', id: 'shop-db' }, { account: '', region: 'eu-west-1' })).toBeNull();
-    expect(['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster'].map(backendService)).toEqual(['Amazon EC2', 'Amazon EC2 Auto Scaling', 'Amazon ECS', 'Amazon RDS', 'Amazon Aurora']);
+    expect(['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster'].map((k) => backendServiceOf(k, 'aws'))).toEqual(['Amazon EC2', 'Amazon EC2 Auto Scaling', 'Amazon ECS', 'Amazon RDS', 'Amazon Aurora']);
   });
   it('tells a target\'s service and ARN from its id: an instance, an ECS task\'s address, an address, a function', () => {
     expect(targetInfo('i-0abc', where, [])).toEqual({ service: 'Amazon EC2 instance', arn: 'arn:aws:ec2:eu-west-1:121014831971:instance/i-0abc' });
@@ -165,7 +165,7 @@ describe('attentionMore', () => {
   it('names a Kubernetes backend: its owner, its cluster\'s ARN, its service, how the waker is switched in', () => {
     expect(backendLabel('k8s')).toBe('Kubernetes workload');
     expect(backendHelp('k8s')).toBe('Kubernetes workload: a Deployment or StatefulSet on Amazon EKS, scaled to zero replicas when it naps, back to its replicas when it wakes');
-    expect(backendService('k8s')).toBe('Amazon EKS');
+    expect(backendServiceOf('k8s', 'aws')).toBe('Amazon EKS');
     expect(kubernetesOwner('eks-demo/demo/Deployment/web')).toBe('Deployment demo/web');
     expect(kubernetesOwner('eks-demo/cache/StatefulSet/redis')).toBe('StatefulSet cache/redis');
     expect(backendArn({ kind: 'k8s', id: 'eks-demo/demo/Deployment/web' }, { account: '111122223333', region: 'eu-west-1' })).toBe('arn:aws:eks:eu-west-1:111122223333:cluster/eks-demo');

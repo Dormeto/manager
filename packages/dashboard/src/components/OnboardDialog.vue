@@ -4,6 +4,7 @@
 // the GitOps snippet, the router's access to its cluster. Any other: the lines its Terraform must keep.
 import { computed, ref, watch } from 'vue';
 import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
+import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
 import { cloudWords } from '../cloud-words';
 import { nameRule } from '../format';
 import { copiedTags, rowsOf, rowsProblem, tagsOf, type TagRow, type Tags } from '../tags';
@@ -158,7 +159,7 @@ function submit() {
           </v-col>
         </v-row>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
-          :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : 'No router of the project is 0.40.0 or later: upgrade one with dormeto gcp routers install'" />
+          :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : `No router of the project is ${GOOGLE_ROUTER_MINIMUM} or later: upgrade one with dormeto gcp routers install`" />
         <v-text-field v-model="databases" :label="words.databasesLabel" :hint="words.databasesHint" persistent-hint />
         <!-- Fallback types and hibernation: on Google Cloud always, on AWS but for a Kubernetes candidate. -->
         <v-text-field v-if="gcp || !kubernetes" v-model="fallbacks" :label="`Fallback ${words.types} (optional)`" :rules="[fallbackRule]" class="mt-4" :hint="words.fallbacksHint" persistent-hint />

@@ -16,8 +16,8 @@ const notReady = computed(() => props.report.counts.discoveryMissing + props.rep
 // The procedures of the clouds listed: the roles' for an AWS account (or the delegation policy), the connection's for a project.
 const links = computed(() => {
   const clouds = new Set(props.report.accounts.map((a) => rowCloud(a)));
-  const shown = (cloud: Cloud) => clouds.has(cloud) || (cloud === 'aws' && (props.report.delegation === 'missing' || !clouds.size));
-  return (['aws', 'gcp'] as const).filter(shown).map((cloud) => ({ href: procedureLink(cloud), text: cloudWords(cloud).procedureText }));
+  const listed = (cloud: Cloud) => clouds.has(cloud) || (cloud === 'aws' && (props.report.delegation === 'missing' || !clouds.size));
+  return (['aws', 'gcp'] as const).filter(listed).map((cloud) => ({ href: procedureLink(cloud), text: cloudWords(cloud).procedureText }));
 });
 // The status icon: the counts and event-driven refresh are in its tooltip; the panel lists only what needs attention.
 const status = computed(() => accessStatus(props.report));

@@ -142,8 +142,8 @@ const BEHAVIOUR: { file: string; text: string; why: string }[] = [
   {
     file: 'views/WorkloadView.vue',
     text: "gcp.value && status.value?.backendService ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, "
-      + "status.value.region ?? ''), label: `Backend service ${resourceName(status.value.backendService)} (this workload)` }] : status.value?.targetGroupArn ? [{ kind: 'target-group', arn: "
-      + "status.value.targetGroupArn, label: `Target group ${shortId(status.value.targetGroupArn.replace(/\\/[0-9a-f]+$/, ''))} (this workload)` }] : []",
+      + "status.value.region ?? ''), label: `${capitalised(words.value.target)} ${resourceName(status.value.backendService)} (this workload)` }] : status.value?.targetGroupArn ? [{ kind: 'target-group', arn: "
+      + "status.value.targetGroupArn, label: `${capitalised(cloudWords('aws').target)} ${shortId(status.value.targetGroupArn.replace(/\\/[0-9a-f]+$/, ''))} (this workload)` }] : []",
     why: 'what Exclude offers: the backend service by its path, or the target group by its ARN',
   },
   { file: 'views/WorkloadView.vue', text: 'gcp ? null : backendArn(b, where)', why: 'a backend\'s ARN: AWS\'s only' },

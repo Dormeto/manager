@@ -80,7 +80,7 @@ const estimates = computed(() => {
     + `for the time asleep the baseline would have run.${words.priceNotes ? ` ${words.priceNotes}` : ''}`;
 });
 // What the requests went to in the workload's cloud: its target group, or its backend service.
-const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }, props.cloud ?? 'aws').detail}` : null));
+const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }, props.cloud).detail}` : null));
 </script>
 
 <template>

@@ -130,6 +130,19 @@ describe('Workload view', () => {
     current = status;
   });
 
+  it('names the target group Exclude offers for an AWS workload, as before', async () => {
+    current = { ...status, source: 'manager', targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-3:111122223333:targetgroup/shop/0123456789abcdef' };
+    document.querySelectorAll('[data-test="action"]').forEach((item) => item.closest('.v-overlay')?.remove());
+    const wrapper = await mountView('operator');
+    await wrapper.find('[data-test="actions"]').trigger('click');
+    await flushPromises();
+    [...document.querySelectorAll<HTMLElement>('[data-test="action"]')].find((i) => i.textContent?.trim() === 'Exclude')!.click();
+    await flushPromises();
+    expect(document.querySelector('.v-dialog')!.textContent).toContain('Target group shop (this workload)');
+    wrapper.unmount();
+    current = status;
+  });
+
   it('groups its actions in one menu on the right of its header: wake, nap, pause, rename, exclude, offboard (user request)', async () => {
     current = { ...status, source: 'manager', targetGroupArn: 'arn:aws:elasticloadbalancing:eu-west-3:111122223333:targetgroup/shop/0123456789abcdef' };
     const wrapper = await mountView('operator');
@@ -1095,7 +1108,7 @@ describe('a Google Cloud workload', () => {
     item('Exclude').click();
     await flushPromises();
     const dialog = document.querySelector('.v-dialog')!;
-    expect(dialog.textContent).toContain('Backend service vm-demo');
+    expect(dialog.textContent).toContain('Backend service vm-demo (this workload)');
     const reason = dialog.querySelector('input[type="text"]') as HTMLInputElement;
     reason.value = 'maintenance';
     reason.dispatchEvent(new Event('input'));
