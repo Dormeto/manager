@@ -6,6 +6,7 @@
 // Google's list prices from the Cloud Billing Catalog (google-prices.ts), the same discounts.
 
 import { createGooglePrices, type CatalogFailure, type CatalogRead } from './google-prices.js';
+import { createPriceCache } from './price-cache.js';
 
 export type StoppedItem =
   | { kind: 'ec2'; type: string; count: number; os: string; spot?: true }
@@ -88,42 +89,14 @@ function spotAverage(history: { AvailabilityZone?: string; SpotPrice?: string; T
 }
 const off = (usd: number | null, percent: number) => (usd === null ? null : usd * (1 - percent / 100));
 
-// In memory (review I5): a price an hour, a failure five minutes; a price being asked is shared.
-const MEMORY_MS = 3_600_000;
-const FAILURE_MS = 300_000;
-
 // Without `catalog` (the API), Google Cloud's items are read from the table only.
 // `onCatalogRead` hears each service's index once it is read, `onCatalogFailed` each load that failed (the savings job logs both).
 export function createPriceBook({ pricing, spot, store, catalog, onCatalogRead, onCatalogFailed, now = Date.now }: { pricing: PricingPort; spot?: SpotPort; store: PriceCache; catalog?: GoogleCatalogPort; onCatalogRead?: (read: CatalogRead) => void; onCatalogFailed?: (failure: CatalogFailure) => void; now?: () => number }) {
   const google = createGooglePrices({ catalog, store, now, ...(onCatalogRead ? { onCatalogRead } : {}), ...(onCatalogFailed ? { onCatalogFailed } : {}) });
-  const memory = new Map<string, { usd: number | null; until: number }>();
-  const pending = new Map<string, Promise<number | null>>();
-  // One price: from memory, the table, else the API; a failed call prices nothing, caches nothing in the table, and is not
-  // asked again for five minutes.
-  async function lookup(key: string, ask: () => Promise<number | null>, days: number): Promise<number | null> {
-    const cached = await store.getPrice(key);
-    if (cached) {
-      memory.set(key, { usd: cached.usd, until: now() + MEMORY_MS });
-      return cached.usd;
-    }
-    let usd: number | null;
-    try {
-      usd = await ask();
-    } catch {
-      memory.set(key, { usd: null, until: now() + FAILURE_MS });
-      return null;
-    }
-    await store.putPrice(key, usd, days);
-    memory.set(key, { usd, until: now() + MEMORY_MS });
-    return usd;
-  }
-  function cachedPrice(key: string, ask: () => Promise<number | null>, days = 30): Promise<number | null> {
-    const known = memory.get(key);
-    if (known && known.until > now()) return Promise.resolve(known.usd);
-    const asked = pending.get(key) ?? lookup(key, ask, days).finally(() => pending.delete(key));
-    pending.set(key, asked);
-    return asked;
-  }
+  // One price: from memory (an hour), the table, else the API (price-cache.ts); a failed call prices nothing, caches nothing
+  // in the table, and is not asked again for five minutes.
+  const cache = createPriceCache({ store, now });
+  const cachedPrice = (key: string, ask: () => Promise<number | null>, days = 30) => cache(key, ask, days);
   const price = (key: string, ServiceCode: string, Filters: { Type: string; Field: string; Value: string }[]) =>
     cachedPrice(key, async () => onDemand((await pricing.getProducts({ ServiceCode, Filters, MaxResults: 10 })).PriceList));
   // A Spot price, from the manager's account in the item's region (one it has not enabled fails: not priced).

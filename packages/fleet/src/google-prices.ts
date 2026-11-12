@@ -6,7 +6,8 @@
 // below don't name, an ambiguous match, or a Catalog that failed is null (not priced, never $0, never another family's
 // price); a failure caches nothing and is not asked again for five minutes. Without the Catalog (the API: a request would
 // wait for 45 MB), the table only: a miss is not priced and nothing is written (the daily savings job prices it).
-// This module imports types only.
+// This module imports types only from prices.ts (which imports it); its cache is AWS's (price-cache.ts).
+import { createPriceCache, FAILURE_MS } from './price-cache.js';
 import type { CatalogSku, Discounts, GoogleCatalogPort, PriceCache, StoppedItem } from './prices.js';
 
 export const COMPUTE_SERVICE = '6F81-5844-456A';
@@ -133,9 +134,7 @@ function indexPrice(index: Index, key: string): number | null {
   return key.endsWith(`#${SUSPENDED_KEY}`) ? index.suspendedMax : null;
 }
 
-// In memory, as AWS's prices (prices.ts, review I5): a price an hour, a failure five minutes; a price being read is shared.
-const MEMORY_MS = 3_600_000;
-const FAILURE_MS = 300_000;
+// In the table: a price 30 days, a key the index lacks a day.
 const PRICE_DAYS = 30;
 const NONE_DAYS = 1;
 
@@ -144,8 +143,6 @@ type CloudSql = Extract<StoppedItem, { kind: 'cloudsql' }>;
 const off = (usd: number, percent: number) => usd * (1 - percent / 100);
 
 export function createGooglePrices({ catalog, store, now, onCatalogRead, onCatalogFailed }: { catalog?: GoogleCatalogPort; store: PriceCache; now: () => number; onCatalogRead?: (read: CatalogRead) => void; onCatalogFailed?: (failure: CatalogFailure) => void }) {
-  const memory = new Map<string, { usd: number | null; until: number }>();
-  const pending = new Map<string, Promise<number | null>>();
   const indexes = new Map<string, Promise<Index>>();
   const failedUntil = new Map<string, number>();
 
@@ -164,34 +161,13 @@ export function createGooglePrices({ catalog, store, now, onCatalogRead, onCatal
     indexes.set(service, loading);
     return loading;
   }
-  // One price: from memory, the table, else the service's index; a failed read prices nothing, caches nothing in the
-  // table, and is not asked again for five minutes. Without the Catalog, a miss is not priced, and not remembered: the
-  // table is read again for the daily job's price.
-  async function lookup(key: string): Promise<number | null> {
-    const cached = await store.getPrice(key);
-    if (cached) {
-      memory.set(key, { usd: cached.usd, until: now() + MEMORY_MS });
-      return cached.usd;
-    }
-    if (!catalog) return null;
-    let usd: number | null;
-    try {
-      usd = indexPrice(await indexOf(catalog, key.includes('#gce#') ? COMPUTE_SERVICE : CLOUD_SQL_SERVICE), key);
-    } catch {
-      memory.set(key, { usd: null, until: now() + FAILURE_MS });
-      return null;
-    }
-    await store.putPrice(key, usd, usd === null ? NONE_DAYS : PRICE_DAYS);
-    memory.set(key, { usd, until: now() + MEMORY_MS });
-    return usd;
-  }
-  function price(key: string): Promise<number | null> {
-    const known = memory.get(key);
-    if (known && known.until > now()) return Promise.resolve(known.usd);
-    const asked = pending.get(key) ?? lookup(key).finally(() => pending.delete(key));
-    pending.set(key, asked);
-    return asked;
-  }
+  // One price: from memory (an hour), the table, else the service's index (price-cache.ts, as AWS's prices); a failed read
+  // prices nothing, caches nothing in the table, and is not asked again for five minutes. Without the Catalog, a miss is not
+  // priced, and not remembered: the table is read again for the daily job's price.
+  const cache = createPriceCache({ store, now });
+  const price = (key: string): Promise<number | null> => cache(key, catalog
+    ? async () => indexPrice(await indexOf(catalog, key.includes('#gce#') ? COMPUTE_SERVICE : CLOUD_SQL_SERVICE), key)
+    : null, PRICE_DAYS, NONE_DAYS);
 
   // A VM group's net hour in its zone's region: count × (vCPUs × core + memory × RAM) (a whole VM's hour for f1-micro and
   // g1-small), less the compute discount unless Spot; suspended, less the memory still paid, never below 0. Windows is
