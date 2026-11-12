@@ -2,7 +2,7 @@
 // time by the Step Functions workflow (`next` until done, waiting as asked), each step idempotent; `fail` releases what the
 // operation holds. Steps act in the target account and region through `target` (DmtCommandRole).
 import { GoogleError, tagTargets, type TagTarget, type Tags } from '@dormeto/google';
-import { cloudOf, googlePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
+import { cloudOf, googlePath, googleServicePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS } from '@dormeto/fleet/router-call';
 import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
@@ -145,9 +145,6 @@ const PROJECT_NUMBER = /^\d{1,20}$/;
 const labelsOf = (targets: TagTarget[]) => targets.map((t) => t.label).join(', ');
 // A zone (`europe-west2-b`) rather than a region: a managed instance group there is a zonal one.
 const ZONE = /-[a-z]$/;
-// The load balancers whose URL map and backend services are a region's (the router's status names its `lb`); the others'
-// (global, classic, cross-region internal) are global.
-const REGIONAL_LBS = new Set(['regional', 'internal']);
 // Router calls per step of an exclusion: the step runs again until every workload is done.
 const EXCLUSION_BATCH = 25;
 const EXCLUDED = 'excluded: ';
@@ -553,10 +550,10 @@ export function createEngine(deps: EngineDeps) {
 
   // --- Google Cloud offboarding (Google Cloud manager design §8) ---------------------------------------------------------
 
-  // A name the router's status gives, as the manager's path: a regional or internal load balancer's in its region (the
-  // router's when the status says none), the others' global.
+  // A name the router's status gives, as the manager's path (@dormeto/fleet/clouds' rule, the router's `lb`): a regional or
+  // internal load balancer's in its region (the router's when the status says none), the others' global.
   const googlePathOf = (op: Operation, kind: 'backendServices' | 'urlMaps', name: string, lb: { kind?: string; region?: string } | undefined) =>
-    `projects/${op.target.account}/${lb?.kind && REGIONAL_LBS.has(lb.kind) ? `regions/${lb.region ?? op.target.region}` : 'global'}/${kind}/${name}`;
+    googleServicePath(op.target.account!, kind, name, lb, op.target.region!);
 
   // The router's status of the workload. What only the CLI undoes is refused before anything changes, in the router's
   // words (router gcp/src/actions.mjs's offboard, `cli-only`): a GKE workload's Kubernetes access, and the request logs

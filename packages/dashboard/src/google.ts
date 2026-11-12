@@ -18,12 +18,9 @@ const withProject = (project: string) => `?project=${part(project)}`;
 export const resourceName = (path: string): string => path.split('/').at(-1) ?? path;
 
 // The path of a backend service or a URL map a workload's row names by name (the router's row holds names, discovery's candidate
-// paths): the global scope for a missing, `global`, `classic` or `cross-region-internal` load balancer, the load balancer's region
-// (else the row's) for a `regional` or `internal` one. A path is kept as it is.
-export function googleResourcePath(project: string, collection: 'backendServices' | 'urlMaps', value: string, lb: { kind: string; region?: string } | undefined, region: string): string {
-  if (value.startsWith('projects/')) return value;
-  return lb?.kind === 'regional' || lb?.kind === 'internal' ? `projects/${project}/regions/${lb.region ?? region}/${collection}/${value}` : `projects/${project}/global/${collection}/${value}`;
-}
+// paths), as the API and the operations make it: the global scope for a missing, `global`, `classic` or `cross-region-internal`
+// load balancer, the load balancer's region (else the row's) for a `regional` or `internal` one. A path is kept as it is.
+export { googleServicePath as googleResourcePath } from '@dormeto/fleet/clouds';
 
 // `projects/<project>/(zones|regions|global)/<location>/<collection>/<name>`, or `projects/<project>/<collection>/<name>`
 // (Cloud SQL's). Null for anything else.

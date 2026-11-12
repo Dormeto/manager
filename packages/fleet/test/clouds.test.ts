@@ -1,7 +1,7 @@
 // One model for both clouds (Google Cloud design §3): the account is an AWS account or a Google Cloud project, and the
 // regions are checked per cloud.
 import { describe, expect, it } from 'vitest';
-import { cloudOf, fiveFieldMinutes, googlePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText } from '../src/clouds.js';
+import { cloudOf, fiveFieldMinutes, googlePath, googleScopeOf, googleServicePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText } from '../src/clouds.js';
 
 describe('clouds', () => {
   it('tells the cloud of an account: twelve digits are AWS, a project ID is Google Cloud, anything else is neither', () => {
@@ -30,6 +30,16 @@ describe('clouds', () => {
       'projects/dormeto-dev/global/urlMaps/X', 'projects/dormeto-dev/global/urlMaps/-x', 'projects/dormeto-dev/global/urlMaps/x-', `projects/dormeto-dev/global/urlMaps/a${'b'.repeat(63)}`,
       'projects/dormeto-dev/global/urlMaps/x/y', 'arn:aws:x', '']) expect(googlePath(bad)).toBeNull();
     expect(googlePath(5)).toBeNull();
+  });
+
+  // One rule for the API, the operations and the dashboard (the router's own is gcp/src/switch.mjs isRegionalLb).
+  it('scopes a Google Cloud name by its load balancer: a regional or internal one\'s region (else the row\'s), the others global', () => {
+    expect([googleScopeOf({ kind: 'regional', region: 'europe-west1' }, 'europe-west2'), googleScopeOf({ kind: 'internal' }, 'europe-west2')]).toEqual(['regions/europe-west1', 'regions/europe-west2']);
+    expect([googleScopeOf(undefined, 'europe-west2'), ...['global', 'classic', 'cross-region-internal'].map((kind) => googleScopeOf({ kind, region: 'europe-west2' }, 'europe-west2'))]).toEqual(['global', 'global', 'global', 'global']);
+    expect(googleServicePath('dormeto-dev', 'urlMaps', 'lb', { kind: 'regional' }, 'europe-west2')).toBe('projects/dormeto-dev/regions/europe-west2/urlMaps/lb');
+    expect(googleServicePath('dormeto-dev', 'backendServices', 'shop', undefined, 'europe-west2')).toBe('projects/dormeto-dev/global/backendServices/shop');
+    // A path is kept as it is.
+    expect(googleServicePath('dormeto-dev', 'urlMaps', 'projects/dormeto-dev/global/urlMaps/lb', { kind: 'regional' }, 'europe-west2')).toBe('projects/dormeto-dev/global/urlMaps/lb');
   });
 });
 
