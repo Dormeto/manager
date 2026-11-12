@@ -153,12 +153,34 @@ describe('DmTable', () => {
     const refresh = vi.fn();
     const w = render({ tableActions: [{ title: 'Refresh the list', icon: mdiRefresh, run: refresh }] satisfies DmAction[] });
     const menu = w.find('[data-test="dm-table-menu"]');
-    expect(menu.attributes('aria-label')).toBe('Table actions');
     expect(menu.element.closest('th')).not.toBeNull();
     await openTableMenu(w);
     expect([...overlay()!.querySelectorAll('.v-list-item-title')].map((t) => t.textContent)).toEqual(['Export CSV', 'Export PDF', 'Refresh the list']);
     await press('.v-list-item:last-child');
     expect(refresh).toHaveBeenCalledTimes(1);
+    // Named with the table's title, as its search: two tables on one page (Routers and its IP lists) told apart.
+    expect(menu.attributes('aria-label')).toBe('Table actions: Tests');
+    expect(w.find('[data-test="dm-table-search"] input').attributes('aria-label')).toBe('Search tests');
+    w.unmount();
+    wrapper = render({ exported: { name: 'ip-lists', title: 'IP lists' } });
+    expect([wrapper.find('[data-test="dm-table-menu"]').attributes('aria-label'), wrapper.find('[data-test="dm-table-search"] input').attributes('aria-label')])
+      .toEqual(['Table actions: IP lists', 'Search IP lists']);
+  });
+
+  it('offers no "All" page size on a client table of more than 1,000 rows (rendering them all would freeze the page)', async () => {
+    const sizes = (w: VueWrapper) => (w.findComponent({ name: 'VDataTableFooter' }).props('itemsPerPageOptions') as { title: string }[]).map((o) => o.title);
+    const w = render({ items: rows(1000) });
+    expect(sizes(w)).toEqual(['25', '50', '100', 'All']);
+    await w.setProps({ items: rows(1001) });
+    await flushPromises();
+    expect(sizes(w)).toEqual(['25', '50', '100']);
+  });
+
+  it('says the time zone of the export\'s time in the PDF', async () => {
+    const w = render({});
+    await openTableMenu(w);
+    await press('[data-test="dm-table-export-pdf"]');
+    expect(vi.mocked(pdf).mock.calls[0]![0].lines[0]).toMatch(/^Exported \w{3} \d+, \d{4}, \d+:\d{2} [AP]M (UTC|GMT([+-]\d{1,2}(:\d{2})?)?|[A-Z]{2,5}) · 6 rows$/);
   });
 
   it('shows a row\'s "⋮" only when the row has actions; a destructive one in its color, a disabled one saying why', async () => {
@@ -426,6 +448,11 @@ describe('DmTable', () => {
       await nextTick();
       expect(w.find('.dm-table').classes()).toContain('dm-table--scrolls');
       size(1200, 1214);
+      await nextTick();
+      expect(w.find('.dm-table').classes()).not.toContain('dm-table--scrolls');
+      // No row with an action (Workloads): nothing to keep in view, the column scrolls with the others.
+      await w.setProps({ actions: () => [] });
+      size(1240, 950);
       await nextTick();
       expect(w.find('.dm-table').classes()).not.toContain('dm-table--scrolls');
     } finally {

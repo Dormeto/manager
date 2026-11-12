@@ -8,13 +8,14 @@ import { pauseLabel, pauseLine } from '../pause';
 import StatusMark from './StatusMark.vue';
 import type { Pause } from '../types';
 
-const props = defineProps<{ pauses?: Pause[] }>();
+// focusable false: inside a link that is the tab stop (the Overview's lists).
+const props = withDefaults(defineProps<{ pauses?: Pause[]; focusable?: boolean }>(), { pauses: undefined, focusable: true });
 const now = useNow();
 const label = computed(() => pauseLabel(props.pauses));
 </script>
 
 <template>
-  <StatusMark v-if="label" :icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" :label="label" class="dm-pause">
+  <StatusMark v-if="label" :icon="label === 'excluded' ? mdiCancel : mdiPauseCircleOutline" color="secondary" :label="label" :focusable="focusable" class="dm-pause">
     <div v-for="p in pauses" :key="`${p.scope}/${p.exclusionId ?? ''}`" class="text-body-medium">{{ pauseLine(p, now) }}</div>
     <div class="text-body-small mt-1 dm-pause__note">Never napped while paused; requests still wake it.</div>
   </StatusMark>

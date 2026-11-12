@@ -21,6 +21,8 @@ export interface DmHeader<T> {
   text?: (item: T) => string;
   // false keeps a column out of the exports (the Actions column always is).
   export?: boolean;
+  // The column's title in the exports when its text is not the screen's (a number with its unit: "Saved (30 days, $)").
+  exportTitle?: string;
 }
 
 // An item of a row's menu, or of the table's (its header's "⋮"). A destructive one has a color; a disabled one says why

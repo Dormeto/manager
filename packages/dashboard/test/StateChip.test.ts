@@ -42,6 +42,8 @@ describe('StateChip', () => {
     await new Promise((r) => setTimeout(r, 300));
     const tip = document.querySelector('.v-overlay--active')!;
     expect(tip.querySelector('.dm-state-chip__label')!.textContent).toBe('Asleep');
+    // The chip's name says the word already: the line is for the eye, not read twice.
+    expect(tip.querySelector('.dm-state-chip__label')!.getAttribute('aria-hidden')).toBe('true');
     expect(tip.textContent).toMatch(/^AsleepThe backends are stopped.*the next request wakes it/);
     wrapper.unmount();
   });

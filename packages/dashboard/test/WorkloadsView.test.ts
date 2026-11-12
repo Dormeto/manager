@@ -428,15 +428,16 @@ describe('Workloads view, its table', () => {
     await serve([full, DEMO_VM]);
     const wrapper = await mountAt('/workloads');
     expect(await exportCsv(wrapper)).toEqual([
-      'Account or project,Workload,Backend,Router,Tags,State,Since,Last 7 days,URL,Wake mode,Wakes (7 days),Wakes (total),Saved (30 days)',
+      // Money as a number, its currency in the column's title.
+      'Account or project,Workload,Backend,Router,Tags,State,Since,Last 7 days,URL,Wake mode,Wakes (7 days),Wakes (total),"Saved (30 days, $)"',
       '111122223333 (AWS),Shop (a4dffc5bf369a297) · Storefront of the shop team · has a schedule,"Auto Scaling group, RDS instance",dmt-dev,"env=staging, team=payments",'
-        + 'Asleep · Paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test,2026-10-09T10:00:00.000Z,"awake 17 %, asleep 83 % · idle 89 %",https://shop.example.com/,browser,4,3,$41.5',
-      'dormeto-dev (Google Cloud),Demo VM (b5eed0c6a470b3a8),"Compute Engine VM, Cloud SQL instance",dmtr-dormeto-dev-europe-west2,,Asleep,,"awake 17 %, asleep 83 % · idle 89 %",,browser,,3,$0',
+        + 'Asleep · Paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test,2026-10-09T10:00:00.000Z,"awake 17 %, asleep 83 % · idle 89 %",https://shop.example.com/,browser,4,3,41.50',
+      'dormeto-dev (Google Cloud),Demo VM (b5eed0c6a470b3a8),"Compute Engine VM, Cloud SQL instance",dmtr-dormeto-dev-europe-west2,,Asleep,,"awake 17 %, asleep 83 % · idle 89 %",,browser,,3,0.00',
     ]);
     expectEveryColumnSaid(wrapper, 'workloads', full);
     // No action on a row: no "⋮" but the table's.
     expect(wrapper.findAll('[data-test="dm-row-menu"]')).toHaveLength(0);
-    expect(wrapper.find('thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
+    expect(wrapper.find('thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions: Workloads');
     wrapper.unmount();
   });
 });

@@ -578,7 +578,7 @@ describe('Discovery view, its table', () => {
     const wrapper = await mountView('viewer');
     expect(wrapper.findAll('[data-test="dm-row-menu"]')).toHaveLength(0);
     expect(wrapper.findAll('tbody input[type="checkbox"]')).toHaveLength(0);
-    expect(wrapper.find('thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
+    expect(wrapper.find('thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions: Discovery candidates');
     wrapper.unmount();
   });
 

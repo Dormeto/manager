@@ -137,7 +137,9 @@ const headers: DmHeader<WorkloadSummary>[] = [
   { title: 'Wake mode', key: 'wakeMode', sortable: false },
   { title: 'Wakes (7 days)', key: 'wakes7d', align: 'end', value: (w) => w.stats7d?.wakes ?? null, sortable: false, text: (w) => (w.stats7d ? String(w.stats7d.wakes) : '') },
   { title: 'Wakes (total)', key: 'wakeCount', align: 'end', sortable: false },
-  { title: 'Saved (30 days)', key: 'saved', align: 'end', value: (w) => w.costs?.saved.usd ?? null, sortable: false, text: (w) => (w.costs ? saved(w.costs.saved) : '') },
+  // Exported as a number a spreadsheet adds up, the currency in the column's title.
+  { title: 'Saved (30 days)', exportTitle: 'Saved (30 days, $)', key: 'saved', align: 'end', value: (w) => w.costs?.saved.usd ?? null, sortable: false,
+    text: (w) => (!w.costs ? '' : !w.costs.saved.usd && w.costs.saved.unpricedHours ? 'not priced' : w.costs.saved.usd.toFixed(2)) },
 ];
 const workloadKey = (w: WorkloadSummary) => `${w.router}/${w.workloadId}`;
 

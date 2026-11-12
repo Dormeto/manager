@@ -16,6 +16,9 @@ import OverviewView from '../src/views/OverviewView.vue';
 import RouterView from '../src/views/RouterView.vue';
 import RoutersView from '../src/views/RoutersView.vue';
 import UsersView from '../src/views/UsersView.vue';
+import AccountView from '../src/views/AccountView.vue';
+import SchedulesView from '../src/views/SchedulesView.vue';
+import UpdateView from '../src/views/UpdateView.vue';
 import WorkloadView from '../src/views/WorkloadView.vue';
 import WorkloadsView from '../src/views/WorkloadsView.vue';
 
@@ -24,6 +27,12 @@ vi.mock('../src/api', async (importOriginal) => {
   const original = await importOriginal<typeof import('../src/api')>();
   return { ...original, api: vi.fn(async (path: string, init?: RequestInit) => (await import('../src/mock')).mockApi(path, init)) };
 });
+// The user's own Cognito calls (Account) answered by the demo's too, signed in.
+vi.mock('../src/cognito', () => ({ cognito: vi.fn(async (target: string, body: Record<string, unknown>) => (await import('../src/mock')).mockCognito(target, body)) }));
+vi.mock('../src/auth', async (importOriginal) => ({ ...(await importOriginal<typeof import('../src/auth')>()), accessToken: async () => 'demo', idToken: async () => 'demo' }));
+vi.mock('../src/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/config')>()), getConfig: () => ({ env: 'demo', authority: 'https://example.invalid', clientId: 'demo', authDomain: 'example.invalid', passkeys: true }),
+}));
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 Object.defineProperty(window, 'visualViewport', {
   configurable: true,
@@ -41,7 +50,8 @@ async function until(test: () => boolean, what: string) {
 const WORDS = [
   'awake', 'asleep', 'napping', 'waking', 'failed', 'unknown', 'paused', 'excluded', 'ok', 'warning', 'error', 'unreachable', 'not reporting', 'idle check late',
   'no health report', 'running', 'succeeded', 'done', 'skipped', 'pending', 'refused', 'confirmed', 'force change password', 'enabled', 'disabled', 'to onboard',
-  'to offboard', 'managed', 'ineligible', 'dismissed', 'out of scope', 'gone', 'partial', 'stopped', 'in progress', 'in_progress',
+  'to offboard', 'managed', 'ineligible', 'dismissed', 'out of scope', 'gone', 'partial', 'stopped', 'in progress', 'in_progress', 'active', 'invited',
+  'password reset', 'healthy', 'unhealthy', 'expired', 'lift incomplete',
 ];
 const said = (text: string) => WORDS.find((w) => new RegExp(`(^|[^a-z-])${w.replace(/ /g, '[ _]')}($|[^a-z-])`, 'i').test(text));
 // What a view shows with a status word where an icon should stand alone, as `<where>: "<text>"`.
@@ -82,7 +92,9 @@ afterEach(() => {
   wrapper = undefined;
   document.body.innerHTML = '';
 });
-async function show(view: Component, path: string, props: Record<string, unknown> = {}) {
+// `width`: the window's (a phone's: 390), which Vuetify reads as it starts.
+async function show(view: Component, path: string, props: Record<string, unknown> = {}, width = 1280) {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
   const pinia = createPinia();
   setActivePinia(pinia);
   useSession().applyMe({ email: 'admin@example.com', role: 'admin' });
@@ -193,4 +205,34 @@ describe('statuses as their icons alone, over the demo', () => {
     await until(() => document.querySelectorAll('[data-test="audit-result"]').length > 0, 'the audit');
     expect(wordsShown(page())).toEqual([]);
   });
+  it('Update, Schedules and the account', async () => {
+    for (const [view, path, ready] of [[UpdateView, '/update', '.v-card'], [SchedulesView, '/schedules', '.fc'], [AccountView, '/account', '.v-card']] as const) {
+      await show(view, path);
+      await until(() => Boolean(document.querySelector(ready)), path);
+      await sleep(600);
+      await flushPromises();
+      expect(wordsShown(page()), path).toEqual([]);
+      wrapper!.unmount();
+      wrapper = undefined;
+      document.body.innerHTML = '';
+    }
+  }, 30_000);
+
+  it('a phone\'s width: the tables as stacked rows', async () => {
+    try {
+      for (const [view, path, ready] of [[RoutersView, '/routers', '.dm-routers [data-test="health-mark"]'], [WorkloadsView, '/workloads', '[data-test="state-chip"]'],
+        [DiscoveryView, '/discovery', '.dm-candidates tbody [data-test="status-mark"]'], [OperationsView, '/operations', '.dm-operations [data-test="status-mark"]'],
+        [UsersView, '/users', '[data-test="status-mark"]']] as const) {
+        await show(view, path, {}, 390);
+        await until(() => Boolean(document.querySelector(ready)), path);
+        expect(document.querySelector('.v-data-table__tr--mobile'), path).not.toBeNull();
+        expect(wordsShown(page()), path).toEqual([]);
+        wrapper!.unmount();
+        wrapper = undefined;
+        document.body.innerHTML = '';
+      }
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1280 });
+    }
+  }, 30_000);
 });

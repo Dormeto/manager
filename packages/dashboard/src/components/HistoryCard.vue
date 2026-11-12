@@ -7,7 +7,11 @@ import { api } from '../api';
 import { usePoll } from '../poll';
 import { duration, stateColor, usd } from '../format';
 import DmLoader from './DmLoader.vue';
+import DmTable from './DmTable.vue';
+import StatusMark from './StatusMark.vue';
 import { causeText, collapseRows, dayRows, dayWave, stateLabel, wavePaths, type Phase } from '../history';
+import { stateIcon } from '../state';
+import type { DmHeader } from '../table';
 import type { WorkloadHistory } from '../types';
 
 const props = defineProps<{ router: string; id: string; now: number }>();
@@ -44,7 +48,19 @@ const summary = computed(() => {
       : h.savings.unpriced.length ? ['savings not priced yet'] : []),
   ];
 });
-const transitions = computed(() => [...(history.value?.entries ?? [])].reverse().slice(0, 50));
+// The changes, as a table of the component (search, sort on When, 25 a page, the exports): newest first.
+type Change = WorkloadHistory['entries'][number];
+const transitions = computed(() => [...(history.value?.entries ?? [])].reverse());
+const why = (t: Change) => `${causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null, hibernated: t.hibernated })}${t.failure ? `: ${t.failure.message}` : ''}`;
+const headers: DmHeader<Change>[] = [
+  { title: 'When', key: 'at', value: (t) => Date.parse(t.at) },
+  { title: 'Change', key: 'to', sortable: false, text: (t) => `${t.from ? stateLabel(t.from) : 'first seen'} → ${stateLabel(t.to)}` },
+  { title: 'Why', key: 'cause', sortable: false, text: why },
+  // A wake's duration: in words on screen, in seconds in the exports.
+  { title: 'Wake', key: 'durationMs', align: 'end', exportTitle: 'Wake (s)', text: (t) => (t.durationMs ? String(Math.round(t.durationMs / 1000)) : '') },
+];
+const NEWEST = [{ key: 'at', order: 'desc' as const }];
+const changeKey = (t: Change) => `${t.at}#${t.to}`;
 // Each day's wave, by the day's time.
 const waves = computed(() => {
   const h = history.value;
@@ -117,17 +133,21 @@ const fill = `dm-wave-${useId()}`;
         <span class="text-medium-emphasis">Point at a day for each change</span>
       </div>
       <div v-if="transitions.length" class="dm-history__changes">
-        <v-table density="compact" fixed-header>
-          <thead><tr><th>When</th><th>Change</th><th>Why</th><th class="text-end">Wake</th></tr></thead>
-          <tbody>
-            <tr v-for="t in transitions" :key="`${t.at}#${t.to}`" data-test="transition">
-              <td class="text-no-wrap text-medium-emphasis dm-num">{{ when(t.at) }}</td>
-              <td class="text-no-wrap"><span class="dm-change">{{ t.from ?? 'first seen' }} <span class="dm-change__arrow">→</span> <span :class="['swatch', 'mr-1', `bg-${stateColor(t.to)}`]" />{{ t.to }}</span></td>
-              <td>{{ causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null, hibernated: t.hibernated }) }}<template v-if="t.failure">: {{ t.failure.message }}</template></td>
-              <td class="text-no-wrap text-end dm-num">{{ t.durationMs ? duration(Math.round(t.durationMs / 1000)) : '' }}</td>
-            </tr>
-          </tbody>
-        </v-table>
+        <DmTable :headers="headers" :items="transitions" :item-value="changeKey" :sort-by="NEWEST" :per-page="25" density="compact"
+          :exported="{ name: `history-${id}`, title: `History of ${router}/${id}`, filters: [`Period: ${days === 1 ? '24 hours' : `${days} days`}`] }">
+          <template #[`item.at`]="{ item }"><span class="text-no-wrap text-medium-emphasis dm-num">{{ when(item.at) }}</span></template>
+          <!-- The states as their icons, their words their names (tables design §3). -->
+          <template #[`item.to`]="{ item }">
+            <span class="dm-change">
+              <StatusMark v-if="item.from" :icon="stateIcon(item.from)" :color="stateColor(item.from)" :label="stateLabel(item.from)" :size="16" />
+              <span v-else class="text-medium-emphasis">first seen</span>
+              <span class="dm-change__arrow" aria-hidden="true">→</span>
+              <StatusMark :icon="stateIcon(item.to)" :color="stateColor(item.to)" :label="stateLabel(item.to)" :size="16" />
+            </span>
+          </template>
+          <template #[`item.cause`]="{ item }"><span class="dm-why">{{ why(item) }}</span></template>
+          <template #[`item.durationMs`]="{ item }"><span class="text-no-wrap dm-num">{{ item.durationMs ? duration(Math.round(item.durationMs / 1000)) : '' }}</span></template>
+        </DmTable>
       </div>
     </v-card-text>
     <DmLoader v-else label="Reading the history…" :size="48" />
@@ -167,10 +187,11 @@ const fill = `dm-wave-${useId()}`;
 .swatch--area { width: 14px; height: 10px; border-radius: 2px 2px 0 0; border-top: 2px solid rgb(var(--v-theme-success));
   background: linear-gradient(180deg, rgba(var(--v-theme-success), 0.6), rgba(var(--v-theme-success), 0.08)); }
 .dm-history__changes { margin-top: 18px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 14px; overflow: hidden; }
-.dm-history__changes :deep(.v-table__wrapper) { max-height: 340px; }
-.dm-history__changes :deep(thead th) { background: rgb(var(--v-theme-surface)) !important; }
+/* Its four columns in the card's half width: tighter cells, a cause (an email) breaking where it must. */
+.dm-history__changes :deep(.v-table__wrapper > table > * > tr:not(.v-data-table__tr--mobile) > :is(td, th)) { padding-inline: 8px !important; }
+.dm-why { overflow-wrap: anywhere; }
 .dm-num { font-variant-numeric: tabular-nums; }
-.dm-change { font: 500 0.74rem/1 var(--dm-mono); letter-spacing: 0.02em; }
+.dm-change { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 0.82rem; }
 .dm-change__arrow { opacity: 0.5; }
 .dm-period :deep(.v-btn) { font-weight: 500; }
 @media (prefers-reduced-motion: reduce) { .wave { animation: none; } }

@@ -1,16 +1,16 @@
 <script setup lang="ts">
 // A status as its icon alone (tables design §3): its word is the icon's accessible name and the tooltip's first line, the
-// slot's lines follow (who, when, why, an error's text). Focusable, so a keyboard opens the tooltip too; `pulse` breathes
-// while something runs. The word itself goes in the exports, from the column's text. A view's class lands on the mark.
+// slot's lines follow (who, when, why, an error's text). Focusable, so a keyboard opens the tooltip too (not inside a link
+// that is the tab stop: `focusable` false, its word then in the link's name); `pulse` breathes while something runs. The word itself goes in the exports, from the column's text. A view's class lands on the mark.
 defineOptions({ inheritAttrs: false });
-withDefaults(defineProps<{ icon: string; color?: string; label: string; pulse?: boolean; size?: number | string }>(), { color: undefined, pulse: false, size: 20 });
+withDefaults(defineProps<{ icon: string; color?: string; label: string; pulse?: boolean; size?: number | string; focusable?: boolean }>(), { color: undefined, pulse: false, size: 20, focusable: true });
 </script>
 
 <template>
   <v-tooltip location="top" max-width="420" open-on-focus>
     <template #activator="{ props: tip }">
       <span v-bind="{ ...$attrs, ...tip }" data-test="status-mark" class="dm-status" :class="[color ? `text-${color}` : 'dm-status--plain', { 'dm-status--pulse': pulse }]" role="img"
-        :aria-label="label" tabindex="0"><v-icon :icon="icon" :size="size" aria-hidden="true" /></span>
+        :aria-label="label" :tabindex="focusable ? 0 : undefined"><v-icon :icon="icon" :size="size" aria-hidden="true" /></span>
     </template>
     <!-- The name says the word already: its line here is for the eye, the other lines are described. -->
     <div class="dm-status__label" aria-hidden="true">{{ label }}</div>

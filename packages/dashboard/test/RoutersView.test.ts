@@ -342,8 +342,13 @@ describe('Routers view', () => {
     expect(chip.findComponent({ name: 'VIcon' }).props('icon')).toBe(mdiPauseCircleOutline);
     expect(chip.attributes('tabindex')).toBe('0');
     expect(chip.attributes('aria-label')).toBe('2 workloads paused on dmt-dev: never napped until resumed; requests still wake them');
+    // It opens nothing: not drawn as the state chips a click opens (outlined, no link), and its tooltip, its name again, not
+    // read twice.
+    expect(chip.classes()).toContain('v-chip--variant-outlined');
+    expect(chip.classes()).not.toContain('v-chip--link');
     await hover(chip);
     expect(document.querySelector('.v-overlay--active')?.textContent).toBe('2 workloads paused on dmt-dev: never napped until resumed; requests still wake them');
+    expect(document.querySelector('.v-overlay--active .v-overlay__content > [aria-hidden="true"]')?.textContent).toBe('2 workloads paused on dmt-dev: never napped until resumed; requests still wake them');
     expect(rowOf(wrapper, 'dmtr-dev-eu-west-3').find('[data-test="paused-count"]').exists()).toBe(false);
     wrapper.unmount();
   });
@@ -433,7 +438,7 @@ describe('Routers view', () => {
     const headers = admin.findAll('thead th').map((th) => th.text());
     expect(headers.at(-1)).toBe('Actions');
     expect(headers.indexOf('Actions')).toBe(headers.indexOf('Pause') + 1);
-    expect(admin.find('.dm-routers thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
+    expect(admin.find('.dm-routers thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions: Routers');
     expect(rowOf(admin, 'dmtr-dev-eu-west-3').find('[data-test="dm-row-menu"]').attributes('aria-label')).toBe('Actions for dmtr-dev-eu-west-3');
     expect(await menuOf(admin, 'dmtr-dev-eu-west-3')).toEqual(['Pause…', 'Uninstall…']);
     expect(await menuOf(admin, 'dmtr-dev-eu-west-1')).toEqual(['Resume', 'Uninstall…']);
@@ -504,9 +509,10 @@ describe('Routers view', () => {
     expect(name).toMatch(/^dormeto-routers-\d{4}-\d{2}-\d{2}\.csv$/);
     expect((body as string).split('\r\n')).toEqual([
       'Router,Version,Health,Idle check,Workloads,Pause',
-      '"dmtr-dev-eu-west-3 (AWS, 111122223333, eu-west-3) · Dev router of the shop team",0.22.6 (build 79c810cca8d3),ok,,1 asleep,',
+      // The version says the upgrade its cell offers (the manager's) or hints at (Terraform's).
+      '"dmtr-dev-eu-west-3 (AWS, 111122223333, eu-west-3) · Dev router of the shop team",0.22.6 (build 79c810cca8d3) · 0.23.0 available,ok,,1 asleep,',
       `"dmtr-dev-eu-west-1 (AWS, 111122223333, eu-west-1)",0.23.0 (build a1b2c3d4e5f6),warning: ${DRIFT} · alert since ${ALARM_SINCE},,0,Router paused by ops@example.com at 2026-10-07T06:00:00.000Z: load test`,
-      '"dmt-dev (AWS, 111122223333, eu-west-1)",0.22.6 (build fc69a52b9b43),ok,,5 asleep; 2 of them paused,',
+      '"dmt-dev (AWS, 111122223333, eu-west-1)",0.22.6 (build fc69a52b9b43) · 0.23.0 available through its Terraform,ok,,5 asleep; 2 of them paused,',
       '',
     ]);
     // A router with every fact (its idle check too): each column says it.

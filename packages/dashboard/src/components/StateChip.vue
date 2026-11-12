@@ -19,7 +19,8 @@ defineProps<{ state: string; failure?: Failure | null; cloud?: Cloud }>();
         <v-icon :icon="stateIcon(state)" size="16" aria-hidden="true" />
       </v-chip>
     </template>
-    <div class="dm-state-chip__label">{{ stateLabel(state) }}</div>
+    <!-- The chip's name says the word already: this line is for the eye. -->
+    <div class="dm-state-chip__label" aria-hidden="true">{{ stateLabel(state) }}</div>
     <div>{{ stateMeaning(state) }}</div>
     <div v-if="failure" class="mt-1">{{ failureTitle(failure, cloud) }} ({{ failure.message }})</div>
   </v-tooltip>

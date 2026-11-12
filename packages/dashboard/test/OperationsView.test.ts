@@ -186,7 +186,7 @@ describe('Operations view', () => {
     expect((await tip(started)).join(' ')).toMatch(/Oct 7, 2026/);
     // No row has an action: no row "⋮", the header's holds the exports.
     expect(wrapper.find('[data-test="dm-row-menu"]').exists()).toBe(false);
-    expect(wrapper.find('.dm-operations thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions');
+    expect(wrapper.find('.dm-operations thead [data-test="dm-table-menu"]').attributes('aria-label')).toBe('Table actions: Operations');
     wrapper.unmount();
   });
 

@@ -68,13 +68,21 @@ function start(body: Record<string, unknown>, what: string) {
 const where = (r: RouterInfo) => [cloudMark(rowCloud(r)).label, r.account, r.region].filter(Boolean).join(', ');
 const headers: DmHeader<RouterInfo>[] = [
   { title: 'Router', key: 'name', text: (r) => [`${r.name} (${where(r)})`, ...(r.summary ? [r.summary] : [])].join(' · ') },
-  { title: 'Version', key: 'version', text: (r) => (r.version ? `${r.version}${r.build ? ` (build ${r.build})` : ''}` : '') },
+  { title: 'Version', key: 'version', text: versionText },
   { title: 'Health', key: 'health', sortable: false, text: (r) => healthText(r, alarmOf(r)) },
   { title: 'Idle check', key: 'lastScheduledCheckAt', text: (r) => r.lastScheduledCheckAt ?? '' },
   { title: 'Workloads', key: 'workloads', sortable: false, text: workloadsText },
   { title: 'Pause', key: 'pauses', sortable: false, text: (r) => pausesText(r.pauses) },
 ];
 const routerName = (r: RouterInfo) => r.name;
+// The version and build, and the upgrade its cell offers (a router the manager installed) or hints at (one in Terraform).
+function versionText(r: RouterInfo): string {
+  if (!r.version) return '';
+  const upgrade = available.value && r.version !== available.value && !r.operation
+    ? r.source === 'manager' ? ` · ${available.value} available` : r.source === 'terraform' ? ` · ${available.value} available through its Terraform` : ''
+    : '';
+  return `${r.version}${r.build ? ` (build ${r.build})` : ''}${upgrade}`;
+}
 
 // A row's menu: pause (with a reason) or resume for operators, while the router reports its health (0.16 and later);
 // uninstall (after a confirmation) for administrators, of a router the manager installed.

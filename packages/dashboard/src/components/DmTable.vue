@@ -92,11 +92,13 @@ watch([total, itemsPerPage], () => {
 // The footer while the rows go beyond a page (the one chosen, or the first size, so a larger size can be undone).
 const size = (n: number) => (n === -1 ? Infinity : n);
 const footer = computed(() => total.value > Math.min(size(itemsPerPage.value), size(props.perPage)));
-const pageSizes = computed(() => (props.server ? OPTIONS : [...OPTIONS, { value: -1, title: 'All' }]));
+// "All" for a client table of 1,000 rows at most: more, drawn at once, would freeze the page.
+const ALL_MOST = 1000;
+const pageSizes = computed(() => (props.server || rows.value.length > ALL_MOST ? OPTIONS : [...OPTIONS, { value: -1, title: 'All' }]));
 
 // Vuetify's headers: the view's (without what is DmTable's), the toggles of an expandable table, then the Actions column.
 const columns = computed(() => [
-  ...props.headers.map(({ text: _text, export: _export, ...header }) => header),
+  ...props.headers.map(({ text: _text, export: _export, exportTitle: _exportTitle, ...header }) => header),
   ...(props.expandable ? [{ title: props.expandTitle, key: EXPAND, sortable: false, width: 48, cellProps: { class: 'dm-table__expand' } }] : []),
   { title: 'Actions', key: ACTIONS, sortable: false, align: 'end' as const, width: 56, headerProps: { class: 'dm-table__actions' }, cellProps: { class: 'dm-table__actions' } },
 ]);
@@ -104,12 +106,14 @@ const columns = computed(() => [
 // A table wider than its card scrolls sideways: its Actions column then stays in view at the end (the view's columns wrap
 // or cut first, so that most tables never scroll).
 const root = ref<HTMLElement | null>(null);
-const scrolls = ref(false);
+const wide = ref(false);
+// Kept in view only when a row has an action there (a table whose rows have none scrolls it with the others).
+const scrolls = computed(() => wide.value && props.items.some((item) => rowActions(item).length > 0));
 let observer: ResizeObserver | undefined;
 onMounted(() => {
   const wrapper = root.value?.querySelector<HTMLElement>('.v-table__wrapper');
   if (!wrapper) return;
-  const check = () => { scrolls.value = wrapper.scrollWidth > wrapper.clientWidth + 1; };
+  const check = () => { wide.value = wrapper.scrollWidth > wrapper.clientWidth + 1; };
   observer = new ResizeObserver(check);
   observer.observe(wrapper);
   const table = wrapper.querySelector('table');
@@ -137,6 +141,8 @@ if (import.meta.env.DEV) {
   }, { immediate: true });
 }
 const searching = computed(() => (search.value ?? '').trim());
+// The table named in its search's name ("Search routers", "Search IP lists"): two tables on a page told apart.
+const named = computed(() => { const t = props.exported.title; return /^[A-Z][a-z]/.test(t) ? `${t.charAt(0).toLowerCase()}${t.slice(1)}` : t; });
 const noMatch = computed(() => !props.server && Boolean(searching.value) && props.items.length > 0 && rows.value.length === 0);
 const mobile = computed(() => smAndDown.value);
 
@@ -197,7 +203,7 @@ async function exportAs(kind: 'csv' | 'pdf') {
   const kept = exportable.value;
   try {
     const { list, note } = await exportRows(viewNote);
-    const titles = kept.map((h) => h.title);
+    const titles = kept.map((h) => h.exportTitle ?? h.title);
     const cells = list.map((item) => kept.map((h) => cellText(h, item)));
     if (kind === 'csv') {
       // The cut said on a last line, the other cells empty (each line has every column).
@@ -205,7 +211,7 @@ async function exportAs(kind: 'csv' | 'pdf') {
       download(fileName(name, 'csv'), 'text/csv;charset=utf-8', csv(titles, lines));
       return;
     }
-    const when = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+    const when = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
     const lines = [
       `Exported ${when} · ${count(list.length)} row${list.length === 1 ? '' : 's'}`,
       ...(query ? [`Search: “${query}”`] : []),
@@ -234,10 +240,10 @@ function options(o: DmOptions) {
     <div v-if="!noSearch || slots.toolbar || mobile" class="dm-table__toolbar">
       <div class="dm-table__tools"><slot name="toolbar" /></div>
       <!-- Cleared, the search is empty text, never null (a server table's view sends it to its API). -->
-      <v-text-field v-if="!noSearch" :model-value="search" data-test="dm-table-search" :prepend-inner-icon="mdiMagnify" label="Search" density="compact" hide-details single-line clearable
+      <v-text-field v-if="!noSearch" :model-value="search" data-test="dm-table-search" :prepend-inner-icon="mdiMagnify" label="Search" :aria-label="`Search ${named}`" density="compact" hide-details single-line clearable
         class="dm-table__search" @update:model-value="search = $event ?? ''" />
       <!-- A phone's table has no header row: its menu is here. -->
-      <DmActionsMenu v-if="mobile" :lead="exports" :actions="tableActions" :busy="busy" label="Table actions" test="dm-table-menu" />
+      <DmActionsMenu v-if="mobile" :lead="exports" :actions="tableActions" :busy="busy" :label="`Table actions: ${exported.title}`" test="dm-table-menu" />
     </div>
     <v-alert v-if="failure" type="error" variant="tonal" density="compact" closable class="ma-3" :text="failure" @click:close="failure = ''" />
     <v-data-table-server v-model="selected" v-model:page="page" v-model:items-per-page="itemsPerPage" v-model:sort-by="sortBy" v-model:expanded="expanded"
@@ -248,7 +254,7 @@ function options(o: DmOptions) {
       <!-- The column's name for screen readers (and a phone's cells, which show it); the "⋮" on a wide screen. -->
       <template #[`header.${ACTIONS}`]>
         <span :class="{ 'd-sr-only': !mobile }">Actions</span>
-        <DmActionsMenu v-if="!mobile" :lead="exports" :actions="tableActions" :busy="busy" label="Table actions" test="dm-table-menu" />
+        <DmActionsMenu v-if="!mobile" :lead="exports" :actions="tableActions" :busy="busy" :label="`Table actions: ${exported.title}`" test="dm-table-menu" />
       </template>
       <!-- An expandable table's toggles, named by what they open and the row (a phone's says its title). -->
       <template v-if="expandable" #[`header.${EXPAND}`]><span :class="{ 'd-sr-only': !mobile }">{{ expandTitle }}</span></template>

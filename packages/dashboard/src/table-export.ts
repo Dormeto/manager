@@ -58,11 +58,13 @@ const unprintable = (text: string) => [...text.normalize('NFC')].filter((c) => !
 // A PDF page: A4 landscape (841.89 pt wide) and its margins, 769.89 pt printed across.
 const PAGE_WIDTH = 841.89;
 const MARGIN = 36;
-// The narrowest a PDF column is: a short word's width (8 letters of the 8 pt font and its padding). Where long addresses
-// and dates fill the page, the columns of short words would otherwise be cut to a few letters a line. The bound: a page
-// holds 17 such columns; the widest table, Workloads, exports 13 (its test checks it); a table of more would overflow.
+// The narrowest a PDF column is: a short word's width (8 letters of the 8 pt font and its padding), in proportion in the
+// 7 pt font of a table of more than 10 columns. Where long addresses and dates fill the page, the columns of short words would
+// otherwise be cut to a few letters a line. The bound: a page holds 19 such columns of the smaller font; the widest table,
+// Workloads, exports 13 (its test checks it); a table of more would overflow.
 export const PDF_COLUMN_MIN = 44;
-export const PDF_COLUMNS_MAX = Math.floor((PAGE_WIDTH - 2 * MARGIN) / PDF_COLUMN_MIN);
+const SMALL = 7;
+export const PDF_COLUMNS_MAX = Math.floor((PAGE_WIDTH - 2 * MARGIN) / ((PDF_COLUMN_MIN * SMALL) / 8));
 
 // A4 landscape: the title, the lines (when, the search and filters in force), the table, and page numbers.
 // A line says how many characters the font could not print, which the CSV keeps.
@@ -88,12 +90,47 @@ export async function pdf(doc: { title: string; lines: string[]; headers: string
       y += 12;
     }
   }
+  const head = doc.headers.map(winAnsi);
+  const body = doc.rows.map((row) => row.map(winAnsi));
+  // A wide table in a smaller font; each column as wide as its longest word (a line breaks between words, not inside one), up
+  // to a quarter of the page. An address (a URL) breaks first: the room left goes to it after. When the words do not fit,
+  // the widest columns give first, down to a common width, never below PDF_COLUMN_MIN.
+  const fontSize = head.length > 10 ? SMALL : 8;
+  const padding = head.length > 10 ? 3 : 4;
+  const least = (PDF_COLUMN_MIN * fontSize) / 8;
+  const printed = file.internal.pageSize.getWidth() - 2 * margin;
+  const wordWidth = (word: string, bold = false) => {
+    file.setFont('helvetica', bold ? 'bold' : 'normal');
+    return Math.min(printed / 4, file.getStringUnitWidth(word) * fontSize + 2 * padding + 1);
+  };
+  const address = (word: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(word);
+  const longest = (c: number, urls: boolean) => Math.max(least, ...head[c]!.split(/\s+/).map((w) => wordWidth(w, true)),
+    ...body.map((row) => Math.max(0, ...(row[c] ?? '').split(/\s+/).filter((w) => urls || !address(w)).map((w) => wordWidth(w)))));
+  const widths = head.map((_, c) => longest(c, false));
+  const sum = () => widths.reduce((a, b) => a + b, 0);
+  if (sum() > printed) {
+    const fits = (cap: number) => widths.reduce((total, w) => total + Math.min(w, cap), 0) <= printed;
+    let [low, high] = [least, Math.max(...widths)];
+    for (let i = 0; i < 30; i += 1) {
+      const middle = (low + high) / 2;
+      if (fits(middle)) low = middle;
+      else high = middle;
+    }
+    widths.forEach((w, c) => { widths[c] = Math.min(w, low); });
+  } else {
+    for (const [c] of widths.entries()) widths[c] = Math.min(longest(c, true), widths[c]! + printed - sum());
+  }
+  const columnStyles = Object.fromEntries(widths.map((w, c) => [c, { minCellWidth: Math.floor(w) }]));
+  file.setFont('helvetica', 'normal');
   autoTable(file, {
-    head: [doc.headers.map(winAnsi)],
-    body: doc.rows.map((row) => row.map(winAnsi)),
+    head: [head],
+    body,
     startY: y + 4,
     margin: { top: margin, right: margin, bottom: margin + 10, left: margin },
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 4, overflow: 'linebreak', valign: 'top', minCellWidth: PDF_COLUMN_MIN },
+    // A row is never split across two pages.
+    rowPageBreak: 'avoid',
+    styles: { font: 'helvetica', fontSize, cellPadding: padding, overflow: 'linebreak', valign: 'top', minCellWidth: least },
+    columnStyles,
     headStyles: { fillColor: [3, 75, 128], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 247, 250] },
   });

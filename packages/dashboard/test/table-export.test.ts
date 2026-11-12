@@ -99,10 +99,34 @@ describe('pdf', () => {
     for (const word of ['awake', 'waking', 'napping', 'asleep', 'idle']) expect(text).toMatch(new RegExp(`\\([^)]*\\b${word}\\b[^)]*\\)`));
   });
 
+  it('breaks no word inside a narrow column of a wide table (Workloads\' 13): a column is as wide as its longest word, in a smaller font', async () => {
+    const headers = ['Account or project', 'Workload', 'Backend', 'Router', 'Tags', 'State', 'Since', 'Last 7 days', 'URL', 'Wake mode', 'Wakes (7 days)', 'Wakes (total)', 'Saved (30 days, $)'];
+    const row = ['192546169435 (AWS)', 'booking-staging (309d8d56319d8ee9) · has a schedule', 'Kubernetes workload', 'dmtr-dormeto-dev-europe-west2', 'env=staging, team=payments',
+      'Awake · Paused by avery.haddad@example.com at 2026-11-11T11:10:56.446Z: Training session all week', '2026-11-12T13:10:31.446Z',
+      'awake 20 %, waking <1 %, napping <1 %, asleep 80 % · idle 74 %', 'https://booking-staging.example.com/', 'browser', '22', '180', '45.80'];
+    const text = new TextDecoder('windows-1252').decode(await (await pdf({ title: 'Workloads', lines: [], headers, rows: [row, row] })).arrayBuffer());
+    for (const word of ['booking-staging', 'Kubernetes', 'dmtr-dormeto-dev-europe-west2', 'avery.haddad@example.com', 'env=staging,', 'team=payments', 'browser', '192546169435', '309d8d56319d8ee9']) {
+      expect(text, word).toMatch(new RegExp(`\\([^)]*${word.replace(/[.()]/g, '\\$&')}[^)]*\\)`));
+    }
+  });
+
+  it('keeps each row on one page', async () => {
+    // 60 rows of five lines each: some would straddle a page.
+    const rows = Array.from({ length: 60 }, (_, i) => [`r${i}`, [1, 2, 3, 4, 5].map((n) => `r${i} line ${n}`).join('\n')]);
+    const text = new TextDecoder('windows-1252').decode(await (await pdf({ title: 'Tall', lines: [], headers: ['Row', 'Lines'], rows })).arrayBuffer());
+    const pages = text.split('endstream');
+    const pageOf = (s: string) => pages.findIndex((p) => p.includes(`(${s})`));
+    expect(pages.filter((p) => p.includes('(r0 line 1)') || p.includes('(r59 line 5)')).length).toBeGreaterThan(0);
+    const split = rows.filter((_, i) => pageOf(`r${i} line 1`) !== pageOf(`r${i} line 5`)).map(([name]) => name);
+    expect(split).toEqual([]);
+    expect(pageOf('r59 line 5')).toBeGreaterThan(pageOf('r0 line 1'));
+  });
+
   it('fits as many columns as a page holds at their narrowest, and says in the console when a table holds more', async () => {
-    // A4 landscape, 36 pt margins: 769.89 pt printed; 44 pt a column at least.
+    // A4 landscape, 36 pt margins: 769.89 pt printed; 44 pt a column at least in the 8 pt font, 38.5 pt in the 7 pt font of a
+    // table of more than 10 columns.
     expect(PDF_COLUMN_MIN).toBe(44);
-    expect(PDF_COLUMNS_MAX).toBe(17);
+    expect(PDF_COLUMNS_MAX).toBe(19);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const wide = (n: number) => pdf({ title: 'Wide', lines: [], headers: Array.from({ length: n }, (_, i) => `Column ${i}`),
       rows: [Array.from({ length: n }, () => 'https://a-long-address-without-a-break.example.com/and/a/path')] });

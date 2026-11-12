@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { useNow } from '../now';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { mdiAlertCircleOutline, mdiArrowRight, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
+import { mdiAlertCircleOutline, mdiArrowRight, mdiCloudOffOutline, mdiFilterRemoveOutline, mdiPowerSleep, mdiServerNetwork, mdiWeatherSunny, mdiWeatherSunsetUp } from '@mdi/js';
 import { api } from '../api';
 import { useSession } from '../stores/session';
 import { usePoll } from '../poll';
 import { attentionMore, relative, rowCloud } from '../format';
 import CloudMark from '../components/CloudMark.vue';
-import { routerStatus } from '../pause';
+import { NOT_REPORTING, routerStatus } from '../pause';
 import PauseChip from '../components/PauseChip.vue';
 import StateChip from '../components/StateChip.vue';
 import StatusMark from '../components/StatusMark.vue';
@@ -48,6 +48,7 @@ const { error, loading, nextAt, run } = usePoll(async () => {
   loaded.value = true;
 });
 const more = computed(() => attentionMore(attentionTotal.value, attention.value.length));
+const notReporting = `${NOT_REPORTING.charAt(0).toUpperCase()}${NOT_REPORTING.slice(1)}`;
 // The energy the naps did not use (the energy card), as the API estimates it with the bar of all workloads: its figures
 // kept an hour, asked again every 10 minutes, as the Workloads view does (never every workload from here).
 const FLEET_MS = 600_000;
@@ -174,10 +175,15 @@ const num = (title: string, value: number) => (shown.value[title] ?? value);
             :subtitle="r.error ? r.error : `${r.region} · router ${r.version} · ${r.workloads} workloads · ${routerStatus(r, now).detail}`">
             <template #prepend><CloudMark :cloud="rowCloud(r)" class="mr-2" /></template>
             <template #append>
-              <!-- Its status as its icon alone (tables design §3): the word its name and its tooltip's first line, the detail next. -->
-              <span class="d-inline-flex align-center ga-2"><PauseChip :pauses="r.pauses" />
-                <StatusMark :icon="routerStatus(r, now).icon" :color="routerStatus(r, now).color" :label="routerStatus(r, now).text">
+              <!-- Its status as its icon alone (tables design §3): the word its name and its tooltip's first line, the detail next;
+                   a muted cloud for a router that does not report, as Routers shows it. Inside the item's link (its tab stop), the
+                   marks are images in its name, not tab stops. -->
+              <span class="d-inline-flex align-center ga-2"><PauseChip :pauses="r.pauses" :focusable="false" />
+                <StatusMark :icon="routerStatus(r, now).icon" :color="routerStatus(r, now).color" :label="routerStatus(r, now).text" :focusable="false">
                   <div class="text-body-medium dm-status-detail">{{ routerStatus(r, now).detail }}</div>
+                </StatusMark>
+                <StatusMark v-if="r.reporting === false && r.health && !r.error" :icon="mdiCloudOffOutline" label="not reporting" :size="18" :focusable="false">
+                  <div class="text-body-medium dm-status-detail">{{ notReporting }}</div>
                 </StatusMark></span>
             </template>
           </v-list-item>

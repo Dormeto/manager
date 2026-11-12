@@ -115,17 +115,23 @@ describe('Overview', () => {
       { name: 'dmtr-down', region: 'eu-west-3', version: '0.24.0', workloads: 1, error: 'timed out' },
       { name: 'dmtr-silent', region: 'eu-west-3', version: '0.20.0', workloads: 1, reporting: false, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: late },
       { name: 'dmtr-late', region: 'us-east-1', version: '0.20.0', workloads: 1, reporting: true, checkSchedule: 'rate(5 minutes)', lastScheduledCheckAt: old },
+      // Its health read, its events not reaching the manager: the muted cloud beside its health, as Routers shows it.
+      { name: 'dmtr-quiet', region: 'us-east-1', version: '0.31.0', workloads: 1, reporting: false, health: { status: 'ok', problems: [] } },
     ];
     const wrapper = await mountOverview();
     const items = wrapper.findAll('[data-test="routers-card"] .v-list-item');
     const marks = items.map((i) => i.find('.v-list-item__append [data-test="status-mark"]'));
-    expect(marks.map((m) => m.attributes('aria-label'))).toEqual(['error', 'ok', 'unreachable', 'not reporting', 'idle check late']);
-    expect(marks.map((m) => m.classes().find((c) => c.startsWith('text-')))).toEqual(['text-error', 'text-success', 'text-error', 'text-warning', 'text-warning']);
-    expect(marks.map((m) => m.attributes('tabindex'))).toEqual(['0', '0', '0', '0', '0']);
+    expect(marks.map((m) => m.attributes('aria-label'))).toEqual(['error', 'ok', 'unreachable', 'not reporting', 'idle check late', 'ok']);
+    expect(marks.map((m) => m.classes().find((c) => c.startsWith('text-')))).toEqual(['text-error', 'text-success', 'text-error', 'text-warning', 'text-warning', 'text-success']);
+    expect(items[5]!.findAll('.v-list-item__append [data-test="status-mark"]').map((m) => m.attributes('aria-label'))).toEqual(['ok', 'not reporting']);
+    marks.pop();
+    // Inside a link (the item's tab stop), a mark is no tab stop of its own; its word is in the link's name (an image's).
+    expect(marks.map((m) => m.attributes('tabindex'))).toEqual([undefined, undefined, undefined, undefined, undefined]);
+    expect(marks.map((m) => [m.attributes('role'), m.element.closest('a') !== null])).toEqual(Array(5).fill(['img', true]));
     // No word beside the icon: the append holds no text.
     for (const item of items) expect(item.find('.v-list-item__append').text()).toBe('');
-    // The tooltip: the word, then the detail.
-    (marks[3]!.element as HTMLElement).focus();
+    // The tooltip, on the mouse: the word, then the detail.
+    await marks[3]!.trigger('mouseenter');
     const tip = () => document.getElementById(marks[3]!.attributes('aria-describedby')!);
     for (const end = Date.now() + 2000; !tip()?.classList.contains('v-overlay--active') && Date.now() < end;) await new Promise((r) => setTimeout(r, 10));
     expect([...tip()!.querySelector('.v-overlay__content')!.children].map((l) => l.textContent!.trim())).toEqual(['not reporting', 'no report from its idle checks for 3 periods of its schedule']);
