@@ -7,6 +7,18 @@ CLI script, of the same release).
 
 ## Unreleased
 
+- **Google Cloud routers report to the manager's event bus:** a router 0.41.0 sends its state changes and its checks to the
+manager's API, `POST <api endpoint>/routers/events`, with an identity token of its own service account (no key, no grant);
+API Gateway checks the token (issuer `https://accounts.google.com`, audience the API's endpoint), the API takes the router's
+project and region from its email (`dmtr-<region>@<project>.iam.gserviceaccount.com`), never from the body, refuses a router
+not registered (403 `router_unknown`), and puts the events on the bus as `dormeto.router.gcp`, which the fleet function
+ingests as an AWS router's, from the manager's own account only. The route has its own throttle (burst 100, 50 a second).
+Each `manager-settings` push now says where to report (`events: { url, audience }`), also to the routers `dormeto gcp
+connect` registers, and a check whose router holds another settings ETag gets the organization's settings pushed again.
+- **The bus admits the AWS routers' and the forwarders' sources only:** its policy allows the organization's principals (the
+manager's account without an organization) `events:PutEvents` for `events:source` `dormeto.router` and
+`aws.elasticloadbalancing` (the forwarders of event-driven refresh) alone, so no other account can send the relay's source. An AWS router installed in the manager's own account is allowed by its role, which router 0.41.0 limits to
+the same source; until it is upgraded, it could still send `dormeto.router.gcp`.
 - **Workloads, four columns fewer:** Since, Wake mode, Wakes (7 days) and Wakes (total) are gone; a row's "Last 7 days" bar says
 them in its tooltip, a labelled line each after the states (`Asleep since: 2 h ago (Nov 13, 2026, 08:02:00 AM GMT+1)`, `Wake mode`,
 `Wakes in the last 7 days`, `Wakes in total`), and in its name for screen readers; a fact the row does not have is left out. The

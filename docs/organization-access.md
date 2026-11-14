@@ -18,6 +18,14 @@ Each release also publishes `dormeto-access-commands-<version>.sh`, the same wit
 `dmt-<env>-manager-access-check`, which only assumes it) and the Discovery view's Organization access panel lists what is
 missing: onboarding and router installs are refused where the command role is missing.
 
+The routers' events go to the manager's bus (`dmt-<env>-manager`). Its policy admits the organization's principals (the
+manager's account alone without an organization) for the sources `dormeto.router` and `aws.elasticloadbalancing` (the
+forwarders' load balancer changes, event-driven refresh) only (`events:source`): the source
+`dormeto.router.gcp` is the manager API's, which relays the Google Cloud routers' events and is the only one the fleet
+function reads it from. An AWS router in the manager's own account holds `events:PutEvents` on the bus by its role, which
+the bus policy does not limit: router 0.41.0 puts the same condition on its role and on the routers' boundary, so until such
+a router is upgraded it could send that source too.
+
 ## Google Cloud
 
 A manager reaches Google Cloud without a key or a secret: its Lambda roles act as two service accounts of one **host
@@ -59,6 +67,9 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   adds, updates or removes the registrations (the version is the service's `DMT_VERSION`: the discovery account never
   calls a router). The [poll](operations.md#google-cloud-routers) removes a router whose controller no longer exists, and
   reads the version of a router too old to poll from its health, every 10 minutes.
+- **A router's reports** need no grant: the router sends its events to the manager's API (`POST <api>/routers/events`)
+  with an identity token of its own service account (`dmtr-<region>@<project>.iam.gserviceaccount.com`), which the
+  metadata server gives it ([Operations](operations.md#google-cloud-routers)). `router/gcp/access.json` is unchanged.
 - **Discovery of projects:** with a connection, each run lists the projects at the scopes as the discovery account
   (`projects.search`) and scans each one: its URL maps, backend services, target proxies, forwarding rules, instance
   group managers and VMs (Compute Engine's aggregated lists), then the instance groups and zonal network endpoint groups

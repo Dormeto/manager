@@ -75,6 +75,21 @@ doesn't); the registry keeps the version as the router reports it.
   AWS; one the poll is refused at keeps the refusal on its `RS#` item (`lastRefusal`), and the watchdog says that refusal,
   with its command, instead of `silent`. A registered router whose controller discovery hasn't found yet is not called: its
   poll records `router_unknown`, once.
+- **The reports** (router 0.41.0, router push design 2026-11-14 §3): a router sends its events to the manager's API,
+  `POST <api endpoint>/routers/events` (the HTTP API's own URL, not CloudFront's), with an identity token of its service
+  account for the API's endpoint. API Gateway refuses a request without a token Google signed for that audience (its JWT
+  authorizer `google`); the function then takes the router's project and region from the token's verified email
+  `dmtr-<region>@<project>.iam.gserviceaccount.com`, never from the body, and refuses with 403 `router_unknown` a token that is
+  not a router's, a manager without a Google Cloud connection, or a router not registered. The body is
+  `{ "events": [{ "detailType": "Router checked" | "Workload state changed", "detail": {…} }] }`, 100 entries and 1 MB at
+  most (else 400 `bad_request`). Each entry goes on the manager's bus as `dormeto.router.gcp`, its detail
+  `{ "account": <project>, "region": <region>, "detail": <the router's> }` (10 entries and 256 KB a call); entries the bus did
+  not take answer 502 `{ "error": "not_published", "failed": n }`, and the router sends them again. The answer is 200
+  `{ "accepted": n, "managerSettings": { "etag": <settings.json's ETag, or null> } }`. The route has its own throttle (burst
+  100, 50 a second). The fleet function reads `dormeto.router.gcp` only from the manager's own account (else
+  `RouterEventRefused`, dropped) and ingests it as the poll does the same router's journal and check. An event that comes
+  both ways (a router both polled and reporting) is ingested once: a history entry is keyed by its time and state, and a
+  check's rows are written whichever way they come first.
 - **A router removed:** one whose controller URL answers Google's own 404 (not the controller's JSON) **twice in a row**
   is unregistered (`RouterUnregistered`): an uninstalled router leaves within two minutes instead of alarming. A broken
   connection never counts as a router gone.
@@ -101,7 +116,10 @@ doesn't); the registry keeps the version as the router reports it.
   `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller, but one below
   0.40.0, as `manager-settings` (the object written and its S3 ETag), 10 at a time. A router that fails is logged (`ManagerSettingsNotPushed`), and the
   poll pushes it when the ETag the router holds differs from the file's (`ManagerSettingsPushed`); the write's answer
-  does not change.
+  does not change. The push also carries where to report, `events: { url, audience }` (the route's URL and the API's
+  endpoint), and goes to the routers `dormeto gcp connect` registers, once `settings.json` exists. A reported
+  `Router checked` whose `managerSettings.etag` differs from the file's gets it pushed again by the fleet function, once a
+  check (its first chunk).
 - **What stays with the CLI:** every change of an IAM policy, a backend service or a cluster. `install-router` for a project
   and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp routers install`
   or `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and
