@@ -1,6 +1,6 @@
-// The organization's settings.json in the manager's lists bucket (written by the API), as the poll reads it to push it to the
-// Google Cloud routers (Google Cloud manager design §5.5, §6.3): its ETag as S3 gives it (quotes included), and its text;
-// none while it doesn't exist.
+// The organization's settings.json in the manager's lists bucket (written by the API), as the fleet function reads it to push
+// it to the Google Cloud routers (Google Cloud manager design §5.5, §6.3; router push design §6.2): its ETag as S3 gives it
+// (quotes included), and its text; none while it doesn't exist.
 import { GetObjectCommand, HeadObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 
 // The S3 client's bounds: 3 s to connect, then 10 s of silence (socketTimeout; past a requestTimeout the HTTP handler only
@@ -33,4 +33,18 @@ export function createSettingsJson({ s3, bucket }: { s3: Pick<S3Client, 'send'>;
       }
     },
   };
+}
+
+export type SettingsJson = Pick<ReturnType<typeof createSettingsJson>, 'etag' | 'read'>;
+
+// settings.json as `manager-settings` pushes it, with its ETag; pushed as it is when it is not JSON: the router reads it as
+// unset and says it is unreadable, as an AWS router does. Null while it doesn't exist.
+export async function settingsDocument(settings: Pick<SettingsJson, 'read'>): Promise<{ etag: string; settings: unknown } | null> {
+  const read = await settings.read();
+  if (!read) return null;
+  try {
+    return { etag: read.etag, settings: JSON.parse(read.text) as unknown };
+  } catch {
+    return { etag: read.etag, settings: read.text };
+  }
 }

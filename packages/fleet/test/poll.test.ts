@@ -99,7 +99,7 @@ function fakeRouter(project: string, region: string, order: string[]) {
 type FakeRouter = ReturnType<typeof fakeRouter>;
 
 // The manager's side: its table, the registry, the real ingest and store, settings.json in S3 and the connection.
-function world({ now }: { now?: () => number } = {}) {
+function world({ now, events }: { now?: () => number; events?: { url: string; audience: string } } = {}) {
   const clock = { t: T0 };
   const time = now ?? (() => clock.t);
   const dynamo = fakeDynamo();
@@ -117,7 +117,7 @@ function world({ now }: { now?: () => number } = {}) {
   const s3 = { etag: null as string | null, text: '', heads: 0, gets: 0 };
   const logs: [string, Payload][] = [];
   const poll = createPoll({
-    store, registry, env: 'dev', routerVersion: '0.40.0', now: time,
+    store, registry, env: 'dev', routerVersion: '0.40.0', now: time, events,
     ingest: async (event) => {
       ingested.push(event);
       await ingestOne(event);
@@ -282,6 +282,17 @@ describe('the poll of Google Cloud routers', () => {
     w.s3.text = '{"workloads": {';
     await w.poll();
     expect(r.calls[1]).toEqual({ action: 'manager-settings', settings: '{"workloads": {', etag: '"abc"', refusals: true });
+  });
+
+  // Until the poll ends (M39), what it pushes says where a router 0.41.0 reports (router push design §4.1).
+  it('pushes with the settings where to report, when the manager has the relay', async () => {
+    const events = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
+    const w = world({ events });
+    const r = await w.add('europe-west2');
+    w.s3.etag = '"abc"';
+    w.s3.text = '{}';
+    await w.poll();
+    expect(r.calls[1]).toEqual({ action: 'manager-settings', settings: {}, etag: '"abc"', events, refusals: true });
   });
 
   it('records a push the router refuses (over its 1 MiB body limit) with its reason, the router keeping its own copy, and tries again at the next poll', async () => {

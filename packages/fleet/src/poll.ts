@@ -13,9 +13,11 @@ import type { Google, GoogleConnection } from '@dormeto/google';
 import { accessMissingText, callRouter, controllerUnknownText, RouterCallError, routerHealth } from '@dormeto/google/router';
 import { CHUNK_WORKLOADS_MAX, timely } from './clean.js';
 import { routerTooOld, tooOldText } from './clouds.js';
+import { googleEvent, type ReportTarget } from './google-report.js';
 import { eachAtOnce, type RouterEvent } from './ingest.js';
 import type { InstalledRouter, Registry } from './registry.js';
 import { GOOGLE_CALL_MS } from './router-call.js';
+import { settingsDocument } from './settings-json.js';
 import type { FleetStore, RouterPoll } from './store.js';
 
 export const POLL_AT_ONCE = 10;
@@ -57,11 +59,12 @@ export interface PollDeps {
   settings: { etag(): Promise<string | null>; read(): Promise<{ etag: string; text: string } | null> };
   env: string; // the manager's environment, for the commands the refusals name
   routerVersion?: string; // the router version the manager pins
+  events?: ReportTarget | undefined; // where a router 0.41.0 reports, sent with the settings it is pushed (router push design §4.1)
   now?: () => number;
   log?: { info(event: string, data: object): void; warn(event: string, data: object): void };
 }
 
-export function createPoll({ store, ingest, registry, google, settings, env, routerVersion, now = Date.now, log }: PollDeps) {
+export function createPoll({ store, ingest, registry, google, settings, env, routerVersion, events, now = Date.now, log }: PollDeps) {
   type Run = {
     connection: GoogleConnection; google: Pick<Google, 'request'>; deadline: number;
     etag: () => Promise<string | null>; document: () => Promise<{ etag: string; settings: unknown } | null>;
@@ -75,14 +78,13 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     return err instanceof Error ? err.message : String(err);
   };
 
-  // A page of the journal: each workload's events in their order, 10 workloads at once, as the router called says them.
+  // A page of the journal: each workload's events in their order, 10 workloads at once, as the router called says them (the
+  // mapping its reports share, google-report.ts).
   async function ingestEvents(router: InstalledRouter, events: Json[]) {
     const byWorkload = new Map<unknown, Json[]>();
     for (const e of events) byWorkload.set(e.workloadId, [...(byWorkload.get(e.workloadId) ?? []), e]);
     await eachAtOnce([...byWorkload.values()], WORKLOADS_AT_ONCE, async (mine) => {
-      for (const { id: _id, ...detail } of mine) {
-        await ingest({ account: router.account, region: router.region, 'detail-type': 'Workload state changed', detail: { ...detail, router: router.name || detail.router, region: router.region } });
-      }
+      for (const detail of mine) await ingest(googleEvent(router, 'Workload state changed', detail));
     });
   }
 
@@ -93,14 +95,11 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     const block = isObject(list.router) ? list.router : {};
     const total = Math.max(1, Math.ceil(rows.length / CHUNK_WORKLOADS_MAX));
     for (let index = 0; index < total; index += 1) {
-      await ingest({
-        account: router.account, region: router.region, 'detail-type': 'Router checked',
-        detail: {
-          router: { ...block, name: router.name || block.name, region: router.region, checkSchedule: check.checkSchedule ?? block.checkSchedule },
-          checkedAt: check.checkedAt, durationMs: check.durationMs, health: check.health, pauses: check.pauses, counts: check.counts,
-          chunk: { index, total }, workloads: rows.slice(index * CHUNK_WORKLOADS_MAX, (index + 1) * CHUNK_WORKLOADS_MAX),
-        },
-      });
+      await ingest(googleEvent(router, 'Router checked', {
+        router: { ...block, checkSchedule: check.checkSchedule ?? block.checkSchedule },
+        checkedAt: check.checkedAt, durationMs: check.durationMs, health: check.health, pauses: check.pauses, counts: check.counts,
+        chunk: { index, total }, workloads: rows.slice(index * CHUNK_WORKLOADS_MAX, (index + 1) * CHUNK_WORKLOADS_MAX),
+      }));
     }
   }
 
@@ -151,7 +150,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
         const current = await run.etag();
         const doc = current && current !== held ? await run.document() : null;
         if (doc) {
-          await call({ action: 'manager-settings', settings: doc.settings, etag: doc.etag });
+          await call({ action: 'manager-settings', settings: doc.settings, etag: doc.etag, ...(events ? { events } : {}) });
           poll.etag = doc.etag;
           log?.info('ManagerSettingsPushed', { router: router.name, account: router.account, region: router.region, etag: doc.etag });
         }
@@ -244,16 +243,7 @@ export function createPoll({ store, ingest, registry, google, settings, env, rou
     const run: Run = {
       ...current, deadline: started + POLL_BUDGET_MS,
       etag: once(() => settings.etag()),
-      // Pushed as it is when it is not JSON: the router reads it as unset and says it is unreadable, as an AWS router does.
-      document: once(async () => {
-        const read = await settings.read();
-        if (!read) return null;
-        try {
-          return { etag: read.etag, settings: JSON.parse(read.text) as unknown };
-        } catch {
-          return { etag: read.etag, settings: read.text };
-        }
-      }),
+      document: once(() => settingsDocument(settings)),
     };
     let next = 0;
     let polled = 0;

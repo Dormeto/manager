@@ -8,6 +8,7 @@
     "./description": "./src/description.ts",
     "./energy": "./src/energy.ts",
     "./clouds": "./src/clouds.ts",
+    "./google-report": "./src/google-report.ts",
     "./registry": "./src/registry.ts",
     "./router-call": "./src/router-call.ts"
   },

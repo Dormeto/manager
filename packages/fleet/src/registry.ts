@@ -1,9 +1,9 @@
 // The registry of the routers the manager knows by installation (a router installed by the manager, or registered for
 // a Google Cloud project): one item per router in the manager table, `ROUTER#<account>#<region>` under T#default, the
 // router as JSON in `data`. Operations writes and reads it, the API registers a Google Cloud connection's routers, and
-// discovery keeps the Google Cloud ones up to date, and the fleet's poll removes an uninstalled Google Cloud router and keeps
-// the version of one too old to poll: they share this format.
-import { DeleteItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
+// discovery keeps the Google Cloud ones up to date, the fleet's poll removes an uninstalled Google Cloud router and keeps
+// the version of one too old to poll, and the fleet reads one that reported to push it the settings: they share this format.
+import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 
 export const REGISTRY_PK = 'T#default';
 export const ROUTER_PREFIX = 'ROUTER#';
@@ -43,7 +43,7 @@ export const routerKey = (account: string, region: string) => ({ pk: { S: REGIST
 export const routerItem = (router: InstalledRouter): Record<string, AttributeValue> => ({ ...routerKey(router.account, router.region), data: { S: JSON.stringify(router) } });
 export const routerOf = (item: Record<string, AttributeValue> | undefined): InstalledRouter | null => (item?.data?.S ? (JSON.parse(item.data.S) as InstalledRouter) : null);
 
-// The registry read and written by a DynamoDB client of the manager table (the fleet's poll's).
+// The registry read and written by a DynamoDB client of the manager table (the fleet function's).
 export function createRegistry({ dynamo, table }: { dynamo: { send(command: object): Promise<any> }; table: string }) {
   return {
     async list(): Promise<InstalledRouter[]> {
@@ -58,6 +58,10 @@ export function createRegistry({ dynamo, table }: { dynamo: { send(command: obje
         start = page.LastEvaluatedKey;
       } while (start);
       return routers;
+    },
+    // One router's registration, null when there is none (the fleet's push of the settings to a router that reported).
+    async get(account: string, region: string): Promise<InstalledRouter | null> {
+      return routerOf((await dynamo.send(new GetItemCommand({ TableName: table, Key: routerKey(account, region), ConsistentRead: true }))).Item);
     },
     async put(router: InstalledRouter): Promise<void> {
       await dynamo.send(new PutItemCommand({ TableName: table, Item: routerItem(router) }));

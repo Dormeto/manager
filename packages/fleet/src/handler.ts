@@ -1,8 +1,11 @@
-// Router events queue → summaries (vision scale design §4), and every minute the poll of the Google Cloud routers, which
-// push nothing (Google Cloud manager design §6.3): the schedule invokes the function with `{ task: 'poll' }`.
+// Router events queue → summaries (vision scale design §4): an AWS router's events (`dormeto.router`), and a Google Cloud
+// router's as the manager's API relays them (`dormeto.router.gcp`, router push design §3.2), with the settings pushed to
+// a router whose check says it is behind (§6.2). Every minute, the poll of the Google Cloud routers (Google Cloud manager
+// design §6.3): the schedule invokes the function with `{ task: 'poll' }`.
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
+import { bySource, createGoogleReports, createSettingsPush } from './google-report.js';
 import { createIngest, processRecords } from './ingest.js';
 import { createPoll } from './poll.js';
 import { createRegistry } from './registry.js';
@@ -31,10 +34,19 @@ const googleSource = createGoogleSource({
 
 // The organization's settings.json in the lists bucket, read at most once a run by the poll.
 const settings = createSettingsJson({ s3: new S3Client(S3_OPTIONS), bucket: process.env.LISTS_BUCKET });
+const registry = createRegistry({ dynamo, table });
+// Where a Google Cloud router reports (the relay's route and its token's audience), sent with the settings it is pushed.
+const events = process.env.EVENTS_URL && process.env.EVENTS_AUDIENCE ? { url: process.env.EVENTS_URL, audience: process.env.EVENTS_AUDIENCE } : undefined;
+const env = process.env.ENV ?? 'dev';
 
-const poll = createPoll({
-  store, ingest, registry: createRegistry({ dynamo, table }), google: googleSource, settings, env: process.env.ENV ?? 'dev', routerVersion: process.env.ROUTER_VERSION, log,
+const poll = createPoll({ store, ingest, registry, google: googleSource, settings, env, routerVersion: process.env.ROUTER_VERSION, events, log });
+
+// The relay's events, from the manager's own account only (MANAGER_ACCOUNT).
+const reports = createGoogleReports({
+  ownAccount: process.env.MANAGER_ACCOUNT, ingest, log,
+  push: createSettingsPush({ settings, registry, google: googleSource, events, env, routerVersion: process.env.ROUTER_VERSION, log }),
 });
+const route = bySource({ ingest, reports });
 
 export const handler = async (event: { task?: string; Records?: { messageId: string; body: string }[] }) =>
-  (event.task === 'poll' ? poll() : processRecords(event.Records ?? [], ingest, log));
+  (event.task === 'poll' ? poll() : processRecords(event.Records ?? [], route, log));
