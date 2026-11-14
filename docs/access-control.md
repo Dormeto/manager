@@ -77,7 +77,9 @@ configuration in its router, beside its name.
 
 ## Groups and grants
 
-Administrators manage groups in the Users view: a name (1 to 48 lower-case letters, digits and hyphens; `dmt-` is
+Administrators manage groups in the dashboard's Groups view (Administration, Groups), a table of the groups with their
+grants, how many users hold each (a link to those users in Users) and their last change; who holds a group is set on
+each user in the Users view. A group has a name (1 to 48 lower-case letters, digits and hyphens; `dmt-` is
 reserved), a description (at most 200 characters), up to 20 grants, at most 100 groups. A group is a Cognito group of the
 manager's user pool; its grants are kept in the manager's table. A user can belong to several groups.
 

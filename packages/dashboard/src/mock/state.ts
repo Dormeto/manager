@@ -372,6 +372,8 @@ function seedJoins(routers: DemoRouter[], workloads: DemoWorkload[]): void {
   }
 }
 
+// R11: the groups the demo's people hold, by their place in the organization's people.
+const DEMO_GROUPS: Record<number, string[]> = { 2: ['payments'], 3: ['auditors'] };
 // R11: the demo's teams, whose workloads the groups below pick by their team tag.
 const TEAMS = ['payments', 'platform', 'data', 'web'];
 
@@ -647,7 +649,9 @@ function build(now: number): Demo {
     operations: [],
     runs: [],
     config: { config: configOf(), updatedAt: iso(now - 3 * DAY - 5 * HOUR), updatedBy: ME },
-    users: ORG.people.map((u) => ({ email: u.email, role: u.role, status: u.status, enabled: u.enabled, createdAt: iso(now - u.createdDays * DAY - 4 * HOUR), mfa: u.mfa })),
+    // R11: an operator in payments, the invited viewer in auditors (the Groups view's members).
+    users: ORG.people.map((u, i) => ({ email: u.email, role: u.role, status: u.status, enabled: u.enabled, createdAt: iso(now - u.createdDays * DAY - 4 * HOUR), mfa: u.mfa,
+      ...(DEMO_GROUPS[i] ? { groups: [...DEMO_GROUPS[i]] } : {}) })),
     groups: [
       { name: 'payments', description: 'The payments team: its workloads, to wake and nap', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake', 'nap'] }], updatedAt: iso(now - 6 * DAY), updatedBy: ME },
       { name: 'auditors', description: 'Read-only on staging', grants: [{ tags: { env: 'staging' }, permissions: ['read'] }], updatedAt: iso(now - 12 * DAY), updatedBy: ME },

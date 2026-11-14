@@ -25,7 +25,7 @@ describe('router guard', () => {
     setActivePinia(createPinia());
     me.value = { email: 'a@example.com', role: 'member', effectiveRole: 'member', groups: ['payments'], grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake'] }] };
     const { router } = await import('../src/router');
-    for (const path of ['/routers', '/routers/dmt-dev', '/discovery', '/operations', '/users']) {
+    for (const path of ['/routers', '/routers/dmt-dev', '/discovery', '/operations', '/users', '/groups']) {
       await router.push(path);
       expect(router.currentRoute.value.path, path).toBe('/');
     }
@@ -33,6 +33,23 @@ describe('router guard', () => {
     expect(router.currentRoute.value.path).toBe('/workloads');
     await router.push('/workloads/dmt-dev/abc');
     expect(router.currentRoute.value.path).toBe('/workloads/dmt-dev/abc');
+  });
+
+  // Groups are an administrator's, as Users (the API refuses GET /groups to anybody else).
+  it('lets an administrator into Groups and sends an operator or a viewer away', async () => {
+    for (const role of ['operator', 'viewer']) {
+      setActivePinia(createPinia());
+      me.value = { email: 'a@example.com', role, effectiveRole: role };
+      const { router } = await import('../src/router');
+      await router.push('/workloads');
+      await router.push('/groups');
+      expect(router.currentRoute.value.path, role).toBe('/');
+    }
+    setActivePinia(createPinia());
+    me.value = { email: 'a@example.com', role: 'admin', effectiveRole: 'admin' };
+    const { router } = await import('../src/router');
+    await router.push('/groups');
+    expect(router.currentRoute.value.path).toBe('/groups');
   });
 
   // The user, 2026-11-02: in the demo, Operations and Users could not be clicked. The dev server rebuilt its dependencies on their

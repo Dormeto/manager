@@ -35,7 +35,7 @@ const updatesLabel = (n: number) => (n === 1 ? '1 update available' : `${n} upda
 const groups = computed<{ title: string; items: NavItem[] }[]>(() => [
   { title: 'Fleet', items: [item('Overview', '/', 'overview'), item('Workloads', '/workloads', 'workloads'), item('Schedules', '/schedules', 'schedules'), ...(session.isMember ? [] : [item('Routers', '/routers', 'routers')])] },
   ...(session.isMember ? [] : [{ title: 'Organization', items: [item('Discovery', '/discovery', 'discovery', badge.pending, pendingLabel), item('Operations', '/operations', 'operations')] }]),
-  ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update', updates.count, updatesLabel)] }] : []),
+  ...(session.isAdmin ? [{ title: 'Administration', items: [item('Users', '/users', 'users'), item('Groups', '/groups', 'groups'), item('Audit', '/audit', 'audit'), item('Update', '/update', 'update', updates.count, updatesLabel)] }] : []),
 ]);
 const initials = computed(() => (session.email.split('@')[0] ?? '').split(/[._-]/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?');
 // The role, and the one the user acts with when MFA lowers it (nothing at all under "required"): in the account menu and

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import UsersView from '../src/views/UsersView.vue';
@@ -41,12 +42,22 @@ Object.defineProperty(window, 'visualViewport', {
   value: { width: 1280, height: 800, offsetLeft: 0, offsetTop: 0, pageLeft: 0, pageTop: 0, scale: 1, addEventListener() {}, removeEventListener() {} },
 });
 
+async function mountUsers(path = '/users') {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  useSession().email = 'admin@example.com';
+  for (const k of Object.keys(bodies)) delete bodies[k];
+  calls.length = 0;
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/users', component: UsersView }, { path: '/groups', component: { render: () => null } }] });
+  await router.push(path);
+  const wrapper = mount(UsersView, { attachTo: document.body, global: { plugins: [createVuetify({ components }), pinia, router] } });
+  await flushPromises();
+  return wrapper;
+}
+
 describe('Users', () => {
   it('shows who has two-step verification, and resets another user\'s after confirmation', async () => {
-    setActivePinia(createPinia());
-    useSession().email = 'admin@example.com';
-    const wrapper = mount(UsersView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
-    await flushPromises();
+    const wrapper = await mountUsers();
     const row = (email: string) => wrapper.findAll('tbody tr').find((r) => r.text().includes(email))!;
     // The status and the two-step verification as icons (tables design §3): their words are their names and tooltips.
     const marks = (email: string) => row(email).findAll('[data-test="status-mark"]');
@@ -71,16 +82,6 @@ describe('Users', () => {
     wrapper.unmount();
   });
 
-  // R11: groups and grants.
-  async function mountUsers() {
-    setActivePinia(createPinia());
-    useSession().email = 'admin@example.com';
-    for (const k of Object.keys(bodies)) delete bodies[k];
-    calls.length = 0;
-    const wrapper = mount(UsersView, { attachTo: document.body, global: { plugins: [createVuetify({ components })] } });
-    await flushPromises();
-    return wrapper;
-  }
   const press = async (label: string) => {
     ([...document.querySelectorAll<HTMLElement>('.v-overlay--active button')].find((b) => b.textContent?.trim() === label) as HTMLElement).click();
     await flushPromises();
@@ -88,59 +89,28 @@ describe('Users', () => {
   const fill = async (el: HTMLInputElement | HTMLTextAreaElement, value: string) => { el.value = value; el.dispatchEvent(new Event('input')); await flushPromises(); };
   const field = (label: string) => [...document.querySelectorAll('.v-overlay--active .v-input')].find((i) => i.querySelector('label')?.textContent?.includes(label))!.querySelector('input, textarea') as HTMLInputElement;
 
-  it('lists the groups with their members and grants, and each user\'s groups', async () => {
+  // The groups are managed in their own view (the user, 2026-11-15); Users keeps each user's membership.
+  it('shows each user\'s groups, each linking to it in Groups, and manages no group itself', async () => {
     const wrapper = await mountUsers();
-    const card = wrapper.find('[data-test="groups"]');
-    const payments = card.findAll('[data-test="group"]').find((g) => g.text().includes('payments'))!;
-    expect(payments.text()).toContain('The payments team');
-    expect(payments.text()).toContain('dev@example.com');
-    expect(payments.findAll('[data-test="grant"]').map((g) => g.text())).toEqual(['team=payments · read, wake, nap', 'every workload · read']);
-    expect(card.findAll('[data-test="group"]').find((g) => g.text().includes('auditors'))!.text()).toContain('no grants');
+    expect(wrapper.find('[data-test="groups"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="new-group"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('New group');
     const row = wrapper.findAll('tbody tr').find((r) => r.text().includes('dev@example.com'))!;
     expect(row.text()).toContain('member');
-    expect(row.find('[data-test="user-group"]').text()).toBe('payments');
+    const chip = row.find('[data-test="user-group"]');
+    expect(chip.text()).toBe('payments');
+    expect(chip.attributes('href')).toBe('/groups?group=payments');
     wrapper.unmount();
   });
 
-  it('creates a group from the grant editor: a selector of tags and permissions, wake and nap implying read', async () => {
-    const wrapper = await mountUsers();
-    await wrapper.find('[data-test="new-group"]').trigger('click');
+  it('shows only the users holding a group a link names, until its filter is removed', async () => {
+    const wrapper = await mountUsers('/users?group=payments');
+    expect(wrapper.findAll('tbody tr').map((r) => r.find('.dm-user__email').text())).toEqual(['dev@example.com']);
+    const filter = wrapper.find('[data-test="group-filter"]');
+    expect(filter.text()).toContain('payments');
+    await filter.find('.v-chip__close').trigger('click');
     await flushPromises();
-    await fill(field('Name'), 'Bad Name');
-    expect(document.querySelector('.v-overlay--active')!.textContent).toContain('1 to 48 lower-case letters');
-    expect(([...document.querySelectorAll<HTMLButtonElement>('.v-overlay--active button')].find((b) => b.textContent?.trim() === 'Create'))!.disabled).toBe(true);
-    await fill(field('Name'), 'billing');
-    await fill(field('Description'), 'Billing team');
-    await press('Add a grant');
-    // A grant with no permission is refused; the selector is empty (every workload) until a tag is added.
-    expect(([...document.querySelectorAll<HTMLButtonElement>('.v-overlay--active button')].find((b) => b.textContent?.trim() === 'Create'))!.disabled).toBe(true);
-    await press('Add a tag');
-    const [key, value] = [...document.querySelectorAll<HTMLInputElement>('.v-overlay--active [data-test="tags-editor"] input')];
-    await fill(key!, 'team');
-    await fill(value!, 'billing');
-    (document.querySelector('.v-overlay--active [data-test="perm-wake"] input') as HTMLInputElement).click();
-    await flushPromises();
-    expect((document.querySelector('.v-overlay--active [data-test="perm-read"] input') as HTMLInputElement).checked).toBe(true);
-    expect((document.querySelector('.v-overlay--active [data-test="perm-read"] input') as HTMLInputElement).disabled).toBe(true);
-    await press('Create');
-    expect(bodies['POST /groups']).toEqual({ name: 'billing', description: 'Billing team', grants: [{ tags: { team: 'billing' }, permissions: ['read', 'wake'] }] });
-    wrapper.unmount();
-  });
-
-  it('edits a group\'s description and grants (not its name) and deletes it after confirmation', async () => {
-    const wrapper = await mountUsers();
-    await wrapper.find('[data-test="edit-group-payments"]').trigger('click');
-    await flushPromises();
-    expect(field('Name').disabled).toBe(true);
-    await fill(field('Description'), 'Payments');
-    await press('Save');
-    expect(bodies['PUT /groups/payments']).toMatchObject({ description: 'Payments', grants: [{ tags: { team: 'payments' }, permissions: ['read', 'wake', 'nap'] }, { tags: {}, permissions: ['read'] }] });
-    await wrapper.find('[data-test="delete-group-payments"]').trigger('click');
-    await flushPromises();
-    expect(document.querySelector('.v-overlay--active')!.textContent).toContain('dev@example.com');
-    expect(calls).not.toContainEqual(['DELETE', '/groups/payments']);
-    await press('Delete');
-    expect(calls).toContainEqual(['DELETE', '/groups/payments']);
+    expect(wrapper.findAll('tbody tr')).toHaveLength(5);
     wrapper.unmount();
   });
 

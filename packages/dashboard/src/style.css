@@ -216,6 +216,10 @@ h1.text-headline-small { font-size: 2rem !important; line-height: 1.1 !important
 .dm-nav-item:hover .ni-cog-small { animation-duration: 2.4s; }
 @keyframes ni-turn { to { transform: rotate(360deg); } }
 @keyframes ni-turn-back { to { transform: rotate(-360deg); } }
+/* Groups: the two at the sides come closer to the one in the middle. */
+.dm-nav-icon--groups .ni-side { transition: transform 0.45s var(--dm-spring); }
+.dm-nav-item:hover .dm-nav-icon--groups .ni-side-left { transform: translateX(1px); }
+.dm-nav-item:hover .dm-nav-icon--groups .ni-side-right { transform: translateX(-1px); }
 .ni-second { transition: transform 0.45s var(--dm-spring); }
 .dm-nav-item:hover .ni-second { transform: translateX(1.5px) translateY(-1px); }
 .ni-check { stroke-dasharray: 10; stroke-dashoffset: 0; }

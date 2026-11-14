@@ -7,6 +7,12 @@ CLI script, of the same release).
 
 ## Unreleased
 
+- **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
+right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
+menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users
+showing only them, `/users?group=<name>`) and last change (when and by whom); a row opens its dialog, as does a link
+`/groups?group=<name>`. The Users view keeps each user's groups: the column, each group linking to it in Groups, the
+user's "Groups…" and the invitation's groups.
 - **Google Cloud routers report to the manager's event bus:** a router 0.41.0 sends its state changes and its checks to the
 manager's API, `POST <api endpoint>/routers/events`, with an identity token of its own service account (no key, no grant);
 API Gateway checks the token (issuer `https://accounts.google.com`, audience the API's endpoint), the API takes the router's

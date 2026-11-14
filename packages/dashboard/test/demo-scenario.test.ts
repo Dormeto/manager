@@ -182,7 +182,9 @@ describe('demo scenario', () => {
       expect((await call<{ tags: unknown }>(`/workloads/${manager.w.router}/${manager.w.workloadId}`)).tags).toEqual({ team: 'billing' });
     }
     if (terraform) await expect(call(`/workloads/${terraform.w.router}/${terraform.w.workloadId}/tags`, json('PUT', { tags: { team: 'x' } }))).rejects.toMatchObject({ status: 409 });
-    // Groups.
+    // Groups: the demo's people hold some, so that the Groups view counts members.
+    const held = (await call<{ users: { groups?: string[] }[] }>('/users')).users.flatMap((u) => u.groups ?? []);
+    expect(new Set(held)).toEqual(new Set(['payments', 'auditors']));
     const created = await call<{ group: { name: string } }>('/groups', json('POST', { name: 'billing', description: 'Billing', grants: [{ tags: { team: 'billing' }, permissions: ['read', 'nap'] }] }));
     expect(created.group.name).toBe('billing');
     await expect(call('/groups', json('POST', { name: 'dmt-x', description: '', grants: [] }))).rejects.toMatchObject({ status: 400 });

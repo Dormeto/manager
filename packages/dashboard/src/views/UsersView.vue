@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useNow } from '../now';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   mdiAccountCancelOutline, mdiAccountCheckOutline, mdiAccountEyeOutline, mdiAccountOutline, mdiAccountGroupOutline, mdiAccountMultipleOutline, mdiAccountPlus, mdiAccountWrenchOutline, mdiCancel, mdiCheckCircleOutline,
   mdiEmailFastOutline, mdiEmailSyncOutline, mdiLockReset, mdiShieldAccountOutline, mdiShieldAlertOutline, mdiShieldCheckOutline,
@@ -13,14 +14,13 @@ import type { DmAction, DmHeader } from '../table';
 import DmLoader from '../components/DmLoader.vue';
 import DmTable from '../components/DmTable.vue';
 import StatusMark from '../components/StatusMark.vue';
-import GroupsCard from '../components/GroupsCard.vue';
 import type { Group } from '../groups';
 import NoticeAlert from '../components/NoticeAlert.vue';
 import { useCountUp } from '../count-up';
 import PageTitle from '../components/PageTitle.vue';
 
 // mfa: null when Cognito could not say.
-// groups: the custom groups (R11).
+// groups: the custom groups (R11), managed in their own view (Groups); a user's are set here.
 interface User { email: string; role: string; status: string; enabled: boolean; createdAt: string | null; mfa?: boolean | null; groups?: string[] }
 
 const now = useNow();
@@ -35,10 +35,21 @@ const resetting = ref<User | null>(null);
 const invite = ref<{ email: string; role: string; groups: string[] }>({ email: '', role: 'viewer', groups: [] });
 const roles = ['viewer', 'operator', 'admin', 'member'];
 const roleItems = [{ title: 'Viewer', value: 'viewer' }, { title: 'Operator', value: 'operator' }, { title: 'Administrator', value: 'admin' }, { title: 'Member', value: 'member' }];
-// R11: the custom groups, and the user whose groups are being set. Group changes travel in the user's token: next sign-in.
+// R11: the custom groups' names, and the user whose groups are being set. Group changes travel in the user's token: next sign-in.
 const groups = ref<Group[]>([]);
 const groupNames = computed(() => groups.value.map((g) => g.name));
 const settingGroups = ref<{ user: User; groups: string[] } | null>(null);
+// The users holding a group a link names (?group=, a group's members in Groups), until the filter is removed.
+const route = useRoute();
+const router = useRouter();
+const groupFilter = ref('');
+watch(() => route.query.group, (name) => { groupFilter.value = typeof name === 'string' ? name : ''; }, { immediate: true });
+const listed = computed(() => (groupFilter.value ? users.value.filter((u) => u.groups?.includes(groupFilter.value)) : users.value));
+function clearGroupFilter() {
+  groupFilter.value = '';
+  const { group: _group, ...query } = route.query;
+  void router.replace({ query });
+}
 
 async function load() {
   loading.value = true;
@@ -177,9 +188,12 @@ load();
         </v-card-text>
       </v-card>
     </div>
-    <GroupsCard :groups="groups" :users="users" @notice="notice = $event" @changed="load" />
     <v-card class="dm-users">
-      <DmTable :headers="headers" :items="users" :loading="loading" item-value="email" :row-props="rowProps" :actions="actions" :exported="{ name: 'users', title: 'Users' }">
+      <DmTable :headers="headers" :items="listed" :loading="loading" item-value="email" :row-props="rowProps" :actions="actions"
+        :exported="{ name: 'users', title: 'Users', filters: groupFilter ? [`Group: ${groupFilter}`] : [] }">
+        <template v-if="groupFilter" #toolbar>
+          <v-chip data-test="group-filter" closable label variant="tonal" color="primary" :prepend-icon="mdiAccountMultipleOutline" close-label="Show every user" @click:close="clearGroupFilter">Group {{ groupFilter }}</v-chip>
+        </template>
         <template v-if="!users.length" #loading><DmLoader label="Reading the users…" :size="48" /></template>
         <template #[`item.email`]="{ item }">
           <div class="dm-user">
@@ -192,7 +206,7 @@ load();
           <v-chip :color="ROLE_COLOR[item.role]" variant="tonal" label :prepend-icon="ROLE_ICON[item.role]" class="dm-role">{{ item.role }}</v-chip>
         </template>
         <template #[`item.groups`]="{ item }">
-          <span class="dm-groups"><v-chip v-for="g in item.groups ?? []" :key="g" data-test="user-group" size="small" label variant="tonal">{{ g }}</v-chip></span>
+          <span class="dm-groups"><v-chip v-for="g in item.groups ?? []" :key="g" data-test="user-group" size="small" label variant="tonal" :to="{ path: '/groups', query: { group: g } }">{{ g }}</v-chip></span>
         </template>
         <template #[`item.status`]="{ item }">
           <StatusMark :icon="statusMark(item).icon" :color="statusMark(item).color" :label="statusWord(item)" />
@@ -236,7 +250,7 @@ load();
         <v-card-text>
           <v-text-field v-model="invite.email" label="Email" type="email" autocomplete="off" autofocus />
           <v-select v-model="invite.role" :items="roleItems" label="Role" />
-          <v-select v-model="invite.groups" :items="groupNames" label="Groups" multiple chips closable-chips :hint="groupNames.length ? undefined : 'No group yet: create one above.'" :persistent-hint="!groupNames.length" />
+          <v-select v-model="invite.groups" :items="groupNames" label="Groups" multiple chips closable-chips :hint="groupNames.length ? undefined : 'No group yet: create one in Groups.'" :persistent-hint="!groupNames.length" />
           <p class="text-body-small text-medium-emphasis">Viewers read, operators also nap and wake workloads, administrators also manage users. A member sees only the workloads their groups
             grant: no built-in role, no group, nothing to see.</p>
         </v-card-text>

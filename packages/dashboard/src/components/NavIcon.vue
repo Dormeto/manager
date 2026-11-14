@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The navigation's own icons: drawn for Dormeto (a line in the text's color, one part in the sun's), each with a small
 // motion when its item is pointed at or active (styled in style.css, .dm-nav-icon).
-defineProps<{ name: 'overview' | 'workloads' | 'schedules' | 'routers' | 'discovery' | 'operations' | 'users' | 'audit' | 'update' }>();
+defineProps<{ name: 'overview' | 'workloads' | 'schedules' | 'routers' | 'discovery' | 'operations' | 'users' | 'groups' | 'audit' | 'update' }>();
 </script>
 
 <template>
@@ -52,6 +52,14 @@ defineProps<{ name: 'overview' | 'workloads' | 'schedules' | 'routers' | 'discov
       <path class="ni-line" d="M2.8 20c.7-3.6 3.2-5.5 6.2-5.5s5.5 1.9 6.2 5.5" />
       <circle class="ni-accent ni-second" cx="17" cy="9.5" r="2.6" />
       <path class="ni-line ni-second" d="M16.5 14.6c2.4.2 4.2 1.9 4.7 4.9" />
+    </template>
+    <template v-else-if="name === 'groups'">
+      <!-- Three people inside a frame: a group, the one in the middle in the sun's color. -->
+      <rect class="ni-line" x="2.5" y="3.5" width="19" height="17" rx="3" />
+      <circle class="ni-line ni-side ni-side-left" cx="7.2" cy="10" r="1.9" />
+      <circle class="ni-accent ni-middle" cx="12" cy="9.2" r="2.3" />
+      <circle class="ni-line ni-side ni-side-right" cx="16.8" cy="10" r="1.9" />
+      <path class="ni-line" d="M7.6 17.2c.6-2.2 2.3-3.5 4.4-3.5s3.8 1.3 4.4 3.5M4.4 16.4c.3-1.5 1.3-2.5 2.8-2.7M19.6 16.4c-.3-1.5-1.3-2.5-2.8-2.7" />
     </template>
     <template v-else-if="name === 'update'">
       <circle class="ni-line" cx="12" cy="12" r="9" />

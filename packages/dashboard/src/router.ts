@@ -17,6 +17,7 @@ export const router = createRouter({
     { path: '/discovery', name: 'discovery', component: () => import('./views/DiscoveryView.vue'), meta: { fleet: true } },
     { path: '/discovery/settings', name: 'discovery-settings', component: () => import('./views/DiscoverySettingsView.vue'), meta: { admin: true } },
     { path: '/users', name: 'users', component: () => import('./views/UsersView.vue'), meta: { admin: true } },
+    { path: '/groups', name: 'groups', component: () => import('./views/GroupsView.vue'), meta: { admin: true } },
     { path: '/audit', name: 'audit', component: () => import('./views/AuditView.vue'), meta: { admin: true } },
     { path: '/update', name: 'update', component: () => import('./views/UpdateView.vue'), meta: { admin: true } },
     { path: '/account', name: 'account', component: () => import('./views/AccountView.vue') },

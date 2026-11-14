@@ -77,6 +77,18 @@ describe('App', () => {
     admin.unmount();
   });
 
+  it('offers Groups to an administrator, right after Users, with its own icon, and not to an operator', async () => {
+    const admin = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
+    const titles = admin.findAll('.dm-nav-item').map((i) => i.text());
+    expect(titles.indexOf('Groups')).toBe(titles.indexOf('Users') + 1);
+    expect(admin.findAll('.dm-nav-item')[titles.indexOf('Groups')]!.attributes('href')).toBe('/groups');
+    expect(admin.find('.dm-nav-icon--groups').exists()).toBe(true);
+    admin.unmount();
+    const operator = await mountSignedIn({ email: 'ops@example.com', role: 'operator', effectiveRole: 'operator' });
+    expect(operator.findAll('.dm-nav-item').map((i) => i.text())).not.toContain('Groups');
+    operator.unmount();
+  });
+
   it('offers the Update page to an administrator, after Audit, and not to an operator', async () => {
     const admin = await mountSignedIn({ email: 'ops@example.com', role: 'admin', effectiveRole: 'admin' });
     const titles = admin.findAll('.dm-nav-item').map((i) => i.text());

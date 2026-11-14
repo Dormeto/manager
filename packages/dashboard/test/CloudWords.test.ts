@@ -5,7 +5,6 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
-import GroupsCard from '../src/components/GroupsCard.vue';
 import HibernateDialog from '../src/components/HibernateDialog.vue';
 import IdleBar from '../src/components/IdleBar.vue';
 import OnboardDialog from '../src/components/OnboardDialog.vue';
@@ -13,6 +12,7 @@ import OrganizationAccess from '../src/components/OrganizationAccess.vue';
 import RenameDialog from '../src/components/RenameDialog.vue';
 import StateBar from '../src/components/StateBar.vue';
 import TagsDialog from '../src/components/TagsDialog.vue';
+import GroupsView from '../src/views/GroupsView.vue';
 import OperationsView from '../src/views/OperationsView.vue';
 import RoutersView from '../src/views/RoutersView.vue';
 import WorkloadView from '../src/views/WorkloadView.vue';
@@ -36,7 +36,7 @@ Object.defineProperty(window, 'visualViewport', {
 // The workload a view of one reads (every read of /workloads/…), as its router answers.
 let workload: Record<string, unknown> = {};
 vi.mock('../src/api', () => ({
-  api: vi.fn(async (path: string) => (path.startsWith('/operations') ? { operations: [] } : path.startsWith('/workloads/') ? structuredClone(workload) : { routers: [], ipLists: [] })),
+  api: vi.fn(async (path: string) => (path.startsWith('/operations') ? { operations: [] } : path.startsWith('/workloads/') ? structuredClone(workload) : { routers: [], ipLists: [], groups: [], users: [] })),
 }));
 
 const mounted: ReturnType<typeof mount>[] = [];
@@ -70,17 +70,16 @@ describe('RenameDialog', () => {
   });
 });
 
-describe('GroupsCard', () => {
+describe('the Groups view', () => {
   it('says the tags are set on the workloads, in neither cloud', async () => {
-    const w = mount(GroupsCard, { props: { groups: [], users: [] }, attachTo: document.body, global: { plugins: [vuetify()] } });
-    mounted.push(w);
+    const w = await mountView(GroupsView, '/groups');
     await w.find('[data-test="new-group"]').trigger('click');
     await flushPromises();
     expect(squash(document.body.textContent ?? '')).toContain('Tags are set on the workloads, not in AWS or Google Cloud.');
   });
 });
 
-async function mountView(view: typeof OperationsView | typeof RoutersView, path: string) {
+async function mountView(view: typeof OperationsView | typeof RoutersView | typeof GroupsView, path: string) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path, component: view }] });
