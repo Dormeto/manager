@@ -65,8 +65,10 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
 - **Routers** are registered when connect writes the record (the routers at the scopes, with their controller's URL and
   version). Each discovery run then lists the Cloud Run services `dmtr-<region>-controller` of the scanned projects and
   adds, updates or removes the registrations (the version is the service's `DMT_VERSION`: the discovery account never
-  calls a router). The [poll](operations.md#google-cloud-routers) removes a router whose controller no longer exists, and
-  reads the version of a router too old to poll from its health, every 10 minutes.
+  calls a router). The [watchdog's probe](operations.md#google-cloud-routers), run by the fleet function every 5 minutes
+  for the routers that are silent or never reported, removes a router whose controller no longer exists, and reads a
+  router's version from its health. The watchdog's role invokes the fleet function for it: only the fleet function's role
+  is trusted by the federation, as before.
 - **A router's reports** need no grant: the router sends its events to the manager's API (`POST <api>/routers/events`)
   with an identity token of its own service account (`dmtr-<region>@<project>.iam.gserviceaccount.com`), which the
   metadata server gives it ([Operations](operations.md#google-cloud-routers)). `router/gcp/access.json` is unchanged.

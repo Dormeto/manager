@@ -62,15 +62,17 @@ services a URL map names, with the router's own reasons when one can't be onboar
 onboards and offboards Compute Engine and Cloud SQL workloads after the router's preview, and excludes
 them, binding and removing only the tag `dormeto/managed` ([Operations](docs/operations.md#onboarding-and-offboarding-on-google-cloud)). The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
 identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
-([Access](docs/organization-access.md#google-cloud)). The manager then polls each router every minute: it
-reads the router's journal of state changes and its check summary, which feed the same history, health and alerts
-as an AWS router's, and it pushes the organization's settings to it ([Operations](docs/operations.md#google-cloud-routers)).
-A router older than 0.40.0 is listed with the `dormeto gcp routers install` command that upgrades it.
+([Access](docs/organization-access.md#google-cloud)). Each router reports to the manager's API after each state change
+and each check, with an identity token of its own service account, and the API puts its events on the manager's bus: they
+feed the same history, health and alerts as an AWS router's. The manager pushes the organization's settings to the router,
+and its watchdog calls only a router that is silent or never reported ([Operations](docs/operations.md#google-cloud-routers)).
+A router older than 0.41.0 can't report: it is listed with the `dormeto gcp routers install` command that upgrades it.
 
 ```mermaid
 flowchart LR
-    manager[Manager<br>in AWS] -->|workload identity federation,<br>polls every minute| gcp[Router<br>Cloud Run, one per project and region]
-    gcp -->|journal and check summary| manager
+    gcp[Router<br>Cloud Run, one per project and region] -->|journal and check,<br>Google identity token| api[Manager's API<br>POST /routers/events]
+    api -->|dormeto.router.gcp| bus[Manager's<br>event bus]
+    manager[Manager<br>in AWS] -->|workload identity federation:<br>actions, settings, the watchdog's probe| gcp
 ```
 
 ## From discovery to the first nap
@@ -193,7 +195,7 @@ The whole guide: [Get started](https://dormeto.com/get-started.html). Every inpu
 | Topic | What it covers |
 |---|---|
 | [Access control](docs/access-control.md) | Roles, members, workload tags, groups and grants, permissions, when changes apply |
-| [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, Google Cloud routers (the poll, `too-old`, the refusals), health alerts, IP lists, MFA, failed wakes, state history |
+| [Operations, alerts and history](docs/operations.md) | Onboarding and router operations, Google Cloud routers (the reports, the watchdog's probe, `too-old`, the refusals), health alerts, IP lists, MFA, failed wakes, state history |
 | [Savings](docs/savings.md) | What is priced on AWS and Google Cloud, Spot, discounts, the daily job, the idle window advisor |
 | [Savings estimate](https://github.com/Dormeto/cli) | The Dormeto CLI's `dormeto aws estimate`: accounts, filters, uptime, companion databases, cache, permissions |
 | [Access](docs/organization-access.md) | The AWS discovery and command roles, the `access` and `organization` modules, and Google Cloud's connection (the host project, its two service accounts, the scopes) |

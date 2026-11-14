@@ -55,51 +55,56 @@ balancer, and binds and removes one resource tag, `dormeto/managed`, as the comm
 
 ## Google Cloud routers
 
-A Google Cloud router (`dmtr-<project>-<region>` in the manager, `cloud: 'gcp'`, installed by the CLI) pushes nothing:
-the manager reaches it through the [connection](organization-access.md#google-cloud) and reads it. Everything the
-manager does there is `POST <controller>/v1/actions` with the command account's ID token for the controller's URL, the
-actions an AWS router's controller answers and two of Google Cloud's (`events`, `manager-settings`), each asking for
-refusals (an asynchronous one too). A call gives up after 10 s (a cold Cloud Run start), 10 are made at once and a request
-takes 20 s at most. The controller always answers JSON: an answer that isn't, or an empty failure, is Google's in front
-of it. A router's version meets the 0.40.0 minimum by major.minor.patch (a dev router's `0.40.0-dev.1` does, `0.39.0-dev.3`
-doesn't); the registry keeps the version as the router reports it.
+A Google Cloud router (`dmtr-<project>-<region>` in the manager, `cloud: 'gcp'`, installed by the CLI) reports to the
+manager's API (router 0.41.0), which puts its events on the manager's bus as an AWS router puts its own; nothing polls it.
+The manager calls it only to act on it (through the [connection](organization-access.md#google-cloud)): `POST
+<controller>/v1/actions` with the command account's ID token for the controller's URL, the actions an AWS router's
+controller answers and Google Cloud's `manager-settings`, each asking for refusals (an asynchronous one too). A call gives
+up after 10 s (a cold Cloud Run start), 10 are made at once and a request takes 20 s at most. The controller always answers
+JSON: an answer that isn't, or an empty failure, is Google's in front of it. A router's version is compared by
+major.minor.patch (a dev router's `0.41.0-dev.1` meets 0.41.0, `0.40.0-dev.3` doesn't); the registry keeps the version as
+the router reports it. The manager calls a router of 0.40.0 or later; only 0.41.0 reports.
 
-- **The poll** runs every minute (the schedule `dmt-<env>-manager-poll` invokes the fleet function with `{ "task":
-  "poll" }`, never retried): 10 routers at once, at most 50 s a run, the least recently polled first, each router at 0.40.0
-  or later or of a version not yet known. It asks the router's journal (`events`) after the cursor kept on the router's `RS#` item,
-  and ingests each event as the `Workload state changed` an AWS router sends, with the project and region of the router
-  called as its identity. The journal is **read again from 5 minutes before the newest event already read**, so a late
-  write is not missed: an event read twice is one history entry, and an older one never sets a summary back. When the
-  router's check is newer than its summary, its rows (`list`, answered whole) come in as `Router checked` chunks of 1000,
-  which the manager cuts. A router that does not answer gets no new summary, so the watchdog's `silent` rule applies as on
-  AWS; one the poll is refused at keeps the refusal on its `RS#` item (`lastRefusal`), and the watchdog says that refusal,
-  with its command, instead of `silent`. A registered router whose controller discovery hasn't found yet is not called: its
-  poll records `router_unknown`, once.
-- **The reports** (router 0.41.0, router push design 2026-11-14 §3): a router sends its events to the manager's API,
-  `POST <api endpoint>/routers/events` (the HTTP API's own URL, not CloudFront's), with an identity token of its service
-  account for the API's endpoint. API Gateway refuses a request without a token Google signed for that audience (its JWT
-  authorizer `google`); the function then takes the router's project and region from the token's verified email
-  `dmtr-<region>@<project>.iam.gserviceaccount.com`, never from the body, and refuses with 403 `router_unknown` a token that is
-  not a router's, a manager without a Google Cloud connection, or a router not registered. The body is
-  `{ "events": [{ "detailType": "Router checked" | "Workload state changed", "detail": {…} }] }`, 100 entries and 1 MB at
-  most (else 400 `bad_request`). Each entry goes on the manager's bus as `dormeto.router.gcp`, its detail
+- **The reports** (router push design 2026-11-14 §3, §4): after each state change and each check, a router sends its journal
+  (from where the manager last accepted it) and its check (`Router checked`, in chunks under 64 KB, with the settings ETag it
+  holds) to the manager's API, `POST <api endpoint>/routers/events` (the HTTP API's own URL, not CloudFront's), with an
+  identity token of its service account for the API's endpoint. API Gateway refuses a request without a token Google signed
+  for that audience (its JWT authorizer `google`); the function then takes the router's project and region from the token's
+  verified email `dmtr-<region>@<project>.iam.gserviceaccount.com`, never from the body, and refuses with 403
+  `router_unknown` a token that is not a router's, a manager without a Google Cloud connection, or a router not registered.
+  The body is `{ "events": [{ "detailType": "Router checked" | "Workload state changed", "detail": {…} }] }`, 100 entries
+  and 1 MB at most (else 400 `bad_request`). Each entry goes on the manager's bus as `dormeto.router.gcp`, its detail
   `{ "account": <project>, "region": <region>, "detail": <the router's> }` (10 entries and 256 KB a call); entries the bus did
   not take answer 502 `{ "error": "not_published", "failed": n }`, and the router sends them again. The answer is 200
   `{ "accepted": n, "managerSettings": { "etag": <settings.json's ETag, or null> } }`. The route has its own throttle (burst
   100, 50 a second). The fleet function reads `dormeto.router.gcp` only from the manager's own account (else
-  `RouterEventRefused`, dropped) and ingests it as the poll does the same router's journal and check. An event that comes
-  both ways (a router both polled and reporting) is ingested once: a history entry is keyed by its time and state, and a
-  check's rows are written whichever way they come first.
-- **A router removed:** one whose controller URL answers Google's own 404 (not the controller's JSON) **twice in a row**
-  is unregistered (`RouterUnregistered`): an uninstalled router leaves within two minutes instead of alarming. A broken
-  connection never counts as a router gone.
-- **`too-old`:** a router below 0.40.0 has no `/v1/actions`. It is listed with its version, never polled and never pushed
-  to, and the watchdog says `too-old`, not `silent`, with the command that upgrades it: `dormeto gcp routers install
-  --project <p> --region <r> --version <pinned>`. So is a router of unknown version whose controller answered it has no
-  `/v1/actions`.
-  The poll reads a too-old router's version from its health (`GET /v1/health`, which every router version answers) at most
-  every 10 minutes and keeps it in the registry (`RouterVersionRead`): after the advised install, the router is polled at the
-  next run and its alarm resolves, within 10 minutes.
+  `RouterEventRefused`, dropped) and ingests it as an AWS router's event, under the token's project and region. An event
+  sent again (an answer lost) is one history entry, and an older one never sets a summary back. A report that fails never
+  holds a wake (2 s at most); the router sends again from where the manager last accepted, at its next state change or
+  check (5 minutes at most). A router that stops reporting gets no new summary, and the watchdog's `silent` rule applies as
+  on AWS (no check within 3 periods of its schedule).
+- **The watchdog's probe:** at each watchdog run (every 5 minutes), the watchdog invokes the fleet function with `{ "task":
+  "probe" }` and waits for it (90 s at most): the fleet function's role holds the connection's federation, the watchdog's
+  doesn't. It calls each registered Google Cloud router that is silent or never reported, never one that reports: 10 at
+  once, none started after 40 s, the least recently probed first. Each one: its health (`GET /v1/health`); at 0.41.0 or
+  later, `manager-settings` with where to report alone (`events: { url, audience }`: the router keeps its settings and
+  answers the ETag it holds), then `settings.json` and its ETag when the router holds another (`ManagerSettingsPushed`). What
+  the probe met is on the router's `RS#` item (`probe`: `probedAt`, `misses`, `lastError`, `lastRefusal`, `tooOld`,
+  `askedAt`), and the watchdog says a refusal, with its command, instead of `silent`. A router that could not report before
+  (never reported, or too old) and was just given where to report has 15 minutes, as a router just installed, before it is
+  `silent`. A registered router whose controller discovery hasn't found yet is not called: its probe records
+  `router_unknown`, once. A probe that fails (the fleet function's error, or no answer in 90 s) is logged
+  (`RoutersNotProbed`) and fails the watchdog's run once the routers are compared, which the `watchdog-errors` alarm says.
+- **A router removed:** one whose controller URL answers Google's own 404 (not the controller's JSON) to the probe **twice
+  running** is unregistered (`RouterUnregistered`), only while its registration is the one the probe read: an uninstalled
+  router leaves at the second watchdog run after it went silent, within about 25 minutes of its last report (15 minutes
+  to be silent, two runs 5 minutes apart), instead of alarming. A broken connection never counts as a router gone.
+- **`too-old`:** a router below 0.41.0 can't report. The probe reads its version from its health and keeps it in the
+  registry (`RouterVersionRead`); it pushes it nothing, and the watchdog says `too-old`, not `silent`, with the command that
+  upgrades it: `router <v> can't report to the manager: dormeto gcp routers install --project <p> --region <r> --version
+  <pinned>` (never below 0.41.0). After the advised install, the next watchdog run reads the new version, gives the router
+  where to report and resolves the alarm, within 5 minutes. A router of 0.40.0 is still called by the API and the operations;
+  its state is not read until it is upgraded.
 - **The refusals,** as a 409 `{ "error": <code>, "message" }` on every route that acts on the router (the lists answer
   200: `GET /routers` with the router's row carrying its `refusal`, `GET /workloads` with the message in its `errors`),
   with the command that fixes it in the message (a failure of the router or of Google's own stays a 502, `router_error`
@@ -114,12 +119,11 @@ doesn't); the registry keeps the version as the router reports it.
   API answers as a 502 `router_error` with that message.
 - **The organization's settings:** each write of `settings.json` (`PUT /api/settings/workloads`, `/settings/types`,
   `PUT` and `DELETE /settings/waiting-page`) is pushed to every Google Cloud router with a controller, but one below
-  0.40.0, as `manager-settings` (the object written and its S3 ETag), 10 at a time. A router that fails is logged (`ManagerSettingsNotPushed`), and the
-  poll pushes it when the ETag the router holds differs from the file's (`ManagerSettingsPushed`); the write's answer
-  does not change. The push also carries where to report, `events: { url, audience }` (the route's URL and the API's
-  endpoint), and goes to the routers `dormeto gcp connect` registers, once `settings.json` exists. A reported
-  `Router checked` whose `managerSettings.etag` differs from the file's gets it pushed again by the fleet function, once a
-  check (its first chunk).
+  0.40.0, as `manager-settings` (the object written and its S3 ETag), 10 at a time, with where to report, `events: { url,
+  audience }` (the route's URL and the API's endpoint); it also goes to the routers `dormeto gcp connect` registers, once
+  `settings.json` exists. A router that fails is logged (`ManagerSettingsNotPushed`) and the write's answer does not change:
+  its next check reports another ETag, and the fleet function pushes it again (`ManagerSettingsPushed`), once a check (its
+  first chunk); a silent router gets it from the watchdog's probe.
 - **What stays with the CLI:** every change of an IAM policy, a backend service or a cluster. `install-router` for a project
   and `upgrade-router` and `uninstall-router` for a Google Cloud router answer 400 with the `dormeto gcp routers install`
   or `uninstall` command, and the Routers view shows them instead of its AWS buttons. The router's install, upgrade and

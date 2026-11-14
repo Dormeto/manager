@@ -15,6 +15,32 @@ not registered (403 `router_unknown`), and puts the events on the bus as `dormet
 ingests as an AWS router's, from the manager's own account only. The route has its own throttle (burst 100, 50 a second).
 Each `manager-settings` push now says where to report (`events: { url, audience }`), also to the routers `dormeto gcp
 connect` registers, and a check whose router holds another settings ETag gets the organization's settings pushed again.
+- **The poll of Google Cloud routers ends:** the schedule `<name>-poll`, its role and the fleet function's `{ task: 'poll' }`
+are removed, with the journal cursor on each router's `RS#` item (`poll`, removed at the router's first probe). A Google
+Cloud router below 0.41.0 can't report: the watchdog says `too-old`, `router <v> can't report to the manager: dormeto gcp
+routers install --project <p> --region <r> --version <pinned>` (never below 0.41.0), and a router 0.40.0's state is not read
+until it is upgraded (the API and the operations still call it). Update the manager before upgrading its Google Cloud
+routers; between the two, a router 0.41.0 is read by nothing (it does not answer the poll's `events`).
+- **The watchdog probes silent Google Cloud routers:** at each run (every 5 minutes) the watchdog has the fleet function
+(`{ task: 'probe' }`, waited for 90 s at most; its role gains `lambda:InvokeFunction` on the fleet function, nothing in Google
+Cloud) call each registered Google Cloud router that is silent or never reported, never one that reports: its health, then
+`manager-settings` with where to report, and the organization's settings when the router holds another ETag. A router whose
+controller answers Google's own 404 twice running is unregistered, now at the watchdog's pace: within about 25 minutes of its
+last report, instead of two minutes. A refusal is said with its command as before; its hint is now "The manager's call to
+the router is refused: once the command has run, the watchdog calls it again at its next run (every 5 minutes)." A router
+just given where to report that could not report before has 15 minutes before it is `silent`, whose advice now names
+`dormeto gcp routers show` and the router's `ReportFailed` and `ReportRefused` logs. A probe that fails fails the watchdog's
+run (the `watchdog-errors` alarm).
+- **Router 0.41.0 on Google Cloud:** the router reports to the manager after each state change and each check: it sends its
+journal and its state to the manager's API (`POST /routers/events`) with its service account's identity token. No new role
+or permission in Google Cloud. A report that fails never holds a wake more than 2 s, and the next one resends from where the
+manager last accepted. `manager-settings` takes `events: { url, audience }`, or that alone. `GET /v1/health` and the
+`router` action show where the reports stand (`report`). The `events` action is gone: a manager below 0.25.0 that polls such
+a router gets `unsupported` and shows its state stale until the manager is updated.
+- **Router 0.41.0 on AWS:** the router's roles may put on the manager's bus only with the source `dormeto.router`, and the
+boundary `DmtRouterBoundary` only `dormeto.router` and `aws.elasticloadbalancing`. Until an AWS router in the manager's own
+account is upgraded to 0.41.0 it could still send the relay's source; the boundary reaches the member accounts only when the
+access module is applied again.
 - **The bus admits the AWS routers' and the forwarders' sources only:** its policy allows the organization's principals (the
 manager's account without an organization) `events:PutEvents` for `events:source` `dormeto.router` and
 `aws.elasticloadbalancing` (the forwarders of event-driven refresh) alone, so no other account can send the relay's source. An AWS router installed in the manager's own account is allowed by its role, which router 0.41.0 limits to
