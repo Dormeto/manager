@@ -1,8 +1,8 @@
 # Router events (vision docs/specs/2026-10-05-scale-design.md §3 and §4): routers of the organization send their state
 # after each idle check and each workload state change to this bus; a queue buffers them for the fleet Lambda, which
 # writes the router and workload summaries the API reads. A Google Cloud router sends its events to the API, which puts
-# them on this bus as `dormeto.router.gcp` (router push design 2026-11-14 §3); until that design's poll ends, the fleet
-# Lambda also polls them every minute (Google Cloud manager design §6.3).
+# them on this bus as `dormeto.router.gcp` (router push design 2026-11-14 §3). The fleet Lambda also probes the Google Cloud
+# routers that are silent or never reported, invoked by the watchdog at each of its runs (§6.3, alerts.tf).
 
 resource "aws_cloudwatch_event_bus" "manager" {
   name = local.name
@@ -93,8 +93,8 @@ resource "aws_iam_role" "fleet" {
 
 data "aws_iam_policy_document" "fleet" {
   statement {
-    # Summaries and their history; a Google Cloud router's poll beside its summary (UpdateItem), its registration read, its
-    # version kept when one too old to poll is read again (PutItem) and removed once uninstalled, the Google Cloud
+    # Summaries and their history; a Google Cloud router's probe beside its summary (UpdateItem), its registration read, its
+    # version kept when the probe reads another from its health (PutItem) and removed once uninstalled, the Google Cloud
     # connection read.
     sid       = "Summaries"
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query"]
@@ -106,7 +106,8 @@ data "aws_iam_policy_document" "fleet" {
     resources = [aws_sqs_queue.router_events.arn]
   }
   statement {
-    # The organization's settings (written by the API), which the poll pushes to the Google Cloud routers: they can't read S3.
+    # The organization's settings (written by the API), which the fleet function pushes to a Google Cloud router whose check
+    # says it holds another, and the probe to one silent: they can't read S3.
     sid       = "OrganizationSettings"
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.lists.arn}/settings.json"]
@@ -148,7 +149,7 @@ resource "aws_lambda_function" "fleet" {
   filename         = local.artifact.fleet
   source_code_hash = filebase64sha256(local.artifact.fleet)
   # A batch of 25 chunks of about 90 workloads, written 10 at a time, takes seconds; the margin is for a throttled table
-  # draining a backlog. A poll starts no router after 50 s, each call within 10 s.
+  # draining a backlog. A probe starts no router after 40 s, each call within 10 s.
   timeout     = 120
   memory_size = 256
 
@@ -156,7 +157,8 @@ resource "aws_lambda_function" "fleet" {
     variables = {
       TABLE        = aws_dynamodb_table.manager.name
       HISTORY_DAYS = tostring(var.history_days)
-      # The poll: settings.json's bucket, and what its refusals' commands name (the environment, the router version pinned).
+      # The probe and the settings push: settings.json's bucket, and what their refusals' commands name (the environment, the
+      # router version pinned).
       LISTS_BUCKET   = aws_s3_bucket.lists.id
       ENV            = var.env
       ROUTER_VERSION = local.router_version
@@ -181,51 +183,6 @@ resource "aws_lambda_event_source_mapping" "router_events" {
   function_response_types            = ["ReportBatchItemFailures"]
   scaling_config {
     maximum_concurrency = 5
-  }
-}
-
-# The poll of the Google Cloud routers (Google Cloud manager design §6.3): every minute, the fleet function with the poll's
-# task. Never retried nor run late (an invocation older than a minute is dropped): the next minute's poll is its retry.
-resource "aws_lambda_function_event_invoke_config" "fleet" {
-  function_name                = aws_lambda_function.fleet.function_name
-  maximum_retry_attempts       = 0
-  maximum_event_age_in_seconds = 60
-}
-
-resource "aws_iam_role" "poll_scheduler" {
-  name               = "${local.name}-poll-scheduler"
-  assume_role_policy = data.aws_iam_policy_document.scheduler_assume.json
-}
-
-data "aws_iam_policy_document" "poll_scheduler" {
-  statement {
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.fleet.arn]
-  }
-}
-
-resource "aws_iam_role_policy" "poll_scheduler" {
-  name   = "scheduler"
-  role   = aws_iam_role.poll_scheduler.id
-  policy = data.aws_iam_policy_document.poll_scheduler.json
-}
-
-resource "aws_scheduler_schedule" "poll" {
-  name                = "${local.name}-poll"
-  schedule_expression = "rate(1 minute)"
-
-  flexible_time_window {
-    mode = "OFF"
-  }
-
-  target {
-    arn      = aws_lambda_function.fleet.arn
-    role_arn = aws_iam_role.poll_scheduler.arn
-    input    = jsonencode({ task = "poll" })
-
-    retry_policy {
-      maximum_retry_attempts = 0
-    }
   }
 }
 

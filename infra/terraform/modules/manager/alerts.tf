@@ -1,6 +1,8 @@
 # Health alarms (vision docs/specs/2026-10-08-reliability-security-design.md, R6a): the watchdog compares, every 5
 # minutes, the routers the manager knows with what they report, and publishes what changed to the alert topic;
-# CloudWatch alarms watch the watchdog and the router events' dead-letter queue, to the same topic.
+# CloudWatch alarms watch the watchdog and the router events' dead-letter queue, to the same topic. Each run first has the
+# fleet function probe the Google Cloud routers that are silent or never reported (router push design 2026-11-14 §6.3):
+# the fleet function's role holds the Google federation (router/gcp/access.json), the watchdog's doesn't.
 
 # Not encrypted: CloudWatch alarms cannot publish to a topic encrypted with the AWS managed key, and alerts hold no secret.
 resource "aws_sns_topic" "alerts" {
@@ -65,6 +67,12 @@ data "aws_iam_policy_document" "watchdog" {
     resources = [aws_sns_topic.alerts.arn]
   }
   statement {
+    # The probe of the Google Cloud routers, run by the fleet function and waited for.
+    sid       = "Probe"
+    actions   = ["lambda:InvokeFunction"]
+    resources = [aws_lambda_function.fleet.arn]
+  }
+  statement {
     sid       = "ListsStatus"
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.lists.arn}/status.json"]
@@ -99,7 +107,7 @@ resource "aws_lambda_function" "watchdog" {
   handler          = "watchdog.handler"
   filename         = local.artifact.watchdog
   source_code_hash = filebase64sha256(local.artifact.watchdog)
-  timeout          = 120
+  timeout          = 120 # the fleet function's probe waited for 90 s at most, then the comparison
   memory_size      = 256
   # One run at a time: an alarm is never sent twice by overlapping runs.
   reserved_concurrent_executions = 1
@@ -113,6 +121,7 @@ resource "aws_lambda_function" "watchdog" {
       ALERTS_TOPIC    = aws_sns_topic.alerts.arn
       ROUTER_VERSION  = local.router_version
       DASHBOARD_URL   = "https://${local.dashboard_host}"
+      FLEET_FUNCTION  = aws_lambda_function.fleet.function_name
       # The manager's IP lists (R6b): their status, alarmed on.
       LISTS_BUCKET = aws_s3_bucket.lists.id
     }

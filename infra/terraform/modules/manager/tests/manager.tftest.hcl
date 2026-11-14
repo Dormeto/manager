@@ -880,15 +880,16 @@ run "update_check_daily_through_its_own_function" {
   }
 }
 
-# The poll of the Google Cloud routers (Google Cloud manager design §6.3): they push nothing, so the fleet function calls them
-# every minute, invoked with the poll's task; it pushes them settings.json, and keeps each router's poll on its summary item.
-run "google_cloud_routers_polled_every_minute" {
+# No schedule polls the Google Cloud routers (router push design 2026-11-14 §5.1, §6.3): they report through the API. At each
+# watchdog run the fleet function probes those silent or never reported, invoked by the watchdog with the probe's task (the
+# watchdog holds no Google identity); it pushes them settings.json, and keeps each router's probe on its summary item.
+run "no_schedule_polls_the_google_cloud_routers" {
   command = plan
 
   override_resource {
     target          = aws_lambda_function.fleet
     override_during = plan
-    values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet" }
+    values          = { arn = "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet", function_name = "dmt-test-manager-fleet" }
   }
   override_resource {
     target          = aws_s3_bucket.lists
@@ -897,24 +898,21 @@ run "google_cloud_routers_polled_every_minute" {
   }
 
   assert {
-    condition     = aws_scheduler_schedule.poll.name == "dmt-test-manager-poll" && aws_scheduler_schedule.poll.schedule_expression == "rate(1 minute)" && aws_scheduler_schedule.poll.flexible_time_window[0].mode == "OFF"
-    error_message = "The Google Cloud routers are polled every minute."
+    condition     = length(regexall("aws_scheduler_schedule\" \"poll|aws_iam_role\" \"poll|-poll\"|task\\s*=\\s*\"poll\"|aws_lambda_function_event_invoke_config\" \"fleet", join("\n", [for f in fileset(path.module, "*.tf") : file("${path.module}/${f}")]))) == 0
+    error_message = "No schedule polls the Google Cloud routers, and nothing invokes the fleet function with the poll's task: they report through the API."
   }
   assert {
-    condition     = aws_scheduler_schedule.poll.target[0].arn == "arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet" && jsondecode(aws_scheduler_schedule.poll.target[0].input) == { task = "poll" }
-    error_message = "The schedule invokes the fleet function with the poll's task."
+    condition = (toset(flatten([for s in data.aws_iam_policy_document.watchdog.statement : tolist(s.actions) if s.sid == "Probe"])) == toset(["lambda:InvokeFunction"])
+    && toset(flatten([for s in data.aws_iam_policy_document.watchdog.statement : tolist(s.resources) if s.sid == "Probe"])) == toset(["arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet"]))
+    error_message = "The watchdog invokes the fleet function, and no other, for the probe."
   }
   assert {
-    condition     = aws_scheduler_schedule.poll.target[0].retry_policy[0].maximum_retry_attempts == 0 && aws_lambda_function_event_invoke_config.fleet.maximum_retry_attempts == 0 && aws_lambda_function_event_invoke_config.fleet.maximum_event_age_in_seconds == 60
-    error_message = "A poll is never retried, nor run late: the next minute's poll is its retry."
-  }
-  assert {
-    condition     = join(",", flatten([for s in data.aws_iam_policy_document.poll_scheduler.statement : tolist(s.actions)])) == "lambda:InvokeFunction" && toset(flatten([for s in data.aws_iam_policy_document.poll_scheduler.statement : tolist(s.resources)])) == toset(["arn:aws:lambda:eu-west-1:111122223333:function:dmt-test-manager-fleet"])
-    error_message = "The schedule's role only invokes the fleet function."
+    condition     = aws_lambda_function.watchdog.environment[0].variables.FLEET_FUNCTION == "dmt-test-manager-fleet"
+    error_message = "The watchdog knows the fleet function it has probe the Google Cloud routers."
   }
   assert {
     condition     = toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "OrganizationSettings"])) == toset(["s3:GetObject"]) && toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.resources) if s.sid == "OrganizationSettings"])) == toset(["arn:aws:s3:::dmt-test-manager-ip-lists-111122223333/settings.json"])
-    error_message = "The fleet function reads settings.json, which the poll pushes to the Google Cloud routers, and no other object."
+    error_message = "The fleet function reads settings.json, which it pushes to the Google Cloud routers, and no other object."
   }
   assert {
     condition     = toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "OrganizationSettingsListing"])) == toset(["s3:ListBucket"]) && toset(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.resources) if s.sid == "OrganizationSettingsListing"])) == toset(["arn:aws:s3:::dmt-test-manager-ip-lists-111122223333"])
@@ -925,12 +923,12 @@ run "google_cloud_routers_polled_every_minute" {
     error_message = "The fleet function lists only settings.json of the lists bucket (s3:prefix), never the lists themselves."
   }
   assert {
-    condition     = contains(flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "Summaries"]), "dynamodb:UpdateItem")
-    error_message = "The fleet function writes a router's poll beside its summary (UpdateItem)."
+    condition     = length(setsubtract(["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Query"], flatten([for s in data.aws_iam_policy_document.fleet.statement : tolist(s.actions) if s.sid == "Summaries"]))) == 0
+    error_message = "The fleet function writes a router's probe beside its summary (UpdateItem), reads the connection and the registry, keeps a version read (PutItem) and unregisters a router uninstalled (DeleteItem)."
   }
   assert {
     condition     = aws_lambda_function.fleet.environment[0].variables.LISTS_BUCKET == "dmt-test-manager-ip-lists-111122223333" && aws_lambda_function.fleet.environment[0].variables.ROUTER_VERSION == local.router_version && aws_lambda_function.fleet.environment[0].variables.ENV == "test"
-    error_message = "The poll knows the lists bucket, the router version the manager pins and the environment (the commands its refusals name)."
+    error_message = "The probe knows the lists bucket, the router version the manager pins and the environment (the commands its refusals name)."
   }
 }
 
