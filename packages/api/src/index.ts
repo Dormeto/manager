@@ -12,6 +12,7 @@ import { ListSubscriptionsByTopicCommand, SNSClient, type Subscription } from '@
 import { CloudWatchLogsClient, GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
 import { BatchGetBuildsCommand, CodeBuildClient, ListBuildsForProjectCommand } from '@aws-sdk/client-codebuild';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { randomBytes } from 'node:crypto';
 import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { createStore } from '@dormeto/discovery';
@@ -23,7 +24,7 @@ import { createGoogle, createGoogleSource, type GoogleConnection, type ServiceAc
 import { createApi, routerInvoker, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
 import { createIdleRequests } from './idle-requests.js';
-import { readJson, writeJson } from './s3-json.js';
+import { etagOf, readJson, readJsonWithEtag, writeJson } from './s3-json.js';
 import { absent, createUpdate, fetchText, missingStream, type Build, type Pending } from './update.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
 
@@ -199,6 +200,19 @@ const ipLists = listsBucket ? {
 const globalSettings = listsBucket ? {
   read: () => readJson<Record<string, unknown>>(s3, listsBucket, 'settings.json'),
   write: (doc: Record<string, unknown>) => writeJson(s3, listsBucket, 'settings.json', doc),
+  etag: () => etagOf(s3, listsBucket, 'settings.json'),
+  current: () => readJsonWithEtag(s3, listsBucket, 'settings.json'),
+} : undefined;
+
+// The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1): the manager's bus, the route's URL and
+// its tokens' audience (the API's endpoint), which Terraform gives.
+const eventBridge = new EventBridgeClient({});
+const relay = process.env.EVENT_BUS && process.env.EVENTS_URL && process.env.EVENTS_AUDIENCE ? {
+  events: { url: process.env.EVENTS_URL, audience: process.env.EVENTS_AUDIENCE },
+  async put(entries: { Source: string; DetailType: string; Detail: string }[]) {
+    const out = await eventBridge.send(new PutEventsCommand({ Entries: entries.map((e) => ({ ...e, EventBusName: process.env.EVENT_BUS })) }));
+    return out.FailedEntryCount ?? 0;
+  },
 } : undefined;
 
 // The manager's self-update (only for an install made with the CLI, which gives the API its install bucket): requests go
@@ -306,4 +320,5 @@ export const handler = createApi({
   alerts,
   ipLists,
   globalSettings,
+  relay,
 });

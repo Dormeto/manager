@@ -58,6 +58,13 @@ export interface ApiResponse {
   body?: string;
 }
 
+// An entry the relay puts on the manager's bus (EventBridge PutEvents; the port names the bus).
+export interface BusEntry {
+  Source: string;
+  DetailType: string;
+  Detail: string;
+}
+
 export interface AuditEntry {
   id: string;
   at: string;
@@ -302,7 +309,15 @@ export interface ApiOptions {
   // The manager's settings for every router (settings.json of the lists bucket): read and rewritten whole, so the keys
   // this API does not know survive. Without it, the defaults are answered and nothing can be set. A write answers S3's
   // ETag of the object, pushed with it to the Google Cloud routers.
-  globalSettings?: { read(): Promise<Record<string, unknown> | null>; write(doc: Record<string, unknown>): Promise<string | void> };
+  // etag: settings.json's ETag as S3 gives it, null while it doesn't exist (the relay's answer); current: the object and its
+  // ETag read at once (the push to a router just registered).
+  globalSettings?: {
+    read(): Promise<Record<string, unknown> | null>; write(doc: Record<string, unknown>): Promise<string | void>;
+    etag?(): Promise<string | null>; current?(): Promise<{ doc: unknown; etag: string } | null>;
+  };
+  // The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1): where they report (sent as `events`
+  // in each manager-settings push), and the bus's PutEvents of at most 10 entries, answering how many it did not take.
+  relay?: { events: { url: string; audience: string }; put(entries: BusEntry[]): Promise<number> };
 }
 
 // An alert endpoint as administrators see it: an address reduced to its first letter and domain, an ARN to its name.
@@ -424,6 +439,63 @@ function bodyOf(event: ApiEvent): Record<string, unknown> {
     // Reported below.
   }
   throw new HttpError(400, 'bad_request', 'JSON object body expected');
+}
+
+// The relay (router push design 2026-11-14 §3.1). A Google Cloud router's token names its service account,
+// dmtr-<region>@<project>.iam.gserviceaccount.com (the router's install names it so): the only place its project and region
+// are read from. Its body: at most 100 entries and 1 MB, each one of the two detail types an AWS router sends, its detail an
+// object. The bus takes 10 entries at most a call, and 256 KB at most (an entry's source, detail type and detail).
+const RELAY_SOURCE = 'dormeto.router.gcp';
+const ROUTER_EMAIL = /^dmtr-([a-z0-9-]+)@([a-z][a-z0-9-]*)\.iam\.gserviceaccount\.com$/;
+const RELAYED = new Set(['Router checked', 'Workload state changed']);
+const RELAY_EVENTS_MAX = 100;
+const RELAY_BODY_MAX = 1024 * 1024;
+const BUS_ENTRIES_MAX = 10;
+const BUS_BYTES_MAX = 256 * 1024;
+const entryBytes = (e: BusEntry) => Buffer.byteLength(e.Source) + Buffer.byteLength(e.DetailType) + Buffer.byteLength(e.Detail);
+
+// The project and region a Google Cloud router's token proves, null for any other token (a user's, another account's, an
+// email Google has not verified). The JWT authorizer hands its claims over as strings.
+function routerOfToken(claims: Record<string, unknown> | undefined): { project: string; region: string } | null {
+  if (claims?.email_verified !== 'true' && claims?.email_verified !== true) return null;
+  const m = ROUTER_EMAIL.exec(typeof claims.email === 'string' ? claims.email : '');
+  return m && isRegion('gcp', m[1]) && isProject(m[2]) ? { project: m[2], region: m[1] } : null;
+}
+
+// The relay's body as bus entries, wrapped with the token's project and region; a 400 for any other shape.
+function relayEntries(event: ApiEvent, project: string, region: string): BusEntry[] {
+  const bad = (message: string): never => { throw new HttpError(400, 'bad_request', message); };
+  const raw = event.isBase64Encoded && event.body !== undefined ? Buffer.from(event.body, 'base64') : Buffer.from(event.body ?? '');
+  if (raw.byteLength > RELAY_BODY_MAX) bad(`the body is larger than ${RELAY_BODY_MAX} bytes`);
+  const body = bodyOf(event);
+  if (!Array.isArray(body.events)) bad('events must be a list');
+  const events = body.events as unknown[];
+  if (events.length > RELAY_EVENTS_MAX) bad(`events must hold at most ${RELAY_EVENTS_MAX} entries`);
+  return events.map((e, i) => {
+    const { detailType, detail } = (e && typeof e === 'object' && !Array.isArray(e) ? e : {}) as Record<string, unknown>;
+    if (typeof detailType !== 'string' || !RELAYED.has(detailType)) bad(`events[${i}].detailType must be ${[...RELAYED].join(' or ')}`);
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) bad(`events[${i}].detail must be an object`);
+    const entry = { Source: RELAY_SOURCE, DetailType: detailType as string, Detail: JSON.stringify({ account: project, region, detail }) };
+    if (entryBytes(entry) > BUS_BYTES_MAX) bad(`events[${i}] is larger than the bus's ${BUS_BYTES_MAX} bytes`);
+    return entry;
+  });
+}
+
+// Entries in the bus's calls: 10 at most and 256 KB at most each, in their order.
+function busBatches(entries: BusEntry[]): BusEntry[][] {
+  const batches: BusEntry[][] = [];
+  let bytes = 0;
+  for (const e of entries) {
+    const last = batches.at(-1);
+    if (!last || last.length >= BUS_ENTRIES_MAX || bytes + entryBytes(e) > BUS_BYTES_MAX) {
+      batches.push([e]);
+      bytes = entryBytes(e);
+    } else {
+      last.push(e);
+      bytes += entryBytes(e);
+    }
+  }
+  return batches;
 }
 
 function reasonIn(body: Record<string, unknown>, max = REASON_MAX): string {
@@ -619,7 +691,7 @@ const settingsText = ({ hibernate, joinMinutes, endedWindowDays, defaults }: { h
 ].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, google, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
-  fleet, idleRequests, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
+  fleet, idleRequests, relay, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -1211,13 +1283,15 @@ export function createApi({
     }
   }
   // The organization's settings pushed to every Google Cloud router that has a controller (Google Cloud manager design
-  // §5.5, §6.5): those routers can't read settings.json. 10 at a time within the request's bound; a router that fails
-  // gets them at the manager's next poll, and the write's answer stays as it is. Not a router below 0.40.0, which can't
-  // take them: the poll pushes them once it has its new version.
-  async function pushSettings(settings: Record<string, unknown>, etag: string | void) {
-    const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? ''));
+  // §5.5, §6.5), or to those `only` keeps: those routers can't read settings.json. With them, where to report (router push
+  // design §4.1), when the manager has the relay. 10 at a time within the request's bound; a router that fails gets them
+  // when its next check reports another ETag (the fleet function), or at the poll, and the write's answer stays as it is.
+  // Not a router below 0.40.0, which can't take them: the poll pushes them once it has its new version.
+  async function pushSettings(settings: unknown, etag: string | void, only: (r: Router) => boolean = () => true) {
+    const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? '') && only(r));
     if (!targets.length) return;
-    const results = await each(targets, (r) => invoke(r, { action: 'manager-settings', settings, etag: etag ?? '' }), callTimeout);
+    const payload = { action: 'manager-settings', settings, etag: etag ?? '', ...(relay ? { events: relay.events } : {}) };
+    const results = await each(targets, (r) => invoke(r, payload), callTimeout);
     results.forEach((result, i) => {
       if (result.status === 'rejected') console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', router: targets[i]!.name, error: (result.reason as Error).message }));
     });
@@ -2285,6 +2359,18 @@ export function createApi({
             ...known, ...(r.controller ? { controller: r.controller } : {}), ...(r.version ? { version: r.version } : {}),
           });
         }
+        // Each router registered gets the organization's settings, and where to report (router push design §4.1): those
+        // with a controller known, as a settings write does. None while settings.json was never written (a router refuses
+        // manager-settings without its ETag): the first settings write pushes them. A read that fails leaves the connection
+        // written: a later settings write, or connect again, pushes them.
+        const current = await globalSettings?.current?.().catch((err: Error) => {
+          console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', error: `settings.json: ${err.message}` }));
+          return null;
+        });
+        if (current) {
+          await refreshRouters();
+          await pushSettings(current.doc, current.etag, (x) => connection.routers.some((k) => k.project === x.account && k.region === x.region));
+        }
         return { result: `${plural(connection.routers.length, 'router')}, ${plural(connection.scopes.length, 'scope')}`, response: reply(200, { connection }) };
       });
     }
@@ -2758,12 +2844,45 @@ export function createApi({
     return { result: `conflict: ${operationId}`, response: reply(409, { error: 'conflict', message: (err as Error).message, operationId }) };
   }
 
+  // --- The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1) ----------------------------------
+
+  // Not a user's route: the token proves a router, never a person; no role, no MFA, no audit. A token that is not a registered
+  // router's is refused before the body is read; nothing is put then. A batch the bus refuses counts all its entries as not
+  // taken: the router sends them again from its cursor, and the ingest takes an event twice as once.
+  async function relayEvents(event: ApiEvent, r: NonNullable<ApiOptions['relay']>): Promise<ApiResponse> {
+    const token = routerOfToken(event.requestContext.authorizer?.jwt?.claims);
+    const unknown = (why: string) => new HttpError(403, 'router_unknown', why);
+    if (!token) throw unknown('the token is not a Google Cloud router\'s (dmtr-<region>@<project>.iam.gserviceaccount.com, verified)');
+    const { project, region } = token;
+    if (!google || !(await google.get())) throw unknown('the manager has no Google Cloud connection: dormeto gcp connect');
+    if (!(await google.routers.list()).some((i) => i.cloud === 'gcp' && i.account === project && i.region === region)) {
+      throw unknown(`router ${project}/${region} is not registered with this manager: dormeto gcp connect, or the next discovery run`);
+    }
+    const entries = relayEntries(event, project, region);
+    let failed = 0;
+    for (const batch of busBatches(entries)) {
+      try {
+        failed += Math.min(batch.length, Math.max(0, await r.put(batch)));
+      } catch (err) {
+        failed += batch.length;
+        console.warn(JSON.stringify({ level: 'warn', event: 'RouterEventsNotPublished', project, region, entries: batch.length, error: (err as Error).message }));
+      }
+    }
+    if (failed) return reply(502, { error: 'not_published', failed });
+    return reply(200, { accepted: entries.length, managerSettings: { etag: (await globalSettings?.etag?.()) ?? null } });
+  }
+
   return async function handler(event: ApiEvent): Promise<ApiResponse> {
     const method = event.requestContext.http.method;
     // The prefix decides where the identity comes from, and neither path falls back to the other's.
     const viaIam = /^\/iam(\/|$)/.test(event.rawPath);
     const parts = event.rawPath.replace(viaIam ? /^\/iam\/?/ : /^\/api\/?/, '').split('/').filter(Boolean);
     try {
+      // The relay's own route, apart from the dashboard's and the CLI's: before any user's identity is read.
+      if (event.rawPath === '/routers/events') {
+        if (method !== 'POST' || !relay) throw new HttpError(404, 'not_found', 'not found');
+        return await relayEvents(event, relay);
+      }
       if (method === 'GET' && parts.length === 1 && parts[0] === 'health') return reply(200, { status: 'ok', version });
       const identity = viaIam ? iamIdentityOf(event) : identityOf(event);
       if (!identity) throw new HttpError(401, 'unauthorized', 'sign in required');

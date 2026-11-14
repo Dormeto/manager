@@ -370,6 +370,7 @@ describe('Google Cloud routers', () => {
   });
   type Seen = { url: string; method: string; headers: Record<string, string>; body: string };
   const answer = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
   const jwt = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
   const claimsOf = (authorization: string) => JSON.parse(Buffer.from(authorization.replace(/^Bearer /, '').split('.')[1]!, 'base64url').toString());
 
@@ -377,10 +378,13 @@ describe('Google Cloud routers', () => {
   // controllers, which `controller` answers), the AWS routers of Terraform called through Lambda (recorded).
   // `tokens` answers Google's token endpoints first when it returns a Response.
   // `call`: the connection's Google API calls (a project's number read as the discovery account), none by default.
-  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens, call }: {
+  // `relay`: the manager has the relay of the routers' events (where they report goes with each manager-settings push).
+  // `connect`: the connection's API, its registry the routers' (dormeto gcp connect writes through /iam).
+  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens, call, relay, connect }: {
     routers?: InstalledRouter[]; controller?: (req: Seen, payload: Record<string, unknown>) => Response; tokens?: (req: Seen) => Response | undefined;
-    call?: <T>(sa: string, method: string, url: string) => Promise<T>;
+    call?: <T>(sa: string, method: string, url: string) => Promise<T>; relay?: boolean; connect?: boolean;
   } = {}) {
+    const registry = [...routers];
     const seen: Seen[] = [];
     let n = 0;
     const fetch = async (input: string | URL | Request, init?: RequestInit) => {
@@ -408,11 +412,25 @@ describe('Google Cloud routers', () => {
       routers: ROUTERS, invoke, audit: { write: async (e) => { audit.push(e); }, list: async () => audit }, now: () => NOW, newId: () => 'id-1', version: '0.1.0',
       routerVersion: '0.40.0', managerAccount: '121014831971',
       operations: {
-        installedRouters: async () => routers, list: async () => [], get: async () => null,
+        installedRouters: async () => registry, list: async () => [], get: async () => null,
         create: async (type, input, by) => { created.push([type, input]); return { id: 'op-1', type, input, by } as never; },
       },
-      globalSettings: { read: async () => settings.doc, write: async (doc) => { settings.doc = doc; return '"5d41402abc4b2a76b9719d911017c592"'; } },
-      ...(call ? { google: { get: async () => record, put: async () => {}, delete: async () => {}, routers: { list: async () => routers, put: async () => {}, delete: async () => {} }, call } } : {}),
+      globalSettings: {
+        read: async () => settings.doc, write: async (doc) => { settings.doc = doc; return '"5d41402abc4b2a76b9719d911017c592"'; },
+        current: async () => (settings.doc ? { doc: settings.doc, etag: '"5d41402abc4b2a76b9719d911017c592"' } : null),
+      },
+      ...(call || connect ? {
+        google: {
+          get: async () => record, put: async () => {}, delete: async () => {},
+          routers: {
+            list: async () => registry,
+            put: async (r: InstalledRouter) => { registry.splice(0, registry.length, ...registry.filter((i) => i.account !== r.account || i.region !== r.region), r); },
+            delete: async () => {},
+          },
+          ...(call ? { call } : {}),
+        },
+      } : {}),
+      ...(relay ? { relay: { events: EVENTS, put: async () => 0 } } : {}),
     });
     const actions = () => seen.filter((s) => s.url.endsWith('/v1/actions')).map((s) => ({ url: s.url, payload: JSON.parse(s.body) as Record<string, unknown>, authorization: s.headers['authorization']! }));
     return { api, seen, actions, aws, audit, created, settings };
@@ -547,6 +565,30 @@ describe('Google Cloud routers', () => {
     expect(m.actions().map((a) => a.payload.action)).toEqual(Array(8).fill('manager-settings'));
     expect(m.actions().at(-1)!.payload.settings).toEqual(m.settings.doc);
     expect(m.aws).toEqual([]);
+  });
+
+  // Router push design §4.1: a router 0.41.0 stores where to report from the settings it is pushed.
+  it('pushes where to report with each settings write, when the manager has the relay', async () => {
+    const m = manager({ relay: true, controller: () => answer(200, { etag: 'stored' }) });
+    expect((await m.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }))).statusCode).toBe(200);
+    expect(m.actions().map((a) => a.payload)).toEqual([{ action: 'manager-settings', settings: m.settings.doc, etag: '"5d41402abc4b2a76b9719d911017c592"', events: EVENTS, refusals: true }]);
+  });
+
+  it('pushes settings.json and where to report to the routers a connection registers that have a controller; nothing while settings.json was never written', async () => {
+    const m = manager({ routers: [], relay: true, connect: true, controller: () => answer(200, { etag: 'stored' }) });
+    const viaIam = (body: unknown): ApiEvent => ({
+      rawPath: '/iam/discovery/google', requestContext: { http: { method: 'PUT' }, authorizer: { iam: { accountId: '121014831971', userArn: 'arn:aws:iam::121014831971:user/cli', userId: 'AIDAX' } } },
+      body: JSON.stringify(body),
+    });
+    const connect = { ...record, routers: [{ project: 'dormeto-dev', region: 'europe-west2', controller: CONTROLLER, version: '0.41.0' }, { project: 'dormeto-dev', region: 'asia-east1' }] };
+    expect((await m.api(viaIam(connect))).statusCode).toBe(200);
+    expect(m.actions()).toEqual([]);
+    m.settings.doc = { workloads: { hibernate: false } };
+    expect((await m.api(viaIam(connect))).statusCode).toBe(200);
+    expect(m.actions().map((a) => [a.url, a.payload])).toEqual([[`${CONTROLLER}/v1/actions`, {
+      action: 'manager-settings', settings: { workloads: { hibernate: false } }, etag: '"5d41402abc4b2a76b9719d911017c592"', events: EVENTS, refusals: true,
+    }]]);
+    expect(m.audit.at(-1)).toMatchObject({ action: 'google-connection', result: '2 routers, 1 scope' });
   });
 
   it('answers a settings write as before when a router refuses the push, and logs it for the poll', async () => {
