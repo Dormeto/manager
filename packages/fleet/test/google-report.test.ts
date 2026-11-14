@@ -131,6 +131,16 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
     expect(w.logs).toEqual([['RouterEventRefused', { account: '038606077307', source: RELAY_SOURCE, detailType: 'Workload state changed', reason: 'the relay\'s events come from the manager\'s own account only' }]]);
   });
 
+  it('drops every dormeto.router.gcp event while the manager\'s own account is unknown (MANAGER_ACCOUNT unset): fail closed', async () => {
+    const ingested: RouterEvent[] = [];
+    for (const ownAccount of [undefined, '']) {
+      const report = createGoogleReports({ ownAccount, ingest: async (e) => { ingested.push(e); }, push: async () => {} });
+      await report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }));
+      await report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }, { account: '' }));
+    }
+    expect(ingested).toEqual([]);
+  });
+
   it('drops a relayed event whose wrapper names no Google Cloud project and region, or a detail type the relay does not send', async () => {
     const w = world();
     await w.report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }, { project: '038606077307' }));
