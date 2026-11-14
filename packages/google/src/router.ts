@@ -4,13 +4,13 @@
 // when it refuses the token (401 or 403: an HTML page, Google's JSON error or nothing) or knows no such service (an HTML
 // or empty 404).
 // A broken connection fails before that, at the ID token (STS or iamcredentials): marked apart, never a router gone.
-// The fleet's router caller (the API's and the operations' calls) and its poll call routers through it; the poll reads the
-// version of a router too old to poll from its health (GET /v1/health, which every router version answers), the same way.
+// The fleet's router caller (the API's and the operations' calls) and the watchdog's probe call routers through it; the
+// probe reads a router's version from its health (GET /v1/health, which every router version answers), the same way.
 import { errorOf, GoogleError, redacted } from './errors.js';
 import type { Bounds } from './fetch.js';
 import type { Google } from './google.js';
 
-// The router version the manager needs (/v1/actions, the journal, the check summary), named when a router has no /v1/actions.
+// The router version the manager needs to call (/v1/actions), named when a router has no /v1/actions.
 // Declared again as GOOGLE_ROUTER_MINIMUM in @dormeto/fleet/clouds, with the rule of a router too old and the install
 // command (fleet depends on this package, never the reverse): packages/fleet/test/router-minimum.test.ts pins the two equal.
 export const ROUTER_MINIMUM = '0.40.0';
@@ -18,13 +18,13 @@ export const ROUTER_MINIMUM = '0.40.0';
 // A call's refusal: the manager's accounts can't reach the router, or the router has no /v1/actions.
 export type RouterRefusal = 'no_access' | 'router_too_old';
 // What the manager can't do with a Google Cloud router, a call's refusal or, before any call, a controller discovery
-// hasn't found yet: the API answers each as a 409, the poll records it, the watchdog says it.
+// hasn't found yet: the API answers each as a 409, the probe records it, the watchdog says it.
 export type Refusal = RouterRefusal | 'router_unknown';
 
-// The commands that fix what the manager can't do on Google Cloud, as the API answers them and the fleet's poll records
+// The commands that fix what the manager can't do on Google Cloud, as the API answers them and the watchdog's probe records
 // them (a router too old's, the install command, is @dormeto/fleet/clouds'). The operator's AWS profile is theirs to fill in.
 export const connectCommand = (host: string, env: string) => `dormeto gcp connect --project ${host} --profile <profile> --env ${env}`;
-// said: what Google answered (see `googleSaid`), so the cause can be seen from the poll's error and the API's 409.
+// said: what Google answered (see `googleSaid`), so the cause can be seen from the probe's error and the API's 409.
 export const accessMissingText = (host: string, env: string, said?: string) => `the manager's accounts can't reach the router: ${connectCommand(host, env)}${said ? ` (${said})` : ''}`;
 export const controllerUnknownText = (host: string, env: string) => `discovery hasn't found this router's controller yet: ${connectCommand(host, env)} again`;
 
@@ -159,8 +159,8 @@ export async function callRouter(google: Pick<Google, 'request'>, router: { cont
   return bounded(timeoutMs, (bounds) => answerOf(google, origin, payload, bounds));
 }
 
-// The router's health (GET /v1/health, as the command account), or a RouterCallError read as callRouter's: the poll reads
-// the version of a router too old to poll there.
+// The router's health (GET /v1/health, as the command account), or a RouterCallError read as callRouter's: the watchdog's
+// probe reads a router's version there.
 export async function routerHealth(google: Pick<Google, 'request'>, router: { controller: string }, { timeoutMs }: { timeoutMs: number }): Promise<RouterHealth> {
   const origin = new URL(router.controller).origin;
   return bounded(timeoutMs, (bounds) => healthOf(google, origin, bounds));

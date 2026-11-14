@@ -139,19 +139,22 @@ describe('fleet', () => {
     expect(items.map((i) => [i.sk!.S, i.expiresAt?.N]).sort()).toEqual([[`RS#${ACCOUNT}#${REGION}`, String(expires)], [`WS#${ACCOUNT}#${REGION}#a`, String(expires)]]);
   });
 
-  it('keeps a Google Cloud router\'s poll on its RS# item beside its summary: a summary written leaves it, a poll alone is no summary, and it expires as summaries do', async () => {
+  it('keeps a Google Cloud router\'s probe on its RS# item beside its summary: a summary written leaves it, a probe alone is no summary, it expires as summaries do, and the poll it replaces leaves', async () => {
     const s = setup();
-    const poll = { newestAt: T1, misses: 1, polledAt: T2, lastError: 'events: no answer within 10000 ms' };
-    await s.store.putPoll('dormeto-dev', 'europe-west2', poll);
+    // What the poll (before manager 0.25.0) left on the item.
+    s.dynamo.items.set('RS#dormeto-dev#europe-west2', { pk: { S: 'T#default' }, sk: { S: 'RS#dormeto-dev#europe-west2' }, poll: { S: '{"newestAt":null,"misses":0,"polledAt":"x"}' } });
+    const probe = { probedAt: T2, misses: 1, lastError: 'health: no answer within 10000 ms' };
+    await s.store.putProbe('dormeto-dev', 'europe-west2', probe);
+    expect(s.dynamo.items.get('RS#dormeto-dev#europe-west2')!.poll).toBeUndefined();
     expect([await s.store.listRouters(), await s.store.getRouter('dormeto-dev', 'europe-west2')]).toEqual([[], null]);
-    expect(await s.store.routerPolls()).toEqual([{ account: 'dormeto-dev', region: 'europe-west2', checkedAt: null, poll }]);
-    const router = { name: 'dmtr-europe-west2', version: '0.40.0', build: 'abc', checkSchedule: '*/5 * * * *', region: 'europe-west2' };
+    expect(await s.store.routerProbes()).toEqual([{ account: 'dormeto-dev', region: 'europe-west2', checkedAt: null, checkSchedule: null, probe }]);
+    const router = { name: 'dmtr-europe-west2', version: '0.41.0', build: 'abc', checkSchedule: '*/5 * * * *', region: 'europe-west2' };
     await s.ingest({ account: 'dormeto-dev', region: 'europe-west2', 'detail-type': 'Router checked', detail: { ...checked(T1, []).detail, router, workloads: [] } });
     await s.ingest(checked(T2, [workload('a')]));
     expect((await s.store.getRouter('dormeto-dev', 'europe-west2'))!.summary.checkedAt).toBe(T1);
-    expect(await s.store.routerPolls()).toEqual([
-      { account: ACCOUNT, region: REGION, checkedAt: T2, poll: null },
-      { account: 'dormeto-dev', region: 'europe-west2', checkedAt: T1, poll },
+    expect(await s.store.routerProbes()).toEqual([
+      { account: ACCOUNT, region: REGION, checkedAt: T2, checkSchedule: 'rate(5 minutes)', probe: null },
+      { account: 'dormeto-dev', region: 'europe-west2', checkedAt: T1, checkSchedule: '*/5 * * * *', probe },
     ]);
     const item = s.dynamo.items.get('RS#dormeto-dev#europe-west2')!;
     expect(item.expiresAt?.N).toBe(String(Math.floor(NOW / 1000) + 7 * 86_400));

@@ -3,7 +3,7 @@
 // puts each one on the bus as `dormeto.router.gcp`, `{account: <project>, region, detail: <the router's>}`. EventBridge sets
 // the envelope's account to the caller's: the fleet function reads that source only from the manager's own account (the bus
 // policy admits other accounts for `dormeto.router` alone), and then trusts the wrapper's project and region, never the
-// detail's. Each event is ingested as the poll ingested the same router's journal and check (googleEvent, which both use).
+// detail's. Each event is ingested as an AWS router's (googleEvent).
 // A check whose router holds another ETag than settings.json's gets the organization's settings pushed (`manager-settings`,
 // with where to report), once a check: on its first chunk.
 import type { Google, GoogleConnection } from '@dormeto/google';

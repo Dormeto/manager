@@ -8,7 +8,7 @@ import {
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { GoogleError, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
 import type { Refusal } from '@dormeto/google/router';
-// The commands that fix what the manager can't do on Google Cloud, as the fleet's poll records them too.
+// The commands that fix what the manager can't do on Google Cloud, as the watchdog's probe records them too.
 import { cloudOf, googlePath, googleScopeOf, googleServicePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
@@ -1285,8 +1285,8 @@ export function createApi({
   // The organization's settings pushed to every Google Cloud router that has a controller (Google Cloud manager design
   // §5.5, §6.5), or to those `only` keeps: those routers can't read settings.json. With them, where to report (router push
   // design §4.1), when the manager has the relay. 10 at a time within the request's bound; a router that fails gets them
-  // when its next check reports another ETag (the fleet function), or at the poll, and the write's answer stays as it is.
-  // Not a router below 0.40.0, which can't take them: the poll pushes them once it has its new version.
+  // when its next check reports another ETag (the fleet function), or at the watchdog's probe if it is silent, and the write's
+  // answer stays as it is. Not a router below 0.40.0, which can't take them: upgraded, its first check reports another ETag.
   async function pushSettings(settings: unknown, etag: string | void, only: (r: Router) => boolean = () => true) {
     const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? '') && only(r));
     if (!targets.length) return;
@@ -2350,8 +2350,8 @@ export function createApi({
         }
         for (const r of connection.routers) {
           // What the record gives (the controller and version connect read) is registered; what it leaves empty keeps
-          // what was learnt since: the controller and version discovery read, or the version the poll read from the health
-          // of a router too old to poll.
+          // what was learnt since: the controller and version discovery read, or the version the watchdog's probe read from
+          // the router's health.
           const known = registered.find((i) => i.cloud === 'gcp' && i.account === r.project && i.region === r.region);
           await g.routers.put({
             name: `dmtr-${r.region}`, account: r.project, region: r.region, controller: '', onboarder: '', version: '', build: '',

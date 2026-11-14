@@ -1,4 +1,4 @@
-export { createFleetStore, reporting, HISTORY_MAX, type Description, type DescriptionKey, type FailureEntry, type Group, type HistoryEntry, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type FleetStore, type RouterPoll, type RouterSummary, type WorkloadSummary, type DynamoSender } from './store.js';
+export { createFleetStore, reporting, HISTORY_MAX, type Description, type DescriptionKey, type FailureEntry, type Group, type HistoryEntry, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type FleetStore, type RouterProbe, type RouterSummary, type WorkloadSummary, type DynamoSender } from './store.js';
 export { createIngest, processRecords, type RouterEvent } from './ingest.js';
 export { historyView, type HistoryView, type Phase } from './history.js';
 export type { CatalogRead } from './google-prices.js';

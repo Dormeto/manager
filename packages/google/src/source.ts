@@ -1,6 +1,6 @@
 // One Google instance per execution environment, so the tokens are kept from one invocation to the next: built when the
 // connection's record is first read, built again only when the record changes. Discovery calls Google's APIs as its
-// account through it; the API and the fleet's poll call routers with its instance.
+// account through it; the API and the fleet function call routers with its instance.
 import type { Google, GoogleConnection, ServiceAccount } from './google.js';
 
 export function createGoogleSource({ read, create }: { read(): Promise<GoogleConnection | null>; create(connection: GoogleConnection): Google }) {

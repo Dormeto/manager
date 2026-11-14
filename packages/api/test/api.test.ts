@@ -591,7 +591,7 @@ describe('Google Cloud routers', () => {
     expect(m.audit.at(-1)).toMatchObject({ action: 'google-connection', result: '2 routers, 1 scope' });
   });
 
-  it('answers a settings write as before when a router refuses the push, and logs it for the poll', async () => {
+  it('answers a settings write as before when a router refuses the push, and logs it: the router\'s next check pushes them again', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const m = manager({ controller: () => new Response('<html>Forbidden</html>', { status: 403 }) });
     const res = await m.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }));
@@ -601,8 +601,8 @@ describe('Google Cloud routers', () => {
     expect(logged).toEqual([{ level: 'warn', event: 'ManagerSettingsNotPushed', router: NAME, error: 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev (Google: dmtr-europe-west2-controller-abc123-nw.a.run.app 403: Forbidden)' }]);
   });
 
-  // A router below 0.40.0 can't take them (its refusal would be logged at every write, forever): the poll pushes them once
-  // it has its new version.
+  // A router below 0.40.0 can't take them (its refusal would be logged at every write, forever): once upgraded, its first check
+  // reports another ETag and the fleet function pushes them (or the watchdog's probe, if it is silent).
   it('pushes a settings write to no router below 0.40.0, and to a dev router of 0.40.0 (0.40.0-dev.1) and one of unknown version', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const m = manager({

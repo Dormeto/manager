@@ -1,4 +1,4 @@
-// One Google instance per execution environment (discovery, the API, the fleet's poll): built when the connection's record
+// One Google instance per execution environment (discovery, the API, the fleet function): built when the connection's record
 // is first read, built again only when the record changes, so its tokens are kept from one invocation to the next.
 import { describe, expect, it } from 'vitest';
 import { createGoogleSource, type Google, type GoogleConnection } from '../src/index.js';

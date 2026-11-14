@@ -127,7 +127,7 @@ describe('discovery routes', () => {
     const gcp = (name: string, region: string, over: Partial<Candidate> = {}) => candidate(`${P}/${region === 'global' ? 'global' : `regions/${region}`}/backendServices/${name}`, {
       account: 'dormeto-dev', region, targetGroup: name, targetGroupArn: null, ...over,
     } as never);
-    // A row as the poll writes it: under the router's own name, dmtr-<region> (the API lists it as dmtr-<project>-<region>).
+    // A row as the router's reports write it: under the router's own name, dmtr-<region> (the API lists it as dmtr-<project>-<region>).
     const row = (over: Record<string, unknown>) => ({ account: 'dormeto-dev', cloud: 'gcp', region: 'europe-west2', router: 'dmtr-europe-west2', ...over });
     // The project's routers as the registry holds them.
     const installed = (region: string) => ({

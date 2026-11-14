@@ -1,5 +1,6 @@
-// The organization's settings.json as the poll reads it (Google Cloud manager design §5.5, §6.3): its ETag as S3 gives it and
-// its text, none while it doesn't exist; each call bounded, 3 s to connect and 10 s of silence.
+// The organization's settings.json as the fleet function reads it (Google Cloud manager design §5.5; router push design
+// §6.2, §6.3): its ETag as S3 gives it and its text, none while it doesn't exist; each call bounded, 3 s to connect and 10 s
+// of silence.
 import { S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it } from 'vitest';
 import { createSettingsJson, S3_OPTIONS } from '../src/settings-json.js';
@@ -24,7 +25,7 @@ function fakeS3(answer: (command: string) => unknown) {
   };
 }
 
-describe('settings.json for the poll', () => {
+describe('settings.json for the pushes to Google Cloud routers', () => {
   it('reads its ETag and its text as S3 gives them, from the lists bucket', async () => {
     const { s3, sent } = fakeS3((command) => (command === 'HeadObjectCommand' ? { ETag: '"abc"' } : { ETag: '"abc"', Body: { transformToString: async () => '{"workloads":{}}' } }));
     const settings = createSettingsJson({ s3: s3 as never, bucket: BUCKET });

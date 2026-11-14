@@ -1,8 +1,11 @@
 // Health alarms (vision docs/specs/2026-10-08-reliability-security-design.md, R6a): every 5 minutes, the routers the
 // manager knows are compared with what they report; an alarm per subject keeps its open problems, and each change that
-// matters (a problem opened or raised, a subject resolved) is published to the environment's alert topic.
-import { reporting, type RouterPoll, type RouterSummary } from '@dormeto/fleet';
-import { cloudOf, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
+// matters (a problem opened or raised, a subject resolved) is published to the environment's alert topic. First, the fleet
+// function probes the Google Cloud routers that are silent or never reported (router push design 2026-11-14 §6.3, §6.4):
+// what it met (a refusal, a router too old to report) is said instead of silent.
+import { InvokeCommand } from '@aws-sdk/client-lambda';
+import { reporting, type RouterProbe, type RouterSummary } from '@dormeto/fleet';
+import { cloudOf, GOOGLE_REPORT_MINIMUM, reportsTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fleetRouters, type TerraformRouter } from './routers.js';
 
@@ -79,14 +82,18 @@ function reportedProblems(summary: RouterSummary): Problem[] {
   }).filter((p) => !FAILED_WORKLOADS.has(p.code));
 }
 
-// What a silent router's owner checks first, per cloud.
+// What a silent router's owner checks first, per cloud; for a Google Cloud router, what the watchdog's probe last met.
 const AWS_SILENT_HINT = 'Its idle check does not run, or its reports do not reach the manager\'s event bus: open the router in the dashboard, which calls it directly and shows why.';
-const gcpSilentHint = (region: string) => `Its Cloud Run service (the controller) does not answer, or its Cloud Scheduler job dmtr-${region}-check does not run: open the router in the dashboard, which calls it directly and shows why, then read the controller's logs in Cloud Logging.`;
+const gcpSilentHint = (project: string, region: string, probe: RouterProbe | null | undefined) => `Its Cloud Scheduler job dmtr-${region}-check does not run, its Cloud Run service (the controller) does not answer, or its reports do not reach the manager's API: `
+  + `dormeto gcp routers show --project ${project} --region ${region} says where it reports and its last refusal; the controller's logs in Cloud Logging say why (ReportFailed, ReportRefused).`
+  + (probe?.lastError ? ` The watchdog's last call of it: ${probe.lastError}.` : '');
+// A refusal the probe met: the command its text names fixes it, and the next run sees it.
+const REFUSED_HINT = 'The manager\'s call to the router is refused: once the command has run, the watchdog calls it again at its next run (every 5 minutes).';
 
-export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now, polls = [], routerVersion }: {
+export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now, probes = [], routerVersion }: {
   terraformRouters: TerraformRouter[]; installed: InstalledRouter[]; summaries: RouterSummary[]; managerAccount: string; now: number;
-  // The Google Cloud routers' polls (RS# items), and the version the manager pins (the install command's).
-  polls?: { account: string; region: string; poll: RouterPoll | null }[]; routerVersion?: string;
+  // The Google Cloud routers' probes (RS# items), and the version the manager pins (the install command's).
+  probes?: { account: string; region: string; probe: RouterProbe | null }[]; routerVersion?: string | undefined;
 }): Observation[] {
   const observations: Observation[] = [];
   for (const router of fleetRouters(terraformRouters, installed, managerAccount)) {
@@ -102,27 +109,29 @@ export function routerObservations({ terraformRouters, installed, summaries, man
       }
       continue;
     }
-    // A Google Cloud router the manager can't poll (older than 0.40.0, or without /v1/actions) can't report: never silent.
+    const probe = cloud === 'gcp' ? probes.find((p) => p.account === account && p.region === router.region)?.probe : null;
+    // A Google Cloud router below 0.41.0 can't report: never silent. Its version as the probe last read it from its health
+    // (kept in the registry), else as it reported.
     if (cloud === 'gcp') {
-      const poll = polls.find((p) => p.account === account && p.region === router.region)?.poll;
-      const version = summary?.version || router.installed?.version || '';
-      if (routerTooOld(version) || poll?.tooOld !== undefined) {
-        observations.push({ subject, problems: [{ code: 'too-old', level: 'error', text: tooOldText(version || poll?.tooOld || '', account, router.region, routerVersion) }] });
+      const version = router.installed?.version || summary?.version || '';
+      if (reportsTooOld(version) || probe?.tooOld !== undefined) {
+        observations.push({ subject, problems: [{ code: 'too-old', level: 'error', text: tooOldText(probe?.tooOld || version, account, router.region, routerVersion, GOOGLE_REPORT_MINIMUM) }] });
         continue;
       }
     }
-    if (!summary && router.installed && now - Date.parse(router.installed.at) < GRACE_MS) {
+    // Not expected yet: a router installed lately, or a Google Cloud router just given where to report that could not before.
+    const installedLately = !summary && router.installed && now - Date.parse(router.installed.at) < GRACE_MS;
+    if (installedLately || (probe?.askedAt && now - Date.parse(probe.askedAt) < GRACE_MS)) {
       observations.push({ subject, problems: [] });
       continue;
     }
-    // A Google Cloud router the poll is refused at (the manager's access missing, a controller not found yet): that refusal,
+    // A Google Cloud router the probe is refused at (the manager's access missing, a controller not found yet): that refusal,
     // with the command that fixes it (its last error, after the step), instead of silent.
-    const refused = cloud === 'gcp' ? polls.find((p) => p.account === account && p.region === router.region)?.poll : null;
-    if (refused?.lastRefusal && refused.lastError) {
-      observations.push({ subject, problems: [{ code: refused.lastRefusal.replace(/_/g, '-'), level: 'error', text: refused.lastError.replace(/^[a-z-]+: /, ''), hint: 'The manager\'s poll of the router is refused: once the command has run, the next poll (every minute) reads it again.' }] });
+    if (probe?.lastRefusal && probe.lastError) {
+      observations.push({ subject, problems: [{ code: probe.lastRefusal.replace(/_/g, '-'), level: 'error', text: probe.lastError.replace(/^[a-z-]+: /, ''), hint: REFUSED_HINT }] });
       continue;
     }
-    const hint = cloud === 'gcp' ? gcpSilentHint(router.region) : AWS_SILENT_HINT;
+    const hint = cloud === 'gcp' ? gcpSilentHint(account, router.region, probe) : AWS_SILENT_HINT;
     observations.push({ subject, problems: [{ code: 'silent', level: 'error', text: summary ? `no report for ${minutes(now - Date.parse(summary.checkedAt))} minutes` : 'no report received', hint }] });
   }
   return observations;
@@ -263,14 +272,16 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
   return { subject, message, chat: chatNotification(subject, description, nextSteps), attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', ...attributes } };
 }
 
-export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations, routerVersion }: {
+export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations, routerVersion, probe }: {
   env: string;
   // The router version the manager pins: the install command's --version for a Google Cloud router too old to report.
   routerVersion?: string;
   managerAccount: string;
   dashboardUrl: string;
   terraformRouters: TerraformRouter[];
-  fleet: { listRouters(): Promise<RouterSummary[]>; routerPolls?(): Promise<{ account: string; region: string; poll: RouterPoll | null }[]> };
+  fleet: { listRouters(): Promise<RouterSummary[]>; routerProbes?(): Promise<{ account: string; region: string; probe: RouterProbe | null }[]> };
+  // The probe of the Google Cloud routers that are silent or never reported (the fleet function's), run before they are compared.
+  probe?: () => Promise<unknown>;
   registry: { listRouters(): Promise<InstalledRouter[]> };
   alarms: AlarmStore;
   notify: { publish(n: Notification): Promise<void> };
@@ -281,8 +292,19 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
 }) {
   return {
     async run() {
+      // A probe that failed leaves the routers' probes as the last one wrote them: they are compared, and the run fails at
+      // its end so that the watchdog's errors alarm says it.
+      let unprobed: string | null = null;
+      if (probe) {
+        try {
+          await probe();
+        } catch (err) {
+          unprobed = (err as Error).message;
+          log.error('RoutersNotProbed', { error: unprobed });
+        }
+      }
       const t = now();
-      const [summaries, installed, existing, polls] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list(), fleet.routerPolls?.() ?? []]);
+      const [summaries, installed, existing, probes] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list(), fleet.routerProbes?.() ?? []]);
       // Subjects other than routers that could not be read keep their alarms as they are (never resolved nor removed).
       let extra: Observation[] = [];
       let extraUnread: string | null = null;
@@ -298,7 +320,7 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       const named = fleetRouters(terraformRouters, installed, managerAccount);
       const routerName = (account?: string, region?: string) => named.find((r) => (r.account ?? managerAccount) === account && r.region === region)?.name;
       const observations = [
-        ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t, polls, routerVersion }),
+        ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t, probes, routerVersion }),
         ...extra.map((o) => (o.subject.kind === 'workload' ? { ...o, subject: { ...o.subject, router: routerName(o.subject.account, o.subject.region) ?? o.subject.router } } : o)),
       ];
       const known = new Map(existing.map((x) => [x.alarm.subject.id, x]));
@@ -373,7 +395,29 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       if (unsent.length) throw new Error(`${unsent.length} alert${unsent.length === 1 ? '' : 's'} not sent: ${[...new Set(unsent)].join('; ')}`);
       // The lists' status unread: the routers are done, and the run fails so that the watchdog's errors alarm says it.
       if (extraUnread !== null) throw new Error(`subjects unreadable: ${extraUnread}`);
+      if (unprobed !== null) throw new Error(`routers not probed: ${unprobed}`);
     },
+  };
+}
+
+// The probe as the watchdog runs it: the fleet function invoked with `{task: 'probe'}`, its answer waited for (the watchdog
+// holds no Google identity: the federation trusts the fleet function's role). Bounded at 90 s: the probe starts no router
+// after 40 s, each within 30 s; the watchdog's own timeout is 120 s.
+export const PROBE_WAIT_MS = 90_000;
+export function fleetProbe(lambda: { send(command: InvokeCommand, options?: { abortSignal?: AbortSignal }): Promise<{ FunctionError?: string; Payload?: Uint8Array }> }, functionName: string) {
+  return async (): Promise<unknown> => {
+    const out = await lambda.send(new InvokeCommand({
+      FunctionName: functionName, InvocationType: 'RequestResponse', Payload: new TextEncoder().encode(JSON.stringify({ task: 'probe' })),
+    }), { abortSignal: AbortSignal.timeout(PROBE_WAIT_MS) });
+    const text = out.Payload ? new TextDecoder().decode(out.Payload) : '';
+    let answer: unknown = null;
+    try {
+      answer = text ? JSON.parse(text) : null;
+    } catch {
+      answer = text;
+    }
+    if (out.FunctionError) throw new Error(`the fleet function failed: ${(answer as { errorMessage?: unknown } | null)?.errorMessage ?? out.FunctionError}`);
+    return answer;
   };
 }
 

@@ -1,6 +1,6 @@
 // The reports of the Google Cloud routers (router push design 2026-11-14 §3.2, §6.2): the manager's API relays each router's
 // events to the bus as `dormeto.router.gcp`, the project and region its token proved in the wrapper. The fleet function reads
-// such an event only from the manager's own account, ingests it as the poll ingested the same router's journal and check,
+// such an event only from the manager's own account, ingests it as an AWS router's (under the wrapper's project and region),
 // and pushes the organization's settings when a check says its router holds another ETag than settings.json's.
 import { GoogleError, type GoogleConnection } from '@dormeto/google';
 import { describe, expect, it } from 'vitest';
@@ -92,7 +92,7 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
     expect(await w.store.getWorkload(PROJECT, 'us-central1', 'web')).toBeNull();
   });
 
-  it('ingests a Router checked as the poll did: its rows with their backend services and source cli, under the wrapper\'s project and region', async () => {
+  it('ingests a Router checked as an AWS router\'s: its rows with their backend services and source cli, under the wrapper\'s project and region', async () => {
     const w = world();
     await w.report(relayed('Router checked', checked(T0 - 10 * S, [row('web', 'AWAKE'), row('shop', 'ASLEEP')], undefined, undefined, {
       router: { name: 'dmtr-elsewhere', version: '0.41.0', build: 'b1', checkSchedule: '*/5 * * * *', region: 'us-central1' },
@@ -105,7 +105,7 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
     expect(await w.store.getWorkload(PROJECT, 'us-central1', 'web')).toBeNull();
   });
 
-  it('maps a router\'s detail as the poll does: the journal entry without its id, the router\'s block named and placed by its registration', () => {
+  it('maps a router\'s detail to an AWS router\'s: the journal entry without its id, the router\'s block named and placed by its registration', () => {
     expect(googleEvent({ account: PROJECT, region: REGION, name: `dmtr-${REGION}` }, 'Workload state changed', { id: '1794225240000-web-ASLEEP', workloadId: 'web', to: 'ASLEEP', region: 'x' })).toEqual({
       account: PROJECT, region: REGION, 'detail-type': 'Workload state changed', detail: { workloadId: 'web', to: 'ASLEEP', router: `dmtr-${REGION}`, region: REGION },
     });
@@ -179,34 +179,40 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
   });
 });
 
-// Until the poll ends (the plan's M39), a router 0.41.0 is both polled and reporting: the same check can come as the poll's
-// one chunk (its 1000 rows at most) and as the router's chunks under 64 KB, and the same transition twice. Both are
-// ingested as they were already (the poll read the journal again from 5 minutes back): nothing is lost or doubled.
-describe('a router both polled and reporting', () => {
-  it('removes no row its check lists when the poll\'s one chunk lands between the router\'s chunks of the same check', async () => {
-    const w = world();
-    const at = T0 - 10 * S;
-    const rows = ['a', 'b', 'c'].map((id) => row(id, 'AWAKE'));
-    await w.ingestOne(googleEvent({ account: PROJECT, region: REGION }, 'Router checked', checked(at - 300 * S, [...rows, row('gone', 'AWAKE')])));
-    // Each order at a check of its own, a second after the one before.
-    const orders = [[0, 'poll', 1, 2], ['poll', 0, 1, 2], [0, 1, 'poll', 2], [2, 'poll', 0, 1]] as const;
-    for (const [i, order] of orders.entries()) {
-      const t = at + i * S;
-      for (const step of order) {
-        const detail = step === 'poll' ? checked(t, rows) : checked(t, [rows[step]!], { index: step, total: 3 });
-        await w.ingestOne(googleEvent({ account: PROJECT, region: REGION }, 'Router checked', detail));
-      }
-      expect(await w.store.getWorkload(PROJECT, REGION, 'gone')).toBeNull();
-      for (const id of ['a', 'b', 'c']) expect(await w.store.getWorkload(PROJECT, REGION, id)).toMatchObject({ state: 'AWAKE', checkedAt: iso(t) });
-    }
-  });
-
-  it('keeps one history entry for a transition the poll and the report both bring', async () => {
+// A router sends from its cursor, moved only on the API's 200 (router push design §4.3): an answer lost sends the same events
+// again, and the waker's and the controller's commits can arrive out of order; a check comes in chunks under 64 KB, in any
+// order. Nothing is lost or doubled.
+describe('a router\'s reports sent again or out of order', () => {
+  it('keeps one history entry for a transition the router sends again', async () => {
     const w = world();
     const change = { at: iso(T0 - 60 * S), workloadId: 'web', from: 'AWAKE', to: 'NAPPING', cause: 'idle', tags: {} };
-    await w.ingestOne(googleEvent({ account: PROJECT, region: REGION, name: `dmtr-${REGION}` }, 'Workload state changed', { id: '1794225540000-web-NAPPING', ...change }));
+    await w.report(relayed('Workload state changed', change));
     await w.report(relayed('Workload state changed', change));
     const history = await w.store.listHistory(PROJECT, REGION, 'web', iso(T0 - 86_400 * S), iso(T0 + 86_400 * S));
     expect(history.entries.map((e) => [e.from, e.to, e.at])).toEqual([['AWAKE', 'NAPPING', iso(T0 - 60 * S)]]);
+  });
+
+  it('files a transition reported after a later one in the history, and leaves the summary at the later one', async () => {
+    const w = world();
+    await w.report(relayed('Workload state changed', { at: iso(T0 - 60 * S), workloadId: 'web', from: 'NAPPING', to: 'ASLEEP', cause: 'idle', tags: {} }));
+    await w.report(relayed('Workload state changed', { at: iso(T0 - 120 * S), workloadId: 'web', from: 'AWAKE', to: 'NAPPING', cause: 'idle', tags: {} }));
+    expect(await w.store.getWorkload(PROJECT, REGION, 'web')).toMatchObject({ state: 'ASLEEP', stateAt: iso(T0 - 60 * S) });
+    const history = await w.store.listHistory(PROJECT, REGION, 'web', iso(T0 - 86_400 * S), iso(T0 + 86_400 * S));
+    expect(history.entries.map((e) => [e.from, e.to, e.at])).toEqual([['AWAKE', 'NAPPING', iso(T0 - 120 * S)], ['NAPPING', 'ASLEEP', iso(T0 - 60 * S)]]);
+  });
+
+  it('keeps every row a check lists, whatever the order of its chunks, and removes the row it no longer lists', async () => {
+    const w = world();
+    const at = T0 - 10 * S;
+    const rows = ['a', 'b', 'c'].map((id) => row(id, 'AWAKE'));
+    await w.report(relayed('Router checked', checked(at - 300 * S, [...rows, row('gone', 'AWAKE')])));
+    // Each order at a check of its own, a second after the one before.
+    const orders = [[0, 1, 2], [2, 0, 1], [1, 2, 0]] as const;
+    for (const [i, order] of orders.entries()) {
+      const t = at + i * S;
+      for (const index of order) await w.report(relayed('Router checked', checked(t, [rows[index]!], { index, total: 3 })));
+      expect(await w.store.getWorkload(PROJECT, REGION, 'gone')).toBeNull();
+      for (const id of ['a', 'b', 'c']) expect(await w.store.getWorkload(PROJECT, REGION, id)).toMatchObject({ state: 'AWAKE', checkedAt: iso(t) });
+    }
   });
 });

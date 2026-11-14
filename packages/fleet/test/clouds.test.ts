@@ -1,7 +1,7 @@
 // One model for both clouds (Google Cloud design §3): the account is an AWS account or a Google Cloud project, and the
 // regions are checked per cloud.
 import { describe, expect, it } from 'vitest';
-import { cloudOf, fiveFieldMinutes, googlePath, googleScopeOf, googleServicePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText } from '../src/clouds.js';
+import { cloudOf, fiveFieldMinutes, GOOGLE_REPORT_MINIMUM, googlePath, googleScopeOf, googleServicePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, reportsTooOld, routerTooOld, tooOldText } from '../src/clouds.js';
 
 describe('clouds', () => {
   it('tells the cloud of an account: twelve digits are AWS, a project ID is Google Cloud, anything else is neither', () => {
@@ -43,7 +43,7 @@ describe('clouds', () => {
   });
 });
 
-// A Google Cloud router too old for the manager, and the command that installs one: the API, the operations, the fleet's poll,
+// A Google Cloud router too old for the manager, and the command that installs one: the API, the operations, the fleet's probe,
 // the watchdog and the dashboard say them alike.
 describe('routerTooOld', () => {
   it('is a known version below 0.40.0; an unknown version is called', () => {
@@ -56,6 +56,22 @@ describe('routerTooOld', () => {
   });
 });
 
+// A Google Cloud router too old to report (router push design 2026-11-14 §6.4): the manager still calls a router of 0.40.0, but
+// only 0.41.0 sends its events to the manager's API.
+describe('reportsTooOld', () => {
+  it('is a known version below 0.41.0, by major.minor.patch; an unknown version is called', () => {
+    expect(GOOGLE_REPORT_MINIMUM).toBe('0.41.0');
+    expect(['0.40.0', '0.40.9-rc.1', '0.40.0-dev.3', '0.39.0'].map(reportsTooOld)).toEqual([true, true, true, true]);
+    expect(['0.41.0', '0.41.0-dev.1', '1.0.0', '', 'dev'].map(reportsTooOld)).toEqual([false, false, false, false, false]);
+  });
+
+  it('names the install command with the pinned version but never below 0.41.0', () => {
+    expect(installCommand('dormeto-dev', 'europe-west2', '0.40.0', GOOGLE_REPORT_MINIMUM)).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.41.0');
+    expect(tooOldText('0.40.0', 'dormeto-dev', 'europe-west2', '0.41.2', GOOGLE_REPORT_MINIMUM)).toBe('router 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.41.2');
+    expect(tooOldText('', 'dormeto-dev', 'europe-west2', undefined, GOOGLE_REPORT_MINIMUM)).toBe('router older than 0.41.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2');
+  });
+});
+
 describe('the refusals\' texts', () => {
   it('names the install command with the pinned version but never below the router minimum', () => {
     expect(installCommand('dormeto-dev', 'europe-west2', '0.37.0')).toBe('dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0');
@@ -64,7 +80,7 @@ describe('the refusals\' texts', () => {
     expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.37.0')).toContain('--version 0.40.0');
   });
 
-  it('name the command that fixes a router too old, as the API answers it and the poll records it', () => {
+  it('name the command that fixes a router too old, as the API answers it and the probe records it', () => {
     expect(tooOldText('0.39.0', 'dormeto-dev', 'europe-west2', '0.40.0')).toBe('router 0.39.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2 --version 0.40.0');
     expect(tooOldText('', 'dormeto-dev', 'europe-west2', undefined)).toBe('router older than 0.40.0 can\'t report to the manager: dormeto gcp routers install --project dormeto-dev --region europe-west2');
   });

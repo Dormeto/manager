@@ -1,6 +1,8 @@
 // Lambda entry point of the watchdog (R6a), run every 5 minutes by EventBridge Scheduler: AWS SDK v3 clients provided by
-// the nodejs24.x runtime (not bundled).
+// the nodejs24.x runtime (not bundled). Each run first has the fleet function probe the Google Cloud routers that are silent
+// or never reported (FLEET_FUNCTION, router push design 2026-11-14 §6.3).
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { LambdaClient } from '@aws-sdk/client-lambda';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import { S3Client } from '@aws-sdk/client-s3';
 import { createFleetStore } from '@dormeto/fleet';
@@ -8,13 +10,14 @@ import { createRecords } from '@dormeto/operations';
 import { createAlarmStore } from './alarms.js';
 import type { TerraformRouter } from './routers.js';
 import { readJson } from './s3-json.js';
-import { createWatchdog, listObservations, snsInput, workloadObservations, type ListStatusLine } from './watchdog.js';
+import { createWatchdog, fleetProbe, listObservations, snsInput, workloadObservations, type ListStatusLine } from './watchdog.js';
 
 const table = process.env.TABLE ?? '';
 const dynamo = new DynamoDBClient({});
 const sns = new SNSClient({});
 const s3 = new S3Client({});
 const listsBucket = process.env.LISTS_BUCKET;
+const fleetFunction = process.env.FLEET_FUNCTION;
 const log = (level: string) => (event: string, data: object = {}) => console.log(JSON.stringify({ level, event, ...data }));
 
 const fleet = createFleetStore({ dynamo, table });
@@ -25,6 +28,7 @@ const watchdog = createWatchdog({
   routerVersion: process.env.ROUTER_VERSION,
   terraformRouters: JSON.parse(process.env.ROUTERS ?? '[]') as TerraformRouter[],
   fleet,
+  ...(fleetFunction ? { probe: fleetProbe(new LambdaClient({ maxAttempts: 1 }), fleetFunction) } : {}),
   registry: createRecords({ dynamo, table }),
   alarms: createAlarmStore({ dynamo, table }),
   notify: {

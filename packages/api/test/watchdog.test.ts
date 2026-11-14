@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createFleetStore, createIngest, type RouterPoll, type RouterSummary } from '@dormeto/fleet';
+import { createFleetStore, createIngest, type RouterProbe, type RouterSummary } from '@dormeto/fleet';
 import { createRegistry } from '@dormeto/fleet/registry';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
-import { createPoll } from '../../fleet/src/poll.js';
-import { createWatchdog, listObservations, problemCode, snsInput, workloadObservations, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
+import { googleEvent } from '../../fleet/src/google-report.js';
+import { createProbe } from '../../fleet/src/probe.js';
+import { createWatchdog, fleetProbe, listObservations, problemCode, snsInput, workloadObservations, type Alarm, type AlarmStore, type Notification } from '../src/watchdog.js';
 
 const NOW = Date.UTC(2026, 9, 8, 12, 0);
 const MIN = 60_000;
@@ -46,50 +47,52 @@ function memoryAlarms(): AlarmStore & { items: Map<string, { alarm: Alarm; versi
   return store;
 }
 
-function setup({ summaries = [] as RouterSummary[], registry = [] as InstalledRouter[], polls = [] as { account: string; region: string; checkedAt: string | null; poll: Partial<RouterPoll> | null }[], terraform = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller' }], failPublish = false } = {}) {
+function setup({ summaries = [] as RouterSummary[], registry = [] as InstalledRouter[], probes = [] as { account: string; region: string; probe: Partial<RouterProbe> | null }[], probe = undefined as (() => Promise<unknown>) | undefined, terraform = [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller' }], failPublish = false } = {}) {
   let now = NOW;
   const sent: Notification[] = [];
-  const state = { summaries, registry, polls, failPublish };
+  const state = { summaries, registry, probes, failPublish };
+  const errors: [string, object | undefined][] = [];
   const alarms = memoryAlarms();
   const watchdog = createWatchdog({
     env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: terraform,
-    fleet: { listRouters: async () => state.summaries, routerPolls: async () => state.polls as never },
-    routerVersion: '0.40.0',
+    fleet: { listRouters: async () => state.summaries, routerProbes: async () => state.probes as never },
+    routerVersion: '0.41.0', ...(probe ? { probe } : {}),
     registry: { listRouters: async () => state.registry },
     alarms,
     notify: { async publish(n) { if (state.failPublish) throw new Error('throttled'); sent.push(n); } },
     now: () => now,
-    log: { info: () => {}, warn: () => {}, error: () => {} },
+    log: { info: () => {}, warn: () => {}, error: (event, data) => { errors.push([event, data]); } },
   });
-  return { watchdog, sent, alarms, state, advance: (ms: number) => { now += ms; } };
+  return { watchdog, sent, alarms, state, errors, advance: (ms: number) => { now += ms; } };
 }
 
 const PROJECT = 'acme-prod';
-const gcp = (installedAgoMs = 10 * HOUR, extra: Partial<InstalledRouter> = {}) => installed(PROJECT, 'europe-west1', installedAgoMs, { cloud: 'gcp', onboarder: '', installedBy: 'cli', controller: 'https://c.run.app', version: '0.40.0', ...extra });
+const gcp = (installedAgoMs = 10 * HOUR, extra: Partial<InstalledRouter> = {}) => installed(PROJECT, 'europe-west1', installedAgoMs, { cloud: 'gcp', onboarder: '', installedBy: 'cli', controller: 'https://c.run.app', version: '0.41.0', ...extra });
 
 describe('watchdog: Google Cloud routers', () => {
-  it('compares a dev router\'s version by major.minor.patch: 0.39.0-dev.3 is too old, 0.40.0-dev.1 is not', async () => {
-    const old = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.39.0-dev.3' })] });
+  // A router below 0.41.0 sends no event (router push design 2026-11-14 §6.4).
+  it('compares a dev router\'s version by major.minor.patch: 0.40.0-dev.3 is too old to report, 0.41.0-dev.1 is not', async () => {
+    const old = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.40.0-dev.3' })] });
     await old.watchdog.run();
     expect(old.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
-    const dev = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.40.0-dev.1' })] });
+    const dev = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.41.0-dev.1' })] });
     await dev.watchdog.run();
     expect(dev.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['silent']);
   });
 
-  it('calls a router below 0.40.0 too old, with the install command, never silent', async () => {
-    const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.39.0' })] });
+  it('calls a router below 0.41.0 too old, with the install command, never silent', async () => {
+    const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.40.0' })], summaries: [summary(PROJECT, 'europe-west1', HOUR, [], { checkSchedule: '*/5 * * * *', version: '0.40.0' })] });
     await s.watchdog.run();
     expect(s.sent).toHaveLength(1);
-    expect(s.sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    expect(s.sent[0]!.message).toContain(`router 0.40.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.41.0`);
     expect(s.sent[0]!.attributes).toEqual({ level: 'error', kind: 'router', cloud: 'gcp', account: PROJECT, region: 'europe-west1', router: `dmtr-${PROJECT}-europe-west1` });
     expect(s.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
   });
 
-  it('calls a router too old when its poll says it has no /v1/actions, even with an unknown version', async () => {
-    const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '' })], polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: null, poll: { tooOld: '' } }] });
+  it('calls a router too old when its probe read a version below 0.41.0 from its health, the registry\'s unknown', async () => {
+    const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '' })], probes: [{ account: PROJECT, region: 'europe-west1', probe: { tooOld: '0.40.0' } }] });
     await s.watchdog.run();
-    expect(s.sent[0]!.message).toContain(`router older than 0.40.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    expect(s.sent[0]!.message).toContain(`router 0.40.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.41.0`);
     expect(s.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
   });
 
@@ -102,52 +105,72 @@ describe('watchdog: Google Cloud routers', () => {
     expect(s.sent[0]!.subject).toContain('no report received');
   });
 
-  it('calls a 0.40.0 router silent after 16 minutes, with the advice of Cloud Run and its Scheduler job', async () => {
-    const s = setup({ terraform: [], registry: [gcp()], summaries: [summary(PROJECT, 'europe-west1', 16 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.40.0' })] });
+  it('calls a 0.41.0 router silent after 16 minutes, with the advice of its Scheduler job, its reports and Cloud Run, and the watchdog\'s last call of it', async () => {
+    const s = setup({
+      terraform: [], registry: [gcp()], summaries: [summary(PROJECT, 'europe-west1', 16 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.41.0' })],
+      probes: [{ account: PROJECT, region: 'europe-west1', probe: { probedAt: iso(NOW), misses: 0, lastError: 'health: no answer within 10000 ms' } }],
+    });
     await s.watchdog.run();
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0]!.subject).toContain('no report for 16 minutes');
+    const hint = 'Its Cloud Scheduler job dmtr-europe-west1-check does not run, its Cloud Run service (the controller) does not answer, or its reports do not reach the manager\'s API: '
+      + `dormeto gcp routers show --project ${PROJECT} --region europe-west1 says where it reports and its last refusal; the controller's logs in Cloud Logging say why (ReportFailed, ReportRefused). `
+      + 'The watchdog\'s last call of it: health: no answer within 10000 ms.';
+    expect(s.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems[0]!.hint).toBe(hint);
     for (const text of [s.sent[0]!.message, JSON.stringify(s.sent[0]!.chat)]) {
       expect(text).toContain('Cloud Run');
       expect(text).toContain('dmtr-europe-west1-check');
       expect(text).not.toContain('Lambda');
+      expect(text).not.toMatch(/poll/i);
     }
     expect(s.sent[0]!.attributes.cloud).toBe('gcp');
   });
 
-  // The poll's refusal says what to run; a silent router's advice would send the operator to Cloud Run's logs instead.
-  it('says the refusal the poll met, with its command, instead of silent: the manager\'s access missing, a controller not found yet', async () => {
+  // The probe's refusal says what to run; a silent router's advice would send the operator to Cloud Run's logs instead.
+  it('says the refusal the probe met, with its command, instead of silent: the manager\'s access missing, a controller not found yet', async () => {
     const access = 'the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev';
+    const hint = 'The manager\'s call to the router is refused: once the command has run, the watchdog calls it again at its next run (every 5 minutes).';
     const refused = setup({
       terraform: [], registry: [gcp()],
-      summaries: [summary(PROJECT, 'europe-west1', 40 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.40.0' })],
-      polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: iso(NOW - 40 * MIN), poll: { lastRefusal: 'no_access', lastError: `events: ${access}` } }],
+      summaries: [summary(PROJECT, 'europe-west1', 40 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.41.0' })],
+      probes: [{ account: PROJECT, region: 'europe-west1', probe: { lastRefusal: 'no_access', lastError: `health: ${access}` } }],
     });
     await refused.watchdog.run();
-    expect(refused.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => [p.code, p.level, p.text])).toEqual([['no-access', 'error', access]]);
+    expect(refused.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => [p.code, p.level, p.text, p.hint])).toEqual([['no-access', 'error', access, hint]]);
     expect(refused.sent).toHaveLength(1);
     expect(refused.sent[0]!.message).toContain(access);
     expect(refused.sent[0]!.message).not.toContain('Cloud Scheduler');
+    expect(refused.sent[0]!.message).not.toMatch(/poll/i);
     const unknown = 'discovery hasn\'t found this router\'s controller yet: dormeto gcp connect --project dormeto-host --profile <profile> --env dev again';
     const undiscovered = setup({
       terraform: [], registry: [gcp(10 * HOUR, { controller: '' })],
-      polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: null, poll: { lastRefusal: 'router_unknown', lastError: `controller: ${unknown}` } }],
+      probes: [{ account: PROJECT, region: 'europe-west1', probe: { lastRefusal: 'router_unknown', lastError: `controller: ${unknown}` } }],
     });
     await undiscovered.watchdog.run();
     expect(undiscovered.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => [p.code, p.text])).toEqual([['router-unknown', unknown]]);
   });
 
   it('gives a refused router installed lately the grace of a silent one, and a reporting one its own report', async () => {
-    const poll = { lastRefusal: 'no_access' as const, lastError: 'events: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' };
-    const fresh = setup({ terraform: [], registry: [gcp(5 * MIN)], polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: null, poll }] });
+    const probe = { lastRefusal: 'no_access' as const, lastError: 'health: the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev' };
+    const fresh = setup({ terraform: [], registry: [gcp(5 * MIN)], probes: [{ account: PROJECT, region: 'europe-west1', probe }] });
     await fresh.watchdog.run();
     expect(fresh.sent).toEqual([]);
     const reporting = setup({
-      terraform: [], registry: [gcp()], summaries: [summary(PROJECT, 'europe-west1', 2 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.40.0' })],
-      polls: [{ account: PROJECT, region: 'europe-west1', checkedAt: iso(NOW - 2 * MIN), poll }],
+      terraform: [], registry: [gcp()], summaries: [summary(PROJECT, 'europe-west1', 2 * MIN, [], { checkSchedule: '*/5 * * * *', version: '0.41.0' })],
+      probes: [{ account: PROJECT, region: 'europe-west1', probe }],
     });
     await reporting.watchdog.run();
     expect(reporting.sent).toEqual([]);
+  });
+
+  it('probes before it compares, and says a probe that failed as an error of its run, once the routers are compared', async () => {
+    const order: string[] = [];
+    const s = setup({ terraform: [], registry: [gcp(10 * HOUR, { version: '0.40.0' })], probe: async () => { order.push('probe'); throw new Error('the fleet function failed: Task timed out'); } });
+    const run = s.watchdog.run();
+    await expect(run).rejects.toThrow('routers not probed: the fleet function failed: Task timed out');
+    expect(order).toEqual(['probe']);
+    expect(s.errors).toContainEqual(['RoutersNotProbed', { error: 'the fleet function failed: Task timed out' }]);
+    expect(s.alarms.items.get(`router#${PROJECT}#europe-west1`)!.alarm.problems.map((p) => p.code)).toEqual(['too-old']);
   });
 
   it('keeps an AWS router\'s advice as it was', async () => {
@@ -180,50 +203,79 @@ describe('watchdog: Google Cloud routers', () => {
   });
 });
 
-// The fleet's poll and the watchdog over one table: the advised `dormeto gcp routers install` clears too-old within 10 minutes.
-describe('watchdog and the poll: a too-old Google Cloud router upgraded', () => {
-  it('resolves the router\'s too-old alarm once the poll read 0.40.0 from its health and polled it at the next run', async () => {
+// The fleet's probe and the watchdog over one table: the advised `dormeto gcp routers install` clears too-old at the watchdog's
+// next run, which gives the router where to report; a router that then never reports is silent once its grace is over.
+describe('watchdog and its probe: a Google Cloud router too old, upgraded', () => {
+  it('resolves the router\'s too-old alarm at the run that finds it 0.41.0 and gives it where to report, and calls it silent 15 minutes later if it never reports', async () => {
     let t = NOW;
     const table = 'dmt-dev-manager';
     const dynamo = fakeDynamo();
     const store = createFleetStore({ dynamo, table, now: () => t });
     const registry = createRegistry({ dynamo, table });
     const controller = 'https://dmtr-europe-west1-controller-abc-ew.a.run.app';
-    await registry.put(gcp(10 * HOUR, { name: 'dmtr-europe-west1', controller, version: '0.39.0' }));
-    // The router as its controller answers: its health, its journal with its last check, its rows.
-    const running = { version: '0.39.0' };
+    await registry.put(gcp(10 * HOUR, { name: 'dmtr-europe-west1', controller, version: '0.40.0' }));
+    // The router as its controller answers: its health, and where to report.
+    const running = { version: '0.40.0', events: null as unknown };
     const answer = (body: unknown) => ({ status: 200, text: JSON.stringify(body) });
     const request = async (_sa: string, _audience: string, method: string, _url: string, body?: unknown) => {
-      if (method === 'GET') return answer({ version: running.version, project: PROJECT, region: 'europe-west1' });
-      const { action } = body as { action: string };
-      if (action === 'events') return answer({ events: [], next: null, check: { checkedAt: iso(t - 30_000), durationMs: 800, checkSchedule: '*/5 * * * *', health: { status: 'ok', problems: [] }, pauses: [], counts: {} }, managerSettings: { etag: null } });
-      if (action === 'list') return answer({ router: { name: 'dmtr-europe-west1', version: running.version, build: 'b', checkSchedule: '*/5 * * * *', pauses: [] }, workloads: [] });
+      if (method === 'GET') return answer({ version: running.version, project: PROJECT, region: 'europe-west1', report: null });
+      const payload = body as { action: string; events?: unknown };
+      if (payload.action === 'manager-settings' && payload.events) {
+        running.events = payload.events;
+        return answer({ etag: null });
+      }
       return { status: 400, text: JSON.stringify({ error: 'unknown-action' }) };
     };
-    const poll = createPoll({
-      store, ingest: createIngest({ store, now: () => t }), registry, env: 'dev', routerVersion: '0.40.0', now: () => t,
+    const events = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
+    const probe = createProbe({
+      store, registry, env: 'dev', routerVersion: '0.41.0', now: () => t, events,
       google: { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }) },
       settings: { etag: async () => null, read: async () => null },
     });
     const sent: Notification[] = [];
     const watchdog = createWatchdog({
-      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [], routerVersion: '0.40.0',
-      fleet: { listRouters: () => store.listRouters(), routerPolls: () => store.routerPolls() }, registry: { listRouters: () => registry.list() },
+      env: 'dev', managerAccount: MANAGER, dashboardUrl: 'https://app.dev.dormeto.com', terraformRouters: [], routerVersion: '0.41.0', probe,
+      fleet: { listRouters: () => store.listRouters(), routerProbes: () => store.routerProbes() }, registry: { listRouters: () => registry.list() },
       alarms: memoryAlarms(), notify: { publish: async (n) => { sent.push(n); } }, now: () => t, log: { info: () => {}, warn: () => {}, error: () => {} },
     });
-    await poll();
     await watchdog.run();
     expect(sent.map((n) => n.attributes.level)).toEqual(['error']);
-    expect(sent[0]!.message).toContain(`router 0.39.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.40.0`);
+    expect(sent[0]!.message).toContain(`router 0.40.0 can't report to the manager: dormeto gcp routers install --project ${PROJECT} --region europe-west1 --version 0.41.0`);
+    expect(running.events).toBeNull();
     // The advised install.
-    running.version = '0.40.0';
-    t += 10 * MIN;
-    await poll();
-    t += MIN;
-    await poll();
+    running.version = '0.41.0';
+    t += 5 * MIN;
     await watchdog.run();
+    expect(running.events).toEqual(events);
     expect(sent.map((n) => n.attributes.level)).toEqual(['error', 'resolved']);
     expect(sent[1]!.attributes).toMatchObject({ kind: 'router', cloud: 'gcp', account: PROJECT, region: 'europe-west1' });
+    // It reports: the watchdog never calls it again while it does.
+    await createIngest({ store, now: () => t })(googleEvent({ account: PROJECT, region: 'europe-west1' }, 'Router checked', {
+      router: { name: 'dmtr-europe-west1', version: '0.41.0', build: 'b', checkSchedule: '*/5 * * * *' }, checkedAt: iso(t + MIN), durationMs: 800,
+      health: { status: 'ok', problems: [] }, pauses: [], counts: {}, chunk: { index: 0, total: 1 }, workloads: [], managerSettings: { etag: null },
+    }));
+    running.events = null;
+    t += 5 * MIN;
+    await watchdog.run();
+    expect([running.events, sent.length]).toEqual([null, 2]);
+    // Silent for 3 periods of its schedule: called again, and said silent.
+    t += 15 * MIN;
+    await watchdog.run();
+    expect(running.events).toEqual(events);
+    expect(sent.map((n) => n.attributes.level)).toEqual(['error', 'resolved', 'error']);
+    expect(sent[2]!.subject).toContain('no report for 19 minutes');
+  });
+
+  it('gives a router 0.41.0 that never reported, given where to report, 15 minutes before it calls it silent', async () => {
+    const s = setup({
+      terraform: [], registry: [gcp(10 * HOUR)],
+      probes: [{ account: PROJECT, region: 'europe-west1', probe: { probedAt: iso(NOW), misses: 0, askedAt: iso(NOW - 10 * MIN) } }],
+    });
+    await s.watchdog.run();
+    expect(s.sent).toEqual([]);
+    s.advance(6 * MIN);
+    await s.watchdog.run();
+    expect(s.sent[0]!.subject).toContain('no report received');
   });
 });
 
@@ -585,5 +637,28 @@ describe('watchdog: SNS input (R7b)', () => {
       .toEqual({ level: 'error', kind: 'workload', account: '1', region: 'eu-west-3', router: 'r', workload: 'w' });
     expect(input.TopicArn).toBe('arn:topic');
     expect(input.Subject).toBe('s');
+  });
+});
+
+// The watchdog holds no Google identity (the federation trusts the fleet function's role, router/gcp/access.json): it invokes
+// the fleet function with the probe's task and waits for its answer, within 90 s.
+describe('watchdog: the fleet function\'s probe', () => {
+  const payload = (body: unknown) => new TextEncoder().encode(JSON.stringify(body));
+
+  it('invokes the fleet function with the probe\'s task, waits for its answer and gives it back', async () => {
+    const sent: { input: Record<string, unknown>; signal: AbortSignal | undefined }[] = [];
+    const lambda = { send: async (command: { input: Record<string, unknown> }, options?: { abortSignal?: AbortSignal }) => {
+      sent.push({ input: command.input, signal: options?.abortSignal });
+      return { StatusCode: 200, Payload: payload({ routers: 2, probed: 2, left: 0 }) };
+    } };
+    expect(await fleetProbe(lambda, 'dmt-dev-manager-fleet')()).toEqual({ routers: 2, probed: 2, left: 0 });
+    expect(sent).toHaveLength(1);
+    expect([sent[0]!.input.FunctionName, sent[0]!.input.InvocationType, new TextDecoder().decode(sent[0]!.input.Payload as Uint8Array)]).toEqual(['dmt-dev-manager-fleet', 'RequestResponse', '{"task":"probe"}']);
+    expect(sent[0]!.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('fails with the fleet function\'s own error when it failed', async () => {
+    const lambda = { send: async () => ({ StatusCode: 200, FunctionError: 'Unhandled', Payload: payload({ errorType: 'Sandbox.Timedout', errorMessage: 'Task timed out after 120.00 seconds' }) }) };
+    await expect(fleetProbe(lambda, 'dmt-dev-manager-fleet')()).rejects.toThrow('the fleet function failed: Task timed out after 120.00 seconds');
   });
 });

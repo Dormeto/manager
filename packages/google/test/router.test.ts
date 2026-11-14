@@ -241,7 +241,7 @@ describe('callRouter', () => {
   });
 });
 
-// A router too old to poll has no /v1/actions, but every router answers its health: the poll reads its version there.
+// Every router answers its health, whatever its version: the watchdog's probe reads its version there.
 describe('routerHealth', () => {
   const HEALTH = `${CONTROLLER}/v1/health`;
 
@@ -292,10 +292,10 @@ describe('brokenConnection', () => {
   });
 });
 
-// The connect command, as the API answers a missing access and the poll records it; the router caller's refusals and the
+// The connect command, as the API answers a missing access and the probe records it; the router caller's refusals and the
 // texts of a router too old are the fleet's (packages/fleet/test/router-call.test.ts, clouds.test.ts).
 describe('the refusals\' texts', () => {
-  it('names the connect command that fixes a missing access, as the API answers it and the poll records it', () => {
+  it('names the connect command that fixes a missing access, as the API answers it and the probe records it', () => {
     expect(accessMissingText('dormeto-host', 'dev')).toBe('the manager\'s accounts can\'t reach the router: dormeto gcp connect --project dormeto-host --profile <profile> --env dev');
   });
 });

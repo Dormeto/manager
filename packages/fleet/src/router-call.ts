@@ -4,7 +4,7 @@
 // (routers 0.37.0 and later: no Lambda error for the router's health, vision refusals design §1) and reads one back as the
 // caller's own error with its code; a thrown error (a router before 0.37.0 throws its refusals, a failure) is one without,
 // and a Google Cloud router the manager can't use is refused with its refusal. The API and the operations engine call
-// routers through it, each with its error; the fleet's poll calls the transport itself (it reads Google's answers).
+// routers through it, each with its error; the watchdog's probe calls the transport itself (it reads Google's answers).
 import type { Google, GoogleConnection } from '@dormeto/google';
 import { accessMissingText, callRouter, controllerUnknownText, RouterCallError, type Refusal } from '@dormeto/google/router';
 import { routerTooOld, tooOldText } from './clouds.js';

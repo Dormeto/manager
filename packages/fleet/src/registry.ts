@@ -1,8 +1,8 @@
 // The registry of the routers the manager knows by installation (a router installed by the manager, or registered for
 // a Google Cloud project): one item per router in the manager table, `ROUTER#<account>#<region>` under T#default, the
 // router as JSON in `data`. Operations writes and reads it, the API registers a Google Cloud connection's routers, and
-// discovery keeps the Google Cloud ones up to date, the fleet's poll removes an uninstalled Google Cloud router and keeps
-// the version of one too old to poll, and the fleet reads one that reported to push it the settings: they share this format.
+// discovery keeps the Google Cloud ones up to date, the watchdog's probe removes an uninstalled Google Cloud router and keeps
+// the version it reads from its health, and the fleet reads one that reported to push it the settings: they share this format.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 
 export const REGISTRY_PK = 'T#default';

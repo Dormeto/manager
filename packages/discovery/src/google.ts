@@ -18,7 +18,7 @@ export interface GooglePort {
   // A Google API call as the discovery service account.
   call<T = unknown>(method: string, url: string, body?: unknown): Promise<T>;
   registry: { list(): Promise<InstalledRouter[]>; put(router: InstalledRouter): Promise<void>; delete(account: string, region: string): Promise<void> };
-  // A router's workload rows (WS#<project>#<region>#<id>), as its poll writes them: what a project's scan finds managed.
+  // A router's workload rows (WS#<project>#<region>#<id>), as its reports write them: what a project's scan finds managed.
   routerWorkloads(account: string, region: string): Promise<WorkloadSummary[]>;
 }
 

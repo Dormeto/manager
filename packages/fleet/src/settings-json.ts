@@ -1,5 +1,5 @@
 // The organization's settings.json in the manager's lists bucket (written by the API), as the fleet function reads it to push
-// it to the Google Cloud routers (Google Cloud manager design §5.5, §6.3; router push design §6.2): its ETag as S3 gives it
+// it to the Google Cloud routers (Google Cloud manager design §5.5; router push design §6.2, §6.3): its ETag as S3 gives it
 // (quotes included), and its text; none while it doesn't exist.
 import { GetObjectCommand, HeadObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 

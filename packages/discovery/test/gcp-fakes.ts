@@ -236,7 +236,7 @@ export function devProject(project = PROJECT) {
   return w;
 }
 
-// The router's row of a workload (WS#<project>#<region>#<id>), as the poll writes it.
+// The router's row of a workload (WS#<project>#<region>#<id>), as the router's reports write it.
 export const workloadRow = (workloadId: string, over: Partial<WorkloadSummary> = {}): WorkloadSummary => ({
   account: PROJECT, region: 'europe-west2', router: 'dmtr-europe-west2', workloadId, name: workloadId, state: 'AWAKE', source: 'manager',
   backendService: workloadId, wakerBackendService: `dmtr-europe-west2-${workloadId}`, urlMap: 'dmt-dev', ...over,

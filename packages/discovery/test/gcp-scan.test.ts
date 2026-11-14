@@ -249,7 +249,7 @@ describe('a Google Cloud project\'s scan', () => {
     expect(w.calls.some((c) => c.includes('dmtr-europe-west2-waker'))).toBe(false);
   });
 
-  it('a waker backend service no row names (a router not polled yet, an offboarding\'s leftover) is never a candidate', async () => {
+  it('a waker backend service no row names (a router not reported yet, an offboarding\'s leftover) is never a candidate', async () => {
     const w = devProject();
     const { rules } = await scan(w, []);
     expect(rules.map((r) => r.targetGroup).sort()).toEqual(['dmt-demo-app', 'dmt-demo-mig-app']);

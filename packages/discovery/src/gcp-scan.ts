@@ -24,7 +24,7 @@ import type { BackendKind, Candidate, ScannedRule } from './types.js';
 type Call = GooglePort['call'];
 type LbKind = NonNullable<ScannedRule['lb']>['kind'];
 
-// The router's row of a workload (WS#<project>#<region>#<id>), as the poll writes it: names, not paths.
+// The router's row of a workload (WS#<project>#<region>#<id>), as the router's reports write it: names, not paths.
 export type ManagedRow = Pick<WorkloadSummary, 'workloadId' | 'region' | 'backendService' | 'wakerBackendService' | 'urlMap' | 'lb'>;
 // A candidate of the project the store holds: where it is, and the idle share it was given last.
 export type StoredCandidate = Pick<Candidate, 'id' | 'region' | 'idleHours7d' | 'requests7d' | 'goneAt'>;

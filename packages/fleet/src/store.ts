@@ -1,7 +1,7 @@
 // Routers and their workloads as they report (vision scale design §4), partition T#default: RS#<account>#<region> per
 // router, WS#<account>#<region>#<workloadId> per workload. Written from the router events, read by the API. Each
 // workload's state history (R8) in its own partition HIST#<account>#<region>#<workloadId>, sorted by time. A Google Cloud
-// router's poll (Google Cloud manager design §6.3) on its RS# item, beside the summary.
+// router's probe (router push design 2026-11-14 §6.3) on its RS# item, beside the summary.
 import { DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, UpdateItemCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import type { Refusal } from '@dormeto/google/router';
 import type { Cloud } from './clouds.js';
@@ -38,26 +38,19 @@ export interface RouterSummary {
   check: { checkedAt: string; total: number; received: number[] };
 }
 
-// A Google Cloud router's poll (Google Cloud manager design §6.3), the `poll` attribute of its RS# item: written by each poll,
-// left by the summary's writes, there before the router's first summary.
-export interface RouterPoll {
-  newestAt: string | null; // the newest `at` of the events read (ISO): the next poll reads from 5 minutes before it
+// The watchdog's probe of a Google Cloud router that is silent or never reported (router push design 2026-11-14 §6.3, §6.4),
+// the `probe` attribute of its RS# item: written by each probe, left by the summary's writes, there before the router's
+// first summary.
+export interface RouterProbe {
+  probedAt: string; // when its last probe started: the least recently probed go first
   misses: number; // Google's own 404s in a row at the controller URL: at 2 the router is unregistered
-  polledAt: string; // when its last poll started: the least recently polled go first
-  lastError?: string; // what its last poll could not do, and why
-  // The refusal its last poll met (lastError says it with its command): the watchdog says it instead of silent.
+  lastError?: string; // what its last probe could not do, and why (after its step: `health: `, `manager-settings: `…)
+  // The refusal its last probe met (lastError says it with its command): the watchdog says it instead of silent.
   lastRefusal?: Refusal;
-  etag?: string; // the ETag of the settings.json the router holds, as it last answered (or as pushed); none: it holds none
-  tooOld?: string; // its version when it answered it has no /v1/actions: not polled again until its version changes
-  versionAt?: string; // when its version was last read from its health (a router too old to poll: every 10 minutes)
-}
-
-// What an earlier build stored as a poll's refusal: its codes in kebab-case, read as the snake_case ones.
-const OLD_REFUSALS: Record<string, Refusal> = { 'manager-access-missing': 'no_access', 'router-too-old': 'router_too_old', 'router-unknown': 'router_unknown' };
-function pollRead(json: string): RouterPoll {
-  const poll = JSON.parse(json) as RouterPoll;
-  const renamed = poll.lastRefusal && OLD_REFUSALS[poll.lastRefusal];
-  return renamed ? { ...poll, lastRefusal: renamed } : poll;
+  tooOld?: string; // its version, read from its health, when it is below 0.41.0: it can't report
+  // When it was first given where to report while it could not report before (it never reported, or was too old): the
+  // watchdog gives it 15 minutes from then, as to a router just installed, before it calls it silent.
+  askedAt?: string;
 }
 
 export interface WorkloadSummary {
@@ -217,7 +210,7 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       const summary = data<RouterSummary>(Item);
       return summary ? { summary, version: Number(Item.version?.N ?? 0) } : null;
     },
-    // Optimistic: false when another writer changed it since `version` was read. An update, which leaves the item's poll.
+    // Optimistic: false when another writer changed it since `version` was read. An update, which leaves the item's probe.
     async putRouter(summary: RouterSummary, version: number): Promise<boolean> {
       return conditional(() => dynamo.send(new UpdateItemCommand({
         TableName: table, Key: key(routerKey(summary.account, summary.region)), UpdateExpression: 'SET #data = :data, version = :next, expiresAt = :expiresAt',
@@ -228,18 +221,21 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
     async listRouters(): Promise<RouterSummary[]> {
       return (await query('RS#')).map((i) => data<RouterSummary>(i)!).filter(Boolean);
     },
-    // A Google Cloud router's poll, which keeps its RS# item from expiring while the router is polled.
-    async putPoll(account: string, region: string, poll: RouterPoll): Promise<void> {
+    // A Google Cloud router's probe, which keeps its RS# item from expiring while the router is probed; the poll it replaces
+    // (manager 0.24.0 and before) leaves the item.
+    async putProbe(account: string, region: string, probe: RouterProbe): Promise<void> {
       await dynamo.send(new UpdateItemCommand({
-        TableName: table, Key: key(routerKey(account, region)), UpdateExpression: 'SET #poll = :poll, expiresAt = :expiresAt',
-        ExpressionAttributeNames: { '#poll': 'poll' }, ExpressionAttributeValues: { ':poll': { S: JSON.stringify(poll) }, ':expiresAt': expiresAt() },
+        TableName: table, Key: key(routerKey(account, region)), UpdateExpression: 'SET #probe = :probe, expiresAt = :expiresAt REMOVE #poll',
+        ExpressionAttributeNames: { '#probe': 'probe', '#poll': 'poll' }, ExpressionAttributeValues: { ':probe': { S: JSON.stringify(probe) }, ':expiresAt': expiresAt() },
       }));
     },
-    // Every RS# item's poll (null: never polled) and its summary's check time (null: no summary yet), in one query.
-    async routerPolls(): Promise<{ account: string; region: string; checkedAt: string | null; poll: RouterPoll | null }[]> {
+    // Every RS# item's probe (null: never probed) and its summary's check time and schedule (null: no summary yet), in one
+    // query: whether the router reports.
+    async routerProbes(): Promise<{ account: string; region: string; checkedAt: string | null; checkSchedule: string | null; probe: RouterProbe | null }[]> {
       return (await query('RS#')).map((item) => {
         const [account = '', region = ''] = item.sk!.S!.slice('RS#'.length).split('#');
-        return { account, region, checkedAt: data<RouterSummary>(item)?.checkedAt ?? null, poll: item.poll?.S ? pollRead(item.poll.S) : null };
+        const summary = data<RouterSummary>(item);
+        return { account, region, checkedAt: summary?.checkedAt ?? null, checkSchedule: summary?.checkSchedule ?? null, probe: item.probe?.S ? (JSON.parse(item.probe.S) as RouterProbe) : null };
       });
     },
     async getWorkload(account: string, region: string, id: string): Promise<WorkloadSummary | null> {
