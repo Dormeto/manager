@@ -178,7 +178,8 @@ load();
 
     <v-dialog v-model="open" max-width="640" scrollable>
       <v-card v-if="editing" :title="editing.isNew ? 'New group' : `Group ${editing.name}`" :prepend-icon="mdiAccountGroupOutline" class="dm-dialog">
-        <v-card-text>
+        <!-- pt-3, as the other scrollable dialogs: the scrolling body would cut the first field's label, which sits on its outline. -->
+        <v-card-text class="pt-3">
           <v-text-field v-model="editing.name" label="Name" :disabled="!editing.isNew" autocomplete="off" :autofocus="editing.isNew"
             hint="Lower-case letters, digits and hyphens, up to 48; dmt- is reserved for the built-in roles." persistent-hint class="mb-3" />
           <v-text-field v-model="editing.description" label="Description" :counter="DESCRIPTION_MAX" class="mb-3" />
