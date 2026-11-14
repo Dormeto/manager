@@ -46,6 +46,7 @@ export interface GoogleApi {
 
 export interface ApiEvent {
   rawPath: string;
+  routeKey?: string; // the route API Gateway matched (`POST /routers/events`, `ANY /api/{proxy+}`…)
   queryStringParameters?: Record<string, string>;
   requestContext: { http: { method: string }; authorizer?: { jwt?: { claims?: Record<string, string> }; iam?: { userArn?: string; userId?: string; accountId?: string } } };
   body?: string;
@@ -197,10 +198,14 @@ export interface Identity {
 const MULTI_FACTOR = ['mfa', 'swk', 'hwk'];
 export const mfaSession = (identity: Identity): boolean | null => identity.amr && identity.amr.some((m) => MULTI_FACTOR.includes(m));
 
+// The issuer of the Google Cloud routers' tokens (the relay's JWT authorizer, api.tf).
+const GOOGLE_ISSUER = 'https://accounts.google.com';
+
 // The JWT authorizer flattens arrays: "[dmt-admin dmt-viewer]", "[pwd otp mfa]".
 export function identityOf(event: ApiEvent): Identity | null {
   const claims = event.requestContext.authorizer?.jwt?.claims;
-  if (!claims?.sub) return null;
+  // A Google token proves a router (the relay's), never a user: whatever path it reached, it signs no one in.
+  if (!claims?.sub || claims.iss === GOOGLE_ISSUER) return null;
   const all = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   const amr = claims.amr === undefined || claims.amr === '' ? null : claims.amr.replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   // No built-in group: a member, who sees workloads by their groups' grants only.
@@ -446,6 +451,7 @@ function bodyOf(event: ApiEvent): Record<string, unknown> {
 // are read from. Its body: at most 100 entries and 1 MB, each one of the two detail types an AWS router sends, its detail an
 // object. The bus takes 10 entries at most a call, and 256 KB at most (an entry's source, detail type and detail).
 const RELAY_SOURCE = 'dormeto.router.gcp';
+const RELAY_ROUTE = 'POST /routers/events';
 const ROUTER_EMAIL = /^dmtr-([a-z0-9-]+)@([a-z][a-z0-9-]*)\.iam\.gserviceaccount\.com$/;
 const RELAYED = new Set(['Router checked', 'Workload state changed']);
 const RELAY_EVENTS_MAX = 100;
@@ -2879,7 +2885,7 @@ export function createApi({
     const parts = event.rawPath.replace(viaIam ? /^\/iam\/?/ : /^\/api\/?/, '').split('/').filter(Boolean);
     try {
       // The relay's own route, apart from the dashboard's and the CLI's: before any user's identity is read.
-      if (event.rawPath === '/routers/events') {
+      if (event.routeKey === RELAY_ROUTE || event.rawPath === '/routers/events') {
         if (method !== 'POST' || !relay) throw new HttpError(404, 'not_found', 'not found');
         return await relayEvents(event, relay);
       }

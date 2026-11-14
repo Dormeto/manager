@@ -178,6 +178,21 @@ describe('POST /routers/events: the relay of a Google Cloud router\'s events', (
     expect((await r.api(post({ events: [] }, googleClaims(), { method: 'GET' }))).statusCode).toBe(404);
   });
 
+  it('never takes a Google token for a user: a router\'s token that reaches another path (a trailing slash, any route) is refused as unsigned', async () => {
+    for (const path of ['/routers/events/', '/api/me', '/me']) {
+      const r = relay();
+      const res = await r.api(post({ events: [stateChanged()] }, googleClaims(), { path, method: path === '/routers/events/' ? 'POST' : 'GET' }));
+      expect([res.statusCode, json(res).error], path).toEqual([401, 'unauthorized']);
+      expect(r.batches).toEqual([]);
+    }
+  });
+
+  it('is the relay on the relay\'s route, whatever path API Gateway matched it on', async () => {
+    const r = relay();
+    const res = await r.api({ ...post({ events: [stateChanged()] }, googleClaims(), { path: '/routers/events/' }), routeKey: 'POST /routers/events' });
+    expect([res.statusCode, json(res).accepted]).toEqual([200, 1]);
+  });
+
   it('answers 404 while the manager has no relay', async () => {
     const api = createApi({ routers: [], version: '0.25.0', invoke: async () => ({}), audit: { write: async () => {}, list: async () => [] } });
     expect((await api(post({ events: [] }))).statusCode).toBe(404);
