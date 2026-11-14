@@ -1,14 +1,17 @@
 # Router events (vision docs/specs/2026-10-05-scale-design.md §3 and §4): routers of the organization send their state
 # after each idle check and each workload state change to this bus; a queue buffers them for the fleet Lambda, which
-# writes the router and workload summaries the API reads. Google Cloud routers push nothing: the fleet Lambda polls them
-# every minute (Google Cloud manager design §6.3).
+# writes the router and workload summaries the API reads. A Google Cloud router sends its events to the API, which puts
+# them on this bus as `dormeto.router.gcp` (router push design 2026-11-14 §3); until that design's poll ends, the fleet
+# Lambda also polls them every minute (Google Cloud manager design §6.3).
 
 resource "aws_cloudwatch_event_bus" "manager" {
   name = local.name
 }
 
 # Any principal of the organization may publish (routers run in its accounts); the envelope's account and region identify
-# each router, never the payload.
+# each router, never the payload. Under the sources of the AWS routers and of the forwarders the manager installs in each
+# connected account (load balancer changes, event-driven refresh) only: the relay's (`dormeto.router.gcp`), which the fleet
+# Lambda reads only from the manager's own account, is closed to every other account (router push design §3.2).
 data "aws_iam_policy_document" "manager_bus" {
   statement {
     sid       = "OrganizationRouters"
@@ -24,6 +27,11 @@ data "aws_iam_policy_document" "manager_bus" {
       variable = var.organization_id == null ? "aws:PrincipalAccount" : "aws:PrincipalOrgID"
       values   = [var.organization_id == null ? local.account_id : var.organization_id]
     }
+    condition {
+      test     = "StringEquals"
+      variable = "events:source"
+      values   = ["dormeto.router", "aws.elasticloadbalancing"]
+    }
   }
 }
 
@@ -36,7 +44,7 @@ resource "aws_cloudwatch_event_rule" "router_events" {
   name           = "${local.name}-router-events"
   description    = "Dormeto: router state and workload state changes, to the fleet Lambda"
   event_bus_name = aws_cloudwatch_event_bus.manager.name
-  event_pattern  = jsonencode({ source = ["dormeto.router"] })
+  event_pattern  = jsonencode({ source = ["dormeto.router", local.relay_source] })
 }
 
 resource "aws_sqs_queue" "router_events_failed" {
@@ -152,6 +160,11 @@ resource "aws_lambda_function" "fleet" {
       LISTS_BUCKET   = aws_s3_bucket.lists.id
       ENV            = var.env
       ROUTER_VERSION = local.router_version
+      # The relay's events are read from the manager's own account only; where a Google Cloud router reports goes with
+      # the settings pushed to it (router push design §3.2, §6.2).
+      MANAGER_ACCOUNT = local.account_id
+      EVENTS_URL      = local.relay_url
+      EVENTS_AUDIENCE = local.relay_audience
     }
   }
 

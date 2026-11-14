@@ -1,4 +1,5 @@
-# Manager API: one Lambda behind an HTTP API with a Cognito JWT authorizer, served under /api/* by CloudFront.
+# Manager API: one Lambda behind an HTTP API with a Cognito JWT authorizer, served under /api/* by CloudFront; the CLI's
+# routes under /iam/* (AWS_IAM), and the Google Cloud routers' reports at POST /routers/events (a Google token).
 
 resource "aws_dynamodb_table" "manager" {
   name         = local.name
@@ -184,6 +185,18 @@ data "aws_iam_policy_document" "api" {
     }
   }
   statement {
+    # The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1): it puts them on the manager's bus
+    # under its own source only, the project and region their tokens proved inside.
+    sid       = "RouterEventsRelay"
+    actions   = ["events:PutEvents"]
+    resources = [aws_cloudwatch_event_bus.manager.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "events:source"
+      values   = [local.relay_source]
+    }
+  }
+  statement {
     # Discovery: run on demand (the discovery state machine).
     sid       = "Discovery"
     actions   = ["states:StartExecution"]
@@ -244,6 +257,11 @@ resource "aws_lambda_function" "api" {
       INSTALL_BUCKET    = var.install == null ? "" : var.install.bucket
       INSTALL_PROJECT   = var.install == null ? "" : var.install.project
       INSTALL_LOG_GROUP = var.install == null ? "" : var.install.log_group
+      # The relay (router push design §3.1): the bus it puts on, its URL and its tokens' audience, which the API sends the
+      # Google Cloud routers in manager-settings.
+      EVENT_BUS       = aws_cloudwatch_event_bus.manager.name
+      EVENTS_URL      = local.relay_url
+      EVENTS_AUDIENCE = local.relay_audience
     }
   }
 
@@ -265,6 +283,29 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
     issuer   = "https://${aws_cognito_user_pool.main.endpoint}"
     audience = concat([aws_cognito_user_pool_client.dashboard.id], aws_cognito_user_pool_client.smoke[*].id)
   }
+}
+
+# The Google Cloud routers' tokens (router push design 2026-11-14 §3.1): identity tokens Google signs for a router's service
+# account, with the API's own endpoint as audience. A request without one is refused before the function runs; the function
+# then reads which router it is from the token's email.
+resource "aws_apigatewayv2_authorizer" "google" {
+  api_id           = aws_apigatewayv2_api.api.id
+  authorizer_type  = "JWT"
+  name             = "google"
+  identity_sources = ["$request.header.Authorization"]
+
+  jwt_configuration {
+    issuer   = "https://accounts.google.com"
+    audience = [local.relay_audience]
+  }
+}
+
+locals {
+  relay_source   = "dormeto.router.gcp"
+  relay_audience = aws_apigatewayv2_api.api.api_endpoint
+  relay_url      = "${aws_apigatewayv2_api.api.api_endpoint}/routers/events"
+  # The relay's own throttle, apart from the dashboard's (design §3.1, call).
+  relay_throttle = { burst = 100, rate = 50 }
 }
 
 resource "aws_apigatewayv2_integration" "api" {
@@ -297,6 +338,16 @@ resource "aws_apigatewayv2_route" "iam" {
   authorization_type = "AWS_IAM"
 }
 
+# The Google Cloud routers report their events here (router push design 2026-11-14 §3.1): not under /api, which CloudFront
+# serves to the dashboard, and only with a Google token.
+resource "aws_apigatewayv2_route" "router_events" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /routers/events"
+  target             = "integrations/${aws_apigatewayv2_integration.api.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.google.id
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"
@@ -305,6 +356,12 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_burst_limit = 50
     throttling_rate_limit  = 20
+  }
+
+  route_settings {
+    route_key              = aws_apigatewayv2_route.router_events.route_key
+    throttling_burst_limit = local.relay_throttle.burst
+    throttling_rate_limit  = local.relay_throttle.rate
   }
 }
 
