@@ -20,9 +20,10 @@ missing: onboarding and router installs are refused where the command role is mi
 
 The routers' events go to the manager's bus (`dmt-<env>-manager`). Its policy admits the organization's principals (the
 manager's account alone without an organization) for the sources `dormeto.router` and `aws.elasticloadbalancing` (the
-forwarders' load balancer changes, event-driven refresh) only (`events:source`): the source
-`dormeto.router.gcp` is the manager API's, which relays the Google Cloud routers' events and is the only one the fleet
-function reads it from. An AWS router in the manager's own account holds `events:PutEvents` on the bus by its role, which
+forwarders' load balancer changes, event-driven refresh) only (`events:source`): a Google Cloud
+router's source, `dormeto.router.gcp/<project>/<region>`, is put with the manager's own role `dmt-<env>-manager-router-report`
+(the credentials the API gives the router once an hour, cut to its own source), and the fleet function reads that source
+only from the manager's own account. An AWS router in the manager's own account holds `events:PutEvents` on the bus by its role, which
 the bus policy does not limit: router 0.41.0 puts the same condition on its role and on the routers' boundary, so until such
 a router is upgraded it could send that source too.
 
@@ -69,9 +70,12 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   for the routers that are silent or never reported, removes a router whose controller no longer exists, and reads a
   router's version from its health. The watchdog's role invokes the fleet function for it: only the fleet function's role
   is trusted by the federation, as before.
-- **A router's reports** need no grant: the router sends its events to the manager's API (`POST <api>/routers/events`)
-  with an identity token of its own service account (`dmtr-<region>@<project>.iam.gserviceaccount.com`), which the
-  metadata server gives it ([Operations](operations.md#google-cloud-routers)). `router/gcp/access.json` is unchanged.
+- **A router's reports** need no grant in Google Cloud: the router asks the manager's API for AWS credentials once an
+  hour (`POST <api>/routers/credentials`) with an identity token of its own service account
+  (`dmtr-<region>@<project>.iam.gserviceaccount.com`), which the metadata server gives it, and puts its events on the
+  manager's bus itself; the credentials allow its own source alone ([Operations](operations.md#google-cloud-routers)).
+  Registering a router changes no IAM: the role is written once by the manager's Terraform. `router/gcp/access.json` is
+  unchanged.
 - **Discovery of projects:** with a connection, each run lists the projects at the scopes as the discovery account
   (`projects.search`) and scans each one: its URL maps, backend services, target proxies, forwarding rules, instance
   group managers and VMs (Compute Engine's aggregated lists), then the instance groups and zonal network endpoint groups

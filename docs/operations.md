@@ -65,23 +65,27 @@ JSON: an answer that isn't, or an empty failure, is Google's in front of it. A r
 major.minor.patch (a dev router's `0.41.0-dev.1` meets 0.41.0, `0.40.0-dev.3` doesn't); the registry keeps the version as
 the router reports it. The manager calls a router of 0.40.0 or later; only 0.41.0 reports.
 
-- **The reports** (router push design 2026-11-14 §3, §4): after each state change and each check, a router sends its journal
-  (from where the manager last accepted it) and its check (`Router checked`, in chunks under 64 KB, with the settings ETag it
-  holds) to the manager's API, `POST <api endpoint>/routers/events` (the HTTP API's own URL, not CloudFront's), with an
-  identity token of its service account for the API's endpoint. API Gateway refuses a request without a token Google signed
-  for that audience (its JWT authorizer `google`); the function then takes the router's project and region from the token's
-  verified email `dmtr-<region>@<project>.iam.gserviceaccount.com`, never from the body, and refuses with 403
-  `router_unknown` a token that is not a router's, a manager without a Google Cloud connection, or a router not registered.
-  The body is `{ "events": [{ "detailType": "Router checked" | "Workload state changed", "detail": {…} }] }`, 100 entries
-  and 1 MB at most (else 400 `bad_request`). Each entry goes on the manager's bus as `dormeto.router.gcp`, its detail
-  `{ "account": <project>, "region": <region>, "detail": <the router's> }` (10 entries and 256 KB a call); entries the bus did
-  not take answer 502 `{ "error": "not_published", "failed": n }`, and the router sends them again. The answer is 200
-  `{ "accepted": n, "managerSettings": { "etag": <settings.json's ETag, or null> } }`. The route has its own throttle (burst
-  100, 50 a second). The fleet function reads `dormeto.router.gcp` only from the manager's own account (else
-  `RouterEventRefused`, dropped) and ingests it as an AWS router's event, under the token's project and region. An event
-  sent again (an answer lost) is one history entry, and an older one never sets a summary back. A report that fails never
-  holds a wake (2 s at most); the router sends again from where the manager last accepted, at its next state change or
-  check (5 minutes at most). A router that stops reporting gets no new summary, and the watchdog's `silent` rule applies as
+- **The reports** (router credentials design 2026-11-15; router push design 2026-11-14 §4): a router asks the manager's API
+  for AWS credentials, `POST <api endpoint>/routers/credentials` (the HTTP API's own URL, not CloudFront's; no body), with an
+  identity token of its service account for the API's endpoint, once an hour (it keeps them in memory and asks again when
+  under 5 minutes remain). API Gateway refuses a request without a token Google signed for that audience (its JWT authorizer
+  `google`); the function then takes the router's project and region from the token's verified email
+  `dmtr-<region>@<project>.iam.gserviceaccount.com`, and refuses with 403 `router_unknown` a token that is not a router's, a
+  manager without a Google Cloud connection, or a router not registered. Otherwise it assumes the role
+  `dmt-<env>-manager-router-report` for an hour, the session named `<project>.<region>` and cut by a session policy to
+  `events:PutEvents` on the manager's bus with the source `dormeto.router.gcp/<project>/<region>` alone, and answers 200
+  `{ "credentials": { "accessKeyId", "secretAccessKey", "sessionToken", "expiration" }, "bus": { "name", "region" },
+  "source": "dormeto.router.gcp/<project>/<region>", "managerSettings": { "etag": <settings.json's ETag, or null> } }`
+  (never logged); STS failing answers 502 `no_credentials` (`RouterCredentialsNotIssued`). The route has its own throttle
+  (burst 100, 50 a second). Then, after each state change and each check, the router puts its journal (from where the bus
+  last took it) and its check (`Router checked`, in chunks under 64 KB, with the settings ETag it holds) on the bus itself
+  (`PutEvents`), each entry under that source with its own detail. The fleet function reads such an event only from the
+  manager's own account, takes the project and region from the source, never from the detail, and drops (logged
+  `RouterEventRefused`) another account's event, a source that is not exactly a project and a region, and the event of a
+  router not registered: a removed router's credentials last up to an hour, its events stop at once. It ingests the rest as
+  an AWS router's events. An event sent again is one history entry, and an older one never sets a summary back. A report
+  that fails never holds a wake (2 s at most, credentials included); the router sends again from where the bus last took
+  it, at its next state change or check (5 minutes at most). A router that stops reporting gets no new summary, and the watchdog's `silent` rule applies as
   on AWS (no check within 3 periods of its schedule).
 - **The watchdog's probe:** at each watchdog run (every 5 minutes), the watchdog invokes the fleet function with `{ "task":
   "probe" }` and waits for it (90 s at most): the fleet function's role holds the connection's federation, the watchdog's

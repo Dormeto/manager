@@ -62,16 +62,16 @@ services a URL map names, with the router's own reasons when one can't be onboar
 onboards and offboards Compute Engine and Cloud SQL workloads after the router's preview, and excludes
 them, binding and removing only the tag `dormeto/managed` ([Operations](docs/operations.md#onboarding-and-offboarding-on-google-cloud)). The manager reaches Google Cloud without a key: `dormeto gcp connect` sets up workload
 identity federation from its AWS roles to two service accounts of a host project, and grants them what they need
-([Access](docs/organization-access.md#google-cloud)). Each router reports to the manager's API after each state change
-and each check, with an identity token of its own service account, and the API puts its events on the manager's bus: they
-feed the same history, health and alerts as an AWS router's. The manager pushes the organization's settings to the router,
+([Access](docs/organization-access.md#google-cloud)). Each router asks the manager's API for AWS credentials once an hour,
+with an identity token of its own service account, and puts its events on the manager's bus itself after each state change
+and each check, under its own source alone: they feed the same history, health and alerts as an AWS router's. The manager pushes the organization's settings to the router,
 and its watchdog calls only a router that is silent or never reported ([Operations](docs/operations.md#google-cloud-routers)).
 A router older than 0.41.0 can't report: it is listed with the `dormeto gcp routers install` command that upgrades it.
 
 ```mermaid
 flowchart LR
-    gcp[Router<br>Cloud Run, one per project and region] -->|journal and check,<br>Google identity token| api[Manager's API<br>POST /routers/events]
-    api -->|dormeto.router.gcp| bus[Manager's<br>event bus]
+    gcp[Router<br>Cloud Run, one per project and region] -->|credentials, once an hour,<br>Google identity token| api[Manager's API<br>POST /routers/credentials]
+    gcp -->|journal and check, PutEvents:<br>dormeto.router.gcp/project/region| bus[Manager's<br>event bus]
     manager[Manager<br>in AWS] -->|workload identity federation:<br>actions, settings, the watchdog's probe| gcp
 ```
 

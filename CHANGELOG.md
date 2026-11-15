@@ -13,14 +13,19 @@ menu with Edit and Delete), with each group's name, description, grants, members
 showing only them, `/users?group=<name>`) and last change (when and by whom); a row opens its dialog, as does a link
 `/groups?group=<name>`. The Users view keeps each user's groups: the column, each group linking to it in Groups, the
 user's "Groups…" and the invitation's groups.
-- **Google Cloud routers report to the manager's event bus:** a router 0.41.0 sends its state changes and its checks to the
-manager's API, `POST <api endpoint>/routers/events`, with an identity token of its own service account (no key, no grant);
-API Gateway checks the token (issuer `https://accounts.google.com`, audience the API's endpoint), the API takes the router's
-project and region from its email (`dmtr-<region>@<project>.iam.gserviceaccount.com`), never from the body, refuses a router
-not registered (403 `router_unknown`), and puts the events on the bus as `dormeto.router.gcp`, which the fleet function
-ingests as an AWS router's, from the manager's own account only. The route has its own throttle (burst 100, 50 a second).
-Each `manager-settings` push now says where to report (`events: { url, audience }`), also to the routers `dormeto gcp
-connect` registers, and a check whose router holds another settings ETag gets the organization's settings pushed again.
+- **Google Cloud routers report to the manager's event bus:** a router 0.41.0 asks the manager's API for AWS credentials
+once an hour, `POST <api endpoint>/routers/credentials`, with an identity token of its own service account (no key, no
+grant in Google Cloud), and puts its state changes and its checks on the bus itself. API Gateway checks the token (issuer
+`https://accounts.google.com`, audience the API's endpoint), the API takes the router's project and region from its email
+(`dmtr-<region>@<project>.iam.gserviceaccount.com`), refuses a router not registered (403 `router_unknown`), and answers an
+hour's session of the new role `dmt-<env>-manager-router-report`, cut by a session policy to `events:PutEvents` with the
+source `dormeto.router.gcp/<project>/<region>` alone, with the bus's name and region (STS failing: 502 `no_credentials`).
+The API function's role loses `events:PutEvents` and may assume that role only. The fleet function ingests such an event as
+an AWS router's, from the manager's own account only, under the source's project and region, and drops a malformed source
+and the event of a router not registered (a removed router's credentials last up to an hour). The route has its own
+throttle (burst 100, 50 a second). Each `manager-settings` push now says where to ask for credentials (`events: { url,
+audience }`), also to the routers `dormeto gcp connect` registers, and a check whose router holds another settings ETag gets
+the organization's settings pushed again.
 - **The poll of Google Cloud routers ends:** the schedule `<name>-poll`, its role and the fleet function's `{ task: 'poll' }`
 are removed, with the journal cursor on each router's `RS#` item (`poll`, removed at the router's first probe). A Google
 Cloud router below 0.41.0 can't report: the watchdog says `too-old`, `router <v> can't report to the manager: dormeto gcp
@@ -37,20 +42,22 @@ the router is refused: once the command has run, the watchdog calls it again at 
 just given where to report that could not report before has 15 minutes before it is `silent`, whose advice now names
 `dormeto gcp routers show` and the router's `ReportFailed` and `ReportRefused` logs. A probe that fails fails the watchdog's
 run (the `watchdog-errors` alarm).
-- **Router 0.41.0 on Google Cloud:** the router reports to the manager after each state change and each check: it sends its
-journal and its state to the manager's API (`POST /routers/events`) with its service account's identity token. No new role
-or permission in Google Cloud. A report that fails never holds a wake more than 2 s, and the next one resends from where the
-manager last accepted. `manager-settings` takes `events: { url, audience }`, or that alone. `GET /v1/health` and the
+- **Router 0.41.0 on Google Cloud:** the router reports to the manager after each state change and each check: it asks the
+manager's API for credentials (`POST /routers/credentials`) with its service account's identity token, keeps them in memory
+for the hour, and puts its journal and its state on the manager's bus itself (`PutEvents`, signed with Signature Version 4).
+No new role or permission in Google Cloud. A report that fails never holds a wake more than 2 s, credentials included, and
+the next one resends from where the bus last took it. `manager-settings` takes `events: { url, audience }`, or that alone. `GET /v1/health` and the
 `router` action show where the reports stand (`report`). The `events` action is gone: a manager below 0.25.0 that polls such
 a router gets `unsupported` and shows its state stale until the manager is updated.
 - **Router 0.41.0 on AWS:** the router's roles may put on the manager's bus only with the source `dormeto.router`, and the
 boundary `DmtRouterBoundary` only `dormeto.router` and `aws.elasticloadbalancing`. Until an AWS router in the manager's own
-account is upgraded to 0.41.0 it could still send the relay's source; the boundary reaches the member accounts only when the
+account is upgraded to 0.41.0 it could still send a Google Cloud router's source; the boundary reaches the member accounts only when the
 access module is applied again.
 - **The bus admits the AWS routers' and the forwarders' sources only:** its policy allows the organization's principals (the
 manager's account without an organization) `events:PutEvents` for `events:source` `dormeto.router` and
-`aws.elasticloadbalancing` (the forwarders of event-driven refresh) alone, so no other account can send the relay's source. An AWS router installed in the manager's own account is allowed by its role, which router 0.41.0 limits to
-the same source; until it is upgraded, it could still send `dormeto.router.gcp`.
+`aws.elasticloadbalancing` (the forwarders of event-driven refresh) alone, so no other account can send a Google Cloud
+router's source. An AWS router installed in the manager's own account is allowed by its role, which router 0.41.0 limits to
+the same source; until it is upgraded, it could still send `dormeto.router.gcp/<project>/<region>`.
 - **Workloads, four columns fewer:** Since, Wake mode, Wakes (7 days) and Wakes (total) are gone; a row's "Last 7 days" bar says
 them in its tooltip, a labelled line each after the states (`Asleep since: 2 h ago (Nov 13, 2026, 08:02:00 AM GMT+1)`, `Wake mode`,
 `Wakes in the last 7 days`, `Wakes in total`), and in its name for screen readers; a fact the row does not have is left out. The
