@@ -20,12 +20,12 @@ missing: onboarding and router installs are refused where the command role is mi
 
 The routers' events go to the manager's bus (`dmt-<env>-manager`). Its policy admits the organization's principals (the
 manager's account alone without an organization) for the sources `dormeto.router` and `aws.elasticloadbalancing` (the
-forwarders' load balancer changes, event-driven refresh) only (`events:source`): a Google Cloud
-router's source, `dormeto.router.gcp/<project>/<region>`, is put with the manager's own role `dmt-<env>-manager-router-report`
-(the credentials the API gives the router once an hour, cut to its own source), and the fleet function reads that source
-only from the manager's own account. An AWS router in the manager's own account holds `events:PutEvents` on the bus by its role, which
-the bus policy does not limit: router 0.41.0 puts the same condition on its role and on the routers' boundary, so until such
-a router is upgraded it could send that source too.
+forwarders' load balancer changes, event-driven refresh) only (`events:source`): a Google Cloud router's source,
+`dormeto.router.gcp/<project>/<region>`, is put with the manager's own role `dmt-<env>-manager-router-report` (the
+credentials the API gives the router once an hour, cut to its own source), and the fleet function reads that source only
+from the manager's own account. An AWS router in the manager's own account holds `events:PutEvents` on the bus by its
+role, which the bus policy does not limit: router 0.41.0 puts the same condition on its role and on the routers' boundary,
+so until such a router is upgraded it could send that source too.
 
 ## Google Cloud
 
