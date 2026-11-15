@@ -1,27 +1,28 @@
-// The reports of the Google Cloud routers (router push design 2026-11-14 §3, §6.2). A Google Cloud router holds no AWS
-// credential: it sends its events to the manager's API, which proves its project and region from its Google-signed token and
-// puts each one on the bus as `dormeto.router.gcp`, `{account: <project>, region, detail: <the router's>}`. EventBridge sets
-// the envelope's account to the caller's: the fleet function reads that source only from the manager's own account (the bus
-// policy admits other accounts for `dormeto.router` alone), and then trusts the wrapper's project and region, never the
-// detail's. Each event is ingested as an AWS router's (googleEvent).
+// The reports of the Google Cloud routers (router credentials design 2026-11-15 §4; router push design 2026-11-14 §6.2). A
+// Google Cloud router asks the manager's API for credentials once an hour (its Google-signed token proves its project and
+// region) and puts its events on the manager's bus itself, as `dormeto.router.gcp/<project>/<region>`, its detail its own:
+// its session allows that source alone. EventBridge sets the envelope's account to the caller's, the manager's for such a
+// session: the fleet function reads that source only from the manager's own account (the bus policy admits other accounts
+// for `dormeto.router` alone), takes the project and region from the source, never from the detail, and only for a router
+// registered (a removed router's session lasts up to an hour). Each event is ingested as an AWS router's (googleEvent).
 // A check whose router holds another ETag than settings.json's gets the organization's settings pushed (`manager-settings`,
 // with where to report), once a check: on its first chunk.
 import type { Google, GoogleConnection } from '@dormeto/google';
 import { chunkOf } from './clean.js';
-import { isProject, isRegion } from './clouds.js';
+import { GOOGLE_SOURCE_PREFIX, googleSourceOf, googleSourceParts } from './clouds.js';
 import type { RouterEvent } from './ingest.js';
 import type { Registry } from './registry.js';
 import { actOnRouter, GOOGLE_CALL_MS } from './router-call.js';
 import { settingsDocument, type SettingsJson } from './settings-json.js';
 
-export const RELAY_SOURCE = 'dormeto.router.gcp';
-// The detail types the relay puts on the bus (its route refuses any other).
-export const RELAYED = new Set(['Router checked', 'Workload state changed']);
+export { GOOGLE_SOURCE_PREFIX, googleSourceOf, googleSourceParts };
+// The detail types a Google Cloud router puts on the bus (an AWS router's two).
+export const REPORTED = new Set(['Router checked', 'Workload state changed']);
 
 type Json = Record<string, any>;
 const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-// Where a Google Cloud router reports (`manager-settings`' `events`): the relay's URL, and the audience of its token.
+// Where a Google Cloud router reports (`manager-settings`' `events`): the credentials route's URL, and the audience of its token.
 export interface ReportTarget { url: string; audience: string }
 
 // A Google Cloud router's event as an AWS router's: under its project and region, named as its registration names it (the
@@ -38,8 +39,8 @@ export function googleEvent(router: { account: string; region: string; name?: st
   return { account, region, 'detail-type': detailType, detail: { ...rest, router: name, region } };
 }
 
-// The relay's entry as EventBridge hands it to the queue.
-export interface RelayedEvent {
+// A Google Cloud router's entry as EventBridge hands it to the queue.
+export interface ReportedEvent {
   source?: string;
   account: string;
   region: string;
@@ -86,33 +87,38 @@ export function createSettingsPush({ settings, registry, google, events, env = '
   };
 }
 
-// The fleet function's reading of the relay's events. An event refused is dropped with a log line, never retried: the same
-// event would be refused again.
-export function createGoogleReports({ ownAccount, ingest, push, log }: {
+// The fleet function's reading of the Google Cloud routers' events. An event refused is dropped with a log line, never
+// retried: the same event would be refused again.
+export function createGoogleReports({ ownAccount, registry, ingest, push, log }: {
   ownAccount: string | undefined;
+  registry: Pick<Registry, 'get'>;
   ingest: (event: RouterEvent) => Promise<unknown>;
   push: (account: string, region: string, held: string | null) => Promise<void>;
   log?: Log;
 }) {
-  const refuse = (event: RelayedEvent, reason: string): void => {
+  const refuse = (event: ReportedEvent, reason: string): void => {
     log?.warn('RouterEventRefused', { account: event.account, source: event.source, detailType: event['detail-type'], reason });
   };
-  return async function report(event: RelayedEvent): Promise<void> {
-    if (!ownAccount || event.account !== ownAccount) return refuse(event, 'the relay\'s events come from the manager\'s own account only');
-    const wrapper = isObject(event.detail) ? event.detail : {};
-    if (!isProject(wrapper.account) || !isRegion('gcp', wrapper.region)) return refuse(event, 'the wrapper names no Google Cloud project and region');
+  return async function report(event: ReportedEvent): Promise<void> {
+    if (!ownAccount || event.account !== ownAccount) return refuse(event, 'a Google Cloud router\'s events come from the manager\'s own account only');
+    const from = googleSourceParts(event.source);
+    if (!from) return refuse(event, 'the source is not dormeto.router.gcp/<project>/<region>');
     const detailType = event['detail-type'];
-    if (!RELAYED.has(detailType) || !isObject(wrapper.detail)) return refuse(event, 'not a detail type the relay sends');
-    const detail = wrapper.detail;
-    await ingest(googleEvent({ account: wrapper.account, region: wrapper.region }, detailType, detail));
+    if (!REPORTED.has(detailType) || !isObject(event.detail)) return refuse(event, 'not a detail type a router sends');
+    const { project, region } = from;
+    const router = await registry.get(project, region);
+    if (!router || router.cloud !== 'gcp') return refuse(event, `router ${project}/${region} is not registered with this manager`);
+    const detail = event.detail;
+    await ingest(googleEvent({ account: project, region, name: router.name }, detailType, detail));
     if (detailType === 'Router checked' && chunkOf(detail.chunk)?.index === 0) {
       const held = typeof detail.managerSettings?.etag === 'string' && detail.managerSettings.etag ? detail.managerSettings.etag as string : null;
-      await push(wrapper.account, wrapper.region, held);
+      await push(project, region, held);
     }
   };
 }
 
-// The queue's records by their source: the relay's to its reading, any other (an AWS router's, `dormeto.router`) to the
-// ingest, as before.
-export const bySource = ({ ingest, reports }: { ingest: (event: RouterEvent) => Promise<unknown>; reports: (event: RelayedEvent) => Promise<unknown> }) =>
-  (event: RouterEvent & { source?: string }) => (event.source === RELAY_SOURCE ? reports(event) : ingest(event));
+// The queue's records by their source: a Google Cloud router's (any source named `dormeto.router.gcp…`, read or refused there)
+// to its reading, any other (an AWS router's, `dormeto.router`) to the ingest, as before.
+const GOOGLE_SOURCES = GOOGLE_SOURCE_PREFIX.slice(0, -1);
+export const bySource = ({ ingest, reports }: { ingest: (event: RouterEvent) => Promise<unknown>; reports: (event: ReportedEvent) => Promise<unknown> }) =>
+  (event: RouterEvent & { source?: string }) => (event.source?.startsWith(GOOGLE_SOURCES) ? reports(event) : ingest(event));

@@ -44,7 +44,7 @@ export interface ProbeDeps {
   settings: { etag(): Promise<string | null>; read(): Promise<{ etag: string; text: string } | null> };
   env: string; // the manager's environment, for the commands the refusals name
   routerVersion?: string | undefined; // the router version the manager pins
-  events?: ReportTarget | undefined; // where a router reports (the relay's route and its token's audience)
+  events?: ReportTarget | undefined; // where a router reports (the credentials route and its token's audience)
   now?: () => number;
   log?: { info(event: string, data: object): void; warn(event: string, data: object): void };
 }
@@ -101,7 +101,7 @@ export function createProbe({ store, registry, google, settings, env, routerVers
         probe.lastError = `health: ${tooOldText(version, router.account, router.region, routerVersion, GOOGLE_REPORT_MINIMUM)}`;
       } else {
         step = 'manager-settings';
-        // Where to report alone answers the ETag the router holds; without the relay, it is unknown.
+        // Where to report alone answers the ETag the router holds; without the routers' reports, it is unknown.
         const held = events ? (await act({ action: 'manager-settings', events })).etag : undefined;
         if (events) {
           // A router that could not report before (it never reported, or was too old) has the watchdog's grace from now.

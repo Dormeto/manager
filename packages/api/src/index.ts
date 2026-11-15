@@ -12,7 +12,7 @@ import { ListSubscriptionsByTopicCommand, SNSClient, type Subscription } from '@
 import { CloudWatchLogsClient, GetLogEventsCommand } from '@aws-sdk/client-cloudwatch-logs';
 import { BatchGetBuildsCommand, CodeBuildClient, ListBuildsForProjectCommand } from '@aws-sdk/client-codebuild';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import { randomBytes } from 'node:crypto';
 import { GetProductsCommand, PricingClient, type GetProductsCommandInput } from '@aws-sdk/client-pricing';
 import { createStore } from '@dormeto/discovery';
@@ -204,15 +204,14 @@ const globalSettings = listsBucket ? {
   current: () => readJsonWithEtag(s3, listsBucket, 'settings.json'),
 } : undefined;
 
-// The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1): the manager's bus, the route's URL and
-// its tokens' audience (the API's endpoint), which Terraform gives.
-const eventBridge = new EventBridgeClient({});
-const relay = process.env.EVENT_BUS && process.env.EVENTS_URL && process.env.EVENTS_AUDIENCE ? {
+// The Google Cloud routers' reports (router credentials design 2026-11-15 §2, §3): the credentials route's URL and its tokens'
+// audience (the API's endpoint), the role the routers' sessions assume and the manager's bus, which Terraform gives.
+const sts = new STSClient({});
+const routerReports = process.env.EVENTS_URL && process.env.EVENTS_AUDIENCE && process.env.ROUTER_REPORT_ROLE && process.env.EVENT_BUS && process.env.EVENT_BUS_ARN ? {
   events: { url: process.env.EVENTS_URL, audience: process.env.EVENTS_AUDIENCE },
-  async put(entries: { Source: string; DetailType: string; Detail: string }[]) {
-    const out = await eventBridge.send(new PutEventsCommand({ Entries: entries.map((e) => ({ ...e, EventBusName: process.env.EVENT_BUS })) }));
-    return out.FailedEntryCount ?? 0;
-  },
+  roleArn: process.env.ROUTER_REPORT_ROLE,
+  bus: { name: process.env.EVENT_BUS, arn: process.env.EVENT_BUS_ARN, region: process.env.AWS_REGION ?? '' },
+  assume: async (input: { RoleArn: string; RoleSessionName: string; DurationSeconds: number; Policy: string }) => (await sts.send(new AssumeRoleCommand(input))).Credentials,
 } : undefined;
 
 // The manager's self-update (only for an install made with the CLI, which gives the API its install bucket): requests go
@@ -320,5 +319,5 @@ export const handler = createApi({
   alerts,
   ipLists,
   globalSettings,
-  relay,
+  routerReports,
 });

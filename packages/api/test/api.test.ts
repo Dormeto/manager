@@ -370,7 +370,7 @@ describe('Google Cloud routers', () => {
   });
   type Seen = { url: string; method: string; headers: Record<string, string>; body: string };
   const answer = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-  const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
+  const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/credentials', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
   const jwt = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
   const claimsOf = (authorization: string) => JSON.parse(Buffer.from(authorization.replace(/^Bearer /, '').split('.')[1]!, 'base64url').toString());
 
@@ -378,11 +378,11 @@ describe('Google Cloud routers', () => {
   // controllers, which `controller` answers), the AWS routers of Terraform called through Lambda (recorded).
   // `tokens` answers Google's token endpoints first when it returns a Response.
   // `call`: the connection's Google API calls (a project's number read as the discovery account), none by default.
-  // `relay`: the manager has the relay of the routers' events (where they report goes with each manager-settings push).
+  // `reports`: the manager has the routers' reports (where they ask for credentials goes with each manager-settings push).
   // `connect`: the connection's API, its registry the routers' (dormeto gcp connect writes through /iam).
-  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens, call, relay, connect }: {
+  function manager({ routers = [gcp()], controller = () => answer(200, {}), tokens, call, reports, connect }: {
     routers?: InstalledRouter[]; controller?: (req: Seen, payload: Record<string, unknown>) => Response; tokens?: (req: Seen) => Response | undefined;
-    call?: <T>(sa: string, method: string, url: string) => Promise<T>; relay?: boolean; connect?: boolean;
+    call?: <T>(sa: string, method: string, url: string) => Promise<T>; reports?: boolean; connect?: boolean;
   } = {}) {
     const registry = [...routers];
     const seen: Seen[] = [];
@@ -430,7 +430,13 @@ describe('Google Cloud routers', () => {
           ...(call ? { call } : {}),
         },
       } : {}),
-      ...(relay ? { relay: { events: EVENTS, put: async () => 0 } } : {}),
+      ...(reports ? {
+        routerReports: {
+          events: EVENTS, roleArn: 'arn:aws:iam::121014831971:role/dmt-dev-manager-router-report',
+          bus: { name: 'dmt-dev-manager', arn: 'arn:aws:events:eu-west-1:121014831971:event-bus/dmt-dev-manager', region: 'eu-west-1' },
+          assume: async () => { throw new Error('no router asks for credentials here'); },
+        },
+      } : {}),
     });
     const actions = () => seen.filter((s) => s.url.endsWith('/v1/actions')).map((s) => ({ url: s.url, payload: JSON.parse(s.body) as Record<string, unknown>, authorization: s.headers['authorization']! }));
     return { api, seen, actions, aws, audit, created, settings };
@@ -568,14 +574,14 @@ describe('Google Cloud routers', () => {
   });
 
   // Router push design §4.1: a router 0.41.0 stores where to report from the settings it is pushed.
-  it('pushes where to report with each settings write, when the manager has the relay', async () => {
-    const m = manager({ relay: true, controller: () => answer(200, { etag: 'stored' }) });
+  it('pushes where to report with each settings write, when the manager has the routers\' reports', async () => {
+    const m = manager({ reports: true, controller: () => answer(200, { etag: 'stored' }) });
     expect((await m.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: false }))).statusCode).toBe(200);
     expect(m.actions().map((a) => a.payload)).toEqual([{ action: 'manager-settings', settings: m.settings.doc, etag: '"5d41402abc4b2a76b9719d911017c592"', events: EVENTS, refusals: true }]);
   });
 
   it('pushes settings.json and where to report to the routers a connection registers that have a controller; nothing while settings.json was never written', async () => {
-    const m = manager({ routers: [], relay: true, connect: true, controller: () => answer(200, { etag: 'stored' }) });
+    const m = manager({ routers: [], reports: true, connect: true, controller: () => answer(200, { etag: 'stored' }) });
     const viaIam = (body: unknown): ApiEvent => ({
       rawPath: '/iam/discovery/google', requestContext: { http: { method: 'PUT' }, authorizer: { iam: { accountId: '121014831971', userArn: 'arn:aws:iam::121014831971:user/cli', userId: 'AIDAX' } } },
       body: JSON.stringify(body),

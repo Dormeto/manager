@@ -9,7 +9,7 @@ import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operatio
 import { GoogleError, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
 import type { Refusal } from '@dormeto/google/router';
 // The commands that fix what the manager can't do on Google Cloud, as the watchdog's probe records them too.
-import { cloudOf, googlePath, googleScopeOf, googleServicePath, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
+import { cloudOf, googlePath, googleScopeOf, googleServicePath, googleSourceOf, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
 import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
@@ -46,7 +46,7 @@ export interface GoogleApi {
 
 export interface ApiEvent {
   rawPath: string;
-  routeKey?: string; // the route API Gateway matched (`POST /routers/events`, `ANY /api/{proxy+}`…)
+  routeKey?: string; // the route API Gateway matched (`POST /routers/credentials`, `ANY /api/{proxy+}`…)
   queryStringParameters?: Record<string, string>;
   requestContext: { http: { method: string }; authorizer?: { jwt?: { claims?: Record<string, string> }; iam?: { userArn?: string; userId?: string; accountId?: string } } };
   body?: string;
@@ -59,11 +59,18 @@ export interface ApiResponse {
   body?: string;
 }
 
-// An entry the relay puts on the manager's bus (EventBridge PutEvents; the port names the bus).
-export interface BusEntry {
-  Source: string;
-  DetailType: string;
-  Detail: string;
+// What the API asks STS for a Google Cloud router's session (AssumeRole), and what it takes of STS's answer.
+export interface AssumeRoleInput {
+  RoleArn: string;
+  RoleSessionName: string;
+  DurationSeconds: number;
+  Policy: string;
+}
+export interface AssumedCredentials {
+  AccessKeyId?: string;
+  SecretAccessKey?: string;
+  SessionToken?: string;
+  Expiration?: Date | string;
 }
 
 export interface AuditEntry {
@@ -198,13 +205,13 @@ export interface Identity {
 const MULTI_FACTOR = ['mfa', 'swk', 'hwk'];
 export const mfaSession = (identity: Identity): boolean | null => identity.amr && identity.amr.some((m) => MULTI_FACTOR.includes(m));
 
-// The issuer of the Google Cloud routers' tokens (the relay's JWT authorizer, api.tf).
+// The issuer of the Google Cloud routers' tokens (the credentials route's JWT authorizer, api.tf).
 const GOOGLE_ISSUER = 'https://accounts.google.com';
 
 // The JWT authorizer flattens arrays: "[dmt-admin dmt-viewer]", "[pwd otp mfa]".
 export function identityOf(event: ApiEvent): Identity | null {
   const claims = event.requestContext.authorizer?.jwt?.claims;
-  // A Google token proves a router (the relay's), never a user: whatever path it reached, it signs no one in.
+  // A Google token proves a router (the credentials route's), never a user: whatever path it reached, it signs no one in.
   if (!claims?.sub || claims.iss === GOOGLE_ISSUER) return null;
   const all = (claims['cognito:groups'] ?? '').replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
   const amr = claims.amr === undefined || claims.amr === '' ? null : claims.amr.replace(/^\[|\]$/g, '').split(/[\s,]+/).filter(Boolean);
@@ -314,15 +321,20 @@ export interface ApiOptions {
   // The manager's settings for every router (settings.json of the lists bucket): read and rewritten whole, so the keys
   // this API does not know survive. Without it, the defaults are answered and nothing can be set. A write answers S3's
   // ETag of the object, pushed with it to the Google Cloud routers.
-  // etag: settings.json's ETag as S3 gives it, null while it doesn't exist (the relay's answer); current: the object and its
+  // etag: settings.json's ETag as S3 gives it, null while it doesn't exist (the credentials route's answer); current: the object and its
   // ETag read at once (the push to a router just registered).
   globalSettings?: {
     read(): Promise<Record<string, unknown> | null>; write(doc: Record<string, unknown>): Promise<string | void>;
     etag?(): Promise<string | null>; current?(): Promise<{ doc: unknown; etag: string } | null>;
   };
-  // The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1): where they report (sent as `events`
-  // in each manager-settings push), and the bus's PutEvents of at most 10 entries, answering how many it did not take.
-  relay?: { events: { url: string; audience: string }; put(entries: BusEntry[]): Promise<number> };
+  // The Google Cloud routers' reports (router credentials design 2026-11-15 §2, §3): where they ask for credentials (sent as
+  // `events` in each manager-settings push), the role their sessions assume, the manager's bus, and STS's AssumeRole.
+  routerReports?: {
+    events: { url: string; audience: string };
+    roleArn: string;
+    bus: { name: string; arn: string; region: string };
+    assume(input: AssumeRoleInput): Promise<AssumedCredentials | undefined>;
+  };
 }
 
 // An alert endpoint as administrators see it: an address reduced to its first letter and domain, an ARN to its name.
@@ -446,19 +458,15 @@ function bodyOf(event: ApiEvent): Record<string, unknown> {
   throw new HttpError(400, 'bad_request', 'JSON object body expected');
 }
 
-// The relay (router push design 2026-11-14 §3.1). A Google Cloud router's token names its service account,
-// dmtr-<region>@<project>.iam.gserviceaccount.com (the router's install names it so): the only place its project and region
-// are read from. Its body: at most 100 entries and 1 MB, each one of the two detail types an AWS router sends, its detail an
-// object. The bus takes 10 entries at most a call, and 256 KB at most (an entry's source, detail type and detail).
-const RELAY_SOURCE = 'dormeto.router.gcp';
-const RELAY_ROUTE = 'POST /routers/events';
+// The credentials route (router credentials design 2026-11-15 §2, §3). A Google Cloud router's token names its service
+// account, dmtr-<region>@<project>.iam.gserviceaccount.com (the router's install names it so): the only place its project and
+// region are read from. Its session puts on the manager's bus under `dormeto.router.gcp/<project>/<region>` alone: the role
+// allows the prefix, the session policy written for each call the router's own source (a literal, no policy variable).
+const CREDENTIALS_ROUTE = 'POST /routers/credentials';
+const CREDENTIALS_PATH = '/routers/credentials';
 const ROUTER_EMAIL = /^dmtr-([a-z0-9-]+)@([a-z][a-z0-9-]*)\.iam\.gserviceaccount\.com$/;
-const RELAYED = new Set(['Router checked', 'Workload state changed']);
-const RELAY_EVENTS_MAX = 100;
-const RELAY_BODY_MAX = 1024 * 1024;
-const BUS_ENTRIES_MAX = 10;
-const BUS_BYTES_MAX = 256 * 1024;
-const entryBytes = (e: BusEntry) => Buffer.byteLength(e.Source) + Buffer.byteLength(e.DetailType) + Buffer.byteLength(e.Detail);
+// The most a session of a role assumed from a role lasts.
+const SESSION_SECONDS = 3600;
 
 // The project and region a Google Cloud router's token proves, null for any other token (a user's, another account's, an
 // email Google has not verified). The JWT authorizer hands its claims over as strings.
@@ -468,41 +476,14 @@ function routerOfToken(claims: Record<string, unknown> | undefined): { project: 
   return m && isRegion('gcp', m[1]) && isProject(m[2]) ? { project: m[2], region: m[1] } : null;
 }
 
-// The relay's body as bus entries, wrapped with the token's project and region; a 400 for any other shape.
-function relayEntries(event: ApiEvent, project: string, region: string): BusEntry[] {
-  const bad = (message: string): never => { throw new HttpError(400, 'bad_request', message); };
-  const raw = event.isBase64Encoded && event.body !== undefined ? Buffer.from(event.body, 'base64') : Buffer.from(event.body ?? '');
-  if (raw.byteLength > RELAY_BODY_MAX) bad(`the body is larger than ${RELAY_BODY_MAX} bytes`);
-  const body = bodyOf(event);
-  if (!Array.isArray(body.events)) bad('events must be a list');
-  const events = body.events as unknown[];
-  if (events.length > RELAY_EVENTS_MAX) bad(`events must hold at most ${RELAY_EVENTS_MAX} entries`);
-  return events.map((e, i) => {
-    const { detailType, detail } = (e && typeof e === 'object' && !Array.isArray(e) ? e : {}) as Record<string, unknown>;
-    if (typeof detailType !== 'string' || !RELAYED.has(detailType)) bad(`events[${i}].detailType must be ${[...RELAYED].join(' or ')}`);
-    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) bad(`events[${i}].detail must be an object`);
-    const entry = { Source: RELAY_SOURCE, DetailType: detailType as string, Detail: JSON.stringify({ account: project, region, detail }) };
-    if (entryBytes(entry) > BUS_BYTES_MAX) bad(`events[${i}] is larger than the bus's ${BUS_BYTES_MAX} bytes`);
-    return entry;
-  });
-}
-
-// Entries in the bus's calls: 10 at most and 256 KB at most each, in their order.
-function busBatches(entries: BusEntry[]): BusEntry[][] {
-  const batches: BusEntry[][] = [];
-  let bytes = 0;
-  for (const e of entries) {
-    const last = batches.at(-1);
-    if (!last || last.length >= BUS_ENTRIES_MAX || bytes + entryBytes(e) > BUS_BYTES_MAX) {
-      batches.push([e]);
-      bytes = entryBytes(e);
-    } else {
-      last.push(e);
-      bytes += entryBytes(e);
-    }
-  }
-  return batches;
-}
+// A router's session name: `<project>.<region>`, in the characters STS allows and its 64 at most (a project's 30 and a
+// region's name keep within them). Its source on the bus: googleSourceOf, `dormeto.router.gcp/<project>/<region>`.
+const sessionNameOf = (project: string, region: string) => `${project}.${region}`.replace(/[^\w+=,.@-]/g, '-').slice(0, 64);
+// The session policy: PutEvents on the manager's bus, for that router's source alone.
+const sessionPolicyOf = (busArn: string, source: string) => JSON.stringify({
+  Version: '2012-10-17',
+  Statement: [{ Effect: 'Allow', Action: 'events:PutEvents', Resource: busArn, Condition: { StringEquals: { 'events:source': source } } }],
+});
 
 function reasonIn(body: Record<string, unknown>, max = REASON_MAX): string {
   const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
@@ -697,7 +678,7 @@ const settingsText = ({ hibernate, joinMinutes, endedWindowDays, defaults }: { h
 ].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, google, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
-  fleet, idleRequests, relay, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
+  fleet, idleRequests, routerReports, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -1289,14 +1270,14 @@ export function createApi({
     }
   }
   // The organization's settings pushed to every Google Cloud router that has a controller (Google Cloud manager design
-  // §5.5, §6.5), or to those `only` keeps: those routers can't read settings.json. With them, where to report (router push
-  // design §4.1), when the manager has the relay. 10 at a time within the request's bound; a router that fails gets them
-  // when its next check reports another ETag (the fleet function), or at the watchdog's probe if it is silent, and the write's
-  // answer stays as it is. Not a router below 0.40.0, which can't take them: upgraded, its first check reports another ETag.
+  // §5.5, §6.5), or to those `only` keeps: those routers can't read settings.json. With them, where to ask for credentials
+  // (router credentials design §5), when the manager has the routers' reports. 10 at a time within the request's bound; a
+  // router that fails gets them when its next check reports another ETag (the fleet function), or at the watchdog's probe if
+  // it is silent, and the write's answer stays as it is. Not a router below 0.40.0, which can't take them: upgraded, its first check reports another ETag.
   async function pushSettings(settings: unknown, etag: string | void, only: (r: Router) => boolean = () => true) {
     const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? '') && only(r));
     if (!targets.length) return;
-    const payload = { action: 'manager-settings', settings, etag: etag ?? '', ...(relay ? { events: relay.events } : {}) };
+    const payload = { action: 'manager-settings', settings, etag: etag ?? '', ...(routerReports ? { events: routerReports.events } : {}) };
     const results = await each(targets, (r) => invoke(r, payload), callTimeout);
     results.forEach((result, i) => {
       if (result.status === 'rejected') console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', router: targets[i]!.name, error: (result.reason as Error).message }));
@@ -2850,12 +2831,12 @@ export function createApi({
     return { result: `conflict: ${operationId}`, response: reply(409, { error: 'conflict', message: (err as Error).message, operationId }) };
   }
 
-  // --- The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1) ----------------------------------
+  // --- The Google Cloud routers' credentials (router credentials design 2026-11-15 §2, §3) ------------------------------------
 
   // Not a user's route: the token proves a router, never a person; no role, no MFA, no audit. A token that is not a registered
-  // router's is refused before the body is read; nothing is put then. A batch the bus refuses counts all its entries as not
-  // taken: the router sends them again from its cursor, and the ingest takes an event twice as once.
-  async function relayEvents(event: ApiEvent, r: NonNullable<ApiOptions['relay']>): Promise<ApiResponse> {
+  // router's is refused before STS is asked; no body is read. The answer holds credentials: it is never logged, and a failure
+  // is logged with STS's message alone.
+  async function routerCredentials(event: ApiEvent, r: NonNullable<ApiOptions['routerReports']>): Promise<ApiResponse> {
     const token = routerOfToken(event.requestContext.authorizer?.jwt?.claims);
     const unknown = (why: string) => new HttpError(403, 'router_unknown', why);
     if (!token) throw unknown('the token is not a Google Cloud router\'s (dmtr-<region>@<project>.iam.gserviceaccount.com, verified)');
@@ -2864,18 +2845,25 @@ export function createApi({
     if (!(await google.routers.list()).some((i) => i.cloud === 'gcp' && i.account === project && i.region === region)) {
       throw unknown(`router ${project}/${region} is not registered with this manager: dormeto gcp connect, or the next discovery run`);
     }
-    const entries = relayEntries(event, project, region);
-    let failed = 0;
-    for (const batch of busBatches(entries)) {
-      try {
-        failed += Math.min(batch.length, Math.max(0, await r.put(batch)));
-      } catch (err) {
-        failed += batch.length;
-        console.warn(JSON.stringify({ level: 'warn', event: 'RouterEventsNotPublished', project, region, entries: batch.length, error: (err as Error).message }));
-      }
+    const source = googleSourceOf(project, region);
+    let session: AssumedCredentials | undefined;
+    try {
+      session = await r.assume({ RoleArn: r.roleArn, RoleSessionName: sessionNameOf(project, region), DurationSeconds: SESSION_SECONDS, Policy: sessionPolicyOf(r.bus.arn, source) });
+    } catch (err) {
+      console.warn(JSON.stringify({ level: 'warn', event: 'RouterCredentialsNotIssued', project, region, error: (err as Error).message }));
+      throw new HttpError(502, 'no_credentials', 'the manager could not issue credentials: try again later');
     }
-    if (failed) return reply(502, { error: 'not_published', failed });
-    return reply(200, { accepted: entries.length, managerSettings: { etag: (await globalSettings?.etag?.()) ?? null } });
+    const expiration = session?.Expiration ? new Date(session.Expiration) : null;
+    if (!session?.AccessKeyId || !session.SecretAccessKey || !session.SessionToken || !expiration || Number.isNaN(expiration.getTime())) {
+      console.warn(JSON.stringify({ level: 'warn', event: 'RouterCredentialsNotIssued', project, region, error: 'STS answered no credentials' }));
+      throw new HttpError(502, 'no_credentials', 'the manager could not issue credentials: try again later');
+    }
+    return reply(200, {
+      credentials: { accessKeyId: session.AccessKeyId, secretAccessKey: session.SecretAccessKey, sessionToken: session.SessionToken, expiration: expiration.toISOString() },
+      bus: { name: r.bus.name, region: r.bus.region },
+      source,
+      managerSettings: { etag: (await globalSettings?.etag?.()) ?? null },
+    });
   }
 
   return async function handler(event: ApiEvent): Promise<ApiResponse> {
@@ -2884,10 +2872,10 @@ export function createApi({
     const viaIam = /^\/iam(\/|$)/.test(event.rawPath);
     const parts = event.rawPath.replace(viaIam ? /^\/iam\/?/ : /^\/api\/?/, '').split('/').filter(Boolean);
     try {
-      // The relay's own route, apart from the dashboard's and the CLI's: before any user's identity is read.
-      if (event.routeKey === RELAY_ROUTE || event.rawPath === '/routers/events') {
-        if (method !== 'POST' || !relay) throw new HttpError(404, 'not_found', 'not found');
-        return await relayEvents(event, relay);
+      // The credentials route, apart from the dashboard's and the CLI's: before any user's identity is read.
+      if (event.routeKey === CREDENTIALS_ROUTE || event.rawPath === CREDENTIALS_PATH) {
+        if (method !== 'POST' || !routerReports) throw new HttpError(404, 'not_found', 'not found');
+        return await routerCredentials(event, routerReports);
       }
       if (method === 'GET' && parts.length === 1 && parts[0] === 'health') return reply(200, { status: 'ok', version });
       const identity = viaIam ? iamIdentityOf(event) : identityOf(event);

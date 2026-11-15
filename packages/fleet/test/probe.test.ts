@@ -19,7 +19,7 @@ const T0 = Date.parse('2026-11-14T12:00:00.000Z');
 const S = 1000;
 const MIN = 60 * S;
 const iso = (ms: number) => new Date(ms).toISOString();
-const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
+const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/credentials', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
 
 const connection: GoogleConnection = {
   project: 'dormeto-host', projectNumber: '1034397096264', pool: 'dmt-dev', provider: 'aws', scopes: ['projects/dormeto-dev'],
@@ -193,7 +193,7 @@ describe('the watchdog\'s probe of Google Cloud routers', () => {
     expect(r.calls[1]).toEqual({ action: 'manager-settings', settings: '{"workloads": {', etag: '"abc"', events: EVENTS, refusals: true });
   });
 
-  it('without the relay, pushes settings.json alone', async () => {
+  it('without the routers\' reports, pushes settings.json alone', async () => {
     const w = world({ events: null });
     const r = await w.add('europe-west2');
     w.s3.etag = '"abc"';

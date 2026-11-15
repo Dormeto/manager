@@ -226,7 +226,7 @@ describe('watchdog and its probe: a Google Cloud router too old, upgraded', () =
       }
       return { status: 400, text: JSON.stringify({ error: 'unknown-action' }) };
     };
-    const events = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
+    const events = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/credentials', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
     const probe = createProbe({
       store, registry, env: 'dev', routerVersion: '0.41.0', now: () => t, events,
       google: { current: async () => ({ connection: { project: 'dormeto-host' } as never, google: { request } }) },

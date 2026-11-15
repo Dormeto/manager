@@ -1,7 +1,7 @@
 // Router events queue → summaries (vision scale design §4): an AWS router's events (`dormeto.router`), and a Google Cloud
-// router's as the manager's API relays them (`dormeto.router.gcp`, router push design §3.2), with the settings pushed to
-// a router whose check says it is behind (§6.2). At each watchdog run, the probe of the Google Cloud routers that are silent
-// or never reported (§6.3, §6.4): the watchdog invokes the function with `{ task: 'probe' }` and waits for its answer.
+// router's as it puts them with the manager's credentials (`dormeto.router.gcp/<project>/<region>`, router credentials design
+// 2026-11-15 §4), with the settings pushed to a router whose check says it is behind (router push design §6.2). At each
+// watchdog run, the probe of the Google Cloud routers that are silent or never reported (§6.3, §6.4): the watchdog invokes the function with `{ task: 'probe' }` and waits for its answer.
 import { DynamoDBClient, GetItemCommand } from '@aws-sdk/client-dynamodb';
 import { S3Client } from '@aws-sdk/client-s3';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
@@ -35,15 +35,15 @@ const googleSource = createGoogleSource({
 // The organization's settings.json in the lists bucket, read at most once a probe, and by the push after a check.
 const settings = createSettingsJson({ s3: new S3Client(S3_OPTIONS), bucket: process.env.LISTS_BUCKET });
 const registry = createRegistry({ dynamo, table });
-// Where a Google Cloud router reports (the relay's route and its token's audience), sent with the settings it is pushed.
+// Where a Google Cloud router asks for credentials (the route and its token's audience), sent with the settings it is pushed.
 const events = process.env.EVENTS_URL && process.env.EVENTS_AUDIENCE ? { url: process.env.EVENTS_URL, audience: process.env.EVENTS_AUDIENCE } : undefined;
 const env = process.env.ENV ?? 'dev';
 
 const probe = createProbe({ store, registry, google: googleSource, settings, env, routerVersion: process.env.ROUTER_VERSION, events, log });
 
-// The relay's events, from the manager's own account only (MANAGER_ACCOUNT).
+// The Google Cloud routers' events, from the manager's own account (MANAGER_ACCOUNT) and a router registered only.
 const reports = createGoogleReports({
-  ownAccount: process.env.MANAGER_ACCOUNT, ingest, log,
+  ownAccount: process.env.MANAGER_ACCOUNT, registry, ingest, log,
   push: createSettingsPush({ settings, registry, google: googleSource, events, env, routerVersion: process.env.ROUTER_VERSION, log }),
 });
 const route = bySource({ ingest, reports });

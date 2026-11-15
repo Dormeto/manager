@@ -52,6 +52,17 @@ export const isRegion = (cloud: Cloud, s: unknown): s is string => typeof s === 
 // A candidate's region: a Google Cloud global load balancer's is `global`.
 export const isCandidateRegion = (cloud: Cloud, s: unknown): s is string => isRegion(cloud, s) || (cloud === 'gcp' && s === 'global');
 
+// A Google Cloud router's source on the manager's bus (router credentials design 2026-11-15 §3, §4): its session puts this
+// source alone, and the fleet function reads the router's project and region from it, never from the detail.
+export const GOOGLE_SOURCE_PREFIX = 'dormeto.router.gcp/';
+export const googleSourceOf = (project: string, region: string): string => `${GOOGLE_SOURCE_PREFIX}${project}/${region}`;
+// The project and region of such a source, null unless it is exactly the prefix, a project ID and a Google Cloud region.
+export function googleSourceParts(source: unknown): { project: string; region: string } | null {
+  if (typeof source !== 'string' || !source.startsWith(GOOGLE_SOURCE_PREFIX)) return null;
+  const parts = source.slice(GOOGLE_SOURCE_PREFIX.length).split('/');
+  return parts.length === 2 && isProject(parts[0]) && isRegion('gcp', parts[1]) ? { project: parts[0], region: parts[1] } : null;
+}
+
 // The minutes of a five-field schedule that runs every N minutes (`*/N * * * *`, a Google Cloud router's Scheduler job).
 export function fiveFieldMinutes(cron: string | null | undefined): number | null {
   const m = /^\*\/(\d+) \* \* \* \*$/.exec(cron ?? '');

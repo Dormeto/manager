@@ -1,11 +1,12 @@
-// The reports of the Google Cloud routers (router push design 2026-11-14 §3.2, §6.2): the manager's API relays each router's
-// events to the bus as `dormeto.router.gcp`, the project and region its token proved in the wrapper. The fleet function reads
-// such an event only from the manager's own account, ingests it as an AWS router's (under the wrapper's project and region),
-// and pushes the organization's settings when a check says its router holds another ETag than settings.json's.
+// The reports of the Google Cloud routers (router credentials design 2026-11-15 §4; router push design 2026-11-14 §6.2): a
+// router puts its events on the manager's bus itself, with the manager's credentials, as `dormeto.router.gcp/<project>/<region>`
+// (its session can put no other source), its detail its own. The fleet function reads such an event only from the manager's
+// own account and for a router registered, ingests it as an AWS router's (under the source's project and region), and pushes
+// the organization's settings when a check says its router holds another ETag than settings.json's.
 import { GoogleError, type GoogleConnection } from '@dormeto/google';
 import { describe, expect, it } from 'vitest';
 import { fakeDynamo } from '../../discovery/test/dynamo-fake.js';
-import { bySource, createGoogleReports, createSettingsPush, googleEvent, RELAY_SOURCE } from '../src/google-report.js';
+import { bySource, createGoogleReports, createSettingsPush, googleEvent, googleSourceOf } from '../src/google-report.js';
 import { createIngest, type RouterEvent } from '../src/ingest.js';
 import { createRegistry, type InstalledRouter } from '../src/registry.js';
 import { createFleetStore } from '../src/store.js';
@@ -15,7 +16,7 @@ const OWN = '121014831971';
 const PROJECT = 'dormeto-dev';
 const REGION = 'europe-west2';
 const CONTROLLER = 'https://dmtr-europe-west2-controller-abc123-nw.a.run.app';
-const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
+const EVENTS = { url: 'https://abc123.execute-api.eu-west-1.amazonaws.com/routers/credentials', audience: 'https://abc123.execute-api.eu-west-1.amazonaws.com' };
 const T0 = Date.parse('2026-11-14T12:00:00.000Z');
 const S = 1000;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -37,13 +38,15 @@ const checked = (ms: number, workloads: Json[], chunk = { index: 0, total: 1 }, 
   checkedAt: iso(ms), durationMs: 850, health: { status: 'ok', problems: [] }, pauses: [], counts: { AWAKE: workloads.length }, chunk, workloads,
   managerSettings: { etag }, ...over,
 });
-// What EventBridge hands the queue for the relay's entry: the envelope's account is the caller's, the manager's API.
-const relayed = (detailType: string, detail: Json, { account = OWN, project = PROJECT, region = REGION } = {}) => ({
-  version: '0', id: 'e-1', source: RELAY_SOURCE, account, region: 'eu-west-1', time: iso(T0), resources: [], 'detail-type': detailType,
-  detail: { account: project, region, detail },
+// What EventBridge hands the queue for a router's entry: the envelope's account is the caller's, the manager's (the role the
+// router's session assumes is the manager's).
+const SOURCE = googleSourceOf(PROJECT, REGION);
+const relayed = (detailType: string, detail: Json, { account = OWN, source = SOURCE } = {}) => ({
+  version: '0', id: 'e-1', source, account, region: 'eu-west-1', time: iso(T0), resources: [], 'detail-type': detailType, detail,
 });
 
-function world() {
+// `registered`: the router of PROJECT and REGION is in the registry from the start.
+function world({ registered = true } = {}) {
   const dynamo = fakeDynamo();
   const store = createFleetStore({ dynamo, table: TABLE, now: () => T0 });
   const ingestOne = createIngest({ store, now: () => T0 });
@@ -64,8 +67,8 @@ function world() {
     settings: { etag: async () => (s3.heads++, s3.etag), read: async () => (s3.gets++, s3.etag ? { etag: s3.etag, text: s3.text } : null) },
     registry, google: { current: async () => ({ connection, google: { request } }) }, events: EVENTS, log,
   });
-  const report = createGoogleReports({
-    ownAccount: OWN, log, push,
+  const reports = createGoogleReports({
+    ownAccount: OWN, registry, log, push,
     ingest: async (event) => {
       ingested.push(event);
       await ingestOne(event);
@@ -75,11 +78,16 @@ function world() {
     name: `dmtr-${REGION}`, account: PROJECT, region: REGION, controller: CONTROLLER, onboarder: '', version: '0.41.0', build: '', installedBy: 'cli', cloud: 'gcp',
     installedAt: iso(T0 - 86_400 * S), ...over,
   });
-  return { store, ingestOne, ingested, logs, s3, calls, google, report, register };
+  const ready = registered ? register() : Promise.resolve();
+  const report = async (event: Parameters<typeof reports>[0]) => {
+    await ready;
+    return reports(event);
+  };
+  return { store, ingestOne, ingested, logs, s3, calls, google, report, register, registry };
 }
 
-describe('a Google Cloud router\'s events, relayed by the manager\'s API', () => {
-  it('ingests a Workload state changed under the wrapper\'s project and region and the router dmtr-<region>, never what the detail says', async () => {
+describe('a Google Cloud router\'s events, put on the manager\'s bus by the router', () => {
+  it('ingests a Workload state changed under the source\'s project and region and the router as registered, never what the detail says', async () => {
     const w = world();
     await w.report(relayed('Workload state changed', {
       at: iso(T0 - 60 * S), workloadId: 'web', from: 'NAPPING', to: 'ASLEEP', cause: 'idle', tags: {}, hibernated: ['web-1'],
@@ -92,7 +100,7 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
     expect(await w.store.getWorkload(PROJECT, 'us-central1', 'web')).toBeNull();
   });
 
-  it('ingests a Router checked as an AWS router\'s: its rows with their backend services and source cli, under the wrapper\'s project and region', async () => {
+  it('ingests a Router checked as an AWS router\'s: its rows with their backend services and source cli, under the source\'s project and region', async () => {
     const w = world();
     await w.report(relayed('Router checked', checked(T0 - 10 * S, [row('web', 'AWAKE'), row('shop', 'ASLEEP')], undefined, undefined, {
       router: { name: 'dmtr-elsewhere', version: '0.41.0', build: 'b1', checkSchedule: '*/5 * * * *', region: 'us-central1' },
@@ -114,49 +122,70 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
     });
   });
 
-  it('sends the queue\'s records by their source: the relay\'s to its reading, an AWS router\'s to the ingest as before', async () => {
+  it('sends the queue\'s records by their source: a Google Cloud router\'s (or anything named like one) to its reading, an AWS router\'s to the ingest as before', async () => {
     const seen: string[] = [];
     const route = bySource({ ingest: async (e) => { seen.push(`ingest ${e.account}`); }, reports: async (e) => { seen.push(`reports ${e.account}`); } });
     await route({ source: 'dormeto.router', account: '038606077307', region: 'eu-west-3', 'detail-type': 'Router checked', detail: {} });
-    await route({ source: RELAY_SOURCE, account: '038606077307', region: 'eu-west-1', 'detail-type': 'Router checked', detail: {} });
+    await route({ source: SOURCE, account: '038606077307', region: 'eu-west-1', 'detail-type': 'Router checked', detail: {} });
+    await route({ source: 'dormeto.router.gcp', account: '038606077307', region: 'eu-west-1', 'detail-type': 'Router checked', detail: {} });
     await route({ account: '038606077307', region: 'eu-west-3', 'detail-type': 'Router checked', detail: {} });
-    expect(seen).toEqual(['ingest 038606077307', 'reports 038606077307', 'ingest 038606077307']);
+    expect(seen).toEqual(['ingest 038606077307', 'reports 038606077307', 'reports 038606077307', 'ingest 038606077307']);
   });
 
-  it('drops a dormeto.router.gcp event from another account, logged and not retried: no other account speaks for a project', async () => {
+  it('drops a dormeto.router.gcp/ event from another account, logged and not retried: no other account speaks for a project', async () => {
     const w = world();
     await expect(w.report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }, { account: '038606077307' }))).resolves.toBeUndefined();
     expect(w.ingested).toEqual([]);
     expect(await w.store.getWorkload(PROJECT, REGION, 'web')).toBeNull();
-    expect(w.logs).toEqual([['RouterEventRefused', { account: '038606077307', source: RELAY_SOURCE, detailType: 'Workload state changed', reason: 'the relay\'s events come from the manager\'s own account only' }]]);
+    expect(w.logs).toEqual([['RouterEventRefused', { account: '038606077307', source: SOURCE, detailType: 'Workload state changed', reason: 'a Google Cloud router\'s events come from the manager\'s own account only' }]]);
   });
 
-  it('drops every dormeto.router.gcp event while the manager\'s own account is unknown (MANAGER_ACCOUNT unset): fail closed', async () => {
+  it('drops every dormeto.router.gcp/ event while the manager\'s own account is unknown (MANAGER_ACCOUNT unset): fail closed', async () => {
     const ingested: RouterEvent[] = [];
+    const registry = { get: async () => { throw new Error('the registry is not read'); } };
     for (const ownAccount of [undefined, '']) {
-      const report = createGoogleReports({ ownAccount, ingest: async (e) => { ingested.push(e); }, push: async () => {} });
+      const report = createGoogleReports({ ownAccount, registry, ingest: async (e) => { ingested.push(e); }, push: async () => {} });
       await report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }));
       await report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }, { account: '' }));
     }
     expect(ingested).toEqual([]);
   });
 
-  it('drops a relayed event whose wrapper names no Google Cloud project and region, or a detail type the relay does not send', async () => {
+  it('drops an event whose source is not exactly dormeto.router.gcp/<project>/<region>, a detail type a router does not send, or a detail that is not an object', async () => {
     const w = world();
-    await w.report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }, { project: '038606077307' }));
-    await w.report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }, { region: 'eu-west-1' }));
+    const change = { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' };
+    const malformed = [
+      'dormeto.router.gcp', 'dormeto.router.gcp/', `dormeto.router.gcp/${PROJECT}`, `dormeto.router.gcp/${PROJECT}/`, `dormeto.router.gcp//${REGION}`,
+      `dormeto.router.gcp/${PROJECT}/${REGION}/extra`, `dormeto.router.gcp/038606077307/${REGION}`, `dormeto.router.gcp/${PROJECT}/eu-west-1`,
+      `dormeto.router.gcp/${PROJECT.toUpperCase()}/${REGION}`, `dormeto.router.gcpx/${PROJECT}/${REGION}`,
+    ];
+    for (const source of malformed) await w.report(relayed('Workload state changed', change, { source }));
     await w.report(relayed('Workload listed', { at: iso(T0), workload: row('web', 'AWAKE') }));
+    await w.report({ ...relayed('Workload state changed', change), detail: [change] });
     expect(w.ingested).toEqual([]);
-    expect(w.logs.map(([event, data]) => [event, data.reason])).toEqual([
-      ['RouterEventRefused', 'the wrapper names no Google Cloud project and region'],
-      ['RouterEventRefused', 'the wrapper names no Google Cloud project and region'],
-      ['RouterEventRefused', 'not a detail type the relay sends'],
+    expect(w.logs.map(([event, data]) => [event, data.source, data.reason])).toEqual([
+      ...malformed.map((source) => ['RouterEventRefused', source, 'the source is not dormeto.router.gcp/<project>/<region>']),
+      ['RouterEventRefused', SOURCE, 'not a detail type a router sends'],
+      ['RouterEventRefused', SOURCE, 'not a detail type a router sends'],
     ]);
+  });
+
+  it('drops the event of a router that is not registered, or registered as an AWS router: a removed router\'s credentials last up to an hour', async () => {
+    const w = world({ registered: false });
+    await w.report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }));
+    await w.report(relayed('Router checked', checked(T0 - 10 * S, [row('web', 'AWAKE')], undefined, '"stale"')));
+    await w.register({ cloud: undefined });
+    await w.report(relayed('Workload state changed', { at: iso(T0), workloadId: 'web', from: 'AWAKE', to: 'NAPPING' }));
+    expect(w.ingested).toEqual([]);
+    expect(await w.store.getWorkload(PROJECT, REGION, 'web')).toBeNull();
+    expect(w.calls).toEqual([]);
+    expect(w.logs).toEqual(Array.from({ length: 3 }, (_, i) => ['RouterEventRefused', {
+      account: OWN, source: SOURCE, detailType: i === 1 ? 'Router checked' : 'Workload state changed', reason: `router ${PROJECT}/${REGION} is not registered with this manager`,
+    }]));
   });
 
   it('pushes manager-settings, with where to report, once a check when the router holds another ETag: on its first chunk only', async () => {
     const w = world();
-    await w.register();
     await w.report(relayed('Router checked', checked(T0 - 10 * S, [row('web', 'AWAKE')], { index: 0, total: 2 }, '"stale"')));
     await w.report(relayed('Router checked', checked(T0 - 10 * S, [row('shop', 'AWAKE')], { index: 1, total: 2 }, '"stale"')));
     expect(w.calls).toEqual([{
@@ -174,7 +203,6 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
 
   it('logs a push that fails, and keeps the check ingested: the next check pushes again', async () => {
     const w = world();
-    await w.register();
     w.google.answer = () => new GoogleError({ host: 'sts.googleapis.com', status: 503, reason: '', message: 'unavailable' });
     await expect(w.report(relayed('Router checked', checked(T0 - 10 * S, [row('web', 'AWAKE')], undefined, '"stale"')))).resolves.toBeUndefined();
     expect(await w.store.getWorkload(PROJECT, REGION, 'web')).toMatchObject({ state: 'AWAKE' });
@@ -183,9 +211,13 @@ describe('a Google Cloud router\'s events, relayed by the manager\'s API', () =>
 
   it('pushes nothing to a router no longer registered, and says so', async () => {
     const w = world();
-    await w.report(relayed('Router checked', checked(T0 - 10 * S, [row('web', 'AWAKE')], undefined, '"stale"')));
+    const push = createSettingsPush({
+      settings: { etag: async () => '"current"', read: async () => ({ etag: '"current"', text: '{}' }) }, registry: w.registry,
+      google: { current: async () => { throw new Error('Google is not called'); } }, events: EVENTS, log: { info: () => {}, warn: (event, data) => w.logs.push([event, data as Json]) },
+    });
+    await push(PROJECT, 'us-central1', '"stale"');
     expect(w.calls).toEqual([]);
-    expect(w.logs).toEqual([['ManagerSettingsNotPushed', { account: PROJECT, region: REGION, error: 'the router is not registered' }]]);
+    expect(w.logs).toEqual([['ManagerSettingsNotPushed', { account: PROJECT, region: 'us-central1', error: 'the router is not registered' }]]);
   });
 });
 
