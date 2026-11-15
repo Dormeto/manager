@@ -1,8 +1,9 @@
 # Router events (vision docs/specs/2026-10-05-scale-design.md §3 and §4): routers of the organization send their state
 # after each idle check and each workload state change to this bus; a queue buffers them for the fleet Lambda, which
-# writes the router and workload summaries the API reads. A Google Cloud router sends its events to the API, which puts
-# them on this bus as `dormeto.router.gcp` (router push design 2026-11-14 §3). The fleet Lambda also probes the Google Cloud
-# routers that are silent or never reported, invoked by the watchdog at each of its runs (§6.3, alerts.tf).
+# writes the router and workload summaries the API reads. A Google Cloud router puts its events on this bus itself, as
+# `dormeto.router.gcp/<project>/<region>`, with a session of the manager's role router-report that the API gives it (router
+# credentials design 2026-11-15 §3, api.tf). The fleet Lambda also probes the Google Cloud routers that are silent or
+# never reported, invoked by the watchdog at each of its runs (router push design 2026-11-14 §6.3, alerts.tf).
 
 resource "aws_cloudwatch_event_bus" "manager" {
   name = local.name
@@ -10,8 +11,8 @@ resource "aws_cloudwatch_event_bus" "manager" {
 
 # Any principal of the organization may publish (routers run in its accounts); the envelope's account and region identify
 # each router, never the payload. Under the sources of the AWS routers and of the forwarders the manager installs in each
-# connected account (load balancer changes, event-driven refresh) only: the relay's (`dormeto.router.gcp`), which the fleet
-# Lambda reads only from the manager's own account, is closed to every other account (router push design §3.2).
+# connected account (load balancer changes, event-driven refresh) only: the Google Cloud routers' (`dormeto.router.gcp/…`),
+# which the fleet Lambda reads only from the manager's own account, is closed to every other account.
 data "aws_iam_policy_document" "manager_bus" {
   statement {
     sid       = "OrganizationRouters"
@@ -44,7 +45,7 @@ resource "aws_cloudwatch_event_rule" "router_events" {
   name           = "${local.name}-router-events"
   description    = "Dormeto: router state and workload state changes, to the fleet Lambda"
   event_bus_name = aws_cloudwatch_event_bus.manager.name
-  event_pattern  = jsonencode({ source = ["dormeto.router", local.relay_source] })
+  event_pattern  = jsonencode({ source = ["dormeto.router", { prefix = local.google_source_prefix }] })
 }
 
 resource "aws_sqs_queue" "router_events_failed" {
@@ -162,11 +163,11 @@ resource "aws_lambda_function" "fleet" {
       LISTS_BUCKET   = aws_s3_bucket.lists.id
       ENV            = var.env
       ROUTER_VERSION = local.router_version
-      # The relay's events are read from the manager's own account only; where a Google Cloud router reports goes with
-      # the settings pushed to it (router push design §3.2, §6.2).
+      # The Google Cloud routers' events are read from the manager's own account only; where a router asks for credentials
+      # goes with the settings pushed to it (router credentials design §4; router push design §6.2).
       MANAGER_ACCOUNT = local.account_id
-      EVENTS_URL      = local.relay_url
-      EVENTS_AUDIENCE = local.relay_audience
+      EVENTS_URL      = local.credentials_url
+      EVENTS_AUDIENCE = local.credentials_audience
     }
   }
 

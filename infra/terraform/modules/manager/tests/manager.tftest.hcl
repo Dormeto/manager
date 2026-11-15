@@ -711,7 +711,7 @@ run "organization_conditions_by_default" {
   assert {
     condition = alltrue([
       for c in [
-        # The bus's other condition, its source, is the relay's test's (google_cloud_routers_report_through_the_api).
+        # The bus's other condition, its source, is google_cloud_routers_report_with_the_managers_credentials's.
         [for x in [for s in data.aws_iam_policy_document.manager_bus.statement : s if s.sid == "OrganizationRouters"][0].condition : x if x.variable != "events:source"],
         [for s in data.aws_iam_policy_document.lists.statement : s if s.sid == "OrganizationRouters"][0].condition,
       ] : length(c) == 1 && one(c).variable == "aws:PrincipalOrgID" && one(c).values[0] == "o-abcdefghij"
@@ -744,7 +744,7 @@ run "account_deployment_without_an_organization" {
   assert {
     condition = alltrue([
       for c in [
-        # The bus's other condition, its source, is the relay's test's (google_cloud_routers_report_through_the_api).
+        # The bus's other condition, its source, is google_cloud_routers_report_with_the_managers_credentials's.
         [for x in [for s in data.aws_iam_policy_document.manager_bus.statement : s if s.sid == "OrganizationRouters"][0].condition : x if x.variable != "events:source"],
         [for s in data.aws_iam_policy_document.lists.statement : s if s.sid == "OrganizationRouters"][0].condition,
       ] : length(c) == 1 && one(c).variable == "aws:PrincipalAccount" && one(c).values[0] == "111122223333"
@@ -932,12 +932,14 @@ run "no_schedule_polls_the_google_cloud_routers" {
   }
 }
 
-# The Google Cloud routers report through the manager's API (router push design 2026-11-14 §3): POST /routers/events behind a
-# JWT authorizer for Google's tokens, the API's endpoint as their audience, its own throttle; the API puts their events on the
-# bus under the relay's source only, the rule takes both sources, and the bus admits other accounts for the AWS routers'
-# source and the forwarders' (load balancer changes, event-driven refresh) alone. The fleet function reads the relay's events from the manager's account, and both functions send the routers
-# where to report.
-run "google_cloud_routers_report_through_the_api" {
+# The Google Cloud routers report with the manager's credentials (router credentials design 2026-11-15 §2 to §4): POST
+# /routers/credentials behind a JWT authorizer for Google's tokens, the API's endpoint as their audience, its own throttle;
+# the role dmt-<env>-manager-router-report, trusted by the API function's role only, puts on the bus under the Google Cloud
+# routers' sources only; the API function may assume it and puts nothing itself; the rule takes the AWS routers' source and
+# the Google Cloud routers' prefix, and the bus admits other accounts for the AWS routers' source and the forwarders' (load
+# balancer changes, event-driven refresh) alone. The fleet function reads the Google Cloud routers' events from the
+# manager's account, and both functions send the routers where to ask for credentials.
+run "google_cloud_routers_report_with_the_managers_credentials" {
   command = plan
 
   override_resource {
@@ -955,6 +957,16 @@ run "google_cloud_routers_report_through_the_api" {
     override_during = plan
     values          = { arn = "arn:aws:events:eu-west-1:111122223333:event-bus/dmt-test-manager", name = "dmt-test-manager" }
   }
+  override_resource {
+    target          = aws_iam_role.api
+    override_during = plan
+    values          = { arn = "arn:aws:iam::111122223333:role/dmt-test-manager-api", id = "dmt-test-manager-api" }
+  }
+  override_resource {
+    target          = aws_iam_role.router_report
+    override_during = plan
+    values          = { arn = "arn:aws:iam::111122223333:role/dmt-test-manager-router-report", id = "dmt-test-manager-router-report" }
+  }
 
   assert {
     condition = (aws_apigatewayv2_authorizer.google.authorizer_type == "JWT" && aws_apigatewayv2_authorizer.google.identity_sources == toset(["$request.header.Authorization"])
@@ -963,38 +975,54 @@ run "google_cloud_routers_report_through_the_api" {
     error_message = "Google's tokens are checked by a JWT authorizer: issuer accounts.google.com, audience the API's own endpoint."
   }
   assert {
-    condition     = aws_apigatewayv2_route.router_events.route_key == "POST /routers/events" && aws_apigatewayv2_route.router_events.authorization_type == "JWT" && aws_apigatewayv2_route.router_events.authorizer_id == "goog01"
-    error_message = "POST /routers/events is behind the Google authorizer, apart from /api's Cognito one."
+    condition     = aws_apigatewayv2_route.router_credentials.route_key == "POST /routers/credentials" && aws_apigatewayv2_route.router_credentials.authorization_type == "JWT" && aws_apigatewayv2_route.router_credentials.authorizer_id == "goog01"
+    error_message = "POST /routers/credentials is behind the Google authorizer, apart from /api's Cognito one."
   }
   assert {
-    condition = length([for r in aws_apigatewayv2_stage.default.route_settings : r if r.route_key == "POST /routers/events" && r.throttling_burst_limit == 100 && r.throttling_rate_limit == 50]) == 1 && (
-    aws_apigatewayv2_stage.default.default_route_settings[0].throttling_burst_limit == 50 && aws_apigatewayv2_stage.default.default_route_settings[0].throttling_rate_limit == 20)
-    error_message = "The relay has its own throttle (burst 100, rate 50 a second); the dashboard's stays burst 50, rate 20."
+    condition = (length(aws_apigatewayv2_stage.default.route_settings) == 1
+      && length([for r in aws_apigatewayv2_stage.default.route_settings : r if r.route_key == "POST /routers/credentials" && r.throttling_burst_limit == 100 && r.throttling_rate_limit == 50]) == 1
+    && aws_apigatewayv2_stage.default.default_route_settings[0].throttling_burst_limit == 50 && aws_apigatewayv2_stage.default.default_route_settings[0].throttling_rate_limit == 20)
+    error_message = "The credentials route has its own throttle (burst 100, rate 50 a second), the relay's route is gone, and the dashboard's stays burst 50, rate 20."
   }
   assert {
-    condition = (toset(flatten([for s in data.aws_iam_policy_document.api.statement : tolist(s.actions) if s.sid == "RouterEventsRelay"])) == toset(["events:PutEvents"])
-      && toset(flatten([for s in data.aws_iam_policy_document.api.statement : tolist(s.resources) if s.sid == "RouterEventsRelay"])) == toset(["arn:aws:events:eu-west-1:111122223333:event-bus/dmt-test-manager"])
-    && flatten([for s in data.aws_iam_policy_document.api.statement : [for c in s.condition : [c.test, c.variable, c.values]] if s.sid == "RouterEventsRelay"]) == ["StringEquals", "events:source", "dormeto.router.gcp"])
-    error_message = "The API puts on the manager's bus, under the relay's source only."
+    condition = (aws_iam_role.router_report.name == "dmt-test-manager-router-report" && length(data.aws_iam_policy_document.router_report_assume.statement) == 1
+      && flatten([for s in data.aws_iam_policy_document.router_report_assume.statement : [tolist(s.actions), [for p in s.principals : [p.type, tolist(p.identifiers)]]]]) == ["sts:AssumeRole", "AWS", "arn:aws:iam::111122223333:role/dmt-test-manager-api"]
+    && alltrue([for s in data.aws_iam_policy_document.router_report_assume.statement : s.condition == null || length(s.condition) == 0]))
+    error_message = "The role of the routers' reports, dmt-test-manager-router-report, is trusted by the API function's role only."
   }
   assert {
-    condition     = jsondecode(aws_cloudwatch_event_rule.router_events.event_pattern) == { source = ["dormeto.router", "dormeto.router.gcp"] }
-    error_message = "The rule sends both sources to the fleet's queue: the AWS routers' and the relay's."
+    condition = (aws_iam_role_policy.router_report.role == "dmt-test-manager-router-report" && length(data.aws_iam_policy_document.router_report.statement) == 1
+      && flatten([for s in data.aws_iam_policy_document.router_report.statement : [tolist(s.actions), tolist(s.resources), [for c in s.condition : [c.test, c.variable, c.values]]]]) == [
+        "events:PutEvents", "arn:aws:events:eu-west-1:111122223333:event-bus/dmt-test-manager", "StringLike", "events:source", "dormeto.router.gcp/*",
+    ])
+    error_message = "The role of the routers' reports puts on the manager's bus only, under the Google Cloud routers' sources (dormeto.router.gcp/*) only."
+  }
+  assert {
+    condition = (length([for s in data.aws_iam_policy_document.api.statement : s if contains(tolist(s.actions), "events:PutEvents")]) == 0
+      && flatten([for s in data.aws_iam_policy_document.api.statement : [tolist(s.actions), tolist(s.resources)] if s.sid == "RouterReportRole"]) == ["sts:AssumeRole", "arn:aws:iam::111122223333:role/dmt-test-manager-router-report"]
+    && length([for s in data.aws_iam_policy_document.api.statement : s if contains(tolist(s.actions), "sts:AssumeRole")]) == 1)
+    error_message = "The API function puts nothing on the bus: it may assume the role of the routers' reports, and no other role."
+  }
+  assert {
+    condition     = jsondecode(aws_cloudwatch_event_rule.router_events.event_pattern) == { source = ["dormeto.router", { prefix = "dormeto.router.gcp/" }] }
+    error_message = "The rule sends the AWS routers' source and the Google Cloud routers' (the prefix dormeto.router.gcp/) to the fleet's queue."
   }
   assert {
     condition     = flatten([for c in [for s in data.aws_iam_policy_document.manager_bus.statement : s if s.sid == "OrganizationRouters"][0].condition : [c.test, c.values] if c.variable == "events:source"]) == ["StringEquals", "dormeto.router", "aws.elasticloadbalancing"]
-    error_message = "The bus admits the organization's principals for the AWS routers' source and the forwarders' (event-driven refresh) only: no other account sends the relay's."
+    error_message = "The bus admits the organization's principals for the AWS routers' source and the forwarders' (event-driven refresh) only: no other account sends a Google Cloud router's."
   }
   assert {
     condition = (aws_lambda_function.fleet.environment[0].variables.MANAGER_ACCOUNT == "111122223333"
-      && aws_lambda_function.fleet.environment[0].variables.EVENTS_URL == "https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events"
+      && aws_lambda_function.fleet.environment[0].variables.EVENTS_URL == "https://abc123.execute-api.eu-west-1.amazonaws.com/routers/credentials"
     && aws_lambda_function.fleet.environment[0].variables.EVENTS_AUDIENCE == "https://abc123.execute-api.eu-west-1.amazonaws.com")
-    error_message = "The fleet function reads the relay's events from the manager's account, and sends the routers where to report."
+    error_message = "The fleet function reads the Google Cloud routers' events from the manager's account, and sends the routers where to ask for credentials."
   }
   assert {
-    condition = (aws_lambda_function.api.environment[0].variables.EVENT_BUS == "dmt-test-manager"
-      && aws_lambda_function.api.environment[0].variables.EVENTS_URL == "https://abc123.execute-api.eu-west-1.amazonaws.com/routers/events"
+    condition = (aws_lambda_function.api.environment[0].variables.ROUTER_REPORT_ROLE == "arn:aws:iam::111122223333:role/dmt-test-manager-router-report"
+      && aws_lambda_function.api.environment[0].variables.EVENT_BUS == "dmt-test-manager"
+      && aws_lambda_function.api.environment[0].variables.EVENT_BUS_ARN == "arn:aws:events:eu-west-1:111122223333:event-bus/dmt-test-manager"
+      && aws_lambda_function.api.environment[0].variables.EVENTS_URL == "https://abc123.execute-api.eu-west-1.amazonaws.com/routers/credentials"
     && aws_lambda_function.api.environment[0].variables.EVENTS_AUDIENCE == "https://abc123.execute-api.eu-west-1.amazonaws.com")
-    error_message = "The API puts on the manager's bus, and sends the routers the route's URL and its tokens' audience."
+    error_message = "The API knows the role it assumes for a router, the bus its sessions put on, and sends the routers the route's URL and its tokens' audience."
   }
 }

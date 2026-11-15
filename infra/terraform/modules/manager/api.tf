@@ -1,5 +1,5 @@
 # Manager API: one Lambda behind an HTTP API with a Cognito JWT authorizer, served under /api/* by CloudFront; the CLI's
-# routes under /iam/* (AWS_IAM), and the Google Cloud routers' reports at POST /routers/events (a Google token).
+# routes under /iam/* (AWS_IAM), and the Google Cloud routers' credentials at POST /routers/credentials (a Google token).
 
 resource "aws_dynamodb_table" "manager" {
   name         = local.name
@@ -57,6 +57,43 @@ data "aws_iam_policy_document" "lambda_assume" {
 resource "aws_iam_role" "api" {
   name               = "${local.name}-api"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+# The role of the Google Cloud routers' reports (router credentials design 2026-11-15 §3): written once, never at a router's
+# install. The API function assumes it for a router for an hour, with a session policy that names that router's source alone
+# (dormeto.router.gcp/<project>/<region>), and gives the router the session; the role allows the routers' sources only.
+data "aws_iam_policy_document" "router_report_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "AWS"
+      identifiers = [aws_iam_role.api.arn]
+    }
+  }
+}
+
+resource "aws_iam_role" "router_report" {
+  name               = "${local.name}-router-report"
+  assume_role_policy = data.aws_iam_policy_document.router_report_assume.json
+}
+
+data "aws_iam_policy_document" "router_report" {
+  statement {
+    sid       = "RouterReports"
+    actions   = ["events:PutEvents"]
+    resources = [aws_cloudwatch_event_bus.manager.arn]
+    condition {
+      test     = "StringLike"
+      variable = "events:source"
+      values   = ["${local.google_source_prefix}*"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "router_report" {
+  name   = "router-report"
+  role   = aws_iam_role.router_report.id
+  policy = data.aws_iam_policy_document.router_report.json
 }
 
 resource "aws_cloudwatch_log_group" "api" {
@@ -185,16 +222,11 @@ data "aws_iam_policy_document" "api" {
     }
   }
   statement {
-    # The relay of the Google Cloud routers' events (router push design 2026-11-14 §3.1): it puts them on the manager's bus
-    # under its own source only, the project and region their tokens proved inside.
-    sid       = "RouterEventsRelay"
-    actions   = ["events:PutEvents"]
-    resources = [aws_cloudwatch_event_bus.manager.arn]
-    condition {
-      test     = "StringEquals"
-      variable = "events:source"
-      values   = [local.relay_source]
-    }
+    # The Google Cloud routers' credentials (router credentials design 2026-11-15 §3): a session of the routers' report role
+    # for a router whose token the function checked. The function puts nothing on the bus itself.
+    sid       = "RouterReportRole"
+    actions   = ["sts:AssumeRole"]
+    resources = [aws_iam_role.router_report.arn]
   }
   statement {
     # Discovery: run on demand (the discovery state machine).
@@ -257,11 +289,13 @@ resource "aws_lambda_function" "api" {
       INSTALL_BUCKET    = var.install == null ? "" : var.install.bucket
       INSTALL_PROJECT   = var.install == null ? "" : var.install.project
       INSTALL_LOG_GROUP = var.install == null ? "" : var.install.log_group
-      # The relay (router push design §3.1): the bus it puts on, its URL and its tokens' audience, which the API sends the
-      # Google Cloud routers in manager-settings.
-      EVENT_BUS       = aws_cloudwatch_event_bus.manager.name
-      EVENTS_URL      = local.relay_url
-      EVENTS_AUDIENCE = local.relay_audience
+      # The Google Cloud routers' credentials (router credentials design §2, §3): the role their sessions assume, the bus
+      # they put on, the route's URL and its tokens' audience, which the API sends the routers in manager-settings.
+      ROUTER_REPORT_ROLE = aws_iam_role.router_report.arn
+      EVENT_BUS          = aws_cloudwatch_event_bus.manager.name
+      EVENT_BUS_ARN      = aws_cloudwatch_event_bus.manager.arn
+      EVENTS_URL         = local.credentials_url
+      EVENTS_AUDIENCE    = local.credentials_audience
     }
   }
 
@@ -285,7 +319,7 @@ resource "aws_apigatewayv2_authorizer" "cognito" {
   }
 }
 
-# The Google Cloud routers' tokens (router push design 2026-11-14 §3.1): identity tokens Google signs for a router's service
+# The Google Cloud routers' tokens (router credentials design 2026-11-15 §2): identity tokens Google signs for a router's service
 # account, with the API's own endpoint as audience. A request without one is refused before the function runs; the function
 # then reads which router it is from the token's email.
 resource "aws_apigatewayv2_authorizer" "google" {
@@ -296,16 +330,17 @@ resource "aws_apigatewayv2_authorizer" "google" {
 
   jwt_configuration {
     issuer   = "https://accounts.google.com"
-    audience = [local.relay_audience]
+    audience = [local.credentials_audience]
   }
 }
 
 locals {
-  relay_source   = "dormeto.router.gcp"
-  relay_audience = aws_apigatewayv2_api.api.api_endpoint
-  relay_url      = "${aws_apigatewayv2_api.api.api_endpoint}/routers/events"
-  # The relay's own throttle, apart from the dashboard's (design §3.1, call).
-  relay_throttle = { burst = 100, rate = 50 }
+  # A Google Cloud router's source on the bus: dormeto.router.gcp/<project>/<region>.
+  google_source_prefix = "dormeto.router.gcp/"
+  credentials_audience = aws_apigatewayv2_api.api.api_endpoint
+  credentials_url      = "${aws_apigatewayv2_api.api.api_endpoint}/routers/credentials"
+  # The route's own throttle, apart from the dashboard's (router push design 2026-11-14 §3.1, call).
+  credentials_throttle = { burst = 100, rate = 50 }
 }
 
 resource "aws_apigatewayv2_integration" "api" {
@@ -338,11 +373,11 @@ resource "aws_apigatewayv2_route" "iam" {
   authorization_type = "AWS_IAM"
 }
 
-# The Google Cloud routers report their events here (router push design 2026-11-14 §3.1): not under /api, which CloudFront
-# serves to the dashboard, and only with a Google token.
-resource "aws_apigatewayv2_route" "router_events" {
+# The Google Cloud routers ask for their credentials here, once an hour (router credentials design 2026-11-15 §2): not under
+# /api, which CloudFront serves to the dashboard, and only with a Google token.
+resource "aws_apigatewayv2_route" "router_credentials" {
   api_id             = aws_apigatewayv2_api.api.id
-  route_key          = "POST /routers/events"
+  route_key          = "POST /routers/credentials"
   target             = "integrations/${aws_apigatewayv2_integration.api.id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.google.id
@@ -359,9 +394,9 @@ resource "aws_apigatewayv2_stage" "default" {
   }
 
   route_settings {
-    route_key              = aws_apigatewayv2_route.router_events.route_key
-    throttling_burst_limit = local.relay_throttle.burst
-    throttling_rate_limit  = local.relay_throttle.rate
+    route_key              = aws_apigatewayv2_route.router_credentials.route_key
+    throttling_burst_limit = local.credentials_throttle.burst
+    throttling_rate_limit  = local.credentials_throttle.rate
   }
 }
 
