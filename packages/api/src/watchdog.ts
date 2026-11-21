@@ -78,9 +78,15 @@ function reportedProblems(summary: RouterSummary): Problem[] {
   return raw.map((p): Problem => {
     const { level, text, code } = (p ?? {}) as { level?: unknown; text?: unknown; code?: unknown };
     if (typeof text !== 'string' || (level !== 'warning' && level !== 'error')) throw new Error('a problem without level or text');
-    return { code: problemCode({ code, text }), level, text };
+    const hint = typeof code === 'string' ? REPORTED_HINTS[code] : undefined;
+    return { code: problemCode({ code, text }), level, text, ...(hint ? { hint } : {}) };
   }).filter((p) => !FAILED_WORKLOADS.has(p.code));
 }
+// What to do about a reported problem, by its code: the router's text says what it is.
+const REPORTED_HINTS: Record<string, string> = {
+  // Standalone workloads without their resource (routers 0.42.0).
+  'resource-missing': 'Offboard a workload whose resource was deleted; tag a resource that lost its dormeto:workload tag again (its value is the workload\'s id). Until then the workload naps and wakes nothing.',
+};
 
 // What a silent router's owner checks first, per cloud; for a Google Cloud router, what the watchdog's probe last met.
 const AWS_SILENT_HINT = 'Its idle check does not run, or its reports do not reach the manager\'s event bus: open the router in the dashboard, which calls it directly and shows why.';

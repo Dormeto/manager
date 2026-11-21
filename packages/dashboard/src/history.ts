@@ -151,6 +151,8 @@ const CAUSES: Record<string, string> = {
   recovered: 'recovered, seen at a check',
   'external-start': 'started outside Dormeto',
   'external-stop': 'stopped outside Dormeto',
+  // A standalone workload's failed wake, tried again by the check (routers 0.42.0).
+  retry: 'a retry of the failed wake, by the check',
 };
 
 // What started a phase, in words ('' when the history does not say); a nap that hibernated instances says how many.

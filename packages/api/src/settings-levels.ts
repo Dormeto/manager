@@ -14,6 +14,16 @@ const GOOGLE_WAKE_TIMEOUT_MAX = 1700;
 const GOOGLE_FIXED_ZERO = ['waitSeconds', 'drainSeconds', 'maxHolders'];
 export const SCALAR_KEYS = [...Object.keys(SETTING_RANGES), 'wakeMode'];
 export const RULE_KEYS = ['noWakeRules', 'wakeRules'];
+// A standalone workload's idle signals (vision standalone workloads design §4; router settings-levels.mjs IDLE_KEYS, its
+// ranges and texts): each a value or 'off'. The waker's keys are an HTTP workload's only (WAKER_KEYS).
+export const IDLE_KEYS = ['idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
+export const STANDALONE_KEYS = ['idleMinutes', 'wakeTimeoutSeconds', ...IDLE_KEYS];
+export const WAKER_KEYS = [...SCALAR_KEYS.filter((key) => !STANDALONE_KEYS.includes(key)), ...RULE_KEYS];
+export type Kind = 'http' | 'standalone';
+const IDLE_METRIC_STATISTICS = ['Maximum', 'Average', 'Sum'];
+const IDLE_NETWORK_BYTES_MAX = 10_000_000_000;
+const DIMENSIONS_MAX = 30;
+const RESOURCE = '${resource}';
 export const BUILT_IN_TYPES = ['instance', 'asg', 'ecs', 'k8s', 'databases'];
 // The levels from the most specific: a value comes from one of them (a workload's `settingsFrom`).
 export const LEVELS = ['workload', 'type', 'router', 'organization', 'default'] as const;
@@ -87,12 +97,50 @@ function rulesProblems(key: string, rules: unknown): string[] {
   return problems;
 }
 
+const isText = (value: unknown, max: number) => typeof value === 'string' && value.length >= 1 && value.length <= max;
+function idleMetricProblems(value: unknown): string[] {
+  if (value === 'off') return [];
+  if (!isObject(value)) return ['idleMetric: must be off or a metric { namespace, name, dimensions, statistic, below }'];
+  const problems: string[] = [];
+  const fields = ['namespace', 'name', 'dimensions', 'statistic', 'below'];
+  problems.push(...Object.keys(value).filter((key) => !fields.includes(key)).map((key) => `idleMetric: unknown field ${key}`));
+  if (!isText(value.namespace, 255)) problems.push('idleMetric: namespace must be text of 1 to 255 characters');
+  if (!isText(value.name, 255)) problems.push('idleMetric: name must be text of 1 to 255 characters');
+  const { dimensions } = value;
+  if (!isObject(dimensions) || Object.keys(dimensions).length > DIMENSIONS_MAX || !Object.entries(dimensions).every(([name, v]) => isText(name, 255) && isText(v, 1024))) {
+    problems.push(`idleMetric: dimensions must be an object of at most ${DIMENSIONS_MAX} names, each with text of 1 to 1024 characters`);
+  } else if (Object.values(dimensions).some((v) => (v as string).replaceAll(RESOURCE, '').includes('${'))) problems.push(`idleMetric: dimensions: only ${RESOURCE} is replaced`);
+  if (!IDLE_METRIC_STATISTICS.includes(value.statistic as string)) problems.push(`idleMetric: statistic must be ${IDLE_METRIC_STATISTICS.slice(0, -1).join(', ')} or ${IDLE_METRIC_STATISTICS.at(-1)}`);
+  if (typeof value.below !== 'number' || !Number.isFinite(value.below)) problems.push('idleMetric: below must be a number');
+  return problems;
+}
+function idleProblems(key: string, value: unknown): string[] {
+  if (key === 'idleMetric') return idleMetricProblems(value);
+  if (value === 'off') return [];
+  if (key === 'idleCpuPercent') return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? [] : ['idleCpuPercent: must be a number from 0 to 100, or off'];
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= IDLE_NETWORK_BYTES_MAX ? [] : [`idleNetworkBytes: must be a whole number from 0 to ${IDLE_NETWORK_BYTES_MAX}, or off`];
+}
+// A key the workload's kind has not (the router's notForKind).
+export const notForKind = (key: string, kind: Kind) => (kind === 'standalone'
+  ? `${key}: a standalone workload has no waker: ${key} is for an HTTP workload`
+  : `${key}: an HTTP workload naps on its requests: the idle signals are for a standalone workload`);
+
 // A level's settings: each a value or null (unset); `type` only at a workload's; `cloud` the router's, for a router's or a
-// workload's.
-export function defaultsProblems(defaults: unknown, { workload = false, cloud = 'aws' }: { workload?: boolean; cloud?: Cloud } = {}): string[] {
+// workload's. `idle`: the idle signals are known (AWS's levels: a type, a router or the organization holds both kinds' keys);
+// `kind`: a workload's, which refuses the other kind's keys whatever their value. A Google Cloud router has no idle signal yet.
+export function defaultsProblems(defaults: unknown, { workload = false, cloud = 'aws', idle = false, kind = null }: { workload?: boolean; cloud?: Cloud; idle?: boolean; kind?: Kind | null } = {}): string[] {
   if (!isObject(defaults)) return ['settings must be an object'];
   const problems: string[] = [];
+  const idleKnown = cloud !== 'gcp' && (idle || kind !== null);
   for (const [key, value] of Object.entries(defaults)) {
+    if (cloud !== 'gcp' && kind !== null && (kind === 'standalone' ? WAKER_KEYS : IDLE_KEYS).includes(key)) {
+      problems.push(notForKind(key, kind));
+      continue;
+    }
+    if (idleKnown && IDLE_KEYS.includes(key)) {
+      if (value !== null) problems.push(...idleProblems(key, value));
+      continue;
+    }
     if (value === null && (SCALAR_KEYS.includes(key) || RULE_KEYS.includes(key) || (workload && key === 'type'))) continue;
     if (cloud === 'gcp' && GOOGLE_FIXED_ZERO.includes(key)) continue;
     const range: [number, number] | undefined = cloud === 'gcp' && key === 'wakeTimeoutSeconds' ? [SETTING_RANGES.wakeTimeoutSeconds![0], GOOGLE_WAKE_TIMEOUT_MAX] : SETTING_RANGES[key];
@@ -112,7 +160,7 @@ export function defaultsProblems(defaults: unknown, { workload = false, cloud = 
 const customTypes = (types: unknown[]) => types.filter((t) => isObject(t) && !BUILT_IN_TYPES.includes(t.name as string));
 
 // The organization's types: the built-in ones' defaults (no tags) and at most 20 custom ones, each selected by its tags.
-export function typesProblems(types: unknown): string[] {
+export function typesProblems(types: unknown, { idle = false }: { idle?: boolean } = {}): string[] {
   if (!Array.isArray(types)) return ['types must be a list'];
   if (customTypes(types).length > TYPES_MAX) return [`at most ${TYPES_MAX} custom types`];
   const problems: string[] = [];
@@ -136,31 +184,50 @@ export function typesProblems(types: unknown): string[] {
     if (type.description !== undefined && type.description !== null && (typeof type.description !== 'string' || type.description.length > DESCRIPTION_MAX)) {
       problems.push(`${at}: description must be text of at most ${DESCRIPTION_MAX} characters`);
     }
-    if (type.settings !== undefined && type.settings !== null) problems.push(...defaultsProblems(type.settings).map((p) => `${at}: settings: ${p}`));
+    if (type.settings !== undefined && type.settings !== null) problems.push(...defaultsProblems(type.settings, { idle }).map((p) => `${at}: settings: ${p}`));
   }
   return problems;
 }
 
 // The valid keys of a stored level (a hand-written settings.json may hold others): what people are shown.
+// The organization's level knows the idle signals (AWS's routers read them; a Google Cloud router is never pushed them).
 export function validDefaults(value: unknown): Json {
   if (!isObject(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(([key, v]) => v !== null && !defaultsProblems({ [key]: v }).length));
+  return Object.fromEntries(Object.entries(value).filter(([key, v]) => v !== null && !defaultsProblems({ [key]: v }, { idle: true }).length));
 }
 
 // The valid types of a stored list, each on its own.
 export function validTypes(value: unknown): Json[] {
-  if (!Array.isArray(value) || typesProblems(value).some((p) => p.startsWith('at most'))) return [];
+  if (!Array.isArray(value) || typesProblems(value, { idle: true }).some((p) => p.startsWith('at most'))) return [];
   const kept: Json[] = [];
-  for (const type of value) if (!typesProblems([...kept, type]).length) kept.push(type as Json);
+  for (const type of value) if (!typesProblems([...kept, type], { idle: true }).length) kept.push(type as Json);
   return kept;
 }
 
+// The idle signals a settings.json sets (its defaults' and each type's), by where: what the organization-level gate compares.
+export function idleSignalsOf(doc: unknown): Record<string, string> {
+  const workloads = isObject(doc) && isObject(doc.workloads) ? doc.workloads : {};
+  const out: Record<string, string> = {};
+  const add = (at: string, settings: unknown) => {
+    if (!isObject(settings)) return;
+    for (const key of IDLE_KEYS) if (settings[key] !== undefined && settings[key] !== null) out[`${at}${key}`] = JSON.stringify(settings[key]);
+  };
+  add('defaults.', workloads.defaults);
+  if (Array.isArray(workloads.types)) for (const t of workloads.types) if (isObject(t)) add(`type ${String(t.name)}.`, t.settings);
+  return out;
+}
+
+// settings.json without its idle signals: what a Google Cloud router is pushed (it has none yet, design §11's plan 5).
+export { withoutIdleSignals } from '@dormeto/fleet';
+
 // How many workloads a level reaches, per setting (design §8): those of its scope whose value comes from it or a level below.
-export function reachOf(summaries: { settingsFrom?: Record<string, string> }[], level: 'organization' | 'router' | 'type') {
+// The idle signals are counted when the scope holds a standalone workload (their only holders).
+export function reachOf(summaries: { settingsFrom?: Record<string, string>; kind?: unknown }[], level: 'organization' | 'router' | 'type') {
   const from = LEVELS.indexOf(level);
-  const keys: Record<string, number> = Object.fromEntries(SCALAR_KEYS.map((key) => [key, 0]));
+  const counted = [...SCALAR_KEYS, ...(summaries.some((s) => s.kind === 'standalone') ? IDLE_KEYS : [])];
+  const keys: Record<string, number> = Object.fromEntries(counted.map((key) => [key, 0]));
   for (const summary of summaries) {
-    for (const key of SCALAR_KEYS) {
+    for (const key of counted) {
       const at = LEVELS.indexOf((summary.settingsFrom?.[key] ?? '') as Level);
       if (at >= from) keys[key]! += 1;
     }

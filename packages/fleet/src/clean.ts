@@ -184,9 +184,36 @@ const lbOf = (v: unknown) => (isObject(v) && typeof v.kind === 'string' && /^[a-
   ? defined({ kind: v.kind, region: isRegion('gcp', v.region) ? v.region : undefined })
   : undefined);
 
-// A workload of a check, or null when it has no valid id.
+// A standalone workload's resource (vision standalone workloads design §5): an AWS ARN.
+const RESOURCE_ARN = /^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^\s]{1,1024}$/;
+// Its idle signals (the router's settings-levels.mjs ranges): CPU a number from 0 to 100, network bytes a whole number from 0 to
+// 10,000,000,000, a metric { namespace, name, dimensions, statistic, below } (its dimensions an object, or a list of them for
+// the built-in connections of several databases), each or 'off'. One that is not of its shape is dropped.
+const STATISTICS = new Set(['Maximum', 'Average', 'Sum']);
+const dimensionsOf = (v: unknown) => isObject(v) && Object.keys(v).length <= 30 && Object.entries(v).every(([k, d]) => k.length >= 1 && k.length <= 255 && typeof d === 'string' && d.length >= 1 && d.length <= 1024);
+function idleSettingOf(key: string, v: unknown): unknown {
+  if (v === 'off') return 'off';
+  if (key === 'idleCpuPercent') return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? v : undefined;
+  if (key === 'idleNetworkBytes') return Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 10_000_000_000 ? v : undefined;
+  if (!isObject(v)) return undefined;
+  const { namespace, name, dimensions, statistic, below } = v;
+  const named = (t: unknown) => typeof t === 'string' && t.length >= 1 && t.length <= 255;
+  const dims = Array.isArray(dimensions) ? dimensions.length <= 20 && dimensions.every(dimensionsOf) : dimensionsOf(dimensions);
+  if (!named(namespace) || !named(name) || !dims || !STATISTICS.has(statistic as string) || typeof below !== 'number' || !Number.isFinite(below)) return undefined;
+  return { namespace, name, dimensions, statistic, below };
+}
+const IDLE_KEYS = ['idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
+// A standalone workload's settings: its kind's five (the router's STANDALONE_KEYS), nothing of the waker's.
+function standaloneSettingsOf(v: unknown): Json | undefined {
+  if (!isObject(v)) return undefined;
+  return defined({ ...numbers(v, new Set(['idleMinutes', 'wakeTimeoutSeconds'])), ...Object.fromEntries(IDLE_KEYS.map((key) => [key, idleSettingOf(key, v[key])])) });
+}
+
+// A workload of a check, or null when it has no valid id. A standalone one (`kind: 'standalone'`, routers 0.42.0) has its
+// resource instead of a target group, no URL nor wake mode, and its kind's settings; an HTTP one has no `kind`.
 export function workloadOf(w: unknown, cloud: Cloud | null = 'aws'): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
+  if (cloud !== 'gcp' && w.kind === 'standalone') return standaloneOf(w, cloud);
   return defined({
     workloadId: w.workloadId,
     name: text(w.name, 64),
@@ -228,8 +255,22 @@ export function workloadOf(w: unknown, cloud: Cloud | null = 'aws'): Json | null
   });
 }
 
+// A standalone workload's row (the router's handover, "The row"): the HTTP row's fields of both kinds, its kind and resource.
+function standaloneOf(w: Json, cloud: Cloud | null): Json {
+  const { targetGroupArn: _t, url: _u, wakeMode: _w, settings: _s, stats7d: _x, ...shared } = workloadOf({ ...w, kind: undefined }, cloud)!;
+  const kept: Json = {};
+  for (const [key, value] of Object.entries(shared)) {
+    kept[key] = value;
+    if (key === 'name') Object.assign(kept, defined({ kind: 'standalone', resourceArn: typeof w.resourceArn === 'string' && RESOURCE_ARN.test(w.resourceArn) ? w.resourceArn : undefined }));
+    // Its resource deleted or untagged (the router's check): said after its backends, absent otherwise.
+    if (key === 'backends' && w.resourceMissing === true) kept.resourceMissing = true;
+    if (key === 'pauses') kept.stats7d = numbers(w.stats7d, new Set(['wakes'])) ?? null;
+  }
+  return defined({ ...kept, settings: standaloneSettingsOf(w.settings), type: kept.type, settingsFrom: kept.settingsFrom });
+}
+
 const TYPE_NAME = /^[a-z][a-z0-9-]{0,31}$/;
-const SETTING_KEYS = new Set(['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode']);
+const SETTING_KEYS = new Set(['idleMinutes', 'waitSeconds', 'drainSeconds', 'wakeTimeoutSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode', ...IDLE_KEYS]);
 const LEVELS = new Set(['workload', 'type', 'router', 'organization', 'default']);
 // The known settings, each from a known level; none at all, undefined.
 function settingsFromOf(value: unknown): Record<string, string> | undefined {

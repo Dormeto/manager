@@ -39,6 +39,20 @@ before the operation in the router's words; the router's preview checks the rest
 them. A router that does not know standalone workloads fails the preview with `router <name> is older than 0.42.0:
 upgrade it to onboard a standalone resource`. Offboarding wakes the workload, as an HTTP one's does, then offboards it and
 gives its candidate back.
+- **Standalone workloads in the fleet and the API:** a standalone workload's row keeps `kind: "standalone"`, `resourceArn`,
+`resourceMissing` (while its resource is deleted or untagged) and its kind's five settings (`idleMinutes`,
+`wakeTimeoutSeconds`, `idleCpuPercent`, `idleNetworkBytes`, `idleMetric`) with their `settingsFrom`; it has no `url`, its
+page none either, and its idle share is its candidate's. An HTTP row is unchanged (no `kind`). The idle signals are taken
+at every level of AWS's in the router's words (a number from 0 to 100, a whole number up to 10000000000, a metric, or
+`off`); a workload refuses the other kind's keys (a standalone one the waker's, an HTTP one the idle signals, also at
+its onboarding); a router that does not know them answers 409 `upgrade the router to 0.42.0`; a Google Cloud router's
+level has none. **An idle signal in the organization's defaults or a type is refused (409) while a router before 0.42.0,
+one whose version is not known, or a Google Cloud router is in the fleet**, naming them (`<n> router(s) must be upgraded
+first: …`); the idle window is not held back, nor a write that keeps or removes them. Google Cloud routers are never pushed
+the idle signals. A standalone workload's waiting page and a target group exclusion naming it are refused before its router
+is called (409, the router's words); the router's refusal of a nap window's `wake` is relayed. What a level reaches counts
+the idle signals where a standalone workload holds them. The history says the check's `retry` of a failed wake; the
+router's `resource-missing` warning alerts with what to do.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

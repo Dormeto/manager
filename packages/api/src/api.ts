@@ -20,7 +20,7 @@ import type { IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 import { atLeastCore, compareVersions, VERSION, type UpdateService } from './update.js';
-import { BUILT_IN_TYPES, defaultsProblems, reachOf, typesProblems, validDefaults, validTypes } from './settings-levels.js';
+import { BUILT_IN_TYPES, IDLE_KEYS, WAKER_KEYS, defaultsProblems, idleSignalsOf, notForKind, reachOf, typesProblems, validDefaults, validTypes, withoutIdleSignals, type Kind } from './settings-levels.js';
 
 export type Router = FleetRouter;
 
@@ -553,12 +553,11 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud
   }
   if (settings?.hibernate !== undefined && typeof settings.hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'settings: hibernate must be true or false');
 }
-// The waker's keys, which a standalone workload has none of (router lambda/src/lib/settings-levels.mjs WAKER_KEYS, and its
-// text, prefixed as its preview prefixes it; a test reads them from the router's checkout).
-const WAKER_KEYS = ['waitSeconds', 'drainSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode', 'noWakeRules', 'wakeRules'];
-function standaloneSettingsFailures(settings: Record<string, unknown> | undefined) {
-  const key = Object.keys(settings ?? {}).find((k) => WAKER_KEYS.includes(k));
-  if (key) throw new HttpError(400, 'bad_request', `settings: ${key}: a standalone workload has no waker: ${key} is for an HTTP workload`);
+// An AWS onboarding's settings by its candidate's kind: the other kind's keys refused in the router's words (its
+// notForKind, prefixed as its preview prefixes it; a test reads them from the router's checkout).
+function kindSettingsFailures(settings: Record<string, unknown> | undefined, kind: Kind) {
+  const key = Object.keys(settings ?? {}).find((k) => (kind === 'standalone' ? WAKER_KEYS : IDLE_KEYS).includes(k));
+  if (key) throw new HttpError(400, 'bad_request', `settings: ${notForKind(key, kind)}`);
 }
 // An AWS onboarding's databases: RDS instances and clusters, as the onboarder takes them (router lambda/src/lib/onboarding.mjs's
 // databasesOf: a kind and an identifier), refused here in one message form before an operation starts.
@@ -611,7 +610,7 @@ function joinMinutesOf(body: Record<string, unknown>): number | null {
 // one is refused here: the router would take it and change nothing. Its defaults are checked as the router's cloud takes them.
 function routerSettingsOf(body: Record<string, unknown>, cloud: Cloud): { hibernate?: boolean | null; joinMinutes?: number | null; defaults?: Record<string, unknown> | null } {
   if (body.hibernate === undefined && body.joinMinutes === undefined && body.defaults === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or defaults is required');
-  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults, cloud) }) };
+  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults, cloud, cloud === 'aws') }) };
 }
 // What a save of the types changed, for the audit (settings at scale design §8): each type added or removed, each changed
 // key of a type with its value before and after (review, 2026-11-04).
@@ -634,22 +633,25 @@ function typesChangeText(before: Record<string, unknown>[], after: { name: strin
   return said.join('; ') || 'no change';
 }
 // What a router before 0.37.0 answers to a setting of the levels: unknown.
+// What a router before 0.42.0 answers to an idle signal (vision standalone workloads design §4): unknown.
+const IDLE_SETTING_UNKNOWN = /^settings: (defaults: )?unknown setting (idleCpuPercent|idleNetworkBytes|idleMetric)$/;
+const IDLE_SINCE = '0.42.0';
 const LEVEL_SETTING_UNKNOWN = /^settings: unknown setting (defaults|idleMinutes|waitSeconds|drainSeconds|wakeTimeoutSeconds|maxHolders|failedRetrySeconds|wakeMode|noWakeRules|wakeRules|type)$/;
 // A level's defaults in a body (settings at scale design §8): each key a value or null, null for all of them; refused in the router's words.
-// cloud: a router's (the organization's level, both clouds', is AWS's).
-function defaultsOf(defaults: unknown, cloud: Cloud = 'aws'): Record<string, unknown> | null {
+// cloud: a router's (the organization's level, both clouds', is AWS's); idle: the level holds the idle signals (AWS's).
+function defaultsOf(defaults: unknown, cloud: Cloud = 'aws', idle = false): Record<string, unknown> | null {
   if (defaults === null) return null;
-  const problems = defaultsProblems(defaults, { cloud });
+  const problems = defaultsProblems(defaults, { cloud, idle });
   if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
   return defaults as Record<string, unknown>;
 }
 // A workload's settings in a body: hibernate, the levels' settings and its type, each a value or null; its join is on its schedule.
-// cloud: its router's.
-function workloadSettingsOf(body: Record<string, unknown>, cloud: Cloud): Record<string, unknown> {
+// cloud: its router's; kind: its row's (null when the manager has none: the router decides).
+function workloadSettingsOf(body: Record<string, unknown>, cloud: Cloud, kind: Kind | null = null): Record<string, unknown> {
   if (body.joinMinutes !== undefined) throw new HttpError(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
   if (!Object.keys(body).length) throw new HttpError(400, 'bad_request', 'a setting is required');
   const { hibernate, ...rest } = body;
-  const problems = defaultsProblems(rest, { workload: true, cloud });
+  const problems = defaultsProblems(rest, { workload: true, cloud, kind, idle: cloud === 'aws' });
   if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
   return { ...(hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...rest };
 }
@@ -1269,6 +1271,8 @@ export function createApi({
   async function settingsCall(router: Router, payload: Record<string, unknown>, by: string) {
     try {
       const result = await invoke(router, { action: 'settings', ...payload, by }) as { problems?: string[] } | null;
+      // An idle signal the router does not know: it predates them (standalone workloads, router 0.42.0).
+      if (Array.isArray(result?.problems) && result.problems.some((p) => IDLE_SETTING_UNKNOWN.test(p))) throw new HttpError(409, 'conflict', `upgrade the router to ${IDLE_SINCE}`);
       // A setting of the levels the router does not know: it predates them (settings at scale, router 0.37.0).
       if (Array.isArray(result?.problems) && result.problems.some((p) => LEVEL_SETTING_UNKNOWN.test(p))) throw new HttpError(409, 'conflict', 'upgrade the router to 0.37.0');
       if (Array.isArray(result?.problems) && result.problems.length) throw new HttpError(400, 'bad_request', result.problems.join('; '));
@@ -1288,11 +1292,37 @@ export function createApi({
   async function pushSettings(settings: unknown, etag: string | void, only: (r: Router) => boolean = () => true) {
     const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? '') && only(r));
     if (!targets.length) return;
-    const payload = { action: 'manager-settings', settings, etag: etag ?? '', ...(routerReports ? { events: routerReports.events } : {}) };
+    // A Google Cloud router has no idle signal yet: it is never pushed one (settings.json keeps them for AWS's).
+    const payload = { action: 'manager-settings', settings: withoutIdleSignals(settings), etag: etag ?? '', ...(routerReports ? { events: routerReports.events } : {}) };
     const results = await each(targets, (r) => invoke(r, payload), callTimeout);
     results.forEach((result, i) => {
       if (result.status === 'rejected') console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', router: targets[i]!.name, error: (result.reason as Error).message }));
     });
+  }
+  // The one writer of settings.json: an idle signal the write adds or changes at the organization's level (its defaults or a
+  // type) waits for every router to know them (vision standalone workloads design §6): a router before 0.42.0 would drop the
+  // whole type, and a Google Cloud router has none yet. Then the Google Cloud routers are pushed it (without idle signals).
+  async function writeSettings(next: Record<string, unknown>, before: unknown) {
+    await idleGate(next, before);
+    if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
+    await pushSettings(next, await globalSettings.write(next));
+  }
+  async function idleGate(next: unknown, before: unknown) {
+    const was = idleSignalsOf(before);
+    const added = Object.entries(idleSignalsOf(next)).some(([where, value]) => was[where] !== value);
+    if (!added) return;
+    await refreshRouters();
+    const summaries = fleet ? await fleet.listRouters().catch(() => [] as RouterSummary[]) : [];
+    const behind = routers.flatMap((r): string[] => {
+      if (r.cloud === 'gcp') return [`${r.name} (Google Cloud)`];
+      const summary = summaries.find((x) => x.account === accountOfRouter(r) && x.region === r.region);
+      const version = (typeof summary?.version === 'string' ? summary.version : null) ?? r.installed?.version ?? null;
+      if (!version) return [`${r.name} (version not known)`];
+      return atLeastCore(version, IDLE_SINCE) ? [] : [`${r.name} (${version})`];
+    });
+    if (behind.length) {
+      throw new HttpError(409, 'conflict', `the organization's idle signals need every router at ${IDLE_SINCE} or later and no Google Cloud router: ${behind.length} router${behind.length === 1 ? '' : 's'} must be upgraded first: ${behind.join(', ')}`);
+    }
   }
   // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
   // by hand): read as never set. Only a write naming hibernate replaces it, so that an administrator can repair it: another would
@@ -1531,7 +1561,7 @@ export function createApi({
       if (hibernate !== undefined && typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
       const joinMinutes = body.joinMinutes === undefined ? undefined : joinMinutesOf(body);
       const endedWindowDays = body.endedWindowDays === undefined ? undefined : endedDaysOf(body);
-      const defaults = body.defaults === undefined ? undefined : defaultsOf(body.defaults);
+      const defaults = body.defaults === undefined ? undefined : defaultsOf(body.defaults, 'aws', true);
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
         const found = await readSettings();
@@ -1556,7 +1586,7 @@ export function createApi({
           },
           updatedAt, updatedBy: identity.email,
         };
-        await pushSettings(next, await globalSettings.write(next));
+        await writeSettings(next, doc);
         const sent = { ...(hibernate === undefined ? {} : { hibernate: hibernate as boolean }), ...(joinMinutes === undefined ? {} : { joinMinutes }), ...(endedWindowDays === undefined ? {} : { endedWindowDays }), ...(defaults === undefined ? {} : { defaults }) };
         return { result: settingsText(sent, 'default', before), response: reply(200, { ...shown(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
@@ -1574,7 +1604,7 @@ export function createApi({
       await needAudited(identity, 'admin', 'types', 'organization');
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
       const { types } = bodyOf(event);
-      const problems = typesProblems(types);
+      const problems = typesProblems(types, { idle: true });
       if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
       return audited(identity, 'types', 'organization', async () => {
         const found = await readSettings();
@@ -1584,7 +1614,7 @@ export function createApi({
         const { types: _replaced, ...others } = workloads;
         const list = types as { name: string }[];
         const next = { ...doc, workloads: { ...others, ...(list.length ? { types: list } : {}) }, updatedAt: new Date(now()).toISOString(), updatedBy: identity.email };
-        await pushSettings(next, await globalSettings.write(next));
+        await writeSettings(next, doc);
         return { result: typesChangeText(validTypes(workloads.types), list), response: reply(200, { ...shownTypes(next), note: 'routers apply it at their next check, within 5 minutes' }) };
       });
     }
@@ -1632,7 +1662,7 @@ export function createApi({
         const { waitingPage: before, ...kept } = found ?? {};
         const at = new Date(now()).toISOString();
         const written = { ...kept, ...(page ? { waitingPage: { ...page, by: identity.email, at } } : {}) };
-        await pushSettings(written, await globalSettings.write(written));
+        await writeSettings(written, found);
         return {
           result: pageText('organization', page, before),
           response: reply(200, { page, warnings: pageWarnings(page), ...(page ? { by: identity.email, at } : { by: null, at: null }), note: 'routers at 0.35.0 or later apply it within about a minute' }),
@@ -1932,7 +1962,9 @@ export function createApi({
         return reply(200, {
           ...description,
           // Its account and region: the ARNs of its backends and targets.
-          ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), ...cloudField(accountOfRouter(router)), region: router.region, url: (summary?.url as string | null | undefined) ?? null, ...states,
+          ...(status as object), ...('tags' in access ? { tags: access.tags } : {}), can: access.can, ...(accountOfRouter(router) ? { account: accountOfRouter(router) } : {}), ...cloudField(accountOfRouter(router)), region: router.region,
+          // A standalone workload has no URL (absent, not null).
+          ...((status as { kind?: unknown } | null)?.kind === 'standalone' || summary?.kind === 'standalone' ? {} : { url: (summary?.url as string | null | undefined) ?? null }), ...states,
           ...(c && typeof c.idleHours7d === 'number' ? { idleHours7d: c.idleHours7d, requests7d: c.requests7d } : {}),
         });
       }
@@ -1985,10 +2017,16 @@ export function createApi({
           }
         });
       }
-      if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && action === 'waiting-page' && !parts[4]) return waitingPageRoute(identity, event, method, router, id);
+      if ((method === 'GET' || method === 'PUT' || method === 'DELETE') && action === 'waiting-page' && !parts[4]) {
+        // A standalone workload has none (the router's refusal, said before calling it).
+        if ((await summaryNow())?.kind === 'standalone') throw new HttpError(409, 'conflict', `workload ${id} is a standalone workload: it has no waiting page`);
+        return waitingPageRoute(identity, event, method, router, id);
+      }
       if (method === 'PUT' && action === 'settings' && !parts[4]) {
         await needAudited(identity, 'operator', 'workload-settings', `${router.name}/${id}`);
-        const settings = workloadSettingsOf(bodyOf(event), cloudOfRouter(router));
+        // Its kind from its row: the other kind's keys are refused in the router's words (none known: the router decides).
+        const row = await summaryNow();
+        const settings = workloadSettingsOf(bodyOf(event), cloudOfRouter(router), row ? (row.kind === 'standalone' ? 'standalone' : 'http') : null);
         return audited(identity, 'workload-settings', `${router.name}/${id}`, async () => {
           const result = await settingsCall(router, { workloadId: id, settings }, identity.email);
           return { result: workloadSettingsText(settings), response: reply(200, result) };
@@ -2308,6 +2346,8 @@ export function createApi({
   // The other way, a workload's candidate (its idle share): AWS's is its target group, by its ARN; a Google Cloud one's is its
   // backend service, by the path its row's name gives in the scope of its load balancer (the candidate's id).
   function candidateIdOf(w: Record<string, unknown>, account: string, region: string): string | null {
+    // A standalone workload's candidate is its resource.
+    if (w.kind === 'standalone') return typeof w.resourceArn === 'string' ? w.resourceArn : null;
     if (cloudOf(account) !== 'gcp') return typeof w.targetGroupArn === 'string' ? w.targetGroupArn : null;
     return typeof w.backendService === 'string' ? googleServicePath(account, 'backendServices', w.backendService, w.lb as WorkloadSummary['lb'], region) : null;
   }
@@ -2600,6 +2640,9 @@ export function createApi({
           || (router.account ?? managerAccount) !== target.account || (!target.path && router.region !== target.region)) {
           throw new HttpError(400, 'bad_request', 'workload must name a registered router of the target group\'s account (project) and region (any region of a Google Cloud project\'s) and a workload id, with a target group exclusion');
         }
+        // A standalone workload has no target group to exclude (the router's refusal, said before any change).
+        const row = fleet ? await fleet.getWorkload(router.account ?? managerAccount ?? '', router.region, String(workload.id)).catch(() => null) : null;
+        if (row?.kind === 'standalone') throw new HttpError(409, 'conflict', `workload ${workload.id} is a standalone workload: it has no target group to exclude`);
         hint = { id: String(workload.id) };
       }
       const exclusion: Exclusion = { id: newId(), target, reason, by: identity.email, at: new Date(now()).toISOString(), ...(expiresAt ? { expiresAt } : {}) };
@@ -2714,7 +2757,7 @@ export function createApi({
       const onGoogle = isProject(c.account);
       // A standalone candidate's settings by its kind (the waker's keys refused in the router's words); its idle keys are the
       // router's preview's to check.
-      if (isStandalone(c)) standaloneSettingsFailures(body.settings as Record<string, unknown> | undefined);
+      if (!onGoogle) kindSettingsFailures(body.settings as Record<string, unknown> | undefined, isStandalone(c) ? 'standalone' : 'http');
       settingsOfFailures(body.settings as Record<string, unknown> | undefined, onGoogle ? 'gcp' : 'aws');
       if (onGoogle) cloudSqlFailures((body.databases ?? []) as unknown[]);
       else rdsFailures((body.databases ?? []) as unknown[]);
