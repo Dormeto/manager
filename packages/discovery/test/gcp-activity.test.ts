@@ -78,6 +78,14 @@ describe.skipIf(!router)('the Google Cloud activity against the router\'s idle s
     const g = google();
     const read = await googleActivityStep(g.call as never, { project: PROJECT, backends, settings: settings as never, days: 1, now: NOW });
     const values = signalValues(read.signals, read);
+    // The queries themselves, not only the values (final review, tests' honesty): each Monitoring read's filter, aligner and
+    // period, the manager's against the router's.
+    const queriesOf = (calls: string[]) => new Set(calls.filter((c) => c.includes('/timeSeries?')).map((c) => {
+      const q = new URL(c.slice(c.indexOf(' ') + 1)).searchParams;
+      return `${q.get('filter')} | ${q.get('aggregation.perSeriesAligner')} | ${q.get('aggregation.alignmentPeriod')}`;
+    }));
+    const ours = queriesOf(g.calls);
+    const mark = g.calls.length;
     const idleSignals = router!.createIdleSignals({ google: { request: g.call }, project: PROJECT, log: { warn() {} } });
     const from = Date.parse(read.from);
     let compared = 0;
@@ -86,12 +94,13 @@ describe.skipIf(!router)('the Google Cloud activity against the router\'s idle s
       const theirs = (await idleSignals({ workloadId: 'w', idleMinutes: 5, ...settings }, routerBackends, window)).filter((s) => s.applies);
       expect(values.map((v) => v.signal)).toEqual(theirs.map((s) => s.signal));
       theirs.forEach((s, i) => {
-        const ours = values[i]!.values[p]!;
-        if (s.value === null) expect(ours, `${s.signal} at ${p}`).toBeNull();
-        else expect(ours, `${s.signal} at ${p}`).toBeCloseTo(s.value, 9);
+        const mine = values[i]!.values[p]!;
+        if (s.value === null) expect(mine, `${s.signal} at ${p}`).toBeNull();
+        else expect(mine, `${s.signal} at ${p}`).toBeCloseTo(s.value, 9);
         compared += 1;
       });
     }
     expect(compared).toBeGreaterThan(200);
+    expect([...ours].sort()).toEqual([...queriesOf(g.calls.slice(mark))].sort());
   });
 });
