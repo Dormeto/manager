@@ -2,7 +2,7 @@
 // it to the Google Cloud routers (Google Cloud manager design §5.5; router push design §6.2, §6.3): its ETag as S3 gives it
 // (quotes included), and its text; none while it doesn't exist.
 import { GetObjectCommand, HeadObjectCommand, type S3Client } from '@aws-sdk/client-s3';
-import { knowsIdleSignals, withoutIdleSignals } from './idle-signals.js';
+import { knowsIdleSignals, withoutIdleSignals, sentEtag } from './idle-signals.js';
 
 // The S3 client's bounds: 3 s to connect, then 10 s of silence (socketTimeout; past a requestTimeout the HTTP handler only
 // logs, unless told to throw).
@@ -47,7 +47,8 @@ export async function settingsDocument(settings: Pick<SettingsJson, 'read'>, { v
   if (!read) return null;
   try {
     const doc = JSON.parse(read.text) as unknown;
-    return { etag: read.etag, settings: knowsIdleSignals('gcp', version) ? doc : withoutIdleSignals(doc) };
+    const sent = knowsIdleSignals('gcp', version) ? doc : withoutIdleSignals(doc);
+    return { etag: sentEtag(read.etag, doc, sent), settings: sent };
   } catch {
     return { etag: read.etag, settings: read.text };
   }

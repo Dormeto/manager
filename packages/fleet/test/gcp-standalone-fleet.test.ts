@@ -44,8 +44,9 @@ describe('the organization\'s settings pushed to a Google Cloud router', () => {
     expect(await settingsDocument(read, { version: '0.42.0' })).toEqual({ etag: '"e1"', settings: DOC });
     expect(await settingsDocument(read, { version: '0.42.1-dev.2' })).toEqual({ etag: '"e1"', settings: DOC });
     const stripped = { workloads: { defaults: { idleMinutes: 30 }, types: [{ name: 'api', settings: { waitSeconds: 20 } }] } };
-    for (const version of ['0.41.9', null, '', 'dev']) expect(await settingsDocument(read, { version }), String(version)).toEqual({ etag: '"e1"', settings: stripped });
-    expect(await settingsDocument(read)).toEqual({ etag: '"e1"', settings: stripped });
+    // Sent without its idle signals: its ETag marked (final review, minor 5).
+    for (const version of ['0.41.9', null, '', 'dev']) expect(await settingsDocument(read, { version }), String(version)).toEqual({ etag: '"e1-without-idle"', settings: stripped });
+    expect(await settingsDocument(read)).toEqual({ etag: '"e1-without-idle"', settings: stripped });
   });
 
   it('knowsIdleSignals by each cloud\'s first version', () => {

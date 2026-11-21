@@ -11,7 +11,7 @@ import type { Refusal } from '@dormeto/google/router';
 // The commands that fix what the manager can't do on Google Cloud, as the watchdog's probe records them too.
 import { cloudOf, googlePath, googleScopeOf, googleServicePath, googleSourceOf, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
-import { STANDALONE_RECOMMENDABLE, STANDALONE_ROUTER, STANDALONE_ROUTERS, STANDALONE_WINDOWS, knowsIdleSignals, activityPlan, googleActivityPlan, type ActivityQuery, type GoogleBackend, type PlannedSignal, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { STANDALONE_RECOMMENDABLE, STANDALONE_ROUTER, STANDALONE_ROUTERS, STANDALONE_WINDOWS, knowsIdleSignals, sentEtag, activityPlan, googleActivityPlan, type ActivityQuery, type GoogleBackend, type PlannedSignal, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
@@ -1305,7 +1305,10 @@ export function createApi({
     // The idle signals only to a router whose version knows them (plan 5), never before or to one of a version not known.
     const summaries = fleet ? await fleet.listRouters().catch(() => [] as RouterSummary[]) : [];
     const versionOf = (r: Router) => (summaries.find((x) => x.account === accountOfRouter(r) && x.region === r.region)?.version ?? r.installed?.version ?? null) as string | null;
-    const payloadOf = (r: Router) => ({ action: 'manager-settings', settings: knowsIdleSignals('gcp', versionOf(r)) ? settings : withoutIdleSignals(settings), etag: etag ?? '', ...(routerReports ? { events: routerReports.events } : {}) });
+    const payloadOf = (r: Router) => {
+      const sent = knowsIdleSignals('gcp', versionOf(r)) ? settings : withoutIdleSignals(settings);
+      return { action: 'manager-settings', settings: sent, etag: sentEtag(etag ?? '', settings, sent), ...(routerReports ? { events: routerReports.events } : {}) };
+    };
     const results = await each(targets, (r) => invoke(r, payloadOf(r)), callTimeout);
     results.forEach((result, i) => {
       if (result.status === 'rejected') console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', router: targets[i]!.name, error: (result.reason as Error).message }));
@@ -2850,7 +2853,12 @@ export function createApi({
       const candidateId = String(body.candidateId ?? '');
       const c = await discovery?.store.getCandidate(candidateId);
       // A Google Cloud resource the last scan did not list: plan 5's safety net, in words that say what to do.
-      if (!c && GOOGLE_RESOURCE_PATH.test(candidateId) && isProject(candidateId.split('/')[1] ?? '')) throw new HttpError(400, 'bad_request', notListed(candidateId));
+      // The caller's scope first (final review, minor 7): its project and the region its path names (a Cloud SQL path names none).
+      if (!c && GOOGLE_RESOURCE_PATH.test(candidateId) && isProject(candidateId.split('/')[1] ?? '')) {
+        const location = /\/(?:zones|regions)\/([^/]+)\//.exec(candidateId)?.[1];
+        if (!sees(identity, candidateId.split('/')[1], location?.replace(/-[a-z]$/, ''))) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
+        throw new HttpError(400, 'bad_request', notListed(candidateId, (await discovery?.store.getConfig())?.config.standalone === 'on'));
+      }
       if (!c || !sees(identity, c.account, c.region)) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
       // A Google Cloud standalone candidate the last scan found ineligible or onboarded, or no longer pending in scope (the router
       // cannot see a backend service; final review I3).

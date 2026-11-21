@@ -20,7 +20,12 @@ export interface StandaloneWords {
   metric: string;
   database: string;
   databases: string;
-  marker: string;
+  // A failure for a permission on a resource that lost its mark, said where the failure is ('' when the cloud says it otherwise:
+  // AWS's untagged resource is missing). The custom metric's aligner's label (Google Cloud's).
+  permissionHint: string;
+  alignerLabel: string;
+  // What a group's Activity history covers ('' when its whole history is read: AWS reads the group's own metrics).
+  groupHistory: string;
   missing: string;
   missingFix: string;
   onboards: string;
@@ -162,7 +167,9 @@ const AWS: CloudWords = {
     metric: 'A CloudWatch metric',
     database: 'a database',
     databases: 'its databases',
-    marker: 'its dormeto:workload tag',
+    permissionHint: '',
+    alignerLabel: '',
+    groupHistory: '',
     missing: 'It was deleted, or lost its dormeto:workload tag: nothing of it is stopped or started.',
     missingFix: 'Offboard the workload, or tag the resource again (its value is the workload\'s id): the router finds it at its next check.',
     onboards: 'The router of its account and region tags it and its databases, installing itself first if needed.',
@@ -258,18 +265,23 @@ const GOOGLE_CLOUD: CloudWords = {
     metric: 'A Cloud Monitoring metric',
     database: 'a Cloud SQL instance',
     databases: 'its Cloud SQL instances',
-    marker: 'the tag dormeto=managed',
-    // The router cannot read the tag: a resource is missing when Google says it is deleted (router docs/scenarios/standalone.md).
+    permissionHint: 'On Google Cloud a resource that lost the tag dormeto/managed shows as a permission failure: offboard the workload, then onboard it again, which binds the tag.',
+    // The router aligns on its 5-minute periods (gcp/src/idle-signals.mjs, PERIOD_MS).
+    alignerLabel: 'Aligner (each 5 minutes)',
+    // Its VMs are read by their names (gcp-activity.ts), and a group recreates them.
+    groupHistory: 'A managed instance group recreates its VMs and has none while asleep: the history covers its current VMs.',
+    // The router cannot read the tag dormeto/managed: a resource is missing when Google says it is deleted (router
+    // docs/scenarios/standalone.md).
     missing: 'It was deleted: nothing of it is stopped or started.',
     missingFix: 'Offboard the workload.',
-    onboards: 'The manager binds the tag dormeto=managed to it and its Cloud SQL instances, and the project\'s router records the workload.',
+    onboards: 'The manager binds the tag dormeto/managed to it and its Cloud SQL instances, and the project\'s router records the workload.',
     idleSource: 'From Cloud Monitoring\'s metrics of the resource',
     help: {
       idleMinutes: 'Time with every idle signal under its threshold before the workload naps; the check reads them every 5 minutes, and an idle nap comes up to 15 minutes after the window, as Cloud Monitoring publishes the signals late. Nothing wakes it on demand: a schedule, a person or a start made in Google Cloud does.',
       wakeTimeoutSeconds: 'Longest a wake may take before the workload is marked FAILED; the check retries it until it succeeds or a person naps it.',
       idleCpuPercent: 'Idle while the CPU\'s maximum stays under this percentage (Cloud Monitoring\'s CPU utilization of the VM, the group\'s VMs or the Cloud SQL instance).',
       idleNetworkBytes: 'Idle while the bytes in and out, a minute, stay under this number (Cloud Monitoring\'s received and sent bytes of the VM or the group\'s VMs); a Cloud SQL instance\'s network is not read.',
-      idleMetric: 'Idle while one Cloud Monitoring metric stays under its threshold, aligned each minute; ${resource} in its filter is the resource\'s name. A Cloud SQL instance\'s built-in: its connections under 1.',
+      idleMetric: 'Idle while one Cloud Monitoring metric stays under its threshold, aligned on 5-minute periods; ${resource} in its filter is the resource\'s name. A Cloud SQL instance\'s built-in: its connections under 1.',
     },
     ranges: { wakeTimeoutSeconds: '60 to 1,700 s; built-in 10 min, 28 min 20 s for a Cloud SQL instance.' },
     builtIn: { idleCpuPercent: 'under 5 %, off for a Cloud SQL instance', idleNetworkBytes: 'off', idleMetric: 'off; a Cloud SQL instance\'s connections under 1' },

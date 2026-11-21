@@ -14,7 +14,8 @@ describe('the settings pushed to a Google Cloud router', () => {
   it('hold no idle signal, everything else as the file holds it, with its ETag', async () => {
     const doc = await settingsDocument({ read: async () => ({ etag: '"e1"', text: JSON.stringify(DOC) }) });
     expect(doc).toEqual({
-      etag: '"e1"',
+      // Marked: sent without its idle signals (final review, minor 5).
+      etag: '"e1-without-idle"',
       settings: { workloads: { hibernate: false, defaults: { idleMinutes: 30 }, types: [{ name: 'ecs', settings: { waitSeconds: 20 } }, { name: 'api', tags: { k: 'v' } }] }, waitingPage: { mode: 'template' } },
     });
   });

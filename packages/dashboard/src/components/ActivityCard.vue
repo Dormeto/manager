@@ -60,6 +60,8 @@ const rows = computed(() => (props.status.idle ?? []).map((s) => ({
 const nap = computed(() => {
   const s = props.status;
   if (s.pauses?.length) return 'never while paused';
+  // Failed (router 4c1fe78): its wake retried, or its nap tried again after its idle window.
+  if (s.state === 'FAILED') return s.failure?.step === 'nap' ? 'its nap is tried again after its idle window' : 'not while it is failed: its wake is retried until it succeeds or a person naps it';
   if (!s.nap) return (s.idle ?? []).some((x) => x.applies) ? 'not while a signal is over its threshold' : 'never on idle: no idle signal applies (schedules and people only)';
   // The router's latest time: the signals read 10 minutes behind, at a check every 5 minutes (the review's M12).
   const latest = s.nap.latestAt ? `, at the latest ${new Date(s.nap.latestAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '';
@@ -88,6 +90,7 @@ const nap = computed(() => {
     <p v-for="r in rows.filter((x) => x.reason)" :key="`${r.key}-reason`" class="text-body-small text-medium-emphasis px-4 mb-1">{{ r.name }}: {{ r.reason }}</p>
     <v-card-text class="text-body-medium" data-test="nap-estimate">Nap: {{ nap }}</v-card-text>
     <p class="text-body-small text-medium-emphasis px-4 mb-2">{{ words.signalsLate }}</p>
+    <p v-if="words.groupHistory && status.backends?.some((b) => b.kind === 'asg')" data-test="group-history" class="text-body-small text-medium-emphasis px-4 mb-2">{{ words.groupHistory }}</p>
     <DmLoader v-if="reading" label="Reading its signals over 7 days…" :size="40" />
     <v-card-text v-else-if="historyError" class="pt-0">
       <v-alert data-test="activity-error" type="warning" variant="tonal" density="compact">No history: {{ historyError }}</v-alert>

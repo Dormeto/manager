@@ -771,7 +771,11 @@ export function createEngine(deps: EngineDeps) {
       if (c && isStandalone(c)) return { target: { account: c.account, region: c.region, resourceArn: c.resourceArn ?? c.id }, activeKey: `RES#${c.resourceArn ?? c.id}` };
       if (c && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
       // A Google Cloud resource the last scan did not list (plan 5's safety net: the router cannot see a backend service).
-      if (!c && GOOGLE_RESOURCE_PATH.test(String(input.candidateId))) throw new Error(notListed(String(input.candidateId)));
+      if (!c && GOOGLE_RESOURCE_PATH.test(String(input.candidateId))) {
+        // The advice as the perimeter is (final review, minor 7), when the store says it.
+        const stored = await (deps.discovery as { getConfig?: () => Promise<{ config: { standalone?: string } } | null> } | undefined)?.getConfig?.().catch(() => null);
+        throw new Error(notListed(String(input.candidateId), stored?.config.standalone === 'on'));
+      }
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
       return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn ?? '' }, activeKey: `TG#${c.targetGroupArn}` };
     }

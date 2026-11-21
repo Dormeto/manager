@@ -42,7 +42,7 @@ Workload defaults. On Google Cloud it adds a second router of the project `dorme
 with five standalone workloads: `batch` (a VM, awake, with its own Cloud Monitoring metric), `render-workers` (a managed
 instance group asleep by its schedule), `orders-sql` (a Cloud SQL instance asleep on its connections, its network set and
 not read), `etl-vm` (a VM whose wake timed out, retried) and `reports-sql` (a Cloud SQL instance with a kept permission
-failure naming the tag `dormeto=managed`). The project's candidates add a VM, an empty group and a Cloud SQL instance to
+failure naming the tag `dormeto/managed`). The project's candidates add a VM, an empty group and a Cloud SQL instance to
 onboard (the last in europe-west3, where the project has no router: the dialog asks which), one of each family the scan
 refuses, and the run says the project `shop-prod`'s Cloud SQL instances were not listed. The first router of `dormeto-dev`
 keeps its HTTP workloads and its version. A dashboard of your own beside a running one takes another port and cache directory (a Vite

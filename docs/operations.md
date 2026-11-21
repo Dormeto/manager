@@ -50,20 +50,33 @@ once the perimeter's `standalone` is `on`; each is a candidate of its own resour
 
 A Google Cloud standalone workload is a Compute Engine VM outside a managed instance group, a managed instance group, or a
 Cloud SQL instance, that no backend service uses. With the perimeter's `standalone` on, each project's scan lists them, each a
-candidate of its path (`id` and `resource`, `cloud: "gcp"`), with the Google Cloud router's reasons; a VM or a group that backs
-any backend service is never eligible (the router cannot see one it does not route).
+candidate of its path (`id` and `resource`, `cloud: "gcp"`), with the Google Cloud router's reasons. The scan is the safety
+net the router cannot be (the router cannot see a backend service it does not route):
+- a VM or a group that backs any backend service, through an instance group or a zonal network endpoint group of VMs
+  (`GCE_VM_IP_PORT` or `GCE_VM_IP`: a passthrough load balancer's too), is never eligible;
+- a managed group in a target pool is not eligible (its own `targetPools`);
+- every VM of a region with a forwarding rule to a target pool or a target instance is not eligible: the discovery role
+  cannot read their members (`compute.targetPools.list` and `compute.targetInstances.list` would narrow it to them);
+- every VM and group of a scope the backend-service or forwarding-rule listing missed (unreachable, or warned) is not
+  eligible, `global` covering the whole project;
+- the run says each. Not checked: a hybrid network endpoint group pointing at a VM's IP.
+
+At onboarding the API checks the resource again, as the discovery account, the same way, and refuses it when anything serves
+it or the check cannot be made; it also refuses a candidate no longer pending in scope (out of scope, excluded, dismissed, gone),
+each in words that say what to do.
 
 - **Onboarding** takes the resource's path as `candidateId`, only from the last scan's eligible candidates. It goes to the
   router of the resource's region, else the project's only router; with several and none in that region, `router` names one
-  (the dialog asks). The manager binds the tag `dormeto=managed` to the resource and its Cloud SQL companions, then the router
+  (the dialog asks). The manager binds the tag `dormeto/managed` to the resource and its Cloud SQL companions, then the router
   records the workload; `verify` waits for it awake with its resource among its backends.
-- **What marks the resource** is the tag `dormeto=managed`, which the router's roles require for every change but cannot
+- **What marks the resource** is the tag `dormeto/managed`, which the router's roles require for every change but cannot
   read: the workload is missing (`resourceMissing`) only once Google says the resource is deleted. A tag binding removed
   shows as a permission failure naming the tag, kept on the workload until a nap or a wake succeeds.
 - **Its settings** are AWS's five, at a Google Cloud router's and workload's levels, with `idleMetric` in Google Cloud's shape
   (`{ type, filter?, aligner, below }`, `${resource}` in the filter the resource's name); the organization's level and a type
-  hold either cloud's metric, which a router of the other cloud ignores. A Cloud SQL instance's network is not a signal; the
-  wake timeout is at most 1,700 s.
+  hold either cloud's metric, which a router of the other cloud ignores, aligned on 5-minute periods. A Cloud SQL instance's
+  network is not a signal; the wake timeout is at most 1,700 s. A managed group's Activity history reads its current VMs by
+  their names: a group recreates its VMs and has none while asleep, so the history covers its current VMs only.
 - **A Cloud SQL instance the router may not read** (a router installed without `--with cloud-sql`) is neither napped nor
   woken nor retried, and the router's health warns `cloud-sql-unreadable` with the count of such workloads: install it again
   with `--with cloud-sql`, or offboard the workload.

@@ -2,6 +2,8 @@
 // a VM, a managed instance group, a Cloud SQL instance, "a start made in Google Cloud", Cloud Monitoring, what marks a resource;
 // the custom metric's form in the level's cloud's shape (the organization's and a type's pick the cloud); the Activity card;
 // a failed workload retried, napped by a person to end the retries; Discovery's candidates; the demo's data.
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
@@ -141,7 +143,7 @@ describe('a Google Cloud standalone workload\'s page', () => {
       const items = [...document.querySelectorAll('[data-test="onboard-standalone"]')].map((e) => e.textContent!.trim());
       expect(items[2], resource).toBe('Nothing wakes it on demand: a schedule, a person or a start made in Google Cloud does.');
       expect(items.join(' '), resource).not.toMatch(/AWS|EC2|RDS|Aurora/);
-      expect(items[0], resource).toContain('dormeto=managed');
+      expect(items[0], resource).toContain('dormeto/managed');
       w.unmount();
     }
   });
@@ -259,5 +261,25 @@ describe('onboarding a Google Cloud resource with a custom metric (final review 
     await flushPromises();
     expect((w.emitted('submit')?.[0]?.[0] as { settings: Record<string, unknown> }).settings).toEqual({ idleMetric: { type: 'custom.googleapis.com/queue/depth', aligner: 'ALIGN_MAX', below: 1 } });
     w.unmount();
+  });
+});
+
+// The final review's minors 1 and 2: the aligner's period is the router's; the tag is named as Google names it.
+describe('Google Cloud\'s standalone words, against the router and Google', () => {
+  const ROUTER = resolve(import.meta.dirname, '../../../../router/lambda/src/lib/activity.mjs');
+  it.skipIf(!existsSync(ROUTER))('say the metric is aligned on the router\'s period', async () => {
+    // The router's `export const PERIOD_MS = <n> * 60_000;` (its module is not importable from the dashboard's test environment).
+    const minutes = Number(/export const PERIOD_MS = (\d+) \* 60_000;/.exec(readFileSync(ROUTER, 'utf8'))?.[1]);
+    expect(minutes).toBeGreaterThan(0);
+    expect(cloudWords('gcp').standalone.help.idleMetric).toContain(`aligned on ${minutes}-minute periods`);
+    expect(cloudWords('gcp').standalone.alignerLabel).toBe(`Aligner (each ${minutes} minutes)`);
+    expect(JSON.stringify(cloudWords('gcp'))).not.toMatch(/each minute/);
+  });
+
+  it('name the tag dormeto/managed in the manager\'s own texts (a router\'s message is quoted as it comes)', () => {
+    const root = resolve(import.meta.dirname, '../../..');
+    const own = ['packages/dashboard/src/cloud-words.ts', 'packages/dashboard/src/components/OnboardDialog.vue', 'docs/operations.md', 'docs/development.md', 'docs/organization-access.md', 'CHANGELOG.md'];
+    for (const file of own) expect(readFileSync(resolve(root, file), 'utf8'), file).not.toContain('dormeto=managed');
+    expect(cloudWords('gcp').standalone.onboards).toContain('dormeto/managed');
   });
 });

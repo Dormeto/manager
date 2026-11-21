@@ -258,3 +258,39 @@ describe('a router\'s reports sent again or out of order', () => {
     }
   });
 });
+
+// The final review's minor 5: the push decides on the version the report carries (the registry's only when it carries none), so
+// a router upgraded to the first version that knows the idle signals gets them at its next report, and one rolled back does not.
+describe('the organization\'s settings pushed by the version the report carries', () => {
+  const IDLE = '{"workloads":{"defaults":{"idleMinutes":30,"idleCpuPercent":3}}}';
+  const pushed = async (registered: string, reported: string | undefined) => {
+    const w = world({ registered: false });
+    await w.register({ version: registered });
+    w.s3.text = IDLE;
+    const detail = checked(T0 - 10 * S, [], undefined, '"stale"');
+    if (reported) detail.router.version = reported;
+    else delete (detail.router as Json).version;
+    await w.report(relayed('Router checked', detail));
+    return (w.calls.at(-1)?.body.settings as Json | undefined)?.workloads.defaults;
+  };
+  it('carries the idle signals to a router that reports the version that knows them, whatever the registry says', async () => {
+    expect(await pushed('0.41.0', '0.42.0')).toEqual({ idleMinutes: 30, idleCpuPercent: 3 });
+    expect(await pushed('0.42.0', '0.41.0')).toEqual({ idleMinutes: 30 });
+    expect(await pushed('0.42.0', undefined)).toEqual({ idleMinutes: 30, idleCpuPercent: 3 });
+  });
+
+  it('marks a document sent without its idle signals, so an upgraded router holding it gets the whole one, and an older one is not sent it again', async () => {
+    const held = async (version: string, etag: string) => {
+      const w = world();
+      w.s3.text = IDLE;
+      const detail = checked(T0 - 10 * S, [], undefined, etag);
+      detail.router.version = version;
+      await w.report(relayed('Router checked', detail));
+      return w.calls.map((c) => [c.body.etag, (c.body.settings as Json).workloads.defaults]);
+    };
+    expect(await held('0.41.0', '"stale"')).toEqual([['"current-without-idle"', { idleMinutes: 30 }]]);
+    expect(await held('0.41.0', '"current-without-idle"')).toEqual([]);
+    expect(await held('0.42.0', '"current-without-idle"')).toEqual([['"current"', { idleMinutes: 30, idleCpuPercent: 3 }]]);
+    expect(await held('0.42.0', '"current"')).toEqual([]);
+  });
+});

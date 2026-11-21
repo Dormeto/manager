@@ -62,7 +62,8 @@ export function createSettingsPush({ settings, registry, google, events, env = '
   routerVersion?: string | undefined;
   log?: Log;
 }) {
-  return async function push(account: string, region: string, held: string | null): Promise<void> {
+  // `reported`: the version the router's report carries (final review, minor 5), the registry's when it carries none.
+  return async function push(account: string, region: string, held: string | null, reported?: string | null): Promise<void> {
     try {
       const current = await settings.etag();
       if (!current || current === held) return;
@@ -71,8 +72,9 @@ export function createSettingsPush({ settings, registry, google, events, env = '
         log?.warn('ManagerSettingsNotPushed', { account, region, error: 'the router is not registered' });
         return;
       }
-      const doc = await settingsDocument(settings, { version: router.version ?? null });
-      if (!doc) return;
+      const doc = await settingsDocument(settings, { version: reported ?? router.version ?? null });
+      // Held already: the whole document, or the one without the idle signals this version gets.
+      if (!doc || doc.etag === held) return;
       const answer = await actOnRouter(await google.current(), router, {
         action: 'manager-settings', settings: doc.settings, etag: doc.etag, ...(events ? { events } : {}),
       }, { timeoutMs: GOOGLE_CALL_MS, env, routerVersion }) as Json | null;
@@ -93,7 +95,7 @@ export function createGoogleReports({ ownAccount, registry, ingest, push, log }:
   ownAccount: string | undefined;
   registry: Pick<Registry, 'get'>;
   ingest: (event: RouterEvent) => Promise<unknown>;
-  push: (account: string, region: string, held: string | null) => Promise<void>;
+  push: (account: string, region: string, held: string | null, reported?: string | null) => Promise<void>;
   log?: Log;
 }) {
   const refuse = (event: ReportedEvent, reason: string): void => {
@@ -112,7 +114,8 @@ export function createGoogleReports({ ownAccount, registry, ingest, push, log }:
     await ingest(googleEvent({ account: project, region, name: router.name }, detailType, detail));
     if (detailType === 'Router checked' && chunkOf(detail.chunk)?.index === 0) {
       const held = typeof detail.managerSettings?.etag === 'string' && detail.managerSettings.etag ? detail.managerSettings.etag as string : null;
-      await push(project, region, held);
+      const version = isObject(detail.router) && typeof detail.router.version === 'string' && detail.router.version ? detail.router.version : null;
+      await push(project, region, held, version);
     }
   };
 }

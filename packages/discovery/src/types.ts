@@ -158,7 +158,11 @@ export type DiscoveredRule = ScannedRule | StandaloneRule;
 // A Google Cloud standalone resource the last scan did not list (plan 5's safety net: the router cannot see a backend service that
 // uses it), as the API and the operations refuse it.
 export const GOOGLE_RESOURCE_PATH = /^projects\/[^/]+\/((zones|regions)\/[^/]+\/(instances|instanceGroupManagers)|instances)\/[^/]+$/;
-export const notListed = (path: string) => `${path} is not a standalone candidate of the last discovery run: turn on Standalone resources in the discovery perimeter, run discovery, then onboard it from its candidate (the scan checks what the router cannot: that no backend service uses it)`;
+// `standaloneOn`: the perimeter's standalone scan (final review, minor 7): off, turn it on; on, the resource was not found, or it
+// is an HTTP candidate's backend or left out.
+export const notListed = (path: string, standaloneOn = false) => (standaloneOn
+  ? `${path} is not a standalone candidate of the last discovery run: run discovery, then onboard it from its candidate if it is listed (an HTTP candidate's backend, or a resource left out by the perimeter or an exclusion, is not; the scan checks what the router cannot: that no load balancer uses it)`
+  : `${path} is not a standalone candidate of the last discovery run: turn on Standalone resources in the discovery perimeter, run discovery, then onboard it from its candidate (the scan checks what the router cannot: that no backend service uses it)`);
 export const isStandalone = <T extends { kind?: string }>(c: T): c is Extract<T, { kind: 'standalone' }> => c.kind === 'standalone';
 
 export interface Decision {

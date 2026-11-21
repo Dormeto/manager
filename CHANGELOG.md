@@ -22,7 +22,7 @@ upgraded. What differs between the clouds: the resources above; the custom metri
 Cloud Monitoring metric type with an optional filter and an aligner on Google Cloud: the dashboard's form takes the level's
 cloud's, and the organization's level and a type pick the cloud, a router of the other cloud ignoring it); what marks the
 resource (AWS's tag `dormeto:workload` with the workload's id, which the router reads, so an untagged resource is missing;
-on Google Cloud the tag `dormeto=managed` the manager binds, which the router's roles require but cannot read, so a resource
+on Google Cloud the tag `dormeto/managed` the manager binds, which the router's roles require but cannot read, so a resource
 is missing only once Google says it is deleted, and a permission failure names that tag); a Cloud SQL instance's network,
 not a signal; the wake timeout, at most 1,700 s on Google Cloud; and Spot capacity: every Spot instance is refused on AWS,
 while Google Cloud accepts Spot and preemptible VMs (a VM Google preempts is read as a stop made outside Dormeto).
@@ -30,8 +30,15 @@ while Google Cloud accepts Spot and preemptible VMs (a VM Google preempts is rea
   instance groups and Cloud SQL instances, each a candidate of its own path (`id` and `resource`, `cloud: "gcp"`, no
   `resourceArn`): eligible, ineligible in the Google Cloud router's words (a managed group's member, a GKE node, a GPU, a local
   SSD, a stateful group, a regional group with the target shape EVEN, a read replica), or managed by a router's standalone
-  workload. A VM or a group that backs any backend service is never eligible: the backend of an HTTP candidate is left out,
-  one behind another backend service is listed with it (`… backs backend service <s>: it belongs to an HTTP workload`).
+  workload. A VM or a group that backs any backend service, through an instance group or a zonal network endpoint group of
+  VMs (a passthrough load balancer's too), is never eligible: the backend of an HTTP candidate is left out, one behind another
+  backend service is listed with it (`… backs backend service <s>: it belongs to an HTTP workload`). Where the scan cannot tell,
+  it is not eligible either: a managed group in a target pool; every VM of a region with a forwarding rule to a target pool or a
+  target instance, whose members the discovery role cannot read (`… its region has a load balancer the manager cannot read`);
+  every VM and group of a scope the backend-service or forwarding-rule listing missed (`… its load balancers could not be
+  read: <scope>`). The run says each. At onboarding the API checks the resource again as the discovery account, and refuses
+  it when anything serves it, when the check cannot be made, or when its candidate is no longer pending in scope (out of
+  scope, excluded, dismissed, gone).
   Criteria take its labels, region and kind (`cloudsql-instance` too); an exclusion takes its path. Its idle share is
   read from Cloud Monitoring: a VM's CPU, each VM of a group's, a Cloud SQL instance's connections. **Run `dormeto gcp connect`
   again to list Cloud SQL instances:** the discovery account's role `dormetoDiscovery` gains `cloudsql.instances.list` and

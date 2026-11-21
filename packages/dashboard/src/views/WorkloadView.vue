@@ -357,6 +357,8 @@ const rows = (kind: keyof Counts) => {
 // A failed standalone workload: a person's nap ends its retries (the router accepts it, router 4c1fe78); an HTTP one naps awake.
 const failedStandalone = computed(() => standaloneKind.value && status.value?.state === 'FAILED');
 const nappable = computed(() => status.value?.state === 'AWAKE' || failedStandalone.value);
+// What a nap may suspend or hibernate: VMs or instances; a standalone database (Cloud SQL, RDS on Google Cloud's row) has none.
+const suspendable = computed(() => !standaloneKind.value || Boolean(status.value?.backends.some((b) => b.kind === 'instance' || b.kind === 'asg')));
 const failureDetail = computed(() => {
   const s = status.value;
   if (!s?.failure) return '';
@@ -505,6 +507,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure, cloud)">
     <div class="text-body-medium">{{ status.failure.message }}</div>
     <div class="text-body-small text-medium-emphasis mt-1">{{ failureDetail }}</div>
+    <div v-if="standaloneKind && status.failure.kind === 'permission' && words.standalone.permissionHint" data-test="permission-hint" class="text-body-small mt-1">{{ words.standalone.permissionHint }}</div>
     <v-btn v-if="failedStandalone && canNap && !pauses.length" data-test="failure-nap" class="mt-2" size="small" variant="tonal" :prepend-icon="mdiPowerSleep" @click="confirm = 'nap'">{{ status.failure.step === 'nap' ? 'Nap now' : 'Nap to end the retries' }}</v-btn>
   </v-alert>
   <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" :title="`On fallback ${words.types}`">
@@ -697,7 +700,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         <v-card-text v-if="!gcp && status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
           Hibernate: <strong>does not apply</strong> (EC2 instances outside an Auto Scaling group only)
         </v-card-text>
-        <v-card-text v-else-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
+        <v-card-text v-else-if="status.hibernation && suspendable" data-test="hibernate" class="pt-0 text-body-medium">
           <div class="d-flex flex-wrap align-center ga-2">
             <span>{{ words.hibernate }} <strong>{{ hibernationLine(status.hibernation, cloud) }}</strong></span>
             <v-spacer />
@@ -730,7 +733,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </v-avatar>
       </template>
       <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
-        ? (standaloneKind ? `${failedStandalone ? 'Its wake is no longer retried: its' : 'Its'} backends stop, then ${words.standalone.databases}. Nothing wakes it on demand: a schedule, a person or ${words.standalone.startOutside} does.` : 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.')
+        ? (standaloneKind ? `${!failedStandalone ? 'Its' : status?.failure?.step === 'nap' ? 'Its nap is tried again now: its' : 'Its wake is no longer retried: its'} backends stop, then ${words.standalone.databases}. Nothing wakes it on demand: a schedule, a person or ${words.standalone.startOutside} does.` : 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.')
         : confirm === 'offboard'
           ? words.offboarding
           : words.waking }}</v-card-text>

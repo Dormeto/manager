@@ -35,3 +35,11 @@ export function withoutIdleSignals(doc: unknown): unknown {
     },
   };
 }
+
+// The ETag a document is sent with: its own when sent whole, marked when its idle signals were taken out (final review, minor 5),
+// so that a router holding the document without them is sent the whole one once its version knows them, and an older one is not
+// sent it again.
+export function sentEtag(etag: string, doc: unknown, sent: unknown): string {
+  if (JSON.stringify(doc) === JSON.stringify(sent)) return etag;
+  return etag.endsWith('"') ? `${etag.slice(0, -1)}-without-idle"` : `${etag}-without-idle`;
+}

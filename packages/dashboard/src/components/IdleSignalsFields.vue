@@ -60,7 +60,7 @@ const addResource = () => { const g = form.value.gcp!; g.filter = `${g.filter}${
           :hint="`${RESOURCE} is the resource's name; the filter adds to the metric type's`" persistent-hint>
           <template #append-inner><v-btn size="x-small" variant="tonal" data-test="idle-filter-resource" @click="addResource">{{ RESOURCE }}</v-btn></template>
         </v-text-field>
-        <v-select v-model="form.gcp.aligner" data-test="idle-metric-aligner" :items="[...IDLE_METRIC_ALIGNERS]" label="Aligner (each minute)" density="compact" />
+        <v-select v-model="form.gcp.aligner" data-test="idle-metric-aligner" :items="[...IDLE_METRIC_ALIGNERS]" :label="words.alignerLabel" density="compact" />
         <v-text-field v-model="form.gcp.below" data-test="idle-metric-below" type="number" label="Idle under" density="compact" />
       </template>
       <template v-else>
