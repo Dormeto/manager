@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..', '..');
-const TOPICS = ['replay', 'prices', 'scan', 'stopped'];
+const TOPICS = ['replay', 'prices', 'scan', 'stopped', 'standalone-idle'];
 
 async function files(dir) {
   const out = {};
@@ -121,5 +121,58 @@ test('nothing of the run itself: no temporary path, no run time', () => {
   for (const [path, text] of Object.entries(first)) {
     assert.ok(!text.includes(tmpdir()) && !text.includes(ROOT), `${path}: a local path`);
     if (path.endsWith('.json') && !path.startsWith('cache/')) assert.ok(!text.includes('"generatedAt"'), `${path}: a run time`);
+  }
+});
+
+// The standalone workloads' cases (plan 3's Interfaces, task M49): the standalone scan, the signals and the idle share, the
+// busy points replayed through the idle window advisor.
+const casesOf = (topic) => JSON.parse(first[`${topic}.json`]).cases;
+const has = (cases, prefix) => cases.filter((c) => c.name.startsWith(prefix));
+
+test('the scan\'s standalone cases cover each kind, each ineligibility, managed, left out, and each list refused', () => {
+  const standalone = casesOf('scan').filter((c) => c.input.standalone === true);
+  assert.ok(standalone.length >= 3);
+  const rules = standalone.flatMap((c) => c.output.rules ?? []).filter((r) => r.kind === 'standalone');
+  for (const kind of ['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster']) assert.ok(rules.some((r) => r.backend.kind === kind && r.eligibility === 'eligible'), `${kind} eligible`);
+  const reasons = rules.map((r) => r.reason ?? '').join('\n');
+  for (const said of ['is in Auto Scaling group', 'has an instance store root volume', 'is a Spot instance', 'feeds target group', 'holds EKS nodes', 'daemon scheduling strategy', 'is a member of Aurora cluster', 'is a read replica', 'is Aurora Serverless v1']) assert.ok(reasons.includes(said), said);
+  assert.ok(rules.some((r) => r.eligibility === 'managed'), 'managed by its own tag');
+  const problems = standalone.flatMap((c) => c.output.standalone?.problems ?? []).join('\n');
+  for (const said of ['RDS instances not listed', 'RDS clusters not listed', 'resource tags of ECS services could not be read', 'the idle share of']) assert.ok(problems.includes(said), said);
+  const answers = standalone.flatMap((c) => Object.keys(c.input.answers ?? {}));
+  for (const call of ['ec2.describeInstances', 'rds.describeDBInstances', 'rds.describeDBClusters', 'cloudwatch.getMetricData', 'ecs.describeServices']) assert.ok(answers.includes(call), call);
+  // HTTP cases keep their output: no standalone key.
+  for (const c of casesOf('scan').filter((x) => x.input.function === 'scanRegion' && x.input.standalone !== true)) assert.ok(!('standalone' in c.output), c.name);
+});
+
+test('the standalone signals\' topic has each function, with pages and an unreadable query among its recorded answers', () => {
+  const cases = casesOf('standalone-idle');
+  for (const fn of ['defaultSignals', 'standaloneIdle', 'activityPlan', 'activityPoints', 'signalValues', 'busyMinutes']) assert.ok(cases.some((c) => c.input.function === fn), fn);
+  const results = cases.flatMap((c) => (c.input.answers?.['cloudwatch.getMetricData'] ?? []).flatMap((e) => [e.output?.NextToken ? 'paged' : null, ...(e.output?.MetricDataResults ?? []).map((r) => r.StatusCode)]));
+  assert.ok(results.includes('paged') && results.includes('Forbidden') && results.includes('PartialData'), 'pages, PartialData and an unreadable query');
+  assert.ok(cases.some((c) => c.input.function === 'standaloneIdle' && c.output.failed.length > 0), 'a failed batch');
+});
+
+test('the replay\'s standalone cases: busy points through the advisor from 5 minutes to 24 hours', () => {
+  const cases = has(casesOf('replay'), 'standaloneAdvice: ');
+  assert.deepEqual(cases.map((c) => c.name.split(': ')[1].split(',')[0]), ['always busy', 'always idle', 'a daily job', 'stopped for part of the window']);
+  for (const c of cases) assert.deepEqual(c.output.windows.map((w) => w.minutes), [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720, 1440], c.name);
+});
+
+// The cases the CLI holds (the last export it committed): each is exported again as it was (the existing topics byte-equal
+// but for the versions and the commit). Skipped without the cli checkout beside the manager.
+const CLI = join(ROOT, '..', 'cli', 'testdata', 'parity');
+test('the cases the CLI holds are exported unchanged', async (t) => {
+  let held;
+  try {
+    held = await files(CLI);
+  } catch {
+    t.skip('no cli checkout');
+    return;
+  }
+  const canonical = (v) => JSON.stringify(v, (_, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
+  for (const topic of ['replay', 'prices', 'scan', 'stopped']) {
+    const exported = new Map(casesOf(topic).map((c) => [c.name, canonical(c)]));
+    for (const c of JSON.parse(held[`${topic}.json`]).cases) assert.equal(exported.get(c.name), canonical(c), `${topic}: ${c.name}`);
   }
 });

@@ -18,8 +18,9 @@ import * as replay from './cases/replay.mjs';
 import * as prices from './cases/prices.mjs';
 import * as scan from './cases/scan.mjs';
 import * as stopped from './cases/stopped.mjs';
+import * as standaloneIdle from './cases/standalone-idle.mjs';
 
-const TOPICS = [replay, prices, scan, stopped];
+const TOPICS = [replay, prices, scan, stopped, standaloneIdle];
 // Every case runs at this time (input.now where the function takes it).
 const NOW = '2026-10-12T08:00:00.000Z';
 

@@ -77,11 +77,19 @@ export function regionModel(spec) {
     'autoscaling.describeAutoScalingGroups': (i) => (i.AutoScalingGroupNames
       ? { AutoScalingGroups: (spec.autoScalingGroups ?? []).filter((g) => i.AutoScalingGroupNames.includes(g.AutoScalingGroupName)) }
       : page(spec.autoScalingGroups ?? [], i.NextToken, size, 'AutoScalingGroups', 'NextToken')),
-    'ec2.describeInstances': (i) => ({ Reservations: [{ Instances: instances(i.InstanceIds) }] }),
+    // By their ids, or every instance of the region in pages (the standalone scan), a reservation a page.
+    'ec2.describeInstances': (i) => {
+      if (i.InstanceIds) return { Reservations: [{ Instances: instances(i.InstanceIds) }] };
+      const { Instances, NextToken } = page(instances(Object.keys(spec.instances ?? {})), i.NextToken, size, 'Instances', 'NextToken');
+      return { Reservations: [{ Instances }], ...(NextToken ? { NextToken } : {}) };
+    },
     'ec2.describeSecurityGroups': (i) => ({ SecurityGroups: i.GroupIds.filter((id) => spec.securityGroups?.[id]).map((GroupId) => ({ GroupId, IpPermissions: [{ IpProtocol: 'tcp', UserIdGroupPairs: spec.securityGroups[GroupId].map((g) => ({ GroupId: g })) }] })) }),
     'ecs.listClusters': (i) => page(Object.keys(spec.ecsClusters ?? {}), i.nextToken, size, 'clusterArns', 'nextToken'),
     'ecs.listServices': (i) => page((spec.ecsClusters?.[ecsCluster(i.cluster)] ?? []).map((s) => s.serviceArn), i.nextToken, size, 'serviceArns', 'nextToken'),
-    'ecs.describeServices': (i) => ({ services: (spec.ecsClusters?.[ecsCluster(i.cluster)] ?? []).filter((s) => i.services.includes(s.serviceArn)) }),
+    // A service's tags only when asked for (include: ['TAGS']), as ECS answers.
+    'ecs.describeServices': (i) => ({
+      services: (spec.ecsClusters?.[ecsCluster(i.cluster)] ?? []).filter((s) => i.services.includes(s.serviceArn)).map(({ tags, ...s }) => (i.include?.includes('TAGS') && tags ? { ...s, tags } : s)),
+    }),
     'ecs.describeTaskDefinition': (i) => ({ taskDefinition: spec.taskDefinitions?.[i.taskDefinition] }),
     'rds.describeDBInstances': (i) => {
       const all = spec.dbInstances ?? [];

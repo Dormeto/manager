@@ -14,6 +14,9 @@ export { IDLE_WINDOWS, checkMinutesOf, idleWindowAdvice, recommendWindow, replay
 export { createPriceBook, NO_DISCOUNTS } from './packages/fleet/src/prices.ts';
 export { DORMETO_COST, baselineHours, savingsOf } from './packages/fleet/src/savings.ts';
 export { scanRegion } from './packages/discovery/src/scan.ts';
+export { defaultSignals, standaloneIdle } from './packages/discovery/src/standalone-idle.ts';
+export { activityPoints } from './packages/discovery/src/activity-step.ts';
+export { STANDALONE_RECOMMENDABLE, STANDALONE_WINDOWS, activityPlan, busyMinutes, signalValues } from './packages/fleet/src/activity.ts';
 export { decide, matches, resourceTagsMatch, scanAccounts, targetPairs } from './packages/discovery/src/filters.ts';
 export { clustersOf, kubernetesBackend } from './packages/discovery/src/kubernetes.ts';
 export { loadInventory } from './packages/discovery/src/org.ts';

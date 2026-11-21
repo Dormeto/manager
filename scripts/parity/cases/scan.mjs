@@ -1,6 +1,7 @@
 // Discovery's scan of a region (discovery src/scan.ts, kubernetes.ts, filters.ts, org.ts): the cases of discovery
 // test/scan.test.ts (its region: test/scan-fakes.ts), kubernetes.test.ts, filters.test.ts (fixtures.ts) and org.test.ts,
 // and the edge cases of the spec's §6 (Kubernetes owners, an empty region).
+import { createHash } from 'node:crypto';
 import { eksCluster, error, regionModel } from './aws.mjs';
 
 export const name = 'scan';
@@ -308,7 +309,117 @@ export function cases(now) {
     { name: 'resourceTagsMatch: no criterion', input: { function: 'resourceTagsMatch', wanted: {}, tags: {} } },
     { name: 'loadInventory: the OU tree walked, pages followed, each active account with its OU path from the root', input: { function: 'loadInventory', tags: false }, model: organizations },
     { name: 'loadInventory: account tags read when asked', input: { function: 'loadInventory', tags: true }, model: organizations },
+    // The standalone scan (vision standalone workloads design §6; discovery test/standalone-scan.test.ts): the router's region
+    // with standalone resources beside its load balancer, and their idle share.
+    standalone('each kind of resource no route uses, eligible, ineligible in the router\'s words, managed, or left out', standaloneRegion(now, { points: true })),
+    standalone('the discovery role without the RDS actions: the other kinds listed, each RDS list said', standaloneRegion(now, {
+      fail: { 'rds.describeDBInstances': denied('rds:DescribeDBInstances'), 'rds.describeDBClusters': denied('rds:DescribeDBClusters') },
+    })),
+    standalone('the ECS services\' tags refused: described without them, said', standaloneRegion(now, {
+      fail: { 'ecs.describeServices': (i) => (i.include ? denied('ecs:ListTagsForResource') : undefined) },
+    })),
+    standalone('CloudWatch failing for the idle share: no share, said', standaloneRegion(now, {
+      fail: { 'cloudwatch.getMetricData': (i) => (i.MetricDataQueries[0].MetricStat.Period === 300 ? error('ThrottlingException', 'Rate exceeded') : undefined) },
+    })),
   ];
+
+  function standalone(title, spec) {
+    return { name: `scanRegion: standalone: ${title}`, input: { function: 'scanRegion', where: WHERE, now, ports: [...BASE, 'ec2', 'rds'], standalone: true }, model: regionModel(spec) };
+  }
+}
+
+// --- The standalone scan's region (discovery test/standalone-fakes.ts) -----------------------------------------------------
+const ACCOUNT = '111122223333';
+const REGION = 'eu-west-1';
+const sha = (arn) => createHash('sha256').update(arn).digest('hex').slice(0, 16);
+const instanceArn = (id) => `arn:aws:ec2:${REGION}:${ACCOUNT}:instance/${id}`;
+const groupArn = (n) => `arn:aws:autoscaling:${REGION}:${ACCOUNT}:autoScalingGroup:6d4f2c1e-0000-4000-8000-${String(n.length).padStart(12, '0')}:autoScalingGroupName/${n}`;
+const serviceArn = (n) => `arn:aws:ecs:${REGION}:${ACCOUNT}:service/main/${n}`;
+const dbArn = (id) => `arn:aws:rds:${REGION}:${ACCOUNT}:db:${id}`;
+const clusterArn = (id) => `arn:aws:rds:${REGION}:${ACCOUNT}:cluster:${id}`;
+const TCP = { TargetGroupArn: `${P}:targetgroup/tcp/1`, TargetGroupName: 'tcp', TargetType: 'instance', LoadBalancerArns: [`${P}:loadbalancer/net/nlb/x`] };
+const tagList = (tags = {}) => Object.entries(tags).map(([Key, Value]) => ({ Key, Value }));
+const denied = (action) => error('AccessDenied', `User: arn:aws:sts::${ACCOUNT}:assumed-role/DmtDiscoveryRole/dmt-dev-discovery is not authorized to perform: ${action} on resource: *`);
+const machine = (over = {}) => ({ State: { Name: over.state ?? 'running' }, RootDeviceType: over.root ?? 'ebs', ...(over.lifecycle ? { InstanceLifecycle: over.lifecycle } : {}), Tags: tagList(over.tags) });
+const STANDALONE_INSTANCES = {
+  'i-lone': machine({ tags: { Name: 'build-agent', team: 'ci' } }),
+  'i-noname': machine(),
+  'i-store': machine({ root: 'instance-store' }),
+  'i-spot': machine({ lifecycle: 'spot' }),
+  'i-both': machine({ root: 'instance-store', lifecycle: 'spot' }),
+  'i-nlb': machine(), // in the network load balancer's target group
+  'i-shop': machine(), // the HTTP candidate shop's backend: left out
+  'i-member': machine({ tags: { 'aws:autoscaling:groupName': 'workers' } }),
+  'i-batch': machine({ tags: { 'aws:autoscaling:groupName': 'batch-asg' } }), // its group feeds an HTTP candidate: left out
+  'i-node': machine({ tags: { 'eks:cluster-name': 'demo' } }), // a Kubernetes node: left out
+  'i-managed': machine({ tags: { 'dormeto:workload': sha(instanceArn('i-managed')), 'dormeto:tagged': 'onboarder' } }),
+  'i-companion': machine({ tags: { 'dormeto:workload': '0123456789abcdef' } }), // another workload's: left out
+  'i-gone': machine({ state: 'terminated' }),
+};
+// The 5-minute points of a standalone resource's default signal (CPU, or a database's connections) over the week before
+// `now`'s last hour 10 minutes behind: build-agent busy 09:00 to 10:00 UTC each day and missing one point on day 2; shop-db
+// without a connection all week but its first hour; every other resource without a point (stopped: no share).
+function standaloneMetric(now) {
+  const end = Math.floor((Date.parse(now) - 600_000) / 3_600_000) * 3_600_000;
+  const start = end - 168 * 3_600_000;
+  const series = (value) => {
+    const Timestamps = [];
+    const Values = [];
+    for (let t = start; t < end; t += 300_000) {
+      const v = value(t);
+      if (v === undefined) continue;
+      Timestamps.push(new Date(t).toISOString());
+      Values.push(v);
+    }
+    return { StatusCode: 'Complete', Timestamps, Values };
+  };
+  return (q) => {
+    const d = Object.fromEntries(q.MetricStat.Metric.Dimensions.map((x) => [x.Name, x.Value]));
+    if (d.InstanceId === 'i-lone') return series((t) => (t === start + 24 * 3_600_000 + 1_800_000 ? undefined : new Date(t).getUTCHours() === 9 ? 64.5 : 1.25));
+    if (d.DBInstanceIdentifier === 'shop-db') return series((t) => (t < start + 3_600_000 ? 2 : 0));
+    return { StatusCode: 'Complete', Timestamps: [], Values: [] };
+  };
+}
+// points: the idle share's points (the first case's only: the others say what fails, with no point to read).
+function standaloneRegion(now, { fail, points = false } = {}) {
+  const base = routerRegion();
+  const metric = points ? standaloneMetric(now) : () => ({ StatusCode: 'Complete', Timestamps: [], Values: [] });
+  return {
+    ...base,
+    page: 4,
+    // Pages of CloudWatch's answer: the week of two series comes in several (NextToken, PartialData).
+    metricsPage: 1500,
+    targetGroups: [...base.targetGroups, TCP],
+    targets: { ...base.targets, [TCP.TargetGroupArn]: ['i-nlb'] },
+    instances: STANDALONE_INSTANCES,
+    autoScalingGroups: [
+      ...base.autoScalingGroups.map((g) => ({ ...g, Tags: [] })),
+      { AutoScalingGroupName: 'workers', AutoScalingGroupARN: groupArn('workers'), TargetGroupARNs: [], Tags: [{ Key: 'team', Value: 'batch', ResourceId: 'workers' }] },
+      { AutoScalingGroupName: 'eks-nodes', AutoScalingGroupARN: groupArn('eks-nodes'), TargetGroupARNs: [], Tags: [{ Key: 'eks:nodegroup-name', Value: 'ng-1' }] },
+      { AutoScalingGroupName: 'tcp-asg', AutoScalingGroupARN: groupArn('tcp-asg'), TargetGroupARNs: [TCP.TargetGroupArn], Tags: [] },
+    ],
+    ecsClusters: {
+      'arn:aws:ecs:eu-west-1:111122223333:cluster/main': [
+        ...base.ecsClusters['arn:aws:ecs:eu-west-1:111122223333:cluster/main'].map((x) => ({ ...x, serviceName: 'api', status: 'ACTIVE', schedulingStrategy: 'REPLICA', tags: [] })),
+        { serviceArn: serviceArn('worker'), serviceName: 'worker', status: 'ACTIVE', schedulingStrategy: 'REPLICA', loadBalancers: [], tags: [{ key: 'team', value: 'jobs' }] },
+        { serviceArn: serviceArn('agent'), serviceName: 'agent', status: 'ACTIVE', schedulingStrategy: 'DAEMON', loadBalancers: [], tags: [] },
+        { serviceArn: serviceArn('old'), serviceName: 'old', status: 'INACTIVE', schedulingStrategy: 'REPLICA', loadBalancers: [], tags: [] },
+      ],
+    },
+    dbInstances: [
+      { DBInstanceIdentifier: 'shop-db', DBInstanceArn: dbArn('shop-db'), DBInstanceStatus: 'available', TagList: tagList({ env: 'dev' }) },
+      { DBInstanceIdentifier: 'replica', DBInstanceArn: dbArn('replica'), DBInstanceStatus: 'available', ReadReplicaSourceDBInstanceIdentifier: 'shop-db', TagList: [] },
+      { DBInstanceIdentifier: 'aurora-1', DBInstanceArn: dbArn('aurora-1'), DBInstanceStatus: 'available', DBClusterIdentifier: 'aurora', TagList: [] },
+      { DBInstanceIdentifier: 'companion-db', DBInstanceArn: dbArn('companion-db'), DBInstanceStatus: 'available', TagList: tagList({ 'dormeto:workload': 'demo' }) },
+      { DBInstanceIdentifier: 'reports', DBInstanceArn: dbArn('reports'), DBInstanceStatus: 'stopped', TagList: tagList({ 'dormeto:workload': sha(dbArn('reports')) }) },
+    ],
+    dbClusters: [
+      { DBClusterIdentifier: 'aurora', DBClusterArn: clusterArn('aurora'), Status: 'available', EngineMode: 'provisioned', TagList: [] },
+      { DBClusterIdentifier: 'serverless', DBClusterArn: clusterArn('serverless'), Status: 'available', EngineMode: 'serverless', TagList: [] },
+    ],
+    metrics: (q, input) => (q.MetricStat.Period === 300 ? metric(q) : base.metrics(q, input)),
+    fail,
+  };
 }
 
 const clusterView = (clusters) => clusters.map((c) => ({ name: c.name, reason: c.reason ?? null }));
@@ -321,8 +432,13 @@ export async function run(product, input, ports, context) {
       if (input.ports.includes('kubernetes')) given.kubernetes = kubernetesPorts(ports, input);
       let clusters = [];
       try {
-        const rules = await product.scanRegion(given, input.where, { now: () => Date.parse(input.now), onClusters: (found) => { clusters = clusterView(found); } });
-        return { rules, clusters };
+        // standalone: the standalone scan on; its report (what it could not read) beside the rules.
+        let report;
+        const rules = await product.scanRegion(given, input.where, {
+          now: () => Date.parse(input.now), onClusters: (found) => { clusters = clusterView(found); },
+          ...(input.standalone ? { standalone: true, onStandalone: (r) => { report = r; } } : {}),
+        });
+        return input.standalone ? { rules, clusters, standalone: report } : { rules, clusters };
       } catch (err) {
         if (!context.fails) throw err;
         return { error: { name: err.name, message: err.message } };
@@ -355,6 +471,16 @@ Go \`internal/discover\`). \`input.function\` names the function:
   \`list\`); \`router\`: as for \`clustersOf\`; \`reader\` names who reads the clusters in the reason of one refused (\`DmtDiscoveryRole\` when absent). Output: \`{rules, clusters}\` — the \`ScannedRule\`s in the scan's order, and the
   region's clusters as read (\`{name, reason}\`, \`reason\` null for one read); \`{error: {name, message}}\` when the scan
   fails.
+  With \`standalone: true\` (the perimeter's standalone scan on; vision standalone workloads design §6) the scan also lists
+  the region's EC2 instances (\`ec2.describeInstances\` with no id, \`NextToken\` pages), its Auto Scaling groups, its ECS
+  services described with their tags (\`include: ["TAGS"]\`; refused: again without, said), its RDS instances and clusters
+  (\`rds.describeDBInstances\`, \`describeDBClusters\`, \`Marker\` pages, tags from \`TagList\`; one refused: that kind
+  unread, said) that no route uses: after the HTTP rules, a \`StandaloneRule\` each (\`kind: "standalone"\`, \`id\` and
+  \`resourceArn\` its ARN, \`backend {kind, id, arn}\`, \`name\`, \`tags\`, \`eligibility\`, \`reason\` (the router's texts,
+  joined by \`; \`), \`workloadId\` when managed, \`idleHours7d\` as the \`standalone-idle\` topic's \`standaloneIdle\` gives it
+  for the eligible and managed ones), instances, then groups, services, RDS instances, RDS clusters. Its output adds
+  \`standalone: {problems, unread}\`: what the scan could not read (sentences), and the kinds whose stored candidates stay.
+  \`ports\` then also lists \`ec2\` and \`rds\`.
 - \`clustersOf\`: \`{where: {account, region}, reader?, router?}\`; \`router\` (the name of the router of the account and region)
   is on a kubernetes port when one is there: a cluster whose private access is on and whose public endpoint is not open to
   \`0.0.0.0/0\` is read through its proxy (the recorded \`kubernetes.of\`), or, without \`router\`, not reached (\`where\` named in its

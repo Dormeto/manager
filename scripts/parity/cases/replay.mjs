@@ -82,8 +82,36 @@ export function cases(now) {
       stopped: [{ kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'x86_64', os: 'Linux' }, { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 3, arch: 'x86_64', os: 'Linux', spot: true }],
       prices: [{ item: { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 1, arch: 'x86_64', os: 'Linux' }, usd: 0.0123425 }, { item: { kind: 'fargate', vcpu: 0.25, memoryGb: 0.5, count: 3, arch: 'x86_64', os: 'Linux', spot: true }, usd: 0.01110825 }],
     }),
+    // A standalone resource (vision standalone workloads design §7; fleet test/activity.test.ts): its signal's 5-minute values
+    // over two days, the busy points (fleet busyMinutes) replayed from 5 minutes to 24 hours, the knee from 5 to 120.
+    standalone('always busy, never asleep whatever the window', (p) => 40),
+    standalone('always idle, asleep from the first window\'s end, no wake', () => 1.5),
+    standalone('a daily job, an hour at 09:00 UTC: a stop a day below a day\'s window', (p) => ((p % 288) >= 108 && (p % 288) < 120 ? 85 : 1.5)),
+    standalone('stopped for part of the window, 20:00 to 08:00 UTC the first night: no point then, nothing busy, nothing saved', (p) => (p >= 240 && p < 384 ? null : (p % 288) >= 108 && (p % 288) < 120 ? 85 : 1.5), {
+      awake: [{ from: SA_FROM, to: sa(240) }, { from: sa(384), to: SA_TO }],
+    }),
   ];
+
+  function standalone(title, value, { awake = [{ from: SA_FROM, to: SA_TO }] } = {}) {
+    return {
+      name: `standaloneAdvice: ${title}`,
+      input: {
+        function: 'standaloneAdvice', from: SA_FROM, to: SA_TO, windows: STANDALONE_WINDOWS, recommendable: STANDALONE_RECOMMENDABLE,
+        signals: [{ signal: 'cpu', below: 5, applies: true }], values: [{ signal: 'cpu', values: Array.from({ length: SA_POINTS }, (_, p) => value(p)) }], awake,
+        current: 120, checkMinutes: 5, wakeMs: 90_000, startAsleep: false, actualWakes: 0, actualFrom: null, stopped: [T3], prices: [{ item: T3, usd: 0.0456 }],
+        baseline: ALWAYS, wakerTargetGroup: false, now, running: awake.length === 1 ? null : awake,
+      },
+    };
+  }
 }
+
+// A standalone resource's two days of 5-minute points, and its windows (fleet src/activity.ts).
+const SA_FROM = '2026-10-10T00:00:00.000Z';
+const SA_POINTS = 2 * 288;
+const sa = (point) => new Date(Date.parse(SA_FROM) + point * 300_000).toISOString();
+const SA_TO = sa(SA_POINTS);
+const STANDALONE_WINDOWS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720, 1440];
+const STANDALONE_RECOMMENDABLE = [5, 10, 15, 20, 30, 45, 60, 90, 120];
 
 // The price of each item, given with the case: Go builds the same callback from input.prices.
 export const pricesOf = (prices) => async (item) => {
@@ -98,6 +126,13 @@ export async function run(product, input) {
     case 'recommendWindow': return product.recommendWindow(input.rows);
     case 'windowsFor': return product.windowsFor(input.current);
     case 'checkMinutesOf': return product.checkMinutesOf(input.schedule);
+    // The busy points of a standalone resource (busyMinutes) replayed through the advisor; its windows the product's.
+    case 'standaloneAdvice': {
+      if (canonical(input.windows) !== canonical(product.STANDALONE_WINDOWS) || canonical(input.recommendable) !== canonical(product.STANDALONE_RECOMMENDABLE)) throw new Error('the standalone windows changed: update the cases');
+      const { function: _, prices, now, from, to, signals, values, awake, ...rest } = input;
+      const requests = product.busyMinutes(signals, values, { from, to }, awake);
+      return product.idleWindowAdvice({ ...rest, requests, hourly: pricesOf(prices), now: Date.parse(now) });
+    }
     case 'idleWindowAdvice': {
       const { function: _, prices, now, ...rest } = input;
       return product.idleWindowAdvice({ ...rest, hourly: pricesOf(prices), now: Date.parse(now) });
@@ -116,6 +151,11 @@ the function:
   with \`now\` an ISO date (Node takes milliseconds) and \`prices\` in place of the \`hourly\` callback: \`[{item, usd}]\`,
   the hourly price of each item it is asked (\`usd\` null: no price); an item is found by equal JSON (sorted keys), one
   missing is an error. Output: the \`IdleWindowAdvice\` (\`computedAt\` is \`now\`).
+- \`standaloneAdvice\` (a standalone resource's, the estimate's and the Activity history's): \`{from, to, signals:
+  [{signal, below, applies}], values: [{signal, values}] (a value or null a 5-minute point from \`from\`), awake: [{from,
+  to}]}\` give the busy points as the \`standalone-idle\` topic's \`busyMinutes\` does (its output is the advisor's
+  \`requests\`); the rest is \`idleWindowAdvice\`'s argument, with \`windows\` (the 15 from 5 minutes to 24 hours) and
+  \`recommendable\` (5 to 120: the knee is chosen among them). Output: the \`IdleWindowAdvice\`.
 - \`replayIdle\` (Go \`replay.Replay\`): \`{requests, windows, checkMinutes, wakeSeconds, startAsleep}\`. Output: one
   \`{minutes, asleep: [{from, to}], wakes, wokeAt}\` per window.
 - \`recommendWindow\` (Go \`replay.Recommend\`): \`{rows: [{minutes, wakes}]}\`. Output: the window, in minutes.
