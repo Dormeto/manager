@@ -1,7 +1,7 @@
 // The demo's standalone workloads and candidates (vision standalone workloads design §6): a workload of each kind of resource
 // in several states (awake, asleep by its schedule, asleep on its idle signals, failed, its resource missing), the
 // standalone candidates of a run with the perimeter's standalone scan on (eligible, and each family of the router's
-// reasons), as the manager answers them (task-M45-report.md's shapes).
+// reasons), in the shapes the manager answers.
 import type { Candidate, StandaloneCandidate } from '@dormeto/discovery/types';
 import type { IdleMetric, IdleSignal, Settings, WorkloadStatus, WorkloadSummary } from '../types';
 import type { Schedule } from '../schedule';

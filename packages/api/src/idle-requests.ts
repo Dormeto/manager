@@ -1,6 +1,6 @@
 // The idle window advisor's requests (R10): the discovery function's step requests, invoked by the API, since member
 // accounts trust only the discovery role to read them. Its reserved executions may all be taken by a discovery run.
-import type { RequestMinutes } from '@dormeto/fleet';
+import type { ActivityQuery, RequestMinutes } from '@dormeto/fleet';
 
 // What a workload's requests are read from: AWS's application target group, or a Google Cloud workload's backend services
 // (the application's and its waker's), URL map and load balancer, as paths (§9.4).
@@ -9,7 +9,6 @@ export type IdleTarget = { targetGroupArn: string } | { backendService: string; 
 export type IdleRequests = (account: string, region: string, target: IdleTarget, days: number) => Promise<RequestMinutes & { wakerTargetGroupArn: string | null; wakerBackendService?: string }>;
 // A standalone workload's signals over its last days (vision standalone workloads design §6): the discovery function's step
 // activity, each query's 5-minute points as minutes from `from`.
-export interface ActivityQuery { id: string; namespace: string; name: string; dimensions: { Name: string; Value: string }[]; stat: string }
 export type IdleActivity = (account: string, region: string, queries: ActivityQuery[], days: number) => Promise<{ from: string; to: string; points: Record<string, [number, number][]> }>;
 export const BUSY = 'discovery is busy (a discovery run uses its capacity): try again in a few minutes';
 

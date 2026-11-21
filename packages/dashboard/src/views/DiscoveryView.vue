@@ -111,7 +111,7 @@ const actingKubernetes = computed(() => {
   const backend = acting.value?.backend as { kind?: string; kubernetes?: KubernetesCandidate } | null | undefined;
   return backend?.kind === 'k8s' ? backend.kubernetes ?? null : null;
 });
-const backendKind = (c: Listed) => (c.backend as { kind?: string } | null | undefined)?.kind;
+const backendKind = (c: Listed) => c.backend?.kind;
 const clusterAccess = ref<ClusterCheck | null>(null);
 // A Google Cloud candidate's routers of 0.40.0 and later (an older one can't be acted through): its region's, or for a
 // `global` one every router of the project, the dialog asking which; null while a `global` one's are read (the dialog waits).
@@ -176,8 +176,7 @@ function follow() {
 const isGoogle = (c: Listed) => rowCloud(c) === 'gcp';
 // The ~ of an estimated idle share (Google Cloud's: the user, 2026-11-12).
 const idleMark = (c: Listed) => cloudWords(rowCloud(c)).idleMark;
-// A standalone candidate's resource kind (its idle share is by its signals). The rows are typed as HTTP candidates until the
-// view shows the two kinds (plan 2, M46).
+// A standalone candidate's resource kind (its idle share is by its signals).
 const resourceOf = (c: Listed): ResourceKind | undefined => (c.kind === 'standalone' ? c.backend.kind : undefined);
 // A standalone candidate is its resource (design §6): its name, and its kind and id as the router names them.
 const resourceText = (c: Listed) => (c.kind === 'standalone' ? `${backendLabel(c.backend.kind, 'aws')} ${c.backend.kind === 'ecs' ? c.backend.arn.split(':service/')[1] ?? c.backend.id : c.backend.id}` : '');

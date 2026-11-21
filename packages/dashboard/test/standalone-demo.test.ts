@@ -1,5 +1,5 @@
 // The demo's standalone workloads and candidates (vision standalone workloads design §6): every new view has something to
-// show, in the shapes the manager answers (task-M45-report.md).
+// show, in the shapes the manager answers.
 import { describe, expect, it } from 'vitest';
 import { mockApi } from '../src/mock';
 import { decide, state } from '../src/mock/state';

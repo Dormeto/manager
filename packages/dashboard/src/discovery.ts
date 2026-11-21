@@ -27,17 +27,17 @@ const META: Record<Status, StatusMeta> = {
   'pending-onboarding': {
     label: 'To onboard', color: 'primary', icon: mdiPlusCircleOutline, help: 'Eligible and in the perimeter, not onboarded yet: Dormeto can nap it once onboarded.',
     transitions: [{ action: 'Onboard', to: 'Managed' }, { action: 'Dismiss', to: 'Dismissed' }, { action: 'Exclude', to: 'Excluded' }],
-    changes: 'Ineligible, Out of scope or Gone when its rules, the perimeter or its load balancer change.',
+    changes: 'Ineligible, Out of scope or Gone when its rules, its resource, the perimeter or its load balancer change.',
   },
   'pending-offboarding': {
     label: 'To offboard', color: 'warning', icon: mdiLogoutVariant, help: 'Onboarded, but out of the perimeter, excluded or no longer eligible (see the reason).',
     transitions: [{ action: 'Offboard', to: 'Out of scope, Excluded or Ineligible' }, { action: 'Include it again (Perimeter)', to: 'Managed' }],
-    changes: 'Managed again when its rule is eligible and in the perimeter.',
+    changes: 'Managed again when its rule or resource is eligible and in the perimeter.',
   },
   managed: {
     label: 'Managed', color: 'success', icon: mdiCheckCircleOutline, help: 'Onboarded: Dormeto naps it when idle.',
     transitions: [{ action: 'Offboard', to: 'To onboard' }, { action: 'Exclude', to: 'To offboard, kept awake until offboarded' }],
-    changes: 'To offboard when it leaves the perimeter or is no longer eligible; Gone when its rule is deleted.',
+    changes: 'To offboard when it leaves the perimeter or is no longer eligible; Gone when its rule or resource is deleted.',
   },
   ineligible: {
     label: 'Ineligible', color: 'grey', icon: mdiSleepOff, help: 'In the perimeter, but Dormeto cannot nap it (see the reason).',
@@ -169,7 +169,7 @@ export const DIMENSIONS: { key: DimensionKey; label: string; kind: 'list' | 'tag
   { key: 'regions', label: 'Regions', kind: 'list', hint: 'eu-west-1 on AWS, europe-west2 or global on Google Cloud' },
   { key: 'loadBalancers', label: 'Load balancers', kind: 'list', hint: 'names with *, AWS ARNs, or Google Cloud paths (projects/…/urlMaps/… or …/backendServices/…)' },
   { key: 'hosts', label: 'Hosts', kind: 'list', hint: 'host names with *, for example *.example.com' },
-  { key: 'resourceTags', label: 'Resource tags', kind: 'tags', hint: 'tags of the load balancer, rule or target group, or labels of the VMs behind a backend service: key=value' },
+  { key: 'resourceTags', label: 'Resource tags', kind: 'tags', hint: 'tags of the load balancer, rule or target group, of a standalone resource, or labels of the VMs behind a backend service: key=value' },
   { key: 'backendKinds', label: 'Backend types', kind: 'list', hint: 'instance, asg, ecs, k8s; for standalone resources also rds-instance, rds-cluster' },
 ];
 
