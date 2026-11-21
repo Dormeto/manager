@@ -30,10 +30,16 @@ once the perimeter's `standalone` is `on`; each is a candidate of its own resour
   workload awake with its resource among its backends. A waker's setting (`waitSeconds`, `drainSeconds`, `maxHolders`,
   `failedRetrySeconds`, `wakeMode`, `noWakeRules`, `wakeRules`) is refused before the operation; a router that does not know
   standalone workloads fails the preview, asking to be upgraded.
-- **Offboarding** is an HTTP workload's: it wakes the workload, offboards it and gives its candidate back.
+- **Offboarding** is an HTTP workload's: it wakes the workload, offboards it and gives its candidate back. A workload whose
+  resource is missing (`resourceMissing`) cannot be woken: `pause` and `wait awake` are skipped, and the router offboards it
+  in any state, skipping what is gone.
+- **Verification** waits for the resource among the workload's backends, a poll each 15 s for 3 minutes (the tagging API
+  lists an ECS service's new tag late); after that the operation fails, saying the workload is onboarded and where to see it.
+- **Turning the perimeter's standalone scan off** makes the managed standalone workloads To offboard, as a workload that
+  leaves the perimeter does.
 - **Its settings** are `idleMinutes`, `wakeTimeoutSeconds` and the three idle signals (`idleCpuPercent`, `idleNetworkBytes`,
   `idleMetric`, each a value or `off`), at every AWS level ([Access control](access-control.md)); the router checks them.
-- **What it refuses:** a waiting page, a target group exclusion naming it and a nap window's `wake` (409, the router's words).
+- **What it refuses:** a waiting page, a target group exclusion naming it (409), and a nap window's `wake` (400, the router's words).
   A resource deleted or untagged sets `resourceMissing` and the router's `resource-missing` warning, which alerts: offboard it,
   or tag the resource again (`dormeto:workload` with the workload's id) and the router finds it at its next check.
 - **Its history** names who started or stopped it: `schedule`, `manager` (a person), `idle`, `external-start` and

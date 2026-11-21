@@ -55,6 +55,22 @@ has none yet.
   while awake; a read that fails answers 502 `metrics_unreadable` and the card says so, never an idle week. The history
   names the causes `external-start`, `external-stop`, `recovered` and the check's `retry`. The demo mode has one
   standalone workload of each kind and state, candidates and the scan on.
+  - **A resource deleted or untagged:** the router's health warns `resource-missing` and nothing is stopped or started;
+  offboarding such a workload no longer wakes it: it is offboarded in any state, what is gone skipped. Tag the resource
+  again (`dormeto:workload` with the workload's id) to keep it.
+  - **When it naps, and what the manager says:** the router reads the signals 10 minutes behind, at its 5-minute check, so
+  an idle nap comes 10 to 15 minutes after the idle window; the Activity card gives the nap's latest time. Onboarding
+  verifies the resource among the workload's backends for up to 3 minutes (an ECS service's tag is listed late). The
+  Discovery view shows what a run could not read in an account and region (the RDS lists, the services' tags, an idle
+  share). Turning the standalone scan off makes the managed standalone workloads To offboard. A router that does not know
+  the idle signals while the organization holds them gets a health warning (`idle-signals-unknown`) naming the levels it
+  ignores, and the watchdog's role reads `settings.json` for it: apply the manager's module.
+  - **The router's side:** the Terraform `workload` module takes `resource_arn` in place of `app_target_group_arn`, with
+  `idle_cpu_percent`, `idle_network_bytes`, `idle_metric` and `databases`, and refuses the waker's variables
+  (`wait_seconds`, `drain_seconds`, `max_holders`, `failed_retry_seconds`, `wake_mode`, `no_wake_rules`, `wake_rules`,
+  `instance_ids`, `waiting_page`, `admin_enabled`, `rule_arn(s)`) with it; tag the resource and its databases
+  `dormeto:workload` yourself. Every Spot instance is refused. A standalone workload refuses a waiting page, a route repair
+  and a target group pause. The router needs no new permission.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users
