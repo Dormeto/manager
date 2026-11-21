@@ -262,7 +262,7 @@ const editable = computed<Candidate[]>(() => enabled.value.flatMap((e) => {
   const r = reads[e.key];
   const can = r?.data?.can;
   if (r?.status !== 'ok' || !r.data || !(can?.wake && can.nap)) return [];
-  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ? writableSchedule(r.data.schedule, r.data) : null, joinMinutes: joinInForce(r.data), kinds: rowOf(e.key)?.backends ?? [] }];
+  return [{ key: e.key, name: nameOf(e.key), schedule: r.data.schedule ? writableSchedule(r.data.schedule, r.data) : null, joinMinutes: joinInForce(r.data), kinds: rowOf(e.key)?.backends ?? [], ...(rowOf(e.key)?.kind === 'standalone' ? { standalone: true } : {}) }];
 }));
 function openNew(selection: Selection) {
   notice.value = '';
@@ -374,7 +374,7 @@ async function change(arg: Change, edge: Edge) {
       said('warning', edited.problem);
       return;
     }
-    const body = scheduleBody(writableSchedule(edited.schedule, fresh), current.maxNapDays ? String(current.maxNapDays) : '');
+    const body = scheduleBody(writableSchedule(edited.schedule, fresh), current.maxNapDays ? String(current.maxNapDays) : '', { standalone: rowOf(key)?.kind === 'standalone' });
     await api(`${pathOf(key)}/schedule`, { method: 'PUT', body: JSON.stringify(body) });
     reads[key] = { status: 'ok', data: { ...fresh, schedule: body } };
     said('success', edited.done);

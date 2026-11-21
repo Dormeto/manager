@@ -1,14 +1,18 @@
 <script setup lang="ts">
 // A manager workload's own settings (settings at scale design §9): each one empty to inherit (the field says the value it
 // gets now and from where) or its own value; its wake mode and type alike; its own rules as JSON. Sends only what changed.
+// A standalone workload's (vision standalone workloads design §4): its idle window, wake timeout, type and idle signals, no
+// waker's setting.
 import { computed, ref, watch } from 'vue';
 import { mdiTuneVariant } from '@mdi/js';
 import { formOf, settingRows, settingsChanges, sourceText, typeText, type SettingsForm } from '../settings';
-import type { WorkloadStatus } from '../types';
+import type { IdleSettings, WorkloadStatus } from '../types';
+import { idleChanges, idleFormOf, standaloneValue, type IdleForm } from '../idle-settings';
+import IdleSignalsFields from './IdleSignalsFields.vue';
 import InfoTip from './InfoTip.vue';
 
 const props = withDefaults(defineProps<{
-  modelValue: boolean; subject: string; status: Pick<WorkloadStatus, 'settings' | 'wakeMode' | 'settingsFrom' | 'type' | 'noWakeRules' | 'wakeRules'>;
+  modelValue: boolean; subject: string; status: Pick<WorkloadStatus, 'settings' | 'wakeMode' | 'settingsFrom' | 'type' | 'noWakeRules' | 'wakeRules' | 'kind'>;
   types?: string[]; saving?: boolean; error?: string;
 }>(), { types: () => [], saving: false, error: '' });
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Record<string, unknown>] }>();
@@ -16,11 +20,25 @@ const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Record<strin
 const initial = ref<SettingsForm>(formOf(props.status));
 const form = ref<SettingsForm>({ ...initial.value });
 const problem = ref('');
+const standalone = computed(() => props.status.kind === 'standalone');
+const ownIdle = (key: keyof IdleSettings) => props.status.settingsFrom?.[key] === 'workload';
+const idleInitial = ref<IdleForm>(idleFormOf(props.status.settings, ownIdle));
+const idle = ref<IdleForm>(JSON.parse(JSON.stringify(idleInitial.value)) as IdleForm);
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   initial.value = formOf(props.status);
   form.value = { ...initial.value };
+  idleInitial.value = idleFormOf(props.status.settings, ownIdle);
+  idle.value = JSON.parse(JSON.stringify(idleInitial.value)) as IdleForm;
   problem.value = '';
+});
+// What an idle signal gets when empty.
+const idlePlaceholders = computed(() => {
+  const at = (key: keyof IdleSettings) => {
+    const value = standaloneValue(key, props.status.settings);
+    return value ? inheritText(key as keyof SettingsForm, value) : 'Inherit';
+  };
+  return { idleCpuPercent: at('idleCpuPercent'), idleNetworkBytes: at('idleNetworkBytes'), idleMetric: at('idleMetric') };
 });
 
 // What each field gets when left empty: the value in force when it is inherited now, else just "Inherit".
@@ -41,8 +59,10 @@ const typeChoices = computed(() => [
 
 function save() {
   const { changes, problem: found } = settingsChanges(initial.value, form.value);
-  problem.value = found ?? '';
-  if (found) return;
+  const idleFound = standalone.value ? idleChanges(idleInitial.value, idle.value) : { changes: {}, problem: null };
+  Object.assign(changes, idleFound.changes);
+  problem.value = found ?? idleFound.problem ?? '';
+  if (problem.value) return;
   if (!Object.keys(changes).length) {
     emit('update:modelValue', false);
     return;
@@ -62,12 +82,19 @@ function save() {
             :placeholder="inheritText(row.key, row.value)" persistent-placeholder clearable>
             <template #append-inner><InfoTip :label="`About ${row.label}`" :test="`setting-${row.key}`">{{ row.help }} {{ row.range }}</InfoTip></template>
           </v-text-field>
-          <v-select v-model="form.wakeMode" data-test="setting-wakeMode" :items="modes" label="Wake mode" density="compact" />
+          <v-select v-if="!standalone" v-model="form.wakeMode" data-test="setting-wakeMode" :items="modes" label="Wake mode" density="compact" />
           <v-select v-model="form.type" data-test="setting-type" :items="typeChoices" label="Type" density="compact" />
         </div>
+        <template v-if="standalone">
+          <div class="dm-eyebrow mt-2 mb-2">Idle signals</div>
+          <p class="text-body-small text-medium-emphasis mb-3">It naps when every signal that applies stays under its threshold for its idle window; Off turns an inherited signal off.</p>
+          <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" />
+        </template>
+        <template v-else>
         <v-textarea v-model="form.noWakeRules" data-test="setting-noWakeRules" label="No-wake rules of this workload (JSON)" rows="3" auto-grow density="compact" class="dm-json"
           hint="Those of its type, router and organization apply too." persistent-hint />
         <v-textarea v-model="form.wakeRules" data-test="setting-wakeRules" label="Wake rules of this workload (JSON)" rows="3" auto-grow density="compact" class="dm-json mt-2" />
+        </template>
         <v-alert v-if="problem || error" data-test="settings-problem" type="error" variant="tonal" density="compact" class="mt-3" :text="problem || error" />
       </v-card-text>
       <v-card-actions class="px-4 pb-4">

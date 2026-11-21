@@ -57,3 +57,60 @@ export const standaloneSettingRows = (settings: Partial<Settings & IdleSettings>
   const value = standaloneValue(key, settings);
   return value === null ? [] : [{ key, label: HELP[key].label, value, help: HELP[key].help, range: HELP[key].range, ...(from?.[key] ? { from: from[key] } : {}) }];
 });
+
+// The dialogs' form of the idle signals: each number as typed (empty: inherit) with its Off; the metric inherited, off or one.
+export interface MetricForm { namespace: string; name: string; dimensions: { name: string; value: string }[]; statistic: IdleMetric['statistic']; below: string }
+export interface IdleForm { idleCpuPercent: string; cpuOff: boolean; idleNetworkBytes: string; networkOff: boolean; metricMode: 'inherit' | 'off' | 'metric'; metric: MetricForm }
+const EMPTY_METRIC: MetricForm = { namespace: '', name: '', dimensions: [], statistic: 'Maximum', below: '' };
+
+// A level's own values (or a workload's: `own` says which keys are its own), the others empty.
+export function idleFormOf(values: Partial<IdleSettings>, own: (key: keyof IdleSettings) => boolean = (key) => values[key] !== undefined): IdleForm {
+  const mine = (key: keyof IdleSettings) => (own(key) ? values[key] : undefined);
+  const cpu = mine('idleCpuPercent');
+  const network = mine('idleNetworkBytes');
+  const metric = mine('idleMetric') as IdleMetric | 'off' | undefined;
+  return {
+    idleCpuPercent: typeof cpu === 'number' ? String(cpu) : '', cpuOff: cpu === 'off',
+    idleNetworkBytes: typeof network === 'number' ? String(network) : '', networkOff: network === 'off',
+    metricMode: metric === 'off' ? 'off' : metric ? 'metric' : 'inherit',
+    metric: metric && metric !== 'off' && !Array.isArray(metric.dimensions)
+      ? { namespace: metric.namespace, name: metric.name, dimensions: Object.entries(metric.dimensions).map(([name, value]) => ({ name, value: String(value) })), statistic: metric.statistic, below: String(metric.below) }
+      : { ...EMPTY_METRIC, dimensions: [] },
+  };
+}
+
+const numberOf = (text: string) => (text.trim() === '' ? null : Number(text));
+function valueOf(form: IdleForm, key: keyof IdleSettings): { value: number | 'off' | IdleMetric | null; problem?: string } {
+  if (key === 'idleCpuPercent') {
+    if (form.cpuOff) return { value: 'off' };
+    const v = numberOf(form.idleCpuPercent);
+    return v === null || (Number.isFinite(v) && v >= 0 && v <= 100) ? { value: v } : { value: null, problem: 'CPU: a number from 0 to 100, or off' };
+  }
+  if (key === 'idleNetworkBytes') {
+    if (form.networkOff) return { value: 'off' };
+    const v = numberOf(form.idleNetworkBytes);
+    return v === null || (Number.isInteger(v) && v >= 0 && v <= IDLE_NETWORK_BYTES_MAX) ? { value: v } : { value: null, problem: `Network: a whole number from 0 to ${IDLE_NETWORK_BYTES_MAX.toLocaleString('en-US')}, or off` };
+  }
+  if (form.metricMode === 'inherit') return { value: null };
+  if (form.metricMode === 'off') return { value: 'off' };
+  const m = form.metric;
+  const below = numberOf(m.below);
+  if (!m.namespace.trim() || !m.name.trim() || below === null || !Number.isFinite(below)) return { value: null, problem: 'Custom metric: its namespace, name and threshold are needed' };
+  const dimensions = Object.fromEntries(m.dimensions.filter((d) => d.name.trim()).map((d) => [d.name.trim(), d.value]));
+  return { value: { namespace: m.namespace.trim(), name: m.name.trim(), dimensions, statistic: m.statistic, below } };
+}
+
+// What changed: each key a value, 'off', or null where the value went back to the levels; the first problem found.
+export function idleChanges(initial: IdleForm, edited: IdleForm): { changes: Record<string, unknown>; problem: string | null } {
+  const changes: Record<string, unknown> = {};
+  for (const key of IDLE_KEYS) {
+    const before = valueOf(initial, key).value;
+    const after = valueOf(edited, key);
+    if (after.problem) return { changes, problem: after.problem };
+    if (JSON.stringify(after.value) !== JSON.stringify(before)) changes[key] = after.value;
+  }
+  return { changes, problem: null };
+}
+
+// The built-in values, as the levels' placeholders say them (the router's STANDALONE_BUILT_IN).
+export const IDLE_BUILT_IN: Record<keyof IdleSettings, string> = { idleCpuPercent: 'under 5 %, off for a database', idleNetworkBytes: 'off', idleMetric: 'off; a database\'s connections under 1' };

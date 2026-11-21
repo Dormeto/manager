@@ -851,7 +851,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   </v-card>
 
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
-  <OnboardDialog v-model="onboardOpen" :title="acting?.conditions ?? ''" :default-name="acting?.targetGroup ?? null" :kubernetes="actingKubernetes" :access="clusterAccess" :aws-tags="acting?.tags" :cloud="acting ? rowCloud(acting) : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="acting ? backendKind(acting) ?? null : null" @submit="onboard" />
+  <OnboardDialog v-model="onboardOpen" :title="(acting?.kind === 'standalone' ? acting.name : acting?.conditions) ?? ''" :default-name="(acting?.kind === 'standalone' ? acting.name : acting?.targetGroup) ?? null" :resource="acting ? resourceOf(acting) ?? null : null" :kubernetes="actingKubernetes" :access="clusterAccess" :aws-tags="acting?.tags" :cloud="acting ? rowCloud(acting) : 'aws'" :routers="projectRouters" :choose-router="chooseRouter" :backend-kind="acting ? backendKind(acting) ?? null : null" @submit="onboard" />
 
   <v-dialog v-model="dismissDialog" max-width="480">
     <v-card class="dm-dialog">

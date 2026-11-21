@@ -15,7 +15,8 @@ import ScheduleHelp from './ScheduleHelp.vue';
 import WindowRecurrence from './WindowRecurrence.vue';
 
 // joinMinutes: the value in force, from its status answer; kinds: of its backends, for their icons.
-export interface Candidate { key: string; name: string; schedule: Schedule | null; joinMinutes?: number; kinds?: string[] }
+// standalone: a standalone workload, whose nap windows have no wake choice.
+export interface Candidate { key: string; name: string; schedule: Schedule | null; joinMinutes?: number; kinds?: string[]; standalone?: boolean }
 export interface Selection { start: Date; end: Date; month: boolean; days?: Day[] }
 
 const props = defineProps<{ modelValue: boolean; candidates: Candidate[]; selection: Selection | null; last?: string; error?: string; saving?: boolean }>();
@@ -100,7 +101,7 @@ function save() {
     windows: [...(current?.windows ?? []), w],
     ...(current?.exceptions?.length ? { exceptions: current.exceptions } : {}),
     joinMinutes: current?.joinMinutes,
-  }, current?.maxNapDays ? String(current.maxNapDays) : '');
+  }, current?.maxNapDays ? String(current.maxNapDays) : '', { standalone: c.standalone });
   emit('submit', { key: c.key, schedule });
 }
 </script>
@@ -129,7 +130,7 @@ function save() {
             </v-btn-toggle>
             <ScheduleHelp />
           </div>
-          <v-select v-if="kind === 'nap'" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
+          <v-select v-if="kind === 'nap' && !chosen?.standalone" v-model="wake" data-test="nw-wake" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" />
           <v-alert v-if="problem" data-test="nw-problem" type="warning" variant="tonal" density="compact" class="mb-3" :text="problem" />
           <WindowRecurrence :key="opening" :model-value="drafted" :time-zone="zone" :exceptions="chosen?.schedule?.exceptions" :date="selectedDate" :others="chosen?.schedule?.windows" :join-minutes="chosen?.joinMinutes" test="nw" class="mb-3" @update:model-value="edit" />
           <div data-test="nw-summary" class="mb-3">

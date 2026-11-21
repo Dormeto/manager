@@ -2,6 +2,8 @@
 // Onboard a discovered candidate: its name (for people; the router derives the workload id from the target group), idle
 // window, wake mode, companion databases, fallback instance types (R7b). A Kubernetes candidate (R10.5): what Dormeto adds,
 // the GitOps snippet, the router's access to its cluster. Any other: the lines its Terraform must keep.
+// A standalone resource (`resource`, its kind; vision standalone workloads design §6): what a nap does to it, that nothing wakes
+// it on demand, its idle signals, and where to give it a schedule.
 import { computed, ref, watch } from 'vue';
 import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
 import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
@@ -12,12 +14,29 @@ import TagsEditor from './TagsEditor.vue';
 import { useSession } from '../stores/session';
 import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
 import { terraformSnippet } from '../terraform';
+import type { ResourceKind } from '@dormeto/discovery/types';
+import { idleChanges, idleFormOf, IDLE_BUILT_IN, type IdleForm } from '../idle-settings';
+import IdleSignalsFields from './IdleSignalsFields.vue';
 
 // On Google Cloud (`cloud`): the candidate's labels come in `awsTags` (the candidate's `tags`), and `routers` are the project's routers
 // of 0.40.0 and later a `global` candidate may go through, null while they are read (Onboard waits). One is asked for when
 // several are offered or the API needs one named (`chooseRouter`: the project has several, whatever their versions), the only
 // one offered then chosen already.
-const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean }>();
+const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean; resource?: ResourceKind | null }>();
+// What a nap and a wake do to a standalone resource, by its kind (the router's backend modules).
+const NAPS: Record<ResourceKind, string> = {
+  instance: 'A nap stops the instance (or hibernates it), then its databases; a wake starts the databases, then the instance.',
+  asg: 'A nap sets the Auto Scaling group\'s capacity to 0, then stops its databases; a wake starts the databases and gives the group back its size.',
+  ecs: 'A nap sets the ECS service\'s desired count to 0, then stops its databases; a wake starts the databases and sets the count back.',
+  'rds-instance': 'A nap stops the database; a wake starts it. AWS starts a database stopped for 7 days by itself: it is then awake until it naps again.',
+  'rds-cluster': 'A nap stops the Aurora cluster; a wake starts it. AWS starts a cluster stopped for 7 days by itself: it is then awake until it naps again.',
+};
+const napText = computed(() => (props.resource ? NAPS[props.resource] : ''));
+// Its idle signals, each inherited unless set here.
+const idleInitial = idleFormOf({});
+const idle = ref<IdleForm>(JSON.parse(JSON.stringify(idleInitial)) as IdleForm);
+const idleProblem = ref('');
+const idlePlaceholders = { idleCpuPercent: `Inherit (built-in ${IDLE_BUILT_IN.idleCpuPercent})`, idleNetworkBytes: `Inherit (built-in ${IDLE_BUILT_IN.idleNetworkBytes})`, idleMetric: `Inherit (built-in ${IDLE_BUILT_IN.idleMetric})` };
 const gcp = computed(() => props.cloud === 'gcp');
 const words = computed(() => cloudWords(props.cloud));
 const waiting = computed(() => gcp.value && props.routers === null);
@@ -56,7 +75,12 @@ const INSTANCE_TYPE = /^[a-z][a-z0-9-]*\d[a-z0-9-]*\.[a-z0-9]+$/;
 // The router's pattern for a Compute Engine machine type.
 const MACHINE_TYPE = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/;
 const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.trim()).filter(Boolean));
-const terraform = computed(() => (props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
+// A standalone resource has no Terraform lines to keep (no rule nor waker is added).
+const noTerraform = computed(() => Boolean(props.resource));
+const terraform = computed(() => (noTerraform.value ? null : props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
+// Fallback types for EC2 capacity: a standalone instance's or group's; hibernation: a standalone instance's.
+const takesFallbacks = computed(() => (props.resource ? props.resource === 'instance' || props.resource === 'asg' : gcp.value || !props.kubernetes));
+const takesHibernate = computed(() => (props.resource ? props.resource === 'instance' : gcp.value || !props.kubernetes));
 const fallbackRule = () => (fallbackTypes.value.length <= 5 && new Set(fallbackTypes.value).size === fallbackTypes.value.length && fallbackTypes.value.every((t) => (gcp.value ? MACHINE_TYPE : INSTANCE_TYPE).test(t)))
   || words.value.fallbacksRule;
 watch(() => props.modelValue, (open) => {
@@ -71,6 +95,8 @@ watch(() => props.modelValue, (open) => {
   preselect();
   tagRows.value = [];
   copyNote.value = '';
+  idle.value = JSON.parse(JSON.stringify(idleInitial)) as IdleForm;
+  idleProblem.value = '';
 });
 
 // Presentation: an icon per change, in onboardingTexts' order (what the switch adds or patches, the HPA kept, KEDA paused).
@@ -86,8 +112,11 @@ const changes = computed(() => {
 });
 
 function submit() {
+  const idleFound = props.resource ? idleChanges(idleInitial, idle.value) : { changes: {}, problem: null };
+  idleProblem.value = idleFound.problem ?? '';
+  if (idleFound.problem) return;
   const list = databases.value.split(',').map((d) => d.trim()).filter(Boolean).map((d) => (gcp.value ? { kind: 'cloudsql-instance', id: d } : d.startsWith('cluster:') ? { kind: 'rds-cluster', id: d.slice(8) } : { kind: 'rds-instance', id: d }));
-  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), ...(several.value && router.value ? { router: router.value } : {}), settings: { ...(idleMinutes.value === null || idleMinutes.value === '' ? {} : { idleMinutes: Number(idleMinutes.value) }), ...(wakeMode.value ? { wakeMode: wakeMode.value } : {}), ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(!props.kubernetes && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}) }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
+  emit('submit', { ...(name.value.trim() ? { name: name.value.trim() } : {}), ...(several.value && router.value ? { router: router.value } : {}), settings: { ...(idleMinutes.value === null || idleMinutes.value === '' ? {} : { idleMinutes: Number(idleMinutes.value) }), ...(wakeMode.value ? { wakeMode: wakeMode.value } : {}), ...(fallbackTypes.value.length ? { fallbackInstanceTypes: fallbackTypes.value } : {}), ...(takesHibernate.value && hibernate.value !== 'inherit' ? { hibernate: hibernate.value === 'on' } : {}), ...idleFound.changes }, databases: list, ...(session.isAdmin && Object.keys(tagsOf(tagRows.value)).length ? { tags: tagsOf(tagRows.value) } : {}) });
 }
 </script>
 
@@ -126,6 +155,14 @@ function submit() {
                 <span>The manager binds the tag <code>dormeto/managed</code> to the VMs, managed instance groups and Cloud SQL instances the preview names, and removes the bindings it made when the router refuses.</span>
               </li>
             </template>
+            <template v-else-if="resource">
+              <li class="dm-change" data-test="onboard-standalone">
+                <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
+                <span>The router of its account and region (installed first if needed) tags it and its databases. {{ napText }}
+                  Nothing wakes it on demand: a schedule, a person or a start made in AWS does. It naps on its schedule, on a person's word, or when its idle signals stay under their thresholds.
+                  <router-link data-test="onboard-schedule" to="/schedules">Give it a schedule</router-link> once onboarded.</span>
+              </li>
+            </template>
             <li v-else class="dm-change">
               <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
               <span>The router of its account and region (installed first if needed) tags its backends, adds the waker before every rule
@@ -149,21 +186,25 @@ function submit() {
           <pre data-test="terraform" class="gitops">{{ terraform }}</pre>
         </template>
         <div class="dm-eyebrow mt-6 mb-3">Settings</div>
-        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" :hint="`Shown in the manager; the ${words.target} name if empty. It can be changed later.`" persistent-hint autofocus class="mb-3" />
+        <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" :hint="resource ? 'Shown in the manager; the resource\'s name if empty. It can be changed later.' : `Shown in the manager; the ${words.target} name if empty. It can be changed later.`" persistent-hint autofocus class="mb-3" />
         <v-row dense>
           <v-col cols="12" sm="5">
-            <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" placeholder="Inherit" persistent-placeholder clearable />
+            <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" :placeholder="resource ? 'Inherit (built-in 120)' : 'Inherit'" persistent-placeholder clearable />
           </v-col>
-          <v-col cols="12" sm="7">
-            <v-select v-model="wakeMode" :items="[{ title: 'Inherit', value: null }, { title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
+          <v-col v-if="!resource" cols="12" sm="7">
+            <v-select v-model="wakeMode" data-test="onboard-wakeMode" :items="[{ title: 'Inherit', value: null }, { title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
           </v-col>
         </v-row>
+        <template v-if="resource">
+          <div class="dm-eyebrow mt-2 mb-2">Idle signals</div>
+          <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" :error="idleProblem" />
+        </template>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
           :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : `No router of the project is ${GOOGLE_ROUTER_MINIMUM} or later: upgrade one with dormeto gcp routers install`" />
         <v-text-field v-model="databases" :label="words.databasesLabel" :hint="words.databasesHint" persistent-hint />
         <!-- Fallback types and hibernation: on Google Cloud always, on AWS but for a Kubernetes candidate. -->
-        <v-text-field v-if="gcp || !kubernetes" v-model="fallbacks" :label="`Fallback ${words.types} (optional)`" :rules="[fallbackRule]" class="mt-4" :hint="words.fallbacksHint" persistent-hint />
-        <v-select v-if="gcp || !kubernetes" v-model="hibernate" :label="words.hibernate" class="mt-4" persistent-hint
+        <v-text-field v-if="takesFallbacks" v-model="fallbacks" :label="`Fallback ${words.types} (optional)`" :rules="[fallbackRule]" class="mt-4" :hint="words.fallbacksHint" persistent-hint />
+        <v-select v-if="takesHibernate" v-model="hibernate" :label="words.hibernate" class="mt-4" persistent-hint
           :items="[{ title: 'Inherit the default', value: 'inherit' }, { title: 'On', value: 'on' }, { title: 'Off', value: 'off' }]" :hint="words.hibernateHint" />
         <template v-if="session.isAdmin">
         <div class="dm-eyebrow mt-6 mb-1">Tags</div>

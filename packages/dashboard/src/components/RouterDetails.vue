@@ -20,6 +20,7 @@ import type { RouterDetails } from '../types';
 import DefaultsDialog from './DefaultsDialog.vue';
 import { builtInText, defaultsLines, levelText } from '../defaults';
 import { SETTING_KEYS } from '../settings';
+import { IDLE_BUILT_IN, IDLE_KEYS, standaloneValue } from '../idle-settings';
 
 // source: who installed the router, so where its configuration is changed.
 // version: the router's, which says whether it takes defaults of its own (settings at scale, routers 0.37.0).
@@ -90,10 +91,13 @@ const savingDefaults = ref(false);
 const defaultsError = ref('');
 const takesDefaults = computed(() => atLeast(props.version, '0.37.0'));
 const routerLines = computed(() => defaultsLines(details.value?.settings?.defaults).map((l) => `${l.label} ${l.value}`).join(' · '));
-const inheritedDefaults = computed(() => Object.fromEntries([...SETTING_KEYS, 'wakeMode' as const].map((key) => {
+const inheritedDefaults = computed(() => Object.fromEntries([...[...SETTING_KEYS, 'wakeMode' as const].map((key) => {
   const value = details.value?.managerSettings?.defaults?.[key];
   return [key, value === undefined ? `${builtInText(key)}, built-in` : `${levelText(key, value as number | string)}, organization`];
-})));
+}), ...IDLE_KEYS.map((key) => {
+  const value = details.value?.managerSettings?.defaults ? standaloneValue(key, details.value.managerSettings.defaults) : null;
+  return [key, value === null ? `${IDLE_BUILT_IN[key]}, built-in` : `${value}, organization`];
+})]));
 async function saveDefaults(changes: Record<string, unknown>) {
   savingDefaults.value = true;
   defaultsError.value = '';
@@ -273,7 +277,7 @@ const columns = computed<Section[][]>(() => {
       </v-table>
     </v-card>
     <DefaultsDialog v-if="details.settings && takesDefaults" v-model="defaultsOpen" :title="`Defaults of ${name}`" level="router" :name="name" :values="details.settings.defaults ?? {}"
-      :inherited="inheritedDefaults" :saving="savingDefaults" @submit="saveDefaults" />
+      :inherited="inheritedDefaults" :saving="savingDefaults" :idle="cloud !== 'gcp'" @submit="saveDefaults" />
     <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :cloud="cloud" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now, details.cloud)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"

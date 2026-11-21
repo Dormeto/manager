@@ -1,9 +1,11 @@
 // A level's defaults (vision settings at scale design §6, §9): the organization's, a router's or a type's. Each key a value
 // or absent (the level below decides); the built-in values at the bottom.
 import { SETTING_KEYS, settingLabel, settingText, type SettingsForm } from './settings';
-import type { Settings } from './types';
+import type { IdleSettings, Settings } from './types';
+import { IDLE_KEYS, standaloneLabel, standaloneValue } from './idle-settings';
 
-export interface Defaults extends Partial<Settings> { wakeMode?: string; noWakeRules?: unknown[]; wakeRules?: unknown[] }
+// The idle signals (vision standalone workloads design §4) apply to a level's standalone workloads.
+export interface Defaults extends Partial<Settings>, IdleSettings { wakeMode?: string; noWakeRules?: unknown[]; wakeRules?: unknown[] }
 export const BUILT_IN: Required<Pick<Defaults, keyof Settings | 'wakeMode'>> = {
   idleMinutes: 15, waitSeconds: 60, drainSeconds: 30, wakeTimeoutSeconds: 600, maxHolders: 50, failedRetrySeconds: 60, wakeMode: 'any',
 };
@@ -21,6 +23,7 @@ export function defaultsLines(d: Defaults | null | undefined): { key: string; la
     ...(d.wakeMode ? [{ key: 'wakeMode', label: 'Wake mode', value: modeText(d.wakeMode) }] : []),
     ...(d.noWakeRules?.length ? [{ key: 'noWakeRules', label: 'No-wake rules', value: rulesText(d.noWakeRules) }] : []),
     ...(d.wakeRules?.length ? [{ key: 'wakeRules', label: 'Wake rules', value: rulesText(d.wakeRules) }] : []),
+    ...IDLE_KEYS.filter((key) => d[key] !== undefined).map((key) => ({ key, label: standaloneLabel(key), value: standaloneValue(key, d)! })),
   ];
 }
 

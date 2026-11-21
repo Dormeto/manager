@@ -680,7 +680,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="status.type" data-test="workload-type">Type <strong>{{ typeText(status.type) }}</strong></span>
           <v-spacer />
           <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set them in its workload module</span>
-          <v-btn v-else-if="canEditSettings && !standaloneKind" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="openSettings">Edit</v-btn>
+          <v-btn v-else-if="canEditSettings" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="openSettings">Edit</v-btn>
         </v-card-text>
         <v-card-text v-if="!gcp && status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
           Hibernate: <strong>does not apply</strong> (standalone EC2 instances only)
@@ -706,7 +706,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </div>
   </div>
 
-  <WorkloadSettingsDialog v-if="status?.settingsFrom && !standaloneKind" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
+  <WorkloadSettingsDialog v-if="status?.settingsFrom" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
   <HibernateDialog v-if="status?.hibernation" :cloud="cloud" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
   <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
@@ -730,7 +730,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </v-card>
   </v-dialog>
   <RenameDialog v-model="renameOpen" :name="title" :cloud="cloud" @submit="rename" />
-  <ScheduleDialog v-model="scheduleOpen" :schedule="status?.schedule" :join="status" :name="title" :kinds="backendKinds(status?.backends ?? [])" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
+ <ScheduleDialog v-model="scheduleOpen" :standalone="standaloneKind" :schedule="status?.schedule" :join="status" :name="title" :kinds="backendKinds(status?.backends ?? [])" :error="scheduleError" :saving="savingSchedule" @submit="saveSchedule" @clear="clearSchedule" />
   <TagsDialog v-model="tagsOpen" :tags="status?.tags" :name="title" :cloud="cloud" @submit="setTags" />
 </template>
 

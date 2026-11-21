@@ -61,6 +61,12 @@ backend type criterion takes `rds-instance` and `rds-cluster`.
 gives each idle signal (CPU, Network, the custom metric by its name) with its threshold, the level it comes from, its
 last value and since when it is under it, when it may nap on idle, and its missing resource; its Settings card shows its
 kind's five settings; its history says an idle nap as "idle on every signal for its idle window".
+- **The dashboard's dialogs for standalone workloads:** the settings dialogs take the idle signals (CPU and network as
+numbers or Off, the custom metric as a namespace, a name, dimensions with `${resource}`, a statistic and a threshold, or
+Off; empty inherits, the placeholder saying what and from where); a standalone workload's has no waker's setting; the
+organization's, a type's and an AWS router's defaults show the HTTP and the standalone settings under two headings, and
+the organization-level gate's refusal on the idle signals; onboarding a resource says what a nap does to it, that nothing
+wakes it on demand, takes its idle signals and links to Schedules; a standalone workload's nap windows have no wake choice.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

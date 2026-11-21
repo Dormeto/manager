@@ -18,7 +18,8 @@ import WindowRecurrence from './WindowRecurrence.vue';
 
 // join: the status answer's value and what is inherited; a router that answers none does not join, and is not asked. kinds: those
 // of the workload's backends, when known.
-const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; kinds?: string[]; error?: string; saving?: boolean; join?: JoinAnswer | null }>();
+// standalone: a standalone workload's, whose nap windows have no wake choice.
+const props = defineProps<{ modelValue: boolean; schedule: Schedule | null | undefined; name: string; kinds?: string[]; error?: string; saving?: boolean; join?: JoinAnswer | null; standalone?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Schedule]; clear: [] }>();
 const windows = ref<ScheduleWindow[]>([]);
 // A stable key for each window, beside it: a window is replaced as it is edited, and a tab keeps its helper's memory when
@@ -81,7 +82,7 @@ const remove = (i: number) => {
 // With no window and no maximum nap left, saving would be refused: what the user means is to clear the schedule.
 const clearing = computed(() => Boolean(props.schedule) && !windows.value.length && !maxNap.value.trim());
 const confirmClear = ref(false);
-const submit = () => emit('submit', scheduleBody(form.value, maxNap.value));
+const submit = () => emit('submit', scheduleBody(form.value, maxNap.value, { standalone: props.standalone }));
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 function commitTyped() {
   const t = (typed.value ?? '').trim();
@@ -141,7 +142,7 @@ const badDate = computed(() => exceptions.value.find((e) => !DATE.test(e)));
           </div>
           <div v-for="(w, i) in windows" v-show="keys[i] === tab" :key="keys[i]" data-test="window" class="dm-window">
             <WindowRecurrence v-model="windows[i]!" :time-zone="timeZone" :exceptions="exceptions" :others="windows.filter((_, j) => j !== i)" :join-minutes="inForce">
-              <v-select v-if="w.kind === 'nap'" :model-value="w.wake ?? 'never'" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" hide-details class="dm-wake" @update:model-value="w.wake = $event" />
+              <v-select v-if="w.kind === 'nap' && !standalone" data-test="window-wake" :model-value="w.wake ?? 'never'" :items="[{ value: 'never', title: 'Requests never wake it' }, { value: 'header', title: 'Wake with the x-dormeto-wake header' }]" label="Wake" density="compact" hide-details class="dm-wake" @update:model-value="w.wake = $event" />
               <template #actions>
                 <v-tooltip location="top">
                   <template #activator="{ props: activator }">

@@ -312,8 +312,9 @@ const isEmpty = (value: unknown): boolean => value === undefined || value === nu
 const filled = <T extends object>(object: T): T => Object.fromEntries(Object.entries(object).filter(([, value]) => !isEmpty(value))) as T;
 
 // A window as the PUT sends it: what is empty dropped (null, a date cleared), what its kind or pattern does not take too,
-// its days in week order. A window read back stays what it was.
-export function windowBody(w: ScheduleWindow): ScheduleWindow {
+// its days in week order. A window read back stays what it was. A standalone workload's nap window has no `wake` (nothing
+// arrives to wake it: the router refuses the field).
+export function windowBody(w: ScheduleWindow, { standalone = false }: { standalone?: boolean } = {}): ScheduleWindow {
   const repeat = isEmpty(w.repeat) ? undefined : filled(w.repeat!);
   const weekOrder = (days: Day[]) => (Array.isArray(days) ? DAYS.filter((d) => days.includes(d)) : days);
   return {
@@ -322,7 +323,7 @@ export function windowBody(w: ScheduleWindow): ScheduleWindow {
     ...(repeat?.pattern === 'cron' ? {} : { start: w.start, end: w.end }),
     ...(repeat ? { repeat: repeat.pattern === 'weekly' ? { ...repeat, days: weekOrder(repeat.days) } : repeat } : {}),
     ...filled({ from: w.from, until: w.until }),
-    ...(w.kind === 'nap' ? { wake: w.wake ?? 'never' } : {}),
+    ...(w.kind === 'nap' && !standalone ? { wake: w.wake ?? 'never' } : {}),
     ...(w.exceptions?.length ? { exceptions: [...w.exceptions] } : {}),
   };
 }
@@ -338,8 +339,8 @@ export function writableSchedule(s: Schedule, answer: JoinAnswer | null | undefi
 // The body of the PUT: the zone in its canonical form (none without windows), the wake mode of nap windows only, the
 // exceptions, the maximum nap and the joined windows' value (0 is one) only when set, so that a schedule without them still
 // reads on an older router. `maxNap` is the form field (blank for none).
-export function scheduleBody(s: Schedule, maxNap: string): Schedule {
-  const windows = (s.windows ?? []).map(windowBody);
+export function scheduleBody(s: Schedule, maxNap: string, { standalone = false }: { standalone?: boolean } = {}): Schedule {
+  const windows = (s.windows ?? []).map((w) => windowBody(w, { standalone }));
   const zone = canonicalZone(s.timeZone) ?? String(s.timeZone ?? '').trim();
   const max = maxNap.trim();
   return {

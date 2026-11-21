@@ -48,15 +48,19 @@ async function count() {
 }
 void load();
 
-async function save(list: TypeEntry[], done: string) {
+// The refusal of a type's defaults (the organization's gate on the idle signals), shown in their dialog.
+const defaultsError = ref('');
+async function save(list: TypeEntry[], done: string, { inDialog = false } = {}) {
   saving.value = true;
+  defaultsError.value = '';
   try {
     const answer = await api<{ types: TypeEntry[]; note: string }>('/settings/types', { method: 'PUT', body: JSON.stringify({ types: list }) });
     types.value = answer.types ?? list;
     emit('notice', { type: 'success', text: `${done}: ${answer.note}.` });
     return true;
   } catch (err) {
-    emit('notice', { type: 'error', text: (err as Error).message });
+    if (inDialog) defaultsError.value = (err as Error).message;
+    else emit('notice', { type: 'error', text: (err as Error).message });
     return false;
   } finally {
     saving.value = false;
@@ -111,7 +115,7 @@ async function saveDefaults(changes: Record<string, unknown>) {
   const known = types.value.some((t) => t.name === name);
   const list = known ? types.value.map((t) => (t.name === name ? { ...t, settings: merged } : t)) : [...types.value, { name, settings: merged }];
   const kept = list.filter((t) => !(builtIn.value.includes(t.name) && !Object.keys(t.settings ?? {}).length));
-  if (await save(kept, `The defaults of ${name} are saved`)) defaultsOpen.value = false;
+  if (await save(kept, `The defaults of ${name} are saved`, { inDialog: true })) defaultsOpen.value = false;
 }
 </script>
 
@@ -165,7 +169,7 @@ async function saveDefaults(changes: Record<string, unknown>) {
       </v-card-actions>
     </v-card>
   </v-dialog>
-  <DefaultsDialog v-model="defaultsOpen" :title="`Defaults of the type ${defaultsOf}`" level="type" :name="defaultsOf" :values="valuesOf(defaultsOf)" :saving="saving" @submit="saveDefaults" />
+  <DefaultsDialog v-model="defaultsOpen" :title="`Defaults of the type ${defaultsOf}`" level="type" :name="defaultsOf" :values="valuesOf(defaultsOf)" :saving="saving" :error="defaultsError" @submit="saveDefaults" />
 </template>
 
 <style scoped>
