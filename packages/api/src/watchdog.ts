@@ -4,8 +4,8 @@
 // function probes the Google Cloud routers that are silent or never reported (router push design 2026-11-14 §6.3, §6.4):
 // what it met (a refusal, a router too old to report) is said instead of silent.
 import { InvokeCommand } from '@aws-sdk/client-lambda';
-import { reporting, type RouterProbe, type RouterSummary } from '@dormeto/fleet';
-import { cloudOf, GOOGLE_REPORT_MINIMUM, reportsTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
+import { IDLE_SIGNAL_KEYS, STANDALONE_ROUTER, reporting, type RouterProbe, type RouterSummary } from '@dormeto/fleet';
+import { below, cloudOf, GOOGLE_REPORT_MINIMUM, reportsTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fleetRouters, type TerraformRouter } from './routers.js';
 
@@ -96,17 +96,46 @@ const gcpSilentHint = (project: string, region: string, probe: RouterProbe | nul
 // A refusal the probe met: the command its text names fixes it, and the next run sees it.
 const REFUSED_HINT = 'The manager\'s call to the router is refused: once the command has run, the watchdog calls it again at its next run (every 5 minutes).';
 
-export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now, probes = [], routerVersion }: {
+// The levels of settings.json that hold idle signals (its defaults, its types), in words: the watchdog's warning names them.
+export function idleLevelsOf(doc: unknown): string[] {
+  const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const workloads = isObject(doc) && isObject(doc.workloads) ? doc.workloads : {};
+  const holds = (settings: unknown) => isObject(settings) && IDLE_SIGNAL_KEYS.some((k) => settings[k] !== undefined && settings[k] !== null);
+  return [...(holds(workloads.defaults) ? ['the defaults'] : []), ...(Array.isArray(workloads.types) ? workloads.types.filter((t) => isObject(t) && holds(t.settings)).map((t) => `type ${String((t as { name?: unknown }).name)}`) : [])];
+}
+
+// A router that does not know the organization's idle signals while they are stored (the review's M5: the gate acts only at a
+// write; a router may join, or report an older version, later): an AWS router before the first that knows them ignores the
+// levels that hold them whole, HTTP settings included; a Google Cloud router is given them without the idle signals.
+function idleSignalsProblem(levels: string[], cloud: Cloud, version: string | null): Problem | null {
+  if (!levels.length) return null;
+  const where = levels.join(', ');
+  if (cloud === 'gcp') {
+    return { code: 'idle-signals-unknown', level: 'warning', text: `the organization's idle signals are set (${where}) and a Google Cloud router has none yet: it is given those levels without them`, hint: 'Nothing to do for its HTTP workloads; standalone workloads come to Google Cloud later.' };
+  }
+  if (version && /^\d+\.\d+\.\d+/.test(version) && !below(version, STANDALONE_ROUTER)) return null;
+  return {
+    code: 'idle-signals-unknown', level: 'warning',
+    text: `the organization's idle signals are set (${where}) and this router (${version ?? 'version not known'}) does not know them: it ignores those levels whole, their HTTP settings included`,
+    hint: `Upgrade the router to ${STANDALONE_ROUTER} or later, or remove the idle signals from those levels.`,
+  };
+}
+
+// idleLevels: the levels of the organization's settings that hold idle signals (idleLevelsOf).
+export function routerObservations({ terraformRouters, installed, summaries, managerAccount, now, probes = [], routerVersion, idleLevels = [] }: {
   terraformRouters: TerraformRouter[]; installed: InstalledRouter[]; summaries: RouterSummary[]; managerAccount: string; now: number;
   // The Google Cloud routers' probes (RS# items), and the version the manager pins (the install command's).
-  probes?: { account: string; region: string; probe: RouterProbe | null }[]; routerVersion?: string | undefined;
+  probes?: { account: string; region: string; probe: RouterProbe | null }[]; routerVersion?: string | undefined; idleLevels?: string[];
 }): Observation[] {
   const observations: Observation[] = [];
+  const dropping = new Map<string, Problem>();
   for (const router of fleetRouters(terraformRouters, installed, managerAccount)) {
     const account = router.account ?? managerAccount;
     const cloud = router.cloud ?? 'aws';
     const subject: Subject = { id: `router#${account}#${router.region}`, kind: 'router', name: router.name, cloud, account, region: router.region };
     const summary = summaries.find((s) => s.account === account && s.region === router.region);
+    const drop = idleSignalsProblem(idleLevels, cloud, (typeof summary?.version === 'string' ? summary.version : null) ?? router.installed?.version ?? null);
+    if (drop) dropping.set(subject.id, drop);
     if (summary && reporting(summary, now)) {
       try {
         observations.push({ subject, problems: reportedProblems(summary) });
@@ -140,7 +169,7 @@ export function routerObservations({ terraformRouters, installed, summaries, man
     const hint = cloud === 'gcp' ? gcpSilentHint(account, router.region, probe) : AWS_SILENT_HINT;
     observations.push({ subject, problems: [{ code: 'silent', level: 'error', text: summary ? `no report for ${minutes(now - Date.parse(summary.checkedAt))} minutes` : 'no report received', hint }] });
   }
-  return observations;
+  return observations.map((o) => (dropping.has(o.subject.id) ? { ...o, problems: [...o.problems, dropping.get(o.subject.id)!] } : o));
 }
 
 // remove: a subject clear for 6 hours (nothing left to damp) leaves the table.
@@ -278,7 +307,7 @@ function render(change: Change, dashboardUrl: string, env: string, at: string): 
   return { subject, message, chat: chatNotification(subject, description, nextSteps), attributes: { level: news.some((p) => p.level === 'error') ? 'error' : 'warning', ...attributes } };
 }
 
-export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations, routerVersion, probe }: {
+export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRouters, fleet, registry, alarms, notify, now = Date.now, log, extraObservations, routerVersion, probe, idleLevels }: {
   env: string;
   // The router version the manager pins: the install command's --version for a Google Cloud router too old to report.
   routerVersion?: string;
@@ -295,6 +324,8 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
   log: Log;
   // Subjects other than routers (the IP lists, R6b).
   extraObservations?: () => Promise<Observation[]>;
+  // The levels of the organization's settings that hold idle signals (idleLevelsOf of settings.json).
+  idleLevels?: () => Promise<string[]>;
 }) {
   return {
     async run() {
@@ -310,7 +341,9 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
         }
       }
       const t = now();
-      const [summaries, installed, existing, probes] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list(), fleet.routerProbes?.() ?? []]);
+      const [summaries, installed, existing, probes, levels] = await Promise.all([fleet.listRouters(), registry.listRouters(), alarms.list(), fleet.routerProbes?.() ?? [],
+        // Unread, the warning is left as it was: the routers' alarms keep their other problems.
+        (idleLevels?.() ?? Promise.resolve([])).catch((err: Error) => { log.warn('IdleLevelsUnread', { error: err.message }); return [] as string[]; })]);
       // Subjects other than routers that could not be read keep their alarms as they are (never resolved nor removed).
       let extra: Observation[] = [];
       let extraUnread: string | null = null;
@@ -326,7 +359,7 @@ export function createWatchdog({ env, managerAccount, dashboardUrl, terraformRou
       const named = fleetRouters(terraformRouters, installed, managerAccount);
       const routerName = (account?: string, region?: string) => named.find((r) => (r.account ?? managerAccount) === account && r.region === region)?.name;
       const observations = [
-        ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t, probes, routerVersion }),
+        ...routerObservations({ terraformRouters, installed: installed.filter((r) => !r.uninstalling), summaries, managerAccount, now: t, probes, routerVersion, idleLevels: levels }),
         ...extra.map((o) => (o.subject.kind === 'workload' ? { ...o, subject: { ...o.subject, router: routerName(o.subject.account, o.subject.region) ?? o.subject.router } } : o)),
       ];
       const known = new Map(existing.map((x) => [x.alarm.subject.id, x]));

@@ -21,3 +21,35 @@ describe('a router\'s standalone workloads without their resource', () => {
     }]);
   });
 });
+
+// The review's M5: idle signals stored at the organization's level while a router does not know them (the gate acts only at a
+// write; a router may join or report an older version later). Its health carries a warning naming what it drops.
+describe('a router that does not know the organization\'s idle signals', () => {
+  const summary = (region: string, version: string | null) => ({
+    account: MANAGER, region, name: `dmt-${region}`, version, build: 'b', checkSchedule: 'rate(5 minutes)', checkedAt: new Date(NOW - 60_000).toISOString(), durationMs: 1,
+    health: { status: 'ok', problems: [] }, pauses: [], counts: {}, check: { checkedAt: new Date(NOW - 60_000).toISOString(), total: 1, received: [0] },
+  }) as unknown as RouterSummary;
+  const routers = [{ name: 'dmt-new', region: 'eu-west-1', controller: 'c' }, { name: 'dmt-old', region: 'eu-west-2', controller: 'c' }, { name: 'dmt-unknown', region: 'eu-west-3', controller: 'c' }];
+  const observe = (idleLevels: string[]) => routerObservations({
+    terraformRouters: routers as never, installed: [], summaries: [summary('eu-west-1', '0.42.0'), summary('eu-west-2', '0.41.2'), summary('eu-west-3', null)], managerAccount: MANAGER, now: NOW, idleLevels,
+  }).map((o) => [o.subject.name, o.problems]);
+
+  it('warns on each such router, naming the levels it ignores, its HTTP settings included', () => {
+    const warning = (version: string) => [{
+      code: 'idle-signals-unknown', level: 'warning',
+      text: `the organization's idle signals are set (the defaults, type batch) and this router (${version}) does not know them: it ignores those levels whole, their HTTP settings included`,
+      hint: 'Upgrade the router to 0.42.0 or later, or remove the idle signals from those levels.',
+    }];
+    expect(observe(['the defaults', 'type batch'])).toEqual([['dmt-new', []], ['dmt-old', warning('0.41.2')], ['dmt-unknown', warning('version not known')]]);
+  });
+
+  it('says nothing while no idle signal is stored', () => {
+    expect(observe([])).toEqual([['dmt-new', []], ['dmt-old', []], ['dmt-unknown', []]]);
+  });
+
+  it('names the levels that hold idle signals in settings.json', async () => {
+    const { idleLevelsOf } = await import('../src/watchdog.js');
+    expect(idleLevelsOf({ workloads: { defaults: { idleMinutes: 30, idleCpuPercent: 5 }, types: [{ name: 'web', settings: { waitSeconds: 10 } }, { name: 'batch', settings: { idleMetric: 'off' } }] } })).toEqual(['the defaults', 'type batch']);
+    expect(idleLevelsOf(null)).toEqual([]);
+  });
+});

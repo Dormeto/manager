@@ -301,6 +301,10 @@ run "ip_lists" {
     condition     = contains(keys(aws_cloudwatch_metric_alarm.manager), "ip-lists-errors") && aws_lambda_function.watchdog.environment[0].variables.LISTS_BUCKET == "dmt-test-manager-ip-lists-111122223333"
     error_message = "The list function's errors alarm; the watchdog alarms on the lists' status."
   }
+  assert {
+    condition     = toset(flatten([for s in data.aws_iam_policy_document.watchdog.statement : tolist(s.resources) if s.sid == "ListsStatus"])) == toset(["arn:aws:s3:::dmt-test-manager-ip-lists-111122223333/status.json", "arn:aws:s3:::dmt-test-manager-ip-lists-111122223333/settings.json"])
+    error_message = "The watchdog reads the lists' status and settings.json (a router that does not know the organization's idle signals is warned on), nothing else of the bucket."
+  }
 }
 
 run "ip_lists_are_validated" {

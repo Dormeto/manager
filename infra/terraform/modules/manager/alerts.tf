@@ -73,9 +73,10 @@ data "aws_iam_policy_document" "watchdog" {
     resources = [aws_lambda_function.fleet.arn]
   }
   statement {
-    sid       = "ListsStatus"
-    actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.lists.arn}/status.json"]
+    sid     = "ListsStatus"
+    actions = ["s3:GetObject"]
+    # status.json: the lists' status; settings.json: the organization's levels that hold idle signals.
+    resources = ["${aws_s3_bucket.lists.arn}/status.json", "${aws_s3_bucket.lists.arn}/settings.json"]
   }
   statement {
     sid       = "ListsListing"

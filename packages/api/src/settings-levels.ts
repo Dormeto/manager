@@ -16,7 +16,9 @@ export const SCALAR_KEYS = [...Object.keys(SETTING_RANGES), 'wakeMode'];
 export const RULE_KEYS = ['noWakeRules', 'wakeRules'];
 // A standalone workload's idle signals (vision standalone workloads design §4; router settings-levels.mjs IDLE_KEYS, its
 // ranges and texts): each a value or 'off'. The waker's keys are an HTTP workload's only (WAKER_KEYS).
-export const IDLE_KEYS = ['idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
+import { IDLE_SIGNAL_KEYS } from '@dormeto/fleet';
+
+export const IDLE_KEYS = IDLE_SIGNAL_KEYS;
 export const STANDALONE_KEYS = ['idleMinutes', 'wakeTimeoutSeconds', ...IDLE_KEYS];
 export const WAKER_KEYS = [...SCALAR_KEYS.filter((key) => !STANDALONE_KEYS.includes(key)), ...RULE_KEYS];
 export type Kind = 'http' | 'standalone';

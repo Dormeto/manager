@@ -11,7 +11,7 @@ import type { Refusal } from '@dormeto/google/router';
 // The commands that fix what the manager can't do on Google Cloud, as the watchdog's probe records them too.
 import { cloudOf, googlePath, googleScopeOf, googleServicePath, googleSourceOf, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
-import { STANDALONE_RECOMMENDABLE, STANDALONE_WINDOWS, activityPlan, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { STANDALONE_RECOMMENDABLE, STANDALONE_ROUTER, STANDALONE_WINDOWS, activityPlan, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
@@ -643,7 +643,7 @@ function typesChangeText(before: Record<string, unknown>[], after: { name: strin
 // What a router before 0.37.0 answers to a setting of the levels: unknown.
 // What a router before 0.42.0 answers to an idle signal (vision standalone workloads design §4): unknown.
 const IDLE_SETTING_UNKNOWN = /^settings: (defaults: )?unknown setting (idleCpuPercent|idleNetworkBytes|idleMetric)$/;
-const IDLE_SINCE = '0.42.0';
+const IDLE_SINCE = STANDALONE_ROUTER;
 const LEVEL_SETTING_UNKNOWN = /^settings: unknown setting (defaults|idleMinutes|waitSeconds|drainSeconds|wakeTimeoutSeconds|maxHolders|failedRetrySeconds|wakeMode|noWakeRules|wakeRules|type)$/;
 // A level's defaults in a body (settings at scale design §8): each key a value or null, null for all of them; refused in the router's words.
 // cloud: a router's (the organization's level, both clouds', is AWS's); idle: the level holds the idle signals (AWS's).

@@ -10,7 +10,7 @@ import { createRecords } from '@dormeto/operations';
 import { createAlarmStore } from './alarms.js';
 import type { TerraformRouter } from './routers.js';
 import { readJson } from './s3-json.js';
-import { createWatchdog, fleetProbe, listObservations, snsInput, workloadObservations, type ListStatusLine } from './watchdog.js';
+import { createWatchdog, fleetProbe, idleLevelsOf, listObservations, snsInput, workloadObservations, type ListStatusLine } from './watchdog.js';
 
 const table = process.env.TABLE ?? '';
 const dynamo = new DynamoDBClient({});
@@ -37,6 +37,8 @@ const watchdog = createWatchdog({
     },
   },
   log: { info: log('info'), warn: log('warn'), error: log('error') },
+  // The organization's levels that hold idle signals (settings.json): a router that does not know them is warned on.
+  ...(listsBucket ? { idleLevels: async () => idleLevelsOf(await readJson<unknown>(s3, listsBucket, 'settings.json')) } : {}),
   // The manager's IP lists (R6b), from the list function's status.
   // The manager's IP lists (R6b), from the list function's status; failed wakes (R7b), from the fleet's failure index.
   extraObservations: async () => [
