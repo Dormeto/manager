@@ -250,9 +250,12 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
           <v-chip v-if="attentionOnly" closable label color="secondary" variant="tonal" @click:close="allWorkloads">Needing attention</v-chip>
           <v-chip v-if="routerFilter || stateFilter" closable label color="primary" variant="tonal" @click:close="allWorkloads">{{ [routerFilter, stateFilter.toLowerCase()].filter(Boolean).join(' · ') }}</v-chip>
         </div>
-        <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
-          class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
-        <KindSelect :model-value="kindFilter" class="dm-toolbar__kind" @update:model-value="filterByKind($event)" />
+        <!-- Tags and Kind side by side, wrapping together (never one of them alone under the count). -->
+        <div class="dm-toolbar__pick" data-test="toolbar-pick">
+          <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
+            class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
+          <KindSelect :model-value="kindFilter" class="dm-toolbar__kind" @update:model-value="filterByKind($event)" />
+        </div>
       </template>
       <template #loading><DmLoader label="Reading the workloads…" :size="56" /></template>
       <template #no-data>
@@ -305,11 +308,13 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-figure__label { font-size: 0.78rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
 
 /* The table's toolbar (DmTable's, the search last): how many, the filters. */
-.dm-toolbar__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.dm-toolbar__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
 .dm-toolbar__count { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); margin-right: 4px; }
 .dm-toolbar__count .dm-num { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
-.dm-toolbar__tags { flex: 0 1 320px; min-width: 200px; }
-.dm-toolbar__kind { flex: 0 1 240px; min-width: 200px; }
+/* Tags and Kind as one group: Tags takes the room left, Kind the width of its longest choice with its icon. */
+.dm-toolbar__pick { display: flex; align-items: center; gap: 8px; flex: 1 1 380px; min-width: 0; max-width: 520px; }
+.dm-toolbar__tags { flex: 1 1 200px; min-width: 160px; }
+.dm-toolbar__kind { flex: 0 0 172px; }
 .dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 8rem; }
 
 /* The table: cells a little tighter, aligned on their middle; numbers in columns. */
@@ -347,6 +352,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
   .dm-strip__figures > * { flex: 1 1 0; min-width: 0; }
 }
 @media (max-width: 600px) {
+  .dm-toolbar__pick { flex: 1 1 100%; max-width: none; flex-wrap: wrap; }
   .dm-toolbar__tags, .dm-toolbar__kind { flex: 1 1 100%; min-width: 0; }
   .dm-url { max-width: 11rem; }
   .dm-strip__body { padding: 16px; }

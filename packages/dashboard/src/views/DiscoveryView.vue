@@ -721,7 +721,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template #toolbar>
         <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
         <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
-        <KindSelect :model-value="kindFilter" max-width="210" class="dm-filter" @update:model-value="filterByKind($event)" />
+        <KindSelect :model-value="kindFilter" class="dm-filter dm-filter--kind" @update:model-value="filterByKind($event)" />
         <v-spacer />
         <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
           <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
@@ -913,6 +913,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   font-variant-numeric: tabular-nums; }
 .dm-tab.v-chip--selected .dm-tab__count, .dm-tab.v-chip--active .dm-tab__count { background: rgba(var(--v-theme-on-surface), 0.12); }
 .dm-filter { flex: 1 1 160px; }
+/* Kind: the width of its longest choice with its icon. */
+.dm-filter--kind { flex: 0 0 172px; }
 .dm-candidates__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* The table's own footer: where the page is in the list, and the cursor's Previous and Next. */
 .dm-candidates__foot { display: flex; align-items: center; gap: 8px; padding: 8px 16px; }
@@ -936,6 +938,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
   .dm-run__tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 600px) {
+  /* A phone's filters stacked, each the full width. */
+  .dm-filter, .dm-filter--kind { flex: 1 1 100%; max-width: none !important; }
   .dm-run__body { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px !important; }
   .dm-run__icon { width: 68px; height: 68px; }
   .dm-candidates__actions { width: 100%; }
