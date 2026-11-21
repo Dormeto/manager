@@ -1,15 +1,16 @@
 <script setup lang="ts">
 // The idle share of the last 7 days as a bar colored from red (busy) to green (idle); the figures and their source in a
-// tooltip.
+// tooltip. resource: a standalone candidate's kind (its share is by its idle signals, not by requests).
 import { computed } from 'vue';
+import type { ResourceKind } from '@dormeto/discovery/types';
 import type { Cloud } from '@dormeto/fleet/clouds';
 import { cloudWords } from '../cloud-words';
 import { idleColor, idleText } from '../discovery';
 
-const props = defineProps<{ idleHours7d: number; requests7d: number | null; cloud?: Cloud }>();
+const props = defineProps<{ idleHours7d: number; requests7d: number | null; cloud?: Cloud; resource?: ResourceKind }>();
 const text = computed(() => idleText(props, props.cloud));
 const share = computed(() => Math.min(100, Math.max(0, (100 * props.idleHours7d) / 168)));
-const words = computed(() => cloudWords(props.cloud));
+const source = computed(() => text.value.source ?? cloudWords(props.cloud).idleSource);
 </script>
 
 <template>
@@ -21,7 +22,7 @@ const words = computed(() => cloudWords(props.cloud));
     </template>
     <div class="font-weight-bold">{{ text.title }}</div>
     <div>{{ text.detail }}</div>
-    <div class="mt-1 note">{{ words.idleSource }}</div>
+    <div class="mt-1 note">{{ source }}</div>
   </v-tooltip>
 </template>
 

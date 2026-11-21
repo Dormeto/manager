@@ -6,7 +6,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
 import { mdiAlertCircleOutline, mdiAlertOutline, mdiCancel, mdiCheckCircleOutline, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
   mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOffOutline, mdiTimerOutline } from '@mdi/js';
-import type { Candidate, RunRecord, Status } from '@dormeto/discovery/types';
+import type { Candidate, ResourceKind, RunRecord, Status } from '@dormeto/discovery/types';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
 import CloudMark from '../components/CloudMark.vue';
@@ -173,6 +173,9 @@ function follow() {
 const isGoogle = (c: Listed) => rowCloud(c) === 'gcp';
 // The ~ of an estimated idle share (Google Cloud's: the user, 2026-11-12).
 const idleMark = (c: Listed) => cloudWords(rowCloud(c)).idleMark;
+// A standalone candidate's resource kind (its idle share is by its signals). The rows are typed as HTTP candidates until the
+// view shows the two kinds (plan 2, M46).
+const resourceOf = (c: Listed): ResourceKind | undefined => ((c as { kind?: string }).kind === 'standalone' ? (c.backend?.kind as ResourceKind) : undefined);
 const mapLink = (c: Listed) => (c.urlMap ? urlMapConsoleUrl(c.urlMap, c.lb, c.account) : null);
 const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
 // The filter takes an AWS account or a Google Cloud project; the region within it is that cloud's.
@@ -762,7 +765,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <!-- The ~ says a Google Cloud share is estimated (the user, 2026-11-12); the bar's tooltip says why. -->
         <div v-if="item.idleHours7d !== null" class="dm-idle">
           <span class="dm-idle__share" aria-hidden="true">{{ idleMark(item) }}{{ idleShare(item) }}</span>
-          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :cloud="rowCloud(item)" />
+          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :cloud="rowCloud(item)" :resource="resourceOf(item)" />
         </div>
       </template>
       <template #[`item.statusReason`]="{ item }">

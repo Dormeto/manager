@@ -90,6 +90,13 @@ export function standalonePorts({ deny = [] as string[] } = {}) {
         return base.elbv2.describeTargetHealth(input);
       },
     },
+    // The standalone candidates' signals (5-minute points) have no data; the HTTP idle share is the base fake's.
+    cloudwatch: {
+      async getMetricData(input) {
+        if (input.MetricDataQueries.every((q) => q.MetricStat.Period === 300)) return { MetricDataResults: [] };
+        return base.cloudwatch!.getMetricData(input);
+      },
+    },
     autoscaling: {
       async describeAutoScalingGroups(input) {
         const names = (input as { AutoScalingGroupNames?: string[] }).AutoScalingGroupNames;

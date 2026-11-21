@@ -4,6 +4,7 @@
 import { errorText } from './error-text.js';
 import type { BackendKind, DiscoveredRule, IdleShare, RuleRef, ScannedRule } from './types.js';
 import { standaloneRules, type StandaloneReport } from './standalone.js';
+import { standaloneIdle } from './standalone-idle.js';
 import { EKS_ACTIONS, clustersOf, kubernetesBackend, type Cluster, type KubernetesBackend, type KubernetesPorts } from './kubernetes.js';
 
 const WORKLOAD_TAG = 'dormeto:workload';
@@ -362,6 +363,18 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   // A resource behind a target group a rule forwards to is its HTTP candidate's.
   const routed = new Set(rows.flatMap((r) => r.forward.all));
   const found = await standaloneRules(ports, where, { targetGroups: [...groups.values()], routed, groups: owners.asgs, services: owners.described });
+  // Their idle share by the default signals of their type, the eligible and managed ones as for HTTP. A batch CloudWatch fails
+  // for keeps its candidates' stored shares (none for one never read), said in the run: never an idle share it did not read.
+  const read = found.rules.filter((c) => c.eligibility !== 'ineligible');
+  if (read.length && ports.cloudwatch) {
+    const { shares, failed } = await standaloneIdle(ports.cloudwatch, read, { now });
+    const kept = failed.length ? (await storedIdle?.()) ?? new Map<string, IdleShare>() : new Map<string, IdleShare>();
+    for (const c of read) c.idleHours7d = shares.has(c.id) ? shares.get(c.id)! : kept.get(c.id)?.idleHours7d ?? null;
+    for (const f of failed) {
+      found.problems.push(`the idle share of ${f.ids.length} standalone candidate${f.ids.length === 1 ? '' : 's'} could not be read: ${f.error}`);
+      log?.warn('CloudWatchIdleFailed', { ...where, standalone: f.ids.length, error: f.error.slice(0, 300) });
+    }
+  }
   onStandalone?.({ problems: found.problems, unread: found.unread });
   return [...candidates, ...found.rules];
 }

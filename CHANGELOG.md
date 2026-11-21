@@ -24,6 +24,12 @@ a managed resource the scan no longer finds is `gone` (`managed resource not fou
 candidates are unchanged. The discovery role `DmtDiscoveryRole` gains `rds:DescribeDBInstances`,
 `rds:DescribeDBClusters` and `rds:ListTagsForResource`; a role applied before lists the other kinds, says in the run
 which RDS list it may not read, and keeps the stored RDS candidates as they were.
+- **A standalone candidate's idle share:** its hours of the last 7 days with the default idle signal of its type under
+its threshold at every 5-minute point (the router's built-ins: a server's CPU under 5 %, a database's connections under
+1), read with `GetMetricData` for the eligible and managed candidates, 500 queries a call. An hour with a missing point is
+not idle; a resource with no point all week (stopped, a service at 0) has no share; a read that fails keeps the stored
+share (none for a candidate never read) and says so in the run. Discovery's idle bar says which signal was under and
+where it comes from.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users
