@@ -54,7 +54,7 @@ const addResource = () => { const g = form.value.gcp!; g.filter = `${g.filter}${
       </template>
       <template v-if="shape === 'gcp' && form.gcp">
         <v-text-field v-model="form.gcp.type" data-test="idle-metric-type" class="dm-metric__wide" label="Metric type" placeholder="custom.googleapis.com/queue/depth" density="compact" />
-        <v-text-field v-model="form.gcp.filter" data-test="idle-metric-filter" class="dm-metric__wide" label="Filter (optional)" placeholder="metric.labels.agent = &quot;${resource}&quot;" density="compact"
+        <v-text-field v-model="form.gcp.filter" data-test="idle-metric-filter" class="dm-metric__wide mb-4" label="Filter (optional)" placeholder="metric.labels.agent = &quot;${resource}&quot;" density="compact"
           :hint="`${RESOURCE} is the resource's name; the filter adds to the metric type's`" persistent-hint>
           <template #append-inner><v-btn size="x-small" variant="tonal" data-test="idle-filter-resource" @click="addResource">{{ RESOURCE }}</v-btn></template>
         </v-text-field>
