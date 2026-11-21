@@ -22,6 +22,8 @@ group, an Auto Scaling group with no target group, an ECS service with no load b
 cluster. Its router naps it when its idle signals stay under their thresholds for its idle window, or by its schedule;
 nothing wakes it on demand (a schedule, a person's Wake, or a start made in AWS that the router sees). Discovery lists them
 once the perimeter's `standalone` is `on`; each is a candidate of its own resource (`kind: "standalone"`, its ARN as `id`).
+What feeds a target group is refused; a Classic Load Balancer is not seen, so a resource behind one stays eligible (the
+router's limit).
 
 - **Onboarding** (`POST /api/operations`, `type: "onboard"`, the resource's ARN as `candidateId`) runs an HTTP
   candidate's steps, its router installed first where the region has none; `lock load balancer` is skipped (there is

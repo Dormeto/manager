@@ -66,7 +66,8 @@ while Google Cloud accepts Spot and preemptible VMs (a VM Google preempts is rea
   and `resourceArn`, its `backend { kind, id, arn }`, its name and its own tags; no load balancer, rule, host or target
   group field), eligible, or ineligible in the router's words (in an Auto Scaling group, an instance store root volume, a
   Spot instance, it feeds a target group, EKS nodes, the daemon scheduling strategy, an Aurora member, a read replica,
-  Aurora Serverless v1), or managed once onboarded. The account, region, resource tag and backend kind criteria apply to
+  Aurora Serverless v1), or managed once onboarded. What feeds a target group is refused; a Classic Load Balancer is not seen,
+  so a resource behind one stays eligible. The account, region, resource tag and backend kind criteria apply to
   the resource (`backendKinds` takes `rds-instance` and `rds-cluster`); exclusions take a resource (`target.kind:
   "resource"`). Its idle share is its hours of the last 7 days with its type's default signal under its threshold at every
   5-minute point (a server's CPU under 5 %, a database's connections under 1); a resource with no point all week has none.
