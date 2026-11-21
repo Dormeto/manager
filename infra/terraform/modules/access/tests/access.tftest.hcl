@@ -97,3 +97,15 @@ run "discovery_invokes_only_the_kubernetes_proxies" {
     error_message = "The same statement for every partition and account: discovery invokes functions named *-kube-* and tagged dormeto:role = kubernetes-proxy only."
   }
 }
+
+# The standalone scan's databases (vision standalone workloads design §6): the discovery role reads RDS, read-only.
+run "discovery_reads_the_databases_of_the_standalone_scan" {
+  command = plan
+
+  assert {
+    condition = length(setsubtract(["rds:DescribeDBInstances", "rds:DescribeDBClusters", "rds:ListTagsForResource"], one([
+      for s in jsondecode(aws_iam_role_policy.discovery.policy).Statement : s.Action if s.Sid == "Discovery"
+    ]))) == 0
+    error_message = "The discovery role reads the RDS instances and clusters and their tags."
+  }
+}

@@ -3,7 +3,7 @@
 import { googlePath } from '@dormeto/fleet/clouds';
 import { BatchGetItemCommand, BatchWriteItemCommand, DeleteItemCommand, GetItemCommand, PutItemCommand, QueryCommand, type AttributeValue } from '@aws-sdk/client-dynamodb';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { CANDIDATE_STATUSES, type AccessReport, type AccessSummary, type AccountScan, type Connection, type Candidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
+import { CANDIDATE_STATUSES, type AccessReport, type AccessSummary, type AccountScan, type Connection, type AnyCandidate, type DiscoveryConfig, type Exclusion, type OrgInventory, type RunRecord, type Status } from './types.js';
 
 const PK = 'T#default';
 const RETENTION_S = 90 * 86_400;
@@ -33,18 +33,18 @@ export interface DiscoveryStore {
   lastRun(options?: { completed?: boolean }): Promise<RunRecord | null>;
   getRun(startedAt: string): Promise<RunRecord | null>;
   putRun(run: RunRecord): Promise<void>;
-  listCandidates(): Promise<Candidate[]>;
+  listCandidates(): Promise<AnyCandidate[]>;
   // A page of the candidates of a status, in account, region and id order; within an account, or an account and region.
-  pageCandidates(page: { status: Status; limit: number; cursor?: string; account?: string; region?: string }): Promise<{ candidates: Candidate[]; cursor: string | null }>;
+  pageCandidates(page: { status: Status; limit: number; cursor?: string; account?: string; region?: string }): Promise<{ candidates: AnyCandidate[]; cursor: string | null }>;
   // Candidates changed between runs (dismissals, exclusions, operations): written, and the counts moved by their status.
-  replaceCandidates(after: Candidate[], before: Candidate[]): Promise<void>;
+  replaceCandidates(after: AnyCandidate[], before: AnyCandidate[]): Promise<void>;
   // Candidates per status: set by each run, moved by each change between runs (scale design §5).
   getCounts(): Promise<{ counts: Partial<Record<Status, number>>; at: string } | null>;
   putCounts(counts: Partial<Record<Status, number>>): Promise<void>;
-  accountCandidates(account: string): Promise<Candidate[]>;
-  getCandidate(id: string): Promise<Candidate | null>;
-  putCandidates(candidates: Candidate[]): Promise<void>;
-  deleteCandidates(candidates: Pick<Candidate, 'id' | 'account' | 'region'>[]): Promise<void>;
+  accountCandidates(account: string): Promise<AnyCandidate[]>;
+  getCandidate(id: string): Promise<AnyCandidate | null>;
+  putCandidates(candidates: AnyCandidate[]): Promise<void>;
+  deleteCandidates(candidates: Pick<AnyCandidate, 'id' | 'account' | 'region'>[]): Promise<void>;
   getAccountScan(account: string): Promise<AccountScan | null>;
   putAccountScan(scan: AccountScan): Promise<void>;
   deleteAccountScan(account: string): Promise<void>;
@@ -78,7 +78,8 @@ export interface DynamoSender {
 const seconds = (ms: number) => Math.floor(ms / 1000);
 
 // Candidate ids are load balancer ARNs (target group or rule): arn:<partition>:elasticloadbalancing:<region>:<account>:...,
-// or on Google Cloud the backend service's path (the project, then `global` or the region).
+// a standalone candidate's resource ARN (arn:<partition>:<service>:<region>:<account>:...), or on Google Cloud the backend
+// service's path (the project, then `global` or the region).
 const locate = (id: string) => {
   const google = googlePath(id);
   if (google) return { account: google.project, region: google.region };
@@ -191,7 +192,7 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
     return items;
   }
 
-  const candidateItem = (c: Candidate): Item => ({
+  const candidateItem = (c: AnyCandidate): Item => ({
     ...candidateKey(c.account, c.region, c.id),
     gsi1pk: { S: `CS#${c.status}` },
     gsi1sk: { S: `${c.account}#${c.region}#${c.id}` },
@@ -271,7 +272,7 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
       const items = (await Promise.all(CANDIDATE_STATUSES.map((status) => queryAll({
         IndexName: 'gsi1', KeyConditionExpression: 'gsi1pk = :pk', ExpressionAttributeValues: { ':pk': { S: `CS#${status}` } },
       })))).flat();
-      return items.map((item) => data<Candidate>(item)!).filter(Boolean);
+      return items.map((item) => data<AnyCandidate>(item)!).filter(Boolean);
     },
     async pageCandidates({ status, limit, cursor, account, region }) {
       const prefix = account ? `${account}#${region ? `${region}#` : ''}` : '';
@@ -281,16 +282,16 @@ export function createStore({ dynamo, table, now = Date.now, lockMs = LOCK_MS }:
         ExpressionAttributeValues: { ':pk': { S: `CS#${status}` }, ...(prefix ? { ':prefix': { S: prefix } } : {}) },
         Limit: limit, ...(cursor ? { ExclusiveStartKey: decodeCursor(cursor, status) } : {}),
       }));
-      return { candidates: ((page.Items ?? []) as Item[]).map((item) => data<Candidate>(item)!).filter(Boolean), cursor: encodeCursor(page.LastEvaluatedKey) };
+      return { candidates: ((page.Items ?? []) as Item[]).map((item) => data<AnyCandidate>(item)!).filter(Boolean), cursor: encodeCursor(page.LastEvaluatedKey) };
     },
     async accountCandidates(account) {
       const items = await queryAll({ KeyConditionExpression: 'pk = :pk', ExpressionAttributeValues: { ':pk': { S: `CAND#${account}` } } });
-      return items.filter((item) => item.sk?.S !== ACCOUNT_SCAN).map((item) => data<Candidate>(item)!).filter(Boolean);
+      return items.filter((item) => item.sk?.S !== ACCOUNT_SCAN).map((item) => data<AnyCandidate>(item)!).filter(Boolean);
     },
     async getCandidate(id) {
       const { account, region } = locate(id);
       const out = await dynamo.send(new GetItemCommand({ TableName: table, Key: candidateKey(account, region, id), ConsistentRead: true }));
-      return data<Candidate>(out.Item);
+      return data<AnyCandidate>(out.Item);
     },
     async putCandidates(candidates) {
       await batchWrite(candidates.map((c) => ({ PutRequest: { Item: candidateItem(c) } })));

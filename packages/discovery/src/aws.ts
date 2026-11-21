@@ -5,6 +5,7 @@ import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwat
 import { GetRoleCommand, IAMClient } from '@aws-sdk/client-iam';
 import { DescribeInstancesCommand, DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { DescribeServicesCommand, ECSClient, ListClustersCommand, ListServicesCommand } from '@aws-sdk/client-ecs';
+import { DescribeDBClustersCommand, DescribeDBInstancesCommand, RDSClient } from '@aws-sdk/client-rds';
 import { DescribeClusterCommand, EKSClient, ListClustersCommand as ListEksClustersCommand } from '@aws-sdk/client-eks';
 import {
   DescribeListenersCommand,
@@ -36,7 +37,7 @@ export interface Credentials {
   expiration?: Date;
 }
 
-export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; cloudwatch: Sender; ec2?: Sender }): ScanPorts {
+export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; cloudwatch: Sender; ec2?: Sender; rds?: Sender }): ScanPorts {
   return {
     elbv2: {
       describeLoadBalancers: (input) => c.elbv2.send(new DescribeLoadBalancersCommand(input)),
@@ -47,7 +48,14 @@ export function scanPorts(c: { elbv2: Sender; autoscaling: Sender; ecs: Sender; 
       describeTargetHealth: (input) => c.elbv2.send(new DescribeTargetHealthCommand(input)),
     },
     autoscaling: { describeAutoScalingGroups: (input) => c.autoscaling.send(new DescribeAutoScalingGroupsCommand(input)) },
-    ...(c.ec2 ? { ec2: { describeInstances: (input: { InstanceIds: string[] }) => c.ec2!.send(new DescribeInstancesCommand(input)) } } : {}),
+    ...(c.ec2 ? { ec2: { describeInstances: (input: { InstanceIds?: string[]; NextToken?: string }) => c.ec2!.send(new DescribeInstancesCommand(input)) } } : {}),
+    // The standalone scan's databases: called only with the perimeter's standalone scan on.
+    ...(c.rds ? {
+      rds: {
+        describeDBInstances: (input: { Marker?: string }) => c.rds!.send(new DescribeDBInstancesCommand(input)),
+        describeDBClusters: (input: { Marker?: string }) => c.rds!.send(new DescribeDBClustersCommand(input)),
+      },
+    } : {}),
     ecs: {
       listClusters: (input) => c.ecs.send(new ListClustersCommand(input)),
       listServices: (input) => c.ecs.send(new ListServicesCommand(input)),
@@ -108,6 +116,7 @@ export function regionalClients(credentials: Credentials, region: string) {
     ecs: new ECSClient(config),
     cloudwatch: new CloudWatchClient(config),
     ec2: new EC2Client(config),
+    rds: new RDSClient(config),
   };
 }
 

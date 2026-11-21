@@ -22,7 +22,10 @@
         "cloudtrail:GetTrailStatus",
         "cloudtrail:GetEventSelectors",
         "eks:ListClusters",
-        "eks:DescribeCluster"
+        "eks:DescribeCluster",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "rds:ListTagsForResource"
       ],
       "Resource": "*"
     },

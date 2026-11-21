@@ -98,7 +98,7 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
     scan: async (credentials, where, options) => scanRegion({
       ...scanPorts(regionalClients(credentials as Credentials, where.region)),
       kubernetes: kubernetesPorts(credentials as Credentials, where.region, undefined, undefined, await proxyPrefix(where)),
-    }, where, { storedIdle: options?.storedIdle, log }),
+    }, where, { storedIdle: options?.storedIdle, log, standalone: options?.standalone === true, onStandalone: options?.onStandalone }),
     trails: (credentials, region) => trailCovers(trailsPort(credentials as Credentials, region), region),
     discoveryOnly: (credentials) => discoveryOnlyOf(credentials as Credentials, roleName),
     ...(synthetic > 0 ? { synthetic: { accounts: synthetic } } : {}),

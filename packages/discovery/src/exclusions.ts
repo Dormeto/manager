@@ -8,6 +8,7 @@ export function exclusionCriterion(e: Exclusion): Criterion {
   const label = `manual exclusion by ${e.by}: ${e.reason}`;
   if (e.target.kind === 'account') return { accountIds: [e.target.account], label };
   if (e.target.kind === 'load-balancer') return { loadBalancers: [e.target.path ?? e.target.arn!], label };
+  if (e.target.kind === 'resource') return { resources: [e.target.arn!], label };
   return { targetGroups: [e.target.path ?? e.target.arn!], label };
 }
 

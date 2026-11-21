@@ -34,6 +34,10 @@ describe('discovery role policy', () => {
     expect(allowsInGov).toBe(true);
   });
 
+  it('reads the databases of the standalone scan (vision standalone workloads design §6)', () => {
+    expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['rds:DescribeDBInstances', 'rds:DescribeDBClusters', 'rds:ListTagsForResource']));
+  });
+
   it('reads the CloudTrail trails of each region (event refresh, packaging design §5)', () => {
     expect(DISCOVERY_ACTIONS).toEqual(expect.arrayContaining(['cloudtrail:DescribeTrails', 'cloudtrail:GetTrailStatus', 'cloudtrail:GetEventSelectors']));
   });

@@ -5,6 +5,7 @@ import { trailCovers } from '../src/aws.js';
 import { refreshAccounts, runDiscovery, runSummary } from '../src/run.js';
 import { A, B, C, config, filter } from './fixtures.js';
 import { T0, setup } from './run-fakes.js';
+import type { ScannedRule } from '../src/types.js';
 
 const ON = config({ regions: ['eu-west-1', 'eu-west-3'], filters: [filter('all', [{}])], eventRefresh: { enabled: true } });
 
@@ -143,7 +144,7 @@ describe('the refresh of forwarded events', () => {
     const counted = (await s.store.getCounts())!.counts;
     const total = Object.values(counted).reduce((n, c) => n + (c ?? 0), 0);
     const scan = s.deps.scan;
-    s.deps.scan = async (credentials, where) => [...(await scan(credentials, where)), ...(where.region === 'eu-west-3' ? [{ ...(await scan(credentials, where))[0]!, id: `new-${where.account}`, targetGroupArn: `new-${where.account}` }] : [])];
+    s.deps.scan = async (credentials, where) => [...(await scan(credentials, where)), ...(where.region === 'eu-west-3' ? [{ ...(await scan(credentials, where))[0]! as ScannedRule, id: `new-${where.account}`, targetGroupArn: `new-${where.account}` }] : [])];
     s.advance(60_000);
     await refreshAccounts(s.deps, [event(B.id, 'eu-west-3')]);
     expect((await s.store.accountCandidates(B.id)).map((c) => c.id)).toContain(`new-${B.id}`);

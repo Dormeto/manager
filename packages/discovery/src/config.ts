@@ -1,6 +1,6 @@
 // Perimeter configuration: default and validation (spec section 4.4). Every error is listed at once, with its path.
 import { googlePath, isAccount, isProject, isRegion } from '@dormeto/fleet/clouds';
-import { BACKEND_KINDS, type Criterion, type DiscoveryConfig, type Filter } from './types.js';
+import { CRITERION_BACKEND_KINDS, type Criterion, type DiscoveryConfig, type Filter } from './types.js';
 
 // A new installation scans nothing until an administrator adds a filter.
 export const DEFAULT_CONFIG: DiscoveryConfig = {
@@ -93,7 +93,7 @@ function criterion(value: unknown, path: string, errors: string[]): Criterion | 
   if (present('hosts')) out.hosts = strings(value.hosts, `${path}.hosts`, errors, pattern) ?? undefined;
   if (present('resourceTags')) out.resourceTags = tags(value.resourceTags, `${path}.resourceTags`, errors) ?? undefined;
   if (present('backendKinds')) {
-    const kinds = strings(value.backendKinds, `${path}.backendKinds`, errors, (s) => ((BACKEND_KINDS as readonly string[]).includes(s) ? null : `"${s}" is not one of ${BACKEND_KINDS.join(', ')}`));
+    const kinds = strings(value.backendKinds, `${path}.backendKinds`, errors, (s) => ((CRITERION_BACKEND_KINDS as readonly string[]).includes(s) ? null : `"${s}" is not one of ${CRITERION_BACKEND_KINDS.join(', ')}`));
     if (kinds) out.backendKinds = kinds as Criterion['backendKinds'];
   }
   for (const key of Object.keys(value)) {
@@ -160,6 +160,15 @@ export function validateConfig(input: unknown): { config: DiscoveryConfig | null
     }
   }
 
+  // The standalone scan (vision standalone workloads design §6): absent is off.
+  if (input.standalone !== undefined && input.standalone !== 'off' && input.standalone !== 'on') errors.push('standalone: must be "off" or "on"');
+
   if (errors.length) return { config: null, errors };
-  return { config: { version: 1, mode: input.mode as DiscoveryConfig['mode'], regions, refreshHours: refreshHours as number, globalExcludes, filters, ...(eventRefresh ? { eventRefresh } : {}) }, errors };
+  return {
+    config: {
+      version: 1, mode: input.mode as DiscoveryConfig['mode'], regions, refreshHours: refreshHours as number, globalExcludes, filters,
+      ...(eventRefresh ? { eventRefresh } : {}), ...(input.standalone !== undefined ? { standalone: input.standalone as 'off' | 'on' } : {}),
+    },
+    errors,
+  };
 }

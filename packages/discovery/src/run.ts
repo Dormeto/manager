@@ -15,8 +15,9 @@ import { nextCandidates } from './lifecycle.js';
 import { lint, lintCounters, sumCounters, type LintCounters } from './lint.js';
 import { loadInventory, type OrganizationsPort } from './org.js';
 import type { DiscoveryStore } from './store.js';
+import type { StandaloneReport } from './standalone.js';
 import { SYNTHETIC_REGIONS, isSynthetic, syntheticInventory, syntheticRules } from './synthetic.js';
-import type { AccessRow, AccessState, AccessSummary, AccountResult, AccountScan, Candidate, Connection, DiscoveryConfig, IdleShare, OrgInventory, PairResult, RunRecord, RunTarget, ScannedRule } from './types.js';
+import { isStandalone, type AccessRow, type AccessState, type AccessSummary, type AccountResult, type AccountScan, type AnyCandidate, type Candidate, type Connection, type DiscoveredRule, type DiscoveryConfig, type IdleShare, type OrgInventory, type PairResult, type RunRecord, type RunTarget, type ScannedRule } from './types.js';
 
 const HOUR_MS = 3_600_000;
 // A region without any rule in EMPTY_RUNS successive scans is scanned once every SKIP_RUNS + 1 runs.
@@ -49,8 +50,11 @@ export interface RunDeps {
   discoveryOnly?(credentials: unknown): Promise<boolean>;
   // Whether a CloudTrail trail logs the management writes of the region (event refresh, packaging design §5).
   trails?(credentials: unknown, region: string): Promise<boolean>;
-  // storedIdle: the account's stored idle shares, by candidate, for the target groups CloudWatch fails for.
-  scan(credentials: unknown, where: { account: string; region: string }, options?: { storedIdle: () => Promise<Map<string, IdleShare>> }): Promise<ScannedRule[]>;
+  // storedIdle: the account's stored idle shares, by candidate, for the target groups CloudWatch fails for. standalone: the
+  // perimeter's standalone scan is on (its candidates too), and onStandalone is told what it could not read.
+  scan(credentials: unknown, where: { account: string; region: string }, options?: {
+    storedIdle: () => Promise<Map<string, IdleShare>>; standalone?: boolean; onStandalone?: (report: StandaloneReport) => void;
+  }): Promise<DiscoveredRule[]>;
   now?: () => number;
   concurrency?: number; // regions of an account scanned at once (8)
   runLimitMs?: number; // a run not finished after this is abandoned (3 hours: the state machine's limit)
@@ -245,19 +249,19 @@ const skipOf = (skipped: { reason: string; pairs: number }[]) => (reason: string
   if (entry) entry.pairs += 1;
   else skipped.push({ reason, pairs: 1 });
 };
-const scannedRegion = (regions: AccountScan['regions'], region: string, rules: ScannedRule[], at: string) => {
+const scannedRegion = (regions: AccountScan['regions'], region: string, rules: DiscoveredRule[], at: string) => {
   regions[region] = { scannedAt: at, emptyRuns: rules.length ? 0 : (regions[region]?.emptyRuns ?? 0) + 1, skippedRuns: 0 };
 };
 function stepEnd({ previous, stored = previous, results, reported = results, skipped, error, inventory, config, now }: {
-  previous: Map<string, Candidate>; stored?: Map<string, Candidate>; results: PairResult[]; reported?: PairResult[];
+  previous: Map<string, AnyCandidate>; stored?: Map<string, AnyCandidate>; results: PairResult[]; reported?: PairResult[];
   skipped: { reason: string; pairs: number }[]; error: string | undefined; inventory: OrgInventory; config: DiscoveryConfig; now: number;
-}): { changed: Candidate[]; result: AccountResult; ok: boolean } {
+}): { changed: AnyCandidate[]; result: AccountResult; ok: boolean } {
   const changed = nextCandidates({ previous, results, inventory, config, now }).filter((c) => {
     const before = stored.get(c.id);
     return !before || canonical(before) !== canonical(c);
   });
   const result: AccountResult = {
-    pairs: reported.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms })),
+    pairs: reported.map((r) => ({ region: r.region, ok: r.ok, ...(r.error ? { error: r.error } : {}), rules: r.rules.length, ms: r.ms, ...(r.problems?.length ? { problems: r.problems } : {}) })),
     skipped,
     ...(error ? { error } : {}),
     lint: lintCounters(config, inventory, results.flatMap((r) => r.rules)),
@@ -338,7 +342,8 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
       continue;
     }
     const prior = regions[p.region];
-    if (prior && prior.emptyRuns >= EMPTY_RUNS && (prior.skippedRuns ?? 0) < SKIP_RUNS) {
+    // With the standalone scan on, a region with no load balancer may hold resources: scanned every run.
+    if (config.standalone !== 'on' && prior && prior.emptyRuns >= EMPTY_RUNS && (prior.skippedRuns ?? 0) < SKIP_RUNS) {
       regions[p.region] = { ...prior, skippedRuns: (prior.skippedRuns ?? 0) + 1 };
       skip(EMPTY_REASON);
       continue;
@@ -368,8 +373,11 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   await pool(toScan, deps.concurrency ?? 8, async (region) => {
     const started = now();
     try {
-      const rules = synthetic ? syntheticRules(account, region) : await deps.scan(credentials, { account, region }, { storedIdle });
-      results.push({ account, region, ok: true, rules, ms: now() - started });
+      let report: StandaloneReport | undefined;
+      const standalone = config.standalone === 'on' ? { standalone: true, onStandalone: (r: StandaloneReport) => { report = r; } } : {};
+      const rules = synthetic ? syntheticRules(account, region) : await deps.scan(credentials, { account, region }, { storedIdle, ...standalone });
+      const r = report as StandaloneReport | undefined;
+      results.push({ account, region, ok: true, rules, ms: now() - started, ...(r?.problems.length ? { problems: r.problems } : {}), ...(r?.unread.length ? { unread: r.unread } : {}) });
       scannedRegion(regions, region, rules, at);
     } catch (err) {
       results.push({ account, region, ok: false, error: errorText(err), rules: [], ms: now() - started });
@@ -381,7 +389,7 @@ export async function scanAccount(deps: RunDeps, { runId, account, only }: { run
   const previous = new Map(stored);
   // A rule candidate (earlier versions, or a rule that rejoined a target group) now inside a target group candidate is
   // merged into it: its dismissal, first seen date and history carry over, and it is deleted rather than gone.
-  const groupOf = new Map(results.flatMap((r) => r.rules.flatMap((c) => (c.rules ?? []).filter((x) => x.id !== c.id).map((x) => [x.id, c.id] as const))));
+  const groupOf = new Map(results.flatMap((r) => r.rules.flatMap((c) => (isStandalone(c) ? [] : c.rules ?? []).filter((x) => x.id !== c.id).map((x) => [x.id, c.id] as const))));
   const superseded = [...previous.keys()].filter((id) => groupOf.has(id));
   for (const [group, merged] of Map.groupBy(superseded.map((id) => previous.get(id)!), (c) => groupOf.get(c.id)!)) {
     if (!previous.has(group)) previous.set(group, mergedCandidate(group, merged));
@@ -430,7 +438,8 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
     if (!google || !connected) throw new Error(NO_CONNECTION);
     routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
     const managed = (await Promise.all(routers.map((r) => google.routerWorkloads(account, r.region)))).flat();
-    scan = await scanProject(google, { project: account, managed, stored, now, log: deps.log });
+    // A project's candidates are HTTP ones (no standalone scan on Google Cloud yet).
+    scan = await scanProject(google, { project: account, managed, stored: stored.filter((c): c is Candidate => !isStandalone(c)), now, log: deps.log });
   } catch (err) {
     error = errorText(err);
     cause = err;
@@ -663,7 +672,7 @@ export async function finalizeRun(deps: RunDeps, plan: RunPlan): Promise<RunReco
       if (r.error && !r.pairs.length) targets.push({ account, region: '*', status: 'error', error: r.error });
       for (const p of r.pairs) {
         if (!p.ok) targets.push({ account, region: p.region, status: 'error', error: p.error ?? 'failed', ms: p.ms });
-        else if (p.rules) targets.push({ account, region: p.region, status: 'ok', ms: p.ms, rules: p.rules });
+        else if (p.rules || p.problems?.length) targets.push({ account, region: p.region, status: 'ok', ms: p.ms, rules: p.rules, ...(p.problems?.length ? { problems: p.problems } : {}) });
         else emptyPairs += 1;
       }
       for (const s of r.skipped) skippedPairs.push({ account, ...s });
@@ -724,7 +733,7 @@ export async function runDiscovery(deps: RunDeps, event: { source: 'schedule' | 
 }
 
 // The previous record of a target group candidate built from the rule candidates merged into it.
-function mergedCandidate(id: string, merged: Candidate[]): Candidate {
+function mergedCandidate(id: string, merged: AnyCandidate[]): AnyCandidate {
   const oldest = [...merged].sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt))[0]!;
   const dismissed = merged.find((c) => c.dismissed)?.dismissed;
   const history = merged.flatMap((c) => c.history).sort((a, b) => a.at.localeCompare(b.at)).slice(-20);

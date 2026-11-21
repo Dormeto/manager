@@ -1,9 +1,9 @@
 // Useless inclusions (spec section 4.3): an include that a global exclude, or its own filter's exclude, covers; an include
 // of everything; and, after a run, includes that matched nothing or only globally excluded accounts, regions or rules.
 import { describeCriterion, globMatches, globalAccountExclude, globalPairExclude, matches, matchesAccount, tagsMatch } from './filters.js';
-import type { Criterion, DiscoveryConfig, LintFinding, OrgInventory, ScannedRule } from './types.js';
+import type { Criterion, DiscoveredRule, DiscoveryConfig, LintFinding, OrgInventory } from './types.js';
 
-const DIMENSIONS = ['accountIds', 'ouIds', 'accountTags', 'regions', 'loadBalancers', 'hosts', 'resourceTags', 'backendKinds', 'targetGroups'] as const;
+const DIMENSIONS = ['accountIds', 'ouIds', 'accountTags', 'regions', 'loadBalancers', 'hosts', 'resourceTags', 'backendKinds', 'targetGroups', 'resources'] as const;
 
 function isUnder(ou: string, ancestor: string, inventory: OrgInventory): boolean {
   for (let current: string | null = ou; current; current = inventory.ous[current]?.parent ?? null) {
@@ -56,7 +56,7 @@ export function covers(e: Criterion, i: Criterion, inventory: OrgInventory): boo
   if (!accountsCovered(e, i, inventory)) return false;
   if (e.regions && !subset(i.regions, e.regions)) return false;
   if (e.backendKinds && !subset(i.backendKinds, e.backendKinds)) return false;
-  for (const key of ['loadBalancers', 'hosts', 'targetGroups'] as const) {
+  for (const key of ['loadBalancers', 'hosts', 'targetGroups', 'resources'] as const) {
     const outer = e[key];
     if (outer && !(i[key] !== undefined && i[key]!.every((p) => outer.some((q) => patternCovers(q, p))))) return false;
   }
@@ -81,7 +81,7 @@ function onlyExcludedPairs(config: DiscoveryConfig, include: Criterion, inventor
 export type LintCounters = Record<string, { matched: number; excluded: number }>;
 const includeKey = (filter: string, index: number) => `${filter}#${index + 1}`;
 
-export function lintCounters(config: DiscoveryConfig, inventory: OrgInventory, rules: ScannedRule[]): LintCounters {
+export function lintCounters(config: DiscoveryConfig, inventory: OrgInventory, rules: DiscoveredRule[]): LintCounters {
   const accounts = new Map(inventory.accounts.map((a) => [a.id, a]));
   const counters: LintCounters = {};
   for (const f of config.filters) {
@@ -109,7 +109,7 @@ export function sumCounters(all: LintCounters[]): LintCounters {
   return sum;
 }
 
-export function lint(config: DiscoveryConfig, inventory: OrgInventory, last?: { rules: ScannedRule[] } | { counters: LintCounters }): LintFinding[] {
+export function lint(config: DiscoveryConfig, inventory: OrgInventory, last?: { rules: DiscoveredRule[] } | { counters: LintCounters }): LintFinding[] {
   const findings: LintFinding[] = [];
   const counters = last && ('rules' in last ? lintCounters(config, inventory, last.rules) : last.counters);
   for (const f of config.filters) {

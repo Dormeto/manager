@@ -2,8 +2,8 @@
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
 import { createHash } from 'node:crypto';
 import {
-  CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, lint, rescope, restatus, validateConfig, withExclusions,
-  type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type RunRecord, type Status,
+  CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, isStandalone, lint, rescope, restatus, validateConfig, withExclusions,
+  type AnyCandidate, type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type RunRecord, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
 import { GoogleError, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
@@ -392,13 +392,17 @@ const CANDIDATES_PAGE = 50;
 const ACCESS_PAGE = 100;
 const ACCESS_MAX = 1000;
 const CANDIDATES_MAX = 200;
-const ARNS: Record<Exclude<ExclusionKind, 'account'>, RegExp> = {
+const ARNS: Record<Exclude<ExclusionKind, 'account' | 'resource'>, RegExp> = {
   'target-group': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):targetgroup\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
   'load-balancer': /^arn:aws[a-z-]*:elasticloadbalancing:([a-z0-9-]+):(\d{12}):loadbalancer\/app\/([A-Za-z0-9-]{1,32})\/[0-9a-f]{16}$/,
 };
 // An exclusion pauses its workloads with the reason "excluded: <reason>", which the router caps at REASON_MAX.
 const EXCLUDED = 'excluded: ';
-const KIND_TEXT: Record<ExclusionKind, string> = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' };
+const KIND_TEXT: Record<ExclusionKind, string> = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account', resource: 'resource' };
+// A standalone candidate's resource (vision standalone workloads design §6): region, account and the router's id of the
+// resource (router lambda/src/lib/settings-levels.mjs resourceKindOf).
+const RESOURCE_ARN = /^arn:aws[a-z-]*:(?:ec2:([a-z0-9-]+):(\d{12}):instance\/(i-[0-9a-f]+)|autoscaling:([a-z0-9-]+):(\d{12}):autoScalingGroup:[0-9a-f-]+:autoScalingGroupName\/(.{1,255})|ecs:([a-z0-9-]+):(\d{12}):service\/([A-Za-z0-9_\/-]{1,512})|rds:([a-z0-9-]+):(\d{12}):(?:db|cluster):([a-z][a-z0-9-]{0,62}))$/;
+const RESOURCE_TEXT = 'target.arn must be the ARN of an EC2 instance, an Auto Scaling group, an ECS service, an RDS instance or an Aurora cluster';
 const GROUPS_MAX = 100;
 const GROUP_DESCRIPTION_MAX = 200;
 const ROLES = new Set<Role>(['member', 'viewer', 'operator', 'admin']);
@@ -2300,9 +2304,9 @@ export function createApi({
     if (cloudOf(account) !== 'gcp') return typeof w.targetGroupArn === 'string' ? w.targetGroupArn : null;
     return typeof w.backendService === 'string' ? googleServicePath(account, 'backendServices', w.backendService, w.lb as WorkloadSummary['lb'], region) : null;
   }
-  async function withWorkload(c: Candidate, rows: FleetRows = rowsOf()) {
+  async function withWorkload(c: AnyCandidate, rows: FleetRows = rowsOf()) {
     if (!c.workloadId) return c;
-    if (cloudOf(c.account) === 'gcp') {
+    if (cloudOf(c.account) === 'gcp' && !isStandalone(c)) {
       const row = await googleRow(c, rows);
       if (!row) return c;
       // The row names its router as the router calls itself (dmtr-<region>); the manager's name for it is by its project and
@@ -2419,7 +2423,7 @@ export function createApi({
       const shown = page.candidates.filter((c) => visible(identity, { account: c.account, region: c.region }));
       // The onboarding or offboarding running on a candidate (the dashboard shows it in progress).
       const running = shown.length ? ((await operations?.list()) ?? []).filter((op) => op.status === 'running' && (op.type === 'onboard' || op.type === 'offboard')) : [];
-      const operationOf = (c: Candidate) => {
+      const operationOf = (c: AnyCandidate) => {
         // A Google Cloud onboarding names the backend service's path (its router's region is not the candidate's).
         if (cloudOf(c.account) === 'gcp') {
           const op = running.find((o) => o.target.account === c.account
@@ -2427,7 +2431,8 @@ export function createApi({
           return op ? { operation: { id: op.id, type: op.type } } : {};
         }
         const op = running.find((o) => o.target.account === c.account && o.target.region === c.region
-          && (o.type === 'onboard' ? o.target.targetGroupArn === c.targetGroupArn : Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
+          // A standalone candidate's onboarding targets its resource.
+          && (o.type === 'onboard' ? (isStandalone(c) ? o.target.resourceArn === c.resourceArn : o.target.targetGroupArn === c.targetGroupArn) : Boolean(c.workloadId) && o.target.workloadId === c.workloadId));
         return op ? { operation: { id: op.id, type: op.type } } : {};
       };
       const rows = rowsOf();
@@ -2497,6 +2502,13 @@ export function createApi({
       const account = String(target.account ?? '');
       if (!isAccount(account) && !isProject(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID or a project ID');
       return { kind, account, name: inventoryName(account) };
+    }
+    if (kind === 'resource') {
+      const arn = String(target.arn ?? '');
+      const m = RESOURCE_ARN.exec(arn);
+      if (!m) throw new HttpError(400, 'bad_request', RESOURCE_TEXT);
+      const [region, account, name] = [1, 4, 7, 10].map((i) => m.slice(i, i + 3)).find((g) => g[0])!;
+      return { kind, arn, account: account!, region: region!, name: name! };
     }
     // Google Cloud names a backend service (a target group) or a URL map (a load balancer) by its path.
     if (target.path !== undefined) {
@@ -2697,7 +2709,7 @@ export function createApi({
       if (onGoogle) cloudSqlFailures((body.databases ?? []) as unknown[]);
       else rdsFailures((body.databases ?? []) as unknown[]);
       // A Google Cloud router is 0.40.0 or later (checked with its choice): it takes Hibernate.
-      const router = onGoogle ? googleRouterOf(c, body.router, identity) : null;
+      const router = onGoogle && !isStandalone(c) ? googleRouterOf(c, body.router, identity) : null;
       // A router before 0.32.0 would refuse the setting at the preview ("unknown setting hibernate"): refused here, with the
       // upgrade it needs. Without a router there, the onboarding installs the manager's own.
       if (!onGoogle && (body.settings as Record<string, unknown> | undefined)?.hibernate !== undefined) {

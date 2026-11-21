@@ -3,8 +3,15 @@
 import type { Cloud } from '@dormeto/fleet/clouds';
 import type { KubernetesCandidate } from './kubernetes.js';
 
-export type BackendKind = 'instance' | 'asg' | 'ecs' | 'k8s';
+export type BackendKind = 'instance' | 'asg' | 'ecs' | 'k8s' | 'rds-instance' | 'rds-cluster';
+// The backends of an HTTP candidate (the dashboard's filter).
 export const BACKEND_KINDS: readonly BackendKind[] = ['instance', 'asg', 'ecs', 'k8s'];
+// The resource of a standalone candidate (vision standalone workloads design §2): the router's kinds (router lambda/src/lib/
+// settings-levels.mjs resourceKindOf).
+export type ResourceKind = 'instance' | 'asg' | 'ecs' | 'rds-instance' | 'rds-cluster';
+export const RESOURCE_KINDS: readonly ResourceKind[] = ['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster'];
+// What a criterion's backendKinds may name: both.
+export const CRITERION_BACKEND_KINDS: readonly BackendKind[] = [...new Set([...BACKEND_KINDS, ...RESOURCE_KINDS])];
 
 export interface Criterion {
   note?: string;
@@ -17,12 +24,14 @@ export interface Criterion {
   resourceTags?: Record<string, string[]>; // load balancer, rule or target group
   backendKinds?: BackendKind[];
   targetGroups?: string[]; // names with *, full ARNs, or Google Cloud paths (manual exclusions only, not in the configuration)
+  resources?: string[]; // a standalone candidate's resource ARN (manual exclusions only, not in the configuration)
   label?: string; // set by manual exclusions: their reason in decisions and lint, instead of "global exclude N"
 }
 
-// A manual exclusion (router management): a target group, a load balancer or an account, kept away from Dormeto.
-export type ExclusionKind = 'target-group' | 'load-balancer' | 'account';
-export const EXCLUSION_KINDS: readonly ExclusionKind[] = ['target-group', 'load-balancer', 'account'];
+// A manual exclusion (router management): a target group, a load balancer, an account or a standalone resource, kept away
+// from Dormeto.
+export type ExclusionKind = 'target-group' | 'load-balancer' | 'account' | 'resource';
+export const EXCLUSION_KINDS: readonly ExclusionKind[] = ['target-group', 'load-balancer', 'account', 'resource'];
 
 export interface Exclusion {
   id: string;
@@ -54,6 +63,9 @@ export interface DiscoveryConfig {
   // Event-driven refresh (packaging design §5): the manager connects the ready accounts (all, or those listed) with a
   // CloudTrail trail; off, it disconnects them. Absent: off.
   eventRefresh?: { enabled: boolean; accounts?: string[] };
+  // The standalone scan (vision standalone workloads design §6): on, AWS's instances, groups, services and databases that
+  // no route uses are candidates too. Absent: off (the built-in), so an install that upgrades sees no new candidate.
+  standalone?: 'off' | 'on';
 }
 
 export interface Account {
@@ -81,12 +93,13 @@ export interface RuleRef {
   managed: boolean; // tagged dormeto:workload
 }
 
-// A candidate: an application target group with every rule forwarding to it (id = target group ARN), or a rule that
-// forwards to no single application target group (id = rule ARN).
 // A candidate's idle share over the last 7 days: its idle hours and its requests, null when never read.
 export interface IdleShare { idleHours7d: number | null; requests7d: number | null }
 
+// An HTTP candidate: an application target group with every rule forwarding to it (id = target group ARN), or a rule that
+// forwards to no single application target group (id = rule ARN). It has no `kind` (absent means HTTP).
 export interface ScannedRule {
+  kind?: undefined;
   id: string; // target group ARN, or rule ARN
   account: string;
   region: string;
@@ -114,6 +127,30 @@ export interface ScannedRule {
   lb?: { kind: 'global' | 'classic' | 'regional' | 'internal' | 'cross-region-internal' };
 }
 
+// A standalone candidate (vision standalone workloads design §6): one stoppable resource on AWS that no route uses, by its
+// ARN (`id` and `resourceArn`), with no load balancer, listener, rule, host or target group field.
+export interface StandaloneRule {
+  kind: 'standalone';
+  id: string; // the resource's ARN
+  account: string;
+  region: string;
+  resourceArn: string;
+  name: string; // the router's default name: the instance's Name tag or its id, the group's, service's or database's name
+  backend: { kind: ResourceKind; id: string; arn: string };
+  tags: Record<string, string[]>; // the resource's own tags, one value each
+  eligibility: 'managed' | 'eligible' | 'ineligible';
+  reason?: string;
+  workloadId?: string;
+  idleHours7d: number | null; // by the default signals of its type (null: never read)
+  // An HTTP candidate's fields, absent.
+  loadBalancer?: never; loadBalancerArn?: never; listener?: never; priority?: never; conditions?: never; hosts?: never;
+  targetGroup?: never; targetGroupArn?: never; rules?: never; requests7d?: never; backendService?: never; urlMap?: never; lb?: never;
+}
+
+// What a scan finds: HTTP candidates, and with the perimeter's standalone scan on, standalone ones.
+export type DiscoveredRule = ScannedRule | StandaloneRule;
+export const isStandalone = <T extends { kind?: string }>(c: T): c is Extract<T, { kind: 'standalone' }> => c.kind === 'standalone';
+
 export interface Decision {
   scope: 'in' | 'out' | 'excluded';
   reason: string;
@@ -137,8 +174,12 @@ export interface PairResult {
   region: string;
   ok: boolean;
   error?: string;
-  rules: ScannedRule[];
+  rules: DiscoveredRule[];
   ms: number;
+  // The standalone scan's (vision standalone workloads design §6): what it could not read, said in the run, and the kinds
+  // whose stored candidates stay as they were.
+  problems?: string[];
+  unread?: ResourceKind[];
 }
 
 export type Status =
@@ -224,14 +265,19 @@ export interface AccessReport extends AccessSummary {
 
 // What an account step of a run found, for the run record (scale design §5).
 export interface AccountResult {
-  pairs: { region: string; ok: boolean; error?: string; rules: number; ms: number }[];
+  pairs: { region: string; ok: boolean; error?: string; rules: number; ms: number; problems?: string[] }[];
   skipped: { reason: string; pairs: number }[];
   error?: string; // the account could not be reached
   lint: Record<string, { matched: number; excluded: number }>;
   written: number;
 }
 
-export interface Candidate extends ScannedRule {
+export interface Candidate extends ScannedRule, CandidateState {}
+export interface StandaloneCandidate extends StandaloneRule, CandidateState {}
+// What the store holds: both kinds.
+export type AnyCandidate = Candidate | StandaloneCandidate;
+// A candidate's decision, status and history (both kinds).
+export interface CandidateState {
   accountName: string;
   ouPath: string[];
   scope: Decision['scope'];
@@ -267,6 +313,7 @@ export interface RunTarget {
   reason?: string;
   ms?: number;
   rules?: number;
+  problems?: string[]; // a pair scanned without all it should read (the standalone scan without the role's RDS actions)
 }
 
 export interface RunRecord {

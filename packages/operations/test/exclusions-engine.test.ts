@@ -363,3 +363,22 @@ describe('exclusions on Google Cloud', () => {
     });
   });
 });
+
+// A standalone workload (vision standalone workloads design §6): an exclusion of its resource, or of its account, pauses
+// the whole workload, with no target group.
+describe('exclusions of a standalone workload', () => {
+  it('pause the workload of the excluded resource without a target group', async () => {
+    const DB = `arn:aws:rds:eu-west-1:${ACCOUNT}:db:shop-db`;
+    const db = {
+      kind: 'standalone', id: DB, account: ACCOUNT, region: 'eu-west-1', resourceArn: DB, name: 'shop-db', backend: { kind: 'rds-instance', id: 'shop-db', arn: DB },
+      tags: {}, eligibility: 'managed', workloadId: 'db', idleHours7d: null, accountName: 'dormeto', ouPath: [], scope: 'in', scopeReason: 'in', status: 'managed',
+      statusReason: 'managed', firstSeenAt: 'x', lastSeenAt: 'x', history: [],
+    } as unknown as Candidate;
+    const s = setup({ candidates: [db, managed(1, 'shop')], known: { 'dmt-dev': ['db', 'shop'] } });
+    s.exclusions.set('x1', exclusion({ target: { kind: 'resource', arn: DB, account: ACCOUNT, region: 'eu-west-1', name: 'shop-db' } }));
+    const op = await s.engine.create('exclude', { exclusionId: 'x1' }, 'ops@example.com');
+    expect(await s.drive(op.id)).toEqual({ done: true, status: 'succeeded' });
+    expect(s.calls.filter(([, p]) => p.action === 'pause').map(([, p]) => p)).toEqual([{ action: 'pause', workloadId: 'db', by: 'ops@example.com', reason: 'excluded: migration', exclusionId: 'x1' }]);
+    expect(s.exclusions.get('x1')!.paused).toEqual([{ router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-1', workloadId: 'db' }]);
+  });
+});

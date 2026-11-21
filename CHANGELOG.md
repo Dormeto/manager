@@ -7,6 +7,23 @@ CLI script, of the same release).
 
 ## Unreleased
 
+- **Discovery finds standalone resources on AWS, once the perimeter says so:** the perimeter gains `standalone`, `off`
+(the built-in, also when absent: an install that upgrades sees no new candidate and makes no new call) or `on`. On, each
+region's scan also lists the EC2 instances, Auto Scaling groups, ECS services, RDS instances and Aurora clusters that no
+load balancer rule uses, each a candidate of its own resource (`kind: "standalone"`, its ARN as id and `resourceArn`, its
+backend, its default name and its own tags; no load balancer, rule, host or target group field): eligible, ineligible with
+the router's onboarding reasons (in an Auto Scaling group, an instance store root volume, a Spot instance, it feeds a
+target group, EKS nodes, the daemon scheduling strategy, an Aurora member, a read replica, Aurora Serverless v1), or
+managed when the router tagged it as a standalone workload's own resource; a backend of an HTTP candidate, a resource or
+companion of another workload, a Kubernetes node, and the members of a group or cluster left out or managed are left
+out. A region with no load balancer is then scanned every run. The account, region, resource tag and backend kind
+criteria apply to the resource (`backendKinds` also takes `rds-instance` and `rds-cluster`); a load balancer, host or
+target group criterion never matches it. Exclusions take a resource (`target.kind: "resource"`, its ARN). Turned off, the
+standalone candidates are `out-of-scope` (`the perimeter's standalone scan is off`), a managed one pending offboarding;
+a managed resource the scan no longer finds is `gone` (`managed resource not found in the last scan: offboard it`). HTTP
+candidates are unchanged. The discovery role `DmtDiscoveryRole` gains `rds:DescribeDBInstances`,
+`rds:DescribeDBClusters` and `rds:ListTagsForResource`; a role applied before lists the other kinds, says in the run
+which RDS list it may not read, and keeps the stored RDS candidates as they were.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

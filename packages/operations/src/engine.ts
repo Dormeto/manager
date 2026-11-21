@@ -4,7 +4,7 @@
 import { GoogleError, tagTargets, type TagTarget, type Tags } from '@dormeto/google';
 import { cloudOf, googlePath, googleServicePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS } from '@dormeto/fleet/router-call';
-import { exclusionCriterion, matches, restatus, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
+import { exclusionCriterion, isStandalone, matches, restatus, type AnyCandidate, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, Records, WorkflowType } from './records.js';
@@ -219,7 +219,8 @@ export function createEngine(deps: EngineDeps) {
     for (const c of await d.accountCandidates(e.target.account)) {
       const account = inventory.accounts.find((a) => a.id === c.account) ?? { id: c.account, name: c.accountName, ouPath: c.ouPath, tags: {} };
       if (!c.workloadId || c.goneAt || !matches(criterion, account, c, inventory)) continue;
-      wanted.set(`${c.workloadId} ${c.targetGroupArn ?? c.backendService}`, {
+      // A standalone workload's pause is the whole workload's: no target group (its resource names it).
+      wanted.set(`${c.workloadId} ${isStandalone(c) ? c.resourceArn : c.targetGroupArn ?? c.backendService}`, {
         workloadId: c.workloadId, ...(c.targetGroupArn ? { targetGroupArn: c.targetGroupArn } : {}), ...(onProject && c.backendService ? { backendService: c.backendService } : {}),
         routers: routersOf(c.account, c.region),
       });
@@ -666,7 +667,8 @@ export function createEngine(deps: EngineDeps) {
     }
     if (type === 'onboard') {
       const c = await deps.discovery?.getCandidate(String(input.candidateId));
-      if (c && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
+      // A standalone candidate has no target group: its onboarding comes with the standalone onboarding (plan 2, M44).
+      if (c && !isStandalone(c) && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
       return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn ?? '' }, activeKey: `TG#${c.targetGroupArn}` };
     }
@@ -795,7 +797,7 @@ export function createEngine(deps: EngineDeps) {
     }
   }
 
-  async function updateCandidate(op: Operation, change: (c: Candidate) => Candidate): Promise<Outcome> {
+  async function updateCandidate(op: Operation, change: (c: AnyCandidate) => AnyCandidate): Promise<Outcome> {
     // An offboarding's candidate: its target group, a Google Cloud one's backend service (its path).
     const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? op.context.backendService ?? '');
     const c = id ? await deps.discovery?.getCandidate(id) : null;

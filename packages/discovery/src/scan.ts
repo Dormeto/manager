@@ -2,7 +2,8 @@
 // eligible, ineligible and why), its host names and tags, and how idle its target group was over the last 7 days.
 // Ported from the router discovery (router lambda/src/lib/candidates.mjs).
 import { errorText } from './error-text.js';
-import type { BackendKind, IdleShare, RuleRef, ScannedRule } from './types.js';
+import type { BackendKind, DiscoveredRule, IdleShare, RuleRef, ScannedRule } from './types.js';
+import { standaloneRules, type StandaloneReport } from './standalone.js';
 import { EKS_ACTIONS, clustersOf, kubernetesBackend, type Cluster, type KubernetesBackend, type KubernetesPorts } from './kubernetes.js';
 
 const WORKLOAD_TAG = 'dormeto:workload';
@@ -11,18 +12,27 @@ const SHADOWS_TAG = 'dormeto:shadows'; // a Dormeto rule before a customer rule 
 const HOUR_MS = 3_600_000;
 const IDLE_WINDOW_HOURS = 168;
 
-type Tag = { Key?: string; Value?: string };
+export type Tag = { Key?: string; Value?: string };
 type Condition = { Field?: string; Values?: string[]; HostHeaderConfig?: { Values?: string[] }; PathPatternConfig?: { Values?: string[] } };
 type Action = { Type?: string; Order?: number; TargetGroupArn?: string; ForwardConfig?: { TargetGroups?: { TargetGroupArn?: string; Weight?: number }[] } };
 export type Rule = { RuleArn?: string; Priority?: string; IsDefault?: boolean; Conditions?: Condition[]; Actions?: Action[] };
 type LoadBalancer = { LoadBalancerArn?: string; LoadBalancerName?: string; Type?: string };
 type Listener = { ListenerArn?: string; Port?: number; Protocol?: string };
-type TargetGroup = { TargetGroupArn?: string; TargetGroupName?: string; TargetType?: string; LoadBalancerArns?: string[]; VpcId?: string };
+export type TargetGroup = { TargetGroupArn?: string; TargetGroupName?: string; TargetType?: string; LoadBalancerArns?: string[]; VpcId?: string };
 type MetricQuery = {
   Id: string;
   ReturnData: boolean;
   MetricStat: { Metric: { Namespace: string; MetricName: string; Dimensions: { Name: string; Value: string }[] }; Period: number; Stat: string };
 };
+
+export type AutoScalingGroup = { AutoScalingGroupName?: string; AutoScalingGroupARN?: string; TargetGroupARNs?: string[]; Tags?: Tag[] };
+export type Instance = { InstanceId?: string; State?: { Name?: string }; RootDeviceType?: string; InstanceLifecycle?: string; Tags?: Tag[] };
+export type Service = {
+  serviceArn?: string; serviceName?: string; status?: string; schedulingStrategy?: string; loadBalancers?: { targetGroupArn?: string }[];
+  tags?: { key?: string; value?: string }[];
+};
+export type DbInstance = { DBInstanceIdentifier?: string; DBInstanceArn?: string; DBClusterIdentifier?: string; ReadReplicaSourceDBInstanceIdentifier?: string; TagList?: Tag[] };
+export type DbCluster = { DBClusterIdentifier?: string; DBClusterArn?: string; EngineMode?: string; TagList?: Tag[] };
 
 // Read-only calls of the discovery role (DmtDiscoveryRole), as plain functions: AWS SDK clients or fakes.
 export interface ScanPorts {
@@ -35,16 +45,23 @@ export interface ScanPorts {
     describeTargetHealth(input: { TargetGroupArn: string }): Promise<{ TargetHealthDescriptions?: { Target?: { Id?: string } }[] }>;
   };
   autoscaling?: {
-    describeAutoScalingGroups(input: { NextToken?: string }): Promise<{ AutoScalingGroups?: { AutoScalingGroupName?: string; TargetGroupARNs?: string[]; Tags?: Tag[] }[]; NextToken?: string }>;
+    describeAutoScalingGroups(input: { NextToken?: string }): Promise<{ AutoScalingGroups?: AutoScalingGroup[]; NextToken?: string }>;
   };
-  // The instances behind an instance target group, read only where the region has EKS clusters (their nodes).
+  // The instances behind an instance target group, read only where the region has EKS clusters (their nodes); every
+  // instance of the region, a page at a time, for the standalone scan.
   ec2?: {
-    describeInstances(input: { InstanceIds: string[] }): Promise<{ Reservations?: { Instances?: { InstanceId?: string; Tags?: Tag[] }[] }[] }>;
+    describeInstances(input: { InstanceIds?: string[]; NextToken?: string }): Promise<{ Reservations?: { Instances?: Instance[] }[]; NextToken?: string }>;
   };
   ecs?: {
     listClusters(input: { nextToken?: string }): Promise<{ clusterArns?: string[]; nextToken?: string }>;
     listServices(input: { cluster: string; nextToken?: string }): Promise<{ serviceArns?: string[]; nextToken?: string }>;
-    describeServices(input: { cluster: string; services: string[] }): Promise<{ services?: { serviceArn?: string; loadBalancers?: { targetGroupArn?: string }[] }[] }>;
+    // include: ['TAGS'] for the standalone scan only.
+    describeServices(input: { cluster: string; services: string[]; include?: 'TAGS'[] }): Promise<{ services?: Service[] }>;
+  };
+  // The standalone scan's databases (vision standalone workloads design §6).
+  rds?: {
+    describeDBInstances(input: { Marker?: string }): Promise<{ DBInstances?: DbInstance[]; Marker?: string }>;
+    describeDBClusters(input: { Marker?: string }): Promise<{ DBClusters?: DbCluster[]; Marker?: string }>;
   };
   cloudwatch?: {
     getMetricData(input: { StartTime: Date; EndTime: Date; MetricDataQueries: MetricQuery[]; NextToken?: string; ScanBy?: 'TimestampAscending' | 'TimestampDescending' }): Promise<{ MetricDataResults?: { Id?: string; Timestamps?: Date[]; Values?: number[]; StatusCode?: string; Messages?: { Code?: string; Value?: string }[] }[]; NextToken?: string }>;
@@ -70,6 +87,9 @@ export const DISCOVERY_ACTIONS = [
   'iam:GetRole',
   // Kubernetes workloads (R10.5): the region's clusters; their API answers through the role's access entry.
   ...EKS_ACTIONS,
+  // The standalone scan's databases (vision standalone workloads design §6): their describe answers carry their tags
+  // (TagList); rds:ListTagsForResource is granted with them.
+  'rds:DescribeDBInstances', 'rds:DescribeDBClusters', 'rds:ListTagsForResource',
 ];
 
 // Pages of an AWS list call: ELBv2 (Marker/NextMarker), Auto Scaling (NextToken), ECS (nextToken).
@@ -107,13 +127,17 @@ export function nodeClusterOf(tags: Tag[] = []): string | null {
   return null;
 }
 
-type Owners = { groups: Map<string, { name: string; arn?: string; cluster?: string }>; services: Map<string, string> };
+// asgs and described: every group and service as read (the standalone scan's).
+type Owners = { groups: Map<string, { name: string; arn?: string; cluster?: string }>; services: Map<string, string>; asgs: AutoScalingGroup[]; described: Service[] };
 
-async function backendOwners({ autoscaling, ecs }: ScanPorts): Promise<Owners> {
+// standalone: the services are described with their tags.
+async function backendOwners({ autoscaling, ecs }: ScanPorts, { standalone = false } = {}): Promise<Owners> {
   const groups = new Map<string, { name: string; arn?: string; cluster?: string }>();
   const services = new Map<string, string>();
+  let asgs: AutoScalingGroup[] = [];
+  const everyService: Service[] = [];
   if (autoscaling) {
-    const asgs = await all<{ AutoScalingGroupName?: string; AutoScalingGroupARN?: string; TargetGroupARNs?: string[]; Tags?: Tag[] }>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
+    asgs = await all<AutoScalingGroup>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
     for (const g of asgs) {
       const cluster = nodeClusterOf(g.Tags);
       for (const arn of g.TargetGroupARNs ?? []) groups.set(arn, { name: g.AutoScalingGroupName ?? '', ...(g.AutoScalingGroupARN ? { arn: g.AutoScalingGroupARN } : {}), ...(cluster ? { cluster } : {}) });
@@ -124,12 +148,13 @@ async function backendOwners({ autoscaling, ecs }: ScanPorts): Promise<Owners> {
     for (const cluster of clusters) {
       const arns = await all<string>((i) => ecs.listServices({ ...i, cluster }), 'serviceArns', { in: 'nextToken', out: 'nextToken' });
       for (const batch of chunks(arns, 10)) {
-        const { services: described = [] } = await ecs.describeServices({ cluster, services: batch });
+        const { services: described = [] } = await ecs.describeServices({ cluster, services: batch, ...(standalone ? { include: ['TAGS' as const] } : {}) });
+        everyService.push(...described);
         for (const s of described) for (const lb of s.loadBalancers ?? []) if (lb.targetGroupArn && s.serviceArn) services.set(lb.targetGroupArn, s.serviceArn);
       }
     }
   }
-  return { groups, services };
+  return { groups, services, asgs, described: everyService };
 }
 
 interface Forward {
@@ -245,11 +270,17 @@ interface Row {
   app?: TargetGroup; // the one application target group it forwards to
 }
 
-// onClusters: the region's clusters as read (the estimate lists those it cannot read). storedIdle: the idle share stored for
-// each candidate, by id, read only when CloudWatch fails.
-export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now, onClusters, storedIdle, log }: {
+type ScanOptions = {
   now?: () => number; onClusters?: (clusters: Cluster[]) => void; storedIdle?: () => Promise<Map<string, IdleShare>>; log?: { warn(event: string, data?: object): void };
-} = {}): Promise<ScannedRule[]> {
+  standalone?: boolean; onStandalone?: (report: StandaloneReport) => void;
+};
+
+// onClusters: the region's clusters as read (the estimate lists those it cannot read). storedIdle: the idle share stored for
+// each candidate, by id, read only when CloudWatch fails. standalone (the perimeter's standalone scan on): the standalone
+// candidates too, after the HTTP ones, and onStandalone told what the scan could not read; off, not one call more.
+export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, options?: ScanOptions & { standalone?: false }): Promise<ScannedRule[]>;
+export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, options?: ScanOptions): Promise<DiscoveredRule[]>;
+export async function scanRegion(ports: ScanPorts, where: { account: string; region: string }, { now = Date.now, onClusters, storedIdle, log, standalone = false, onStandalone }: ScanOptions = {}): Promise<DiscoveredRule[]> {
   const { elbv2 } = ports;
   const lbs = (await all<LoadBalancer>((i) => elbv2.describeLoadBalancers(i), 'LoadBalancers')).filter((lb) => lb.Type === 'application');
   const rows: Row[] = [];
@@ -267,7 +298,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
     ...rows.flatMap((r) => r.forward.all),
   ].filter(Boolean));
   const visible = rows.filter((r) => tags.get(r.rule.RuleArn ?? '')?.[ROLE_TAG] !== 'admin');
-  const owners = await backendOwners(ports);
+  const owners = await backendOwners(ports, { standalone });
   // A discovery role without EKS rights (accounts set up before 0.10.0) scans the region as before.
   const clusters = ports.kubernetes ? await clustersOf(ports.kubernetes, where).catch((err) => {
     if (/AccessDenied|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`)) return [];
@@ -327,7 +358,12 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
   }) : new Map();
   const kept = unread.size ? (await storedIdle?.()) ?? new Map<string, IdleShare>() : new Map<string, IdleShare>();
   for (const c of measured) Object.assign(c, unread.has(c.targetGroupArn!) ? kept.get(c.id) ?? {} : idle.get(c.targetGroupArn!) ?? {});
-  return candidates;
+  if (!standalone) return candidates;
+  // A resource behind a target group a rule forwards to is its HTTP candidate's.
+  const routed = new Set(rows.flatMap((r) => r.forward.all));
+  const found = await standaloneRules(ports, where, { targetGroups: [...groups.values()], routed, groups: owners.asgs, services: owners.described });
+  onStandalone?.({ problems: found.problems, unread: found.unread });
+  return [...candidates, ...found.rules];
 }
 
 // One candidate per application target group, with every rule forwarding to it.
