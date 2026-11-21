@@ -85,6 +85,9 @@ function checked(defaults: unknown, workload = false): Record<string, unknown> {
       if (!Number.isInteger(value) || value < min || value > max) fail(400, 'bad_request', `${key}: must be a whole number from ${min} to ${max}`);
     } else if (key === 'wakeMode') {
       if (value !== 'any' && value !== 'browser') fail(400, 'bad_request', 'wakeMode: must be any or browser');
+    } else if (['idleCpuPercent', 'idleNetworkBytes', 'idleMetric'].includes(key)) {
+      // A standalone workload's idle signals (routers 0.42.0): a number, off, or a metric (the router checks the rest).
+      if (!(value === 'off' || typeof value === 'number' || (key === 'idleMetric' && typeof value === 'object'))) fail(400, 'bad_request', `${key}: must be a number, a metric or off`);
     } else if ((RULE_KEYS as readonly string[]).includes(key)) {
       if (!Array.isArray(value) || value.length > 20 || !value.every((r) => r && typeof r === 'object' && typeof (r as { name?: unknown }).name === 'string')) fail(400, 'bad_request', `${key} must be a list of at most 20 named rules`);
     } else if (!(workload && key === 'type')) fail(400, 'bad_request', `unknown setting ${key}`);

@@ -133,7 +133,7 @@ describe('onboarding a resource', () => {
     const w = mount(OnboardDialog, { props: { modelValue: false, title: 'build-agent', defaultName: 'build-agent', resource: 'instance' }, attachTo: document.body, global: { plugins: [...plugins(), router] } });
     await w.setProps({ modelValue: true });
     await flushPromises();
-    const text = document.querySelector('[data-test="onboard-standalone"]')!.textContent!;
+    const text = [...document.querySelectorAll('[data-test="onboard-standalone"]')].map((e) => e.textContent).join(' ');
     expect(text).toContain('A nap stops the instance');
     expect(text).toContain('Nothing wakes it on demand: a schedule, a person or a start made in AWS does.');
     expect(document.querySelector('[data-test="onboard-schedule"]')!.getAttribute('href')).toBe('/schedules');

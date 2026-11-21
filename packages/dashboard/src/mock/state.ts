@@ -16,6 +16,7 @@ import { cloudOf } from '@dormeto/fleet/clouds';
 import { ACCOUNTS, ME, ORG, accountName } from './org';
 import { bursts, checkAfter, entriesOf, sessions, wakeCause, type Burst } from './history';
 import { DAY, HOUR, MINUTE, SECOND, hash, hex, iso, random, uuid } from './util';
+import { STANDALONE_WORKLOADS, standaloneCandidates, standaloneWorkload } from './standalone';
 
 export class MockError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly body: Record<string, unknown> = {}) {
@@ -554,7 +555,7 @@ export function decide(d: Demo, c: Candidate, now: number): { status: Status; st
   const scopeReason = exclusion ? `excluded: manual exclusion by ${exclusion.by}: ${exclusion.reason}` : IN_SCOPE;
   const managed = c.eligibility === 'managed';
   const out = (status: Status, statusReason: string) => ({ status, statusReason, scope, scopeReason });
-  if (c.goneAt) return out('gone', managed ? `managed ${c.cloud === 'gcp' ? 'backend service' : 'rule'} not found in the last scan: offboard it` : 'not found in the last scan');
+  if (c.goneAt) return out('gone', managed ? `managed ${(c as { kind?: string }).kind === 'standalone' ? 'resource' : c.cloud === 'gcp' ? 'backend service' : 'rule'} not found in the last scan: offboard it` : 'not found in the last scan');
   if (managed) return scope === 'in' ? out('managed', 'managed') : out('pending-offboarding', scopeReason);
   if (c.dismissed) return out('dismissed', `dismissed by ${c.dismissed.by}${c.dismissed.note ? `: ${c.dismissed.note}` : ''}`);
   if (scope === 'excluded') return out('excluded', scopeReason);
@@ -698,7 +699,27 @@ function build(now: number): Demo {
   seedOperations(d, now);
   seedAudit(d, now);
   addGoogleCloud(d, now);
+  addStandalone(d, now, lastRun);
   return d;
+}
+
+// The standalone workloads and candidates (vision standalone workloads design §6), on the first AWS router the manager
+// installed (else the first), with the perimeter's standalone scan on.
+function addStandalone(d: Demo, now: number, lastRun: number): void {
+  const router = d.routers.find((r) => r.cloud !== 'gcp' && r.source === 'manager') ?? d.routers.find((r) => r.cloud !== 'gcp');
+  if (!router) return;
+  for (const spec of STANDALONE_WORKLOADS) {
+    const w = standaloneWorkload(spec, router, (backends) => buildWorkload({ name: spec.name, router: router.name, state: spec.state, profile: spec.state === 'AWAKE' ? 'busy' : 'office', backends, idleMinutes: 120, wakeMode: 'any', source: 'manager', hosts: [`${spec.name}.internal`] }, router, now), now);
+    d.workloads.push(w);
+  }
+  d.candidates = [...d.candidates, ...standaloneCandidates(d, router, now, lastRun + 47 * SECOND)];
+  for (const c of d.candidates.filter((x) => (x as { kind?: string }).kind === 'standalone')) {
+    const next = decide(d, c, now);
+    Object.assign(c, next);
+    c.history = [{ at: c.firstSeenAt, status: c.eligibility === 'ineligible' ? 'ineligible' : 'pending-onboarding', reason: c.eligibility === 'ineligible' ? c.reason ?? '' : 'eligible' }];
+    if (next.status !== c.history[0]!.status) c.history.push({ at: iso(now - DAY), status: next.status, reason: next.statusReason });
+  }
+  d.config.config = { ...d.config.config, standalone: 'on' };
 }
 
 // The demo's Google Cloud router (installed by the CLI in the project dormeto-dev) and its two workloads, a VM and a managed

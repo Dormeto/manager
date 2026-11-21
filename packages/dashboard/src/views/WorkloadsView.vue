@@ -251,7 +251,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         </div>
         <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
           class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
-        <v-select :model-value="kindFilter" :items="KINDS" item-title="title" item-value="value" label="Kind" clearable density="compact" hide-details
+        <v-select :model-value="kindFilter" :items="KINDS" item-title="short" item-value="value" label="Kind" clearable density="compact" hide-details
           class="dm-toolbar__kind" data-test="kind-filter" @update:model-value="filterByKind($event as Kind | null)">
           <template #item="{ props: item, item: choice }"><v-list-item v-bind="item" :prepend-icon="(choice as unknown as { icon: string }).icon" /></template>
         </v-select>
@@ -317,7 +317,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-toolbar__count { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); margin-right: 4px; }
 .dm-toolbar__count .dm-num { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
 .dm-toolbar__tags { flex: 0 1 320px; min-width: 200px; }
-.dm-toolbar__kind { flex: 0 1 210px; min-width: 170px; }
+.dm-toolbar__kind { flex: 0 1 240px; min-width: 200px; }
 .dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 8rem; }
 
 /* The table: cells a little tighter, aligned on their middle; numbers in columns. */

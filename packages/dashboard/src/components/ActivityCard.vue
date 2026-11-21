@@ -56,5 +56,6 @@ const nap = computed(() => {
 
 <style scoped>
 .dm-num { font-variant-numeric: tabular-nums; }
+.dm-activity :deep(td), .dm-activity :deep(th) { white-space: nowrap; }
 .dm-activity :deep(th) { font: 500 0.68rem/1.3 var(--dm-mono) !important; letter-spacing: 0.08em; text-transform: uppercase; }
 </style>

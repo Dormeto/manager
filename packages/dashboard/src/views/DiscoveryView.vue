@@ -719,7 +719,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template #toolbar>
         <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
         <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
-        <v-select :model-value="kindFilter" :items="KINDS" item-title="title" item-value="value" label="Kind" clearable density="compact" hide-details max-width="210"
+        <v-select :model-value="kindFilter" :items="KINDS" item-title="short" item-value="value" label="Kind" clearable density="compact" hide-details max-width="210"
           class="dm-filter" data-test="kind-filter" @update:model-value="filterByKind($event as Kind | null)" />
         <v-spacer />
         <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
@@ -809,7 +809,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template v-if="!searchMode" #bottom>
         <v-divider />
         <nav class="dm-candidates__foot" aria-label="Pages of candidates">
-          <span role="status" class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!appliedCloud && status"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
+          <span role="status" class="text-body-small text-medium-emphasis dm-num">{{ first }}–{{ last }}<template v-if="!appliedCloud && status && !kindFilter"> of {{ counts[status] ?? 0 }} (at the last change)</template></span>
           <v-spacer />
           <v-btn variant="text" :prepend-icon="mdiChevronLeft" :disabled="page === 0" @click="turn(-1)">Previous</v-btn>
           <v-btn variant="text" :append-icon="mdiChevronRight" :disabled="!hasNext" @click="turn(1)">Next</v-btn>

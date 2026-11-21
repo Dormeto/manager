@@ -8,14 +8,15 @@ const info = computed(() => kindInfo(props.kind));
 </script>
 
 <template>
-  <v-tooltip location="top" max-width="380" :text="info.help">
+  <span class="dm-kind-wrap"><v-tooltip location="top" max-width="380" :text="info.help">
     <template #activator="{ props: tip }">
       <v-icon v-bind="tip" data-test="kind-mark" :data-kind="kind" :icon="info.icon" :size="size ?? 16" class="dm-kind" tabindex="0" role="img" :aria-label="info.title" :aria-hidden="false" />
     </template>
-  </v-tooltip>
+  </v-tooltip></span>
 </template>
 
 <style scoped>
+.dm-kind-wrap { display: inline-flex; vertical-align: middle; margin-left: 4px; }
 .dm-kind { color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); border-radius: 4px; outline: none; }
 .dm-kind:focus-visible { box-shadow: 0 0 0 2px rgb(var(--v-theme-secondary)); }
 </style>

@@ -5,7 +5,7 @@
 // A standalone resource (`resource`, its kind; vision standalone workloads design §6): what a nap does to it, that nothing wakes
 // it on demand, its idle signals, and where to give it a schedule.
 import { computed, ref, watch } from 'vue';
-import { mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
+import { mdiCalendarClock, mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
 import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
 import { cloudWords } from '../cloud-words';
 import { nameRule } from '../format';
@@ -158,8 +158,15 @@ function submit() {
             <template v-else-if="resource">
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
-                <span>The router of its account and region (installed first if needed) tags it and its databases. {{ napText }}
-                  Nothing wakes it on demand: a schedule, a person or a start made in AWS does. It naps on its schedule, on a person's word, or when its idle signals stay under their thresholds.
+                <span>The router of its account and region (installed first if needed) tags it and its databases.</span>
+              </li>
+              <li class="dm-change" data-test="onboard-standalone">
+                <v-avatar color="info" variant="tonal" size="28"><v-icon :icon="mdiPauseCircleOutline" size="16" /></v-avatar>
+                <span>{{ napText }}</span>
+              </li>
+              <li class="dm-change" data-test="onboard-standalone">
+                <v-avatar color="warning" variant="tonal" size="28"><v-icon :icon="mdiCalendarClock" size="16" /></v-avatar>
+                <span>Nothing wakes it on demand: a schedule, a person or a start made in AWS does.
                   <router-link data-test="onboard-schedule" to="/schedules">Give it a schedule</router-link> once onboarded.</span>
               </li>
             </template>

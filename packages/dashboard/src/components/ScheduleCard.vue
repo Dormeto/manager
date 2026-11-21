@@ -7,7 +7,8 @@ import { eventText, joinText, kindColor, recurrenceText, type JoinAnswer, type N
 import { relative } from '../format';
 
 // schedule: undefined when the router does not report schedules (before 0.31.0), null when it has none.
-const props = defineProps<{ schedule: Schedule | null | undefined; next?: NextEvent[]; maintenanceDue?: string | null; canEdit: boolean; join?: JoinAnswer | null }>();
+// standalone: a standalone workload's, which nothing wakes on demand.
+const props = defineProps<{ schedule: Schedule | null | undefined; next?: NextEvent[]; maintenanceDue?: string | null; canEdit: boolean; join?: JoinAnswer | null; standalone?: boolean }>();
 const emit = defineEmits<{ edit: []; clear: [] }>();
 const confirm = ref(false);
 const zone = computed(() => props.schedule?.timeZone ?? '');
@@ -27,7 +28,7 @@ const wakeText = (w: ScheduleWindow) => (w.kind === 'nap' ? (w.wake === 'header'
       <v-btn v-if="schedule" data-test="clear-schedule" variant="text" size="small" color="error" @click="confirm = true">Clear</v-btn>
     </template>
     <v-card-text v-if="schedule === undefined" class="text-medium-emphasis">Schedules need router 0.31.0 or later.</v-card-text>
-    <v-card-text v-else-if="!schedule" class="text-medium-emphasis">No schedule: the workload naps when idle and wakes on requests, at any hour.</v-card-text>
+    <v-card-text v-else-if="!schedule" class="text-medium-emphasis">{{ standalone ? 'No schedule: the workload naps on its idle signals, and nothing wakes it on demand: a schedule\'s awake window, a person or a start made in AWS does.' : 'No schedule: the workload naps when idle and wakes on requests, at any hour.' }}</v-card-text>
     <template v-else>
       <v-card-text class="pb-0">
         <div v-if="schedule.windows?.length" class="text-body-medium mb-2">Time zone <strong>{{ zone }}</strong></div>

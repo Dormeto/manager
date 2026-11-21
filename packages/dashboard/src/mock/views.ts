@@ -10,6 +10,7 @@ import type {
   GoogleConnectionAnswer, SavingsSummary, StoppedItem, WorkloadHistory, WorkloadStatus, WorkloadSummary,
 } from '../types';
 import { ROUTER_RULES } from './fixtures';
+import { isStandaloneDemo, standaloneRow, standaloneStatus } from './standalone';
 import { ACCOUNTS, ORG } from './org';
 import { historyView, replayWindows, timeIn, type Burst } from './history';
 import {
@@ -211,7 +212,11 @@ function kinds(w: DemoWorkload): string[] {
   return [...new Set([...all.filter((k) => k !== database), ...all.filter((k) => k === database)])];
 }
 
-export function workloadRow(d: Demo, w: DemoWorkload, now: number, { idle = false, states = false } = {}): WorkloadSummary & { region: string; targetGroupArn?: string } {
+export function workloadRow(d: Demo, w: DemoWorkload, now: number, options: { idle?: boolean; states?: boolean } = {}): WorkloadSummary & { region: string; targetGroupArn?: string } {
+  const row = httpRow(d, w, now, options);
+  return isStandaloneDemo(w) ? standaloneRow(w, row) as WorkloadSummary & { region: string } : row;
+}
+function httpRow(d: Demo, w: DemoWorkload, now: number, { idle = false, states = false } = {}): WorkloadSummary & { region: string; targetGroupArn?: string } {
   const total = countsOf(w, now - 7 * DAY, now);
   const costs = states ? costsOf(d, w, now) : null;
   return {
@@ -272,6 +277,10 @@ function backendsOf(w: DemoWorkload): { backends: Backend[]; targets: { id: stri
 }
 
 export function workloadStatus(d: Demo, w: DemoWorkload, now: number): WorkloadStatus {
+  const status = httpStatus(d, w, now);
+  return isStandaloneDemo(w) ? standaloneStatus(w, status, now) : status;
+}
+function httpStatus(d: Demo, w: DemoWorkload, now: number): WorkloadStatus {
   const router = d.routers.find((r) => r.name === w.router)!;
   const row = workloadRow(d, w, now, { idle: true, states: true });
   const { backends, targets, recommendations } = backendsOf(w);
