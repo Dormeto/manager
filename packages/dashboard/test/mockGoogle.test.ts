@@ -3,12 +3,14 @@ import { mockApi } from '../src/mock';
 import type { GoogleConnectionAnswer, RouterInfo, WorkloadSummary } from '../src/types';
 
 const ROUTER = 'dmtr-dormeto-dev-europe-west2';
+// The project's second router, of 0.42.0, with the Google Cloud standalone workloads (gcp-standalone.test.ts).
+const STANDALONE_ROUTER = 'dmtr-dormeto-dev-europe-west1';
 
 describe('the demo\'s Google Cloud router', () => {
   it('lists a Google Cloud router of the project dormeto-dev next to the AWS ones, installed by the CLI', async () => {
     const { routers } = await mockApi('/routers') as { routers: RouterInfo[] };
     expect(routers.find((r) => r.name === ROUTER)).toMatchObject({ cloud: 'gcp', account: 'dormeto-dev', region: 'europe-west2', version: '0.40.0', source: 'cli', workloads: 2 });
-    expect(routers.filter((r) => r.name !== ROUTER).every((r) => r.cloud === 'aws')).toBe(true);
+    expect(routers.filter((r) => r.name !== ROUTER && r.name !== STANDALONE_ROUTER).every((r) => r.cloud === 'aws')).toBe(true);
   });
 
   it('lists its two workloads, a VM and a managed group, with their cloud and a project', async () => {
@@ -23,7 +25,7 @@ describe('the demo\'s Google Cloud router', () => {
 
   it('marks every AWS workload aws, and reads the workload by its Google Cloud router', async () => {
     const { workloads } = await mockApi('/workloads') as { workloads: WorkloadSummary[] };
-    expect(workloads.filter((w) => w.cloud === 'gcp')).toHaveLength(2);
+    expect(workloads.filter((w) => w.cloud === 'gcp' && w.kind !== 'standalone')).toHaveLength(2);
     expect(workloads.filter((w) => w.cloud !== 'gcp').every((w) => w.cloud === 'aws')).toBe(true);
     const vm = workloads.find((w) => w.workloadId === 'vm-demo')!;
     const detail = await mockApi(`/workloads/${vm.router}/${vm.workloadId}`) as Record<string, unknown>;
@@ -40,7 +42,8 @@ describe('the demo\'s Google Cloud router', () => {
 
   type Row = Record<string, any>;
   const candidates = async (status: string, extra = '') => (await mockApi(`/discovery/candidates?status=${status}&limit=500${extra}`) as { candidates: Row[] }).candidates;
-  const google = async (status: string) => (await candidates(status)).filter((c) => c.account === 'dormeto-dev');
+  // The project's HTTP candidates (its standalone ones: gcp-standalone.test.ts).
+  const google = async (status: string) => (await candidates(status)).filter((c) => c.account === 'dormeto-dev' && c.kind !== 'standalone');
 
   it('finds the project\'s candidates as the API answers them: the backend service\'s path as the id, its name and the URL map\'s, global, the kind of load balancer', async () => {
     const [eligible] = await google('pending-onboarding');
@@ -149,7 +152,8 @@ describe('the demo\'s Google Cloud router', () => {
 
     it('onboards a global candidate through the project\'s router in the Google Cloud plan, then shows it managed with its workload', async () => {
       expect((await post({ type: 'onboard', candidateId: SHOP, router: 'dmtr-nope', settings: {}, databases: [] })).status).toBe(404);
-      const answer = await post({ type: 'onboard', candidateId: SHOP, name: 'Shop', settings: { idleMinutes: 20, fallbackInstanceTypes: ['e2-medium'] }, databases: [{ kind: 'cloudsql-instance', id: 'db-shop' }], tags: { team: 'shop' } });
+      // The project has two routers: a global candidate's is named (the API's rule).
+      const answer = await post({ type: 'onboard', candidateId: SHOP, router: ROUTER, name: 'Shop', settings: { idleMinutes: 20, fallbackInstanceTypes: ['e2-medium'] }, databases: [{ kind: 'cloudsql-instance', id: 'db-shop' }], tags: { team: 'shop' } });
       if (!answer.operation) throw new Error(JSON.stringify(answer));
       const { operation } = answer;
       expect(operation.steps.map((x) => x.name)).toEqual(['find router', 'slot', 'lock load balancer', 'preview', 'tag', 'onboard', 'verify', 'candidate']);
@@ -185,7 +189,7 @@ describe('the demo\'s Google Cloud router', () => {
     expect(Object.keys(answer)).toEqual(['connection']);
     const connection = answer.connection!;
     expect(connection.project).toBe('dormeto-dev');
-    expect(connection.routers.map((r) => r.region)).toEqual(['europe-west2']);
+    expect(connection.routers.map((r) => r.region)).toEqual(['europe-west2', 'europe-west1']);
     expect(connection.serviceAccounts.discovery).toMatch(/^dmt-.*-discovery@dormeto-dev\.iam\.gserviceaccount\.com$/);
   });
 });

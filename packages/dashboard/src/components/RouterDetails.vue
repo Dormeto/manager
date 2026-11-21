@@ -20,7 +20,9 @@ import type { RouterDetails } from '../types';
 import DefaultsDialog from './DefaultsDialog.vue';
 import { builtInText, defaultsLines, levelText } from '../defaults';
 import { SETTING_KEYS } from '../settings';
-import { IDLE_BUILT_IN, IDLE_KEYS, standaloneValue } from '../idle-settings';
+import { IDLE_BUILT_IN_OF, IDLE_KEYS, standaloneValue } from '../idle-settings';
+import { knowsIdleSignals } from '@dormeto/fleet/idle-signals';
+import { isGoogleMetric, type IdleMetric } from '../types';
 
 // source: who installed the router, so where its configuration is changed.
 // version: the router's, which says whether it takes defaults of its own (settings at scale, routers 0.37.0).
@@ -95,8 +97,12 @@ const inheritedDefaults = computed(() => Object.fromEntries([...[...SETTING_KEYS
   const value = details.value?.managerSettings?.defaults?.[key];
   return [key, value === undefined ? `${builtInText(key)}, built-in` : `${levelText(key, value as number | string)}, organization`];
 }), ...IDLE_KEYS.map((key) => {
-  const value = details.value?.managerSettings?.defaults ? standaloneValue(key, details.value.managerSettings.defaults) : null;
-  return [key, value === null ? `${IDLE_BUILT_IN[key]}, built-in` : `${value}, organization`];
+  const defaults = details.value?.managerSettings?.defaults;
+  // The organization's metric of the other cloud: this router ignores it (its workloads take the built-in).
+  const metric = defaults?.idleMetric as IdleMetric | 'off' | undefined;
+  const ignored = key === 'idleMetric' && metric && metric !== 'off' && (isGoogleMetric(metric) ? 'gcp' : 'aws') !== cloud.value;
+  const value = defaults && !ignored ? standaloneValue(key, defaults) : null;
+  return [key, value === null ? `${IDLE_BUILT_IN_OF(cloud.value)[key]}, built-in` : `${value}, organization`];
 })]));
 async function saveDefaults(changes: Record<string, unknown>) {
   savingDefaults.value = true;
@@ -277,7 +283,7 @@ const columns = computed<Section[][]>(() => {
       </v-table>
     </v-card>
     <DefaultsDialog v-if="details.settings && takesDefaults" v-model="defaultsOpen" :title="`Defaults of ${name}`" level="router" :name="name" :values="details.settings.defaults ?? {}"
-      :inherited="inheritedDefaults" :saving="savingDefaults" :idle="cloud !== 'gcp'" @submit="saveDefaults" />
+      :inherited="inheritedDefaults" :saving="savingDefaults" :idle="cloud === 'aws' || knowsIdleSignals(cloud, version)" :cloud="cloud" @submit="saveDefaults" />
     <HibernateDialog v-if="details.settings && details.managerSettings" v-model="editOpen" :cloud="cloud" :subject="name" :current="details.settings.hibernate"
       :inherit-text="routerInheritText(details.managerSettings, now, details.cloud)" :saving="saving" @submit="saveHibernate" />
     <JoinDialog v-if="joinKnown" v-model="joinOpen" :title="`Join windows of ${name}`" :current="details.settings!.joinMinutes ?? null" :inherited="joinInherited.joinMinutes"

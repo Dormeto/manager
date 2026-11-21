@@ -8,7 +8,29 @@
 // new inline word switch.
 import { mdiAws, mdiGoogleCloud } from '@mdi/js';
 import type { Cloud } from '@dormeto/fleet/clouds';
-import type { Settings } from './types';
+import type { IdleSettings, Settings } from './types';
+
+// A standalone workload's words (plan 5): who wakes it besides a schedule or a person, where its signals are read and how late,
+// the custom metric's source, what marks its resource and what a missing one means, the settings' helps and built-ins, a nap and
+// a wake of each of its resource kinds, the onboarding's first step, and discovery's idle share.
+export interface StandaloneWords {
+  startOutside: string;
+  signals: string;
+  signalsLate: string;
+  metric: string;
+  database: string;
+  databases: string;
+  marker: string;
+  missing: string;
+  missingFix: string;
+  onboards: string;
+  idleSource: string;
+  help: Readonly<{ idleMinutes: string; idleCpuPercent: string; idleNetworkBytes: string; idleMetric: string; wakeTimeoutSeconds: string }>;
+  ranges: Readonly<{ wakeTimeoutSeconds: string }>;
+  builtIn: Readonly<Record<keyof IdleSettings, string>>;
+  inherit: string;
+  naps: ByKind;
+}
 
 // The kinds of backends the routers report, on either cloud.
 export type RouterBackendKind = 'instance' | 'asg' | 'ecs' | 'k8s' | 'rds-instance' | 'rds-cluster' | 'cloudsql-instance';
@@ -76,6 +98,7 @@ export interface CloudWords {
   accessMissing: string;
   procedureUrl: string;
   procedureText: string;
+  standalone: StandaloneWords;
 }
 
 const AWS: CloudWords = {
@@ -132,6 +155,36 @@ const AWS: CloudWords = {
   // The website's page, with the roles' Terraform modules and AWS CLI commands.
   procedureUrl: 'https://dormeto.com/organization-access.html',
   procedureText: 'How to set up the roles',
+  standalone: {
+    startOutside: 'a start made in AWS',
+    signals: 'CloudWatch',
+    signalsLate: 'CloudWatch publishes the signals minutes late: an idle nap comes up to 15 minutes after the idle window.',
+    metric: 'A CloudWatch metric',
+    database: 'a database',
+    databases: 'its databases',
+    marker: 'its dormeto:workload tag',
+    missing: 'It was deleted, or lost its dormeto:workload tag: nothing of it is stopped or started.',
+    missingFix: 'Offboard the workload, or tag the resource again (its value is the workload\'s id): the router finds it at its next check.',
+    onboards: 'The router of its account and region tags it and its databases, installing itself first if needed.',
+    idleSource: 'From CloudWatch\'s metrics of the resource',
+    help: {
+      idleMinutes: 'Time with every idle signal under its threshold before the workload naps; the check reads them every 5 minutes, and an idle nap comes up to 15 minutes after the window, as CloudWatch publishes the signals late. Nothing wakes it on demand: a schedule, a person or a start made in AWS does.',
+      wakeTimeoutSeconds: 'Longest a wake may take before the workload is marked FAILED; the check retries it until it succeeds or a person naps it.',
+      idleCpuPercent: 'Idle while the CPU\'s maximum stays under this percentage (CloudWatch\'s CPUUtilization of the instance, group, service or database).',
+      idleNetworkBytes: 'Idle while the bytes in and out, a minute, stay under this number (EC2\'s NetworkIn and NetworkOut, RDS\'s throughput); an ECS service has none without Container Insights.',
+      idleMetric: 'Idle while one CloudWatch metric stays under its threshold; ${resource} in a dimension is the resource\'s own id. A database\'s built-in: its connections under 1.',
+    },
+    ranges: { wakeTimeoutSeconds: '60 to 3,600 s; built-in 10 min, 30 min for a database.' },
+    builtIn: { idleCpuPercent: 'under 5 %, off for a database', idleNetworkBytes: 'off', idleMetric: 'off; a database\'s connections under 1' },
+    inherit: 'a 120-minute idle window, CPU under 5 % (off for a database), network off, no custom metric (a database\'s connections under 1)',
+    naps: {
+      instance: 'A nap stops the instance (or hibernates it), then its databases; a wake starts them in reverse.',
+      asg: 'A nap sets the group\'s capacity to 0, then stops its databases; a wake reverses both.',
+      ecs: 'A nap sets the service\'s desired count to 0, then stops its databases; a wake reverses both.',
+      'rds-instance': 'A nap stops the database and a wake starts it; AWS starts it again after 7 days.',
+      'rds-cluster': 'A nap stops the Aurora cluster and a wake starts it; AWS starts it again after 7 days.',
+    },
+  },
 };
 
 // What Google fixes at 0 (G5's levels), said so.
@@ -198,6 +251,35 @@ const GOOGLE_CLOUD: CloudWords = {
   // The Google Cloud connection on the website: the two service accounts, their scopes and grants, dormeto gcp connect.
   procedureUrl: 'https://dormeto.com/configuration.html#connection',
   procedureText: 'How to connect Google Cloud',
+  standalone: {
+    startOutside: 'a start made in Google Cloud',
+    signals: 'Cloud Monitoring',
+    signalsLate: 'Cloud Monitoring publishes the signals minutes late: an idle nap comes up to 15 minutes after the idle window.',
+    metric: 'A Cloud Monitoring metric',
+    database: 'a Cloud SQL instance',
+    databases: 'its Cloud SQL instances',
+    marker: 'the tag dormeto=managed',
+    // The router cannot read the tag: a resource is missing when Google says it is deleted (router docs/scenarios/standalone.md).
+    missing: 'It was deleted: nothing of it is stopped or started.',
+    missingFix: 'Offboard the workload.',
+    onboards: 'The manager binds the tag dormeto=managed to it and its Cloud SQL instances, and the project\'s router records the workload.',
+    idleSource: 'From Cloud Monitoring\'s metrics of the resource',
+    help: {
+      idleMinutes: 'Time with every idle signal under its threshold before the workload naps; the check reads them every 5 minutes, and an idle nap comes up to 15 minutes after the window, as Cloud Monitoring publishes the signals late. Nothing wakes it on demand: a schedule, a person or a start made in Google Cloud does.',
+      wakeTimeoutSeconds: 'Longest a wake may take before the workload is marked FAILED; the check retries it until it succeeds or a person naps it.',
+      idleCpuPercent: 'Idle while the CPU\'s maximum stays under this percentage (Cloud Monitoring\'s CPU utilization of the VM, the group\'s VMs or the Cloud SQL instance).',
+      idleNetworkBytes: 'Idle while the bytes in and out, a minute, stay under this number (Cloud Monitoring\'s received and sent bytes of the VM or the group\'s VMs); a Cloud SQL instance\'s network is not read.',
+      idleMetric: 'Idle while one Cloud Monitoring metric stays under its threshold, aligned each minute; ${resource} in its filter is the resource\'s name. A Cloud SQL instance\'s built-in: its connections under 1.',
+    },
+    ranges: { wakeTimeoutSeconds: '60 to 1,700 s; built-in 10 min, 28 min 20 s for a Cloud SQL instance.' },
+    builtIn: { idleCpuPercent: 'under 5 %, off for a Cloud SQL instance', idleNetworkBytes: 'off', idleMetric: 'off; a Cloud SQL instance\'s connections under 1' },
+    inherit: 'a 120-minute idle window, CPU under 5 % (off for a Cloud SQL instance), network off, no custom metric (a Cloud SQL instance\'s connections under 1)',
+    naps: {
+      instance: 'A nap stops the VM (or suspends it), then its Cloud SQL instances; a wake starts them in reverse. A Spot VM Google preempts is read as a stop made outside Dormeto.',
+      asg: 'A nap resizes the managed instance group to 0, its autoscaler off, then stops its Cloud SQL instances; a wake reverses both.',
+      'cloudsql-instance': 'A nap stops the Cloud SQL instance and a wake starts it.',
+    },
+  },
 };
 
 const WORDS: Record<Cloud, CloudWords> = { aws: AWS, gcp: GOOGLE_CLOUD };

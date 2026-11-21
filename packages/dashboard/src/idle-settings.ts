@@ -1,8 +1,10 @@
 // A standalone workload's idle signals and settings in words (vision standalone workloads design §4; the router's
-// settings-levels.mjs ranges): the idle window, the wake timeout, CPU, network bytes, a custom CloudWatch metric, or off.
+// settings-levels.mjs ranges): the idle window, the wake timeout, CPU, network bytes, a custom metric (CloudWatch's or Cloud Monitoring's), or off; their words by cloud in cloud-words.ts.
 import { duration } from './format';
 import { IDLE_KEYS as IDLE_SIGNAL_KEYS } from '@dormeto/fleet/idle-signals';
-import type { IdleMetric, IdleSettings, IdleSignal, Settings, SettingsFrom } from './types';
+import type { Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from './cloud-words';
+import { isGoogleMetric, type AwsIdleMetric, type GoogleIdleMetric, type IdleMetric, type IdleSettings, type IdleSignal, type Settings, type SettingsFrom } from './types';
 
 export type StandaloneKey = 'idleMinutes' | 'wakeTimeoutSeconds' | keyof IdleSettings;
 export const STANDALONE_KEYS: StandaloneKey[] = ['idleMinutes', 'wakeTimeoutSeconds', 'idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
@@ -11,12 +13,16 @@ export const IDLE_KEYS = IDLE_SIGNAL_KEYS as (keyof IdleSettings)[];
 export const WAKER_KEYS = ['waitSeconds', 'drainSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode', 'noWakeRules', 'wakeRules'];
 export const IDLE_NETWORK_BYTES_MAX = 10_000_000_000;
 export const IDLE_METRIC_STATISTICS = ['Maximum', 'Average', 'Sum'] as const;
+// Google Cloud's (the router's and the API's IDLE_METRIC_ALIGNERS).
+export const IDLE_METRIC_ALIGNERS = ['ALIGN_MAX', 'ALIGN_MEAN', 'ALIGN_SUM'] as const;
+// A metric's name: AWS's own, a Google Cloud type's last two parts (custom.googleapis.com/queue/depth: queue/depth).
+const metricName = (m: IdleMetric) => (isGoogleMetric(m) ? m.type.split('/').slice(1).slice(-2).join('/') : m.name);
 
 // A signal's name: "CPU", "Network", the custom metric's own name.
 export function signalName(signal: IdleSignal['signal'], metric?: IdleMetric | 'off'): string {
   if (signal === 'cpu') return 'CPU';
   if (signal === 'network') return 'Network';
-  return metric && metric !== 'off' ? metric.name : 'Custom metric';
+  return metric && metric !== 'off' ? metricName(metric) : 'Custom metric';
 }
 const number = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 2 });
 // A value of a signal, in its unit.
@@ -29,19 +35,25 @@ export const thresholdText = (signal: IdleSignal['signal'], below: number | null
 
 export interface StandaloneRow { key: StandaloneKey; label: string; value: string; help: string; range: string; from?: string }
 
-const HELP: Record<StandaloneKey, { label: string; help: string; range: string }> = {
-  idleMinutes: { label: 'Idle window', help: 'Time with every idle signal under its threshold before the workload naps; the check reads them every 5 minutes, and an idle nap comes up to 15 minutes after the window, as CloudWatch publishes the signals late. Nothing wakes it on demand: a schedule, a person or a start made in AWS does.', range: '5 to 1,440 min; built-in 120 min.' },
-  wakeTimeoutSeconds: { label: 'Wake timeout', help: 'Longest a wake may take before the workload is marked FAILED; the check retries it.', range: '60 to 3,600 s; built-in 10 min, 30 min for a database.' },
-  idleCpuPercent: { label: 'CPU', help: 'Idle while the CPU\'s maximum stays under this percentage (CloudWatch\'s CPUUtilization of the instance, group, service or database).', range: '0 to 100, or off; built-in 5, off for a database.' },
-  idleNetworkBytes: { label: 'Network', help: 'Idle while the bytes in and out, a minute, stay under this number (EC2\'s NetworkIn and NetworkOut, RDS\'s throughput); an ECS service has none without Container Insights.', range: '0 to 10,000,000,000, or off; built-in off.' },
-  idleMetric: { label: 'Custom metric', help: 'Idle while one CloudWatch metric stays under its threshold; ${resource} in a dimension is the resource\'s own id. A database\'s built-in: its connections under 1.', range: 'A metric and a threshold, or off; built-in off.' },
+// The labels; the helps and ranges are the cloud's (cloud-words.ts), but the idle window's, CPU's, network's and the metric's ranges.
+const LABELS: Record<StandaloneKey, { label: string; range?: string }> = {
+  idleMinutes: { label: 'Idle window', range: '5 to 1,440 min; built-in 120 min.' },
+  wakeTimeoutSeconds: { label: 'Wake timeout' },
+  idleCpuPercent: { label: 'CPU', range: '0 to 100, or off;' },
+  idleNetworkBytes: { label: 'Network', range: '0 to 10,000,000,000, or off; built-in off.' },
+  idleMetric: { label: 'Custom metric', range: 'A metric and a threshold, or off; built-in off.' },
 };
-export const standaloneLabel = (key: StandaloneKey) => HELP[key].label;
-export const standaloneHelp = (key: StandaloneKey) => `${HELP[key].help} ${HELP[key].range}`;
+const helpOf = (key: StandaloneKey, cloud?: Cloud | null) => {
+  const words = cloudWords(cloud).standalone;
+  const range = key === 'wakeTimeoutSeconds' ? words.ranges.wakeTimeoutSeconds : key === 'idleCpuPercent' ? `${LABELS[key].range} built-in 5, off for ${words.database}.` : LABELS[key].range!;
+  return { label: LABELS[key].label, help: words.help[key], range };
+};
+export const standaloneLabel = (key: StandaloneKey) => LABELS[key].label;
+export const standaloneHelp = (key: StandaloneKey, cloud?: Cloud | null) => { const h = helpOf(key, cloud); return `${h.help} ${h.range}`; };
 
 export function metricText(m: IdleMetric | 'off' | undefined): string {
   if (!m || m === 'off') return 'off';
-  return `${m.name} under ${number(m.below)} (${m.statistic})`;
+  return `${metricName(m)} under ${number(m.below)} (${isGoogleMetric(m) ? m.aligner : m.statistic})`;
 }
 export function standaloneValue(key: StandaloneKey, settings: Partial<Settings & IdleSettings>): string | null {
   const v = settings[key];
@@ -54,29 +66,41 @@ export function standaloneValue(key: StandaloneKey, settings: Partial<Settings &
 }
 
 // Each setting of a standalone workload the router gives, with the level it comes from.
-export const standaloneSettingRows = (settings: Partial<Settings & IdleSettings>, from?: SettingsFrom): StandaloneRow[] => STANDALONE_KEYS.flatMap((key) => {
+export const standaloneSettingRows = (settings: Partial<Settings & IdleSettings>, from?: SettingsFrom, cloud?: Cloud | null): StandaloneRow[] => STANDALONE_KEYS.flatMap((key) => {
   const value = standaloneValue(key, settings);
-  return value === null ? [] : [{ key, label: HELP[key].label, value, help: HELP[key].help, range: HELP[key].range, ...(from?.[key] ? { from: from[key] } : {}) }];
+  const h = helpOf(key, cloud);
+  return value === null ? [] : [{ key, label: h.label, value, help: h.help, range: h.range, ...(from?.[key] ? { from: from[key] } : {}) }];
 });
 
-// The dialogs' form of the idle signals: each number as typed (empty: inherit) with its Off; the metric inherited, off or one.
-export interface MetricForm { namespace: string; name: string; dimensions: { name: string; value: string }[]; statistic: IdleMetric['statistic']; below: string }
-export interface IdleForm { idleCpuPercent: string; cpuOff: boolean; idleNetworkBytes: string; networkOff: boolean; metricMode: 'inherit' | 'off' | 'metric'; metric: MetricForm }
+// The dialogs' form of the idle signals: each number as typed (empty: inherit) with its Off; the metric inherited, off or one, in
+// its cloud's shape (`metricCloud`: AWS's fields or Google Cloud's, absent: AWS's), each shape's fields kept while the other is
+// shown; Google Cloud's (`gcp`) present once that shape is held or shown (the fields add it).
+export interface MetricForm { namespace: string; name: string; dimensions: { name: string; value: string }[]; statistic: AwsIdleMetric['statistic']; below: string }
+export interface GoogleMetricForm { type: string; filter: string; aligner: GoogleIdleMetric['aligner']; below: string }
+export interface IdleForm {
+  idleCpuPercent: string; cpuOff: boolean; idleNetworkBytes: string; networkOff: boolean; metricMode: 'inherit' | 'off' | 'metric';
+  metricCloud?: Cloud; metric: MetricForm; gcp?: GoogleMetricForm;
+}
 const EMPTY_METRIC: MetricForm = { namespace: '', name: '', dimensions: [], statistic: 'Maximum', below: '' };
+export const EMPTY_GOOGLE: GoogleMetricForm = { type: '', filter: '', aligner: 'ALIGN_MAX', below: '' };
 
-// A level's own values (or a workload's: `own` says which keys are its own), the others empty.
-export function idleFormOf(values: Partial<IdleSettings>, own: (key: keyof IdleSettings) => boolean = (key) => values[key] !== undefined): IdleForm {
+// A level's own values (or a workload's: `own` says which keys are its own), the others empty; `cloud`, the metric's cloud when
+// it holds none (Google Cloud's level or workload).
+export function idleFormOf(values: Partial<IdleSettings>, own: (key: keyof IdleSettings) => boolean = (key) => values[key] !== undefined, cloud?: Cloud): IdleForm {
   const mine = (key: keyof IdleSettings) => (own(key) ? values[key] : undefined);
   const cpu = mine('idleCpuPercent');
   const network = mine('idleNetworkBytes');
   const metric = mine('idleMetric') as IdleMetric | 'off' | undefined;
+  const one = metric && metric !== 'off' ? metric : null;
   return {
     idleCpuPercent: typeof cpu === 'number' ? String(cpu) : '', cpuOff: cpu === 'off',
     idleNetworkBytes: typeof network === 'number' ? String(network) : '', networkOff: network === 'off',
     metricMode: metric === 'off' ? 'off' : metric ? 'metric' : 'inherit',
-    metric: metric && metric !== 'off' && !Array.isArray(metric.dimensions)
-      ? { namespace: metric.namespace, name: metric.name, dimensions: Object.entries(metric.dimensions).map(([name, value]) => ({ name, value: String(value) })), statistic: metric.statistic, below: String(metric.below) }
+    ...((one ? (isGoogleMetric(one) ? 'gcp' : 'aws') : cloud) === 'gcp' ? { metricCloud: 'gcp' as const } : {}),
+    metric: one && !isGoogleMetric(one) && !Array.isArray(one.dimensions)
+      ? { namespace: one.namespace, name: one.name, dimensions: Object.entries(one.dimensions).map(([name, value]) => ({ name, value: String(value) })), statistic: one.statistic, below: String(one.below) }
       : { ...EMPTY_METRIC, dimensions: [] },
+    ...(one && isGoogleMetric(one) ? { gcp: { type: one.type, filter: one.filter ?? '', aligner: one.aligner, below: String(one.below) } } : cloud === 'gcp' ? { gcp: { ...EMPTY_GOOGLE } } : {}),
   };
 }
 
@@ -94,6 +118,12 @@ function valueOf(form: IdleForm, key: keyof IdleSettings): { value: number | 'of
   }
   if (form.metricMode === 'inherit') return { value: null };
   if (form.metricMode === 'off') return { value: 'off' };
+  if (form.metricCloud === 'gcp') {
+    const g = form.gcp ?? EMPTY_GOOGLE;
+    const below = numberOf(g.below);
+    if (!g.type.trim() || below === null || !Number.isFinite(below)) return { value: null, problem: 'Custom metric: its type and threshold are needed' };
+    return { value: { type: g.type.trim(), ...(g.filter.trim() ? { filter: g.filter.trim() } : {}), aligner: g.aligner, below } };
+  }
   const m = form.metric;
   const below = numberOf(m.below);
   if (!m.namespace.trim() || !m.name.trim() || below === null || !Number.isFinite(below)) return { value: null, problem: 'Custom metric: its namespace, name and threshold are needed' };
@@ -113,5 +143,6 @@ export function idleChanges(initial: IdleForm, edited: IdleForm): { changes: Rec
   return { changes, problem: null };
 }
 
-// The built-in values, as the levels' placeholders say them (the router's STANDALONE_BUILT_IN).
-export const IDLE_BUILT_IN: Record<keyof IdleSettings, string> = { idleCpuPercent: 'under 5 %, off for a database', idleNetworkBytes: 'off', idleMetric: 'off; a database\'s connections under 1' };
+// The built-in values, as the levels' placeholders say them (the router's STANDALONE_BUILT_IN), in the cloud's words.
+export const IDLE_BUILT_IN_OF = (cloud?: Cloud | null): Record<keyof IdleSettings, string> => ({ ...cloudWords(cloud).standalone.builtIn });
+export const IDLE_BUILT_IN = IDLE_BUILT_IN_OF('aws');

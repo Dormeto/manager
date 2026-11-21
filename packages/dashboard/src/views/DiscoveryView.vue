@@ -131,6 +131,13 @@ watchValue(onboardOpen, async (open) => {
   const routers = (await api<{ routers: RouterInfo[] }>('/routers').catch(() => ({ routers: [] as RouterInfo[] }))).routers;
   if (!kubernetes) {
     const ofProject = routers.filter((r) => r.cloud === 'gcp' && r.account === c.account);
+    // A standalone resource's: its region's router, else the project's only one; several and none there, one is asked for (M51).
+    if (c.kind === 'standalone') {
+      const inRegion = ofProject.filter((r) => r.region === c.region);
+      chooseRouter.value = !inRegion.length && ofProject.length > 1;
+      projectRouters.value = (inRegion.length ? inRegion : ofProject).filter((r) => !googleRouterTooOld(r)).map((r) => ({ name: r.name, region: r.region }));
+      return;
+    }
     chooseRouter.value = c.region === 'global' && ofProject.length > 1;
     projectRouters.value = ofProject.filter((r) => (c.region === 'global' || r.region === c.region) && !googleRouterTooOld(r)).map((r) => ({ name: r.name, region: r.region }));
     return;
@@ -181,7 +188,7 @@ const idleMark = (c: Listed) => cloudWords(rowCloud(c)).idleMark;
 // A standalone candidate's resource kind (its idle share is by its signals).
 const resourceOf = (c: Listed): ResourceKind | undefined => (c.kind === 'standalone' ? c.backend.kind : undefined);
 // A standalone candidate is its resource (design §6): its name, and its kind and id as the router names them.
-const resourceText = (c: Listed) => (c.kind === 'standalone' ? `${backendLabel(c.backend.kind, 'aws')} ${c.backend.kind === 'ecs' ? (c.backend.arn ?? c.backend.id).split(':service/')[1] ?? c.backend.id : c.backend.id}` : '');
+const resourceText = (c: Listed) => (c.kind === 'standalone' ? `${backendLabel(c.backend.kind, rowCloud(c))} ${c.backend.kind === 'ecs' ? (c.backend.arn ?? c.backend.id).split(':service/')[1] ?? c.backend.id : c.backend.id}` : '');
 // One kind of candidates (the API's filter), from the address too.
 const route = useRoute();
 const kindFilter = ref<Kind | null>(route.query.kind === 'http' || route.query.kind === 'standalone' ? route.query.kind : null);
@@ -753,7 +760,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       </template>
       <template #[`item.conditions`]="{ item }">
         <div v-if="isStandalone(item) && item.kind === 'standalone'" class="dm-rule">
-          <div class="dm-rule__host">{{ item.name }}<KindMark kind="standalone" class="ml-1" /></div>
+          <div class="dm-rule__host">{{ item.name }}<KindMark kind="standalone" :cloud="rowCloud(item)" class="ml-1" /></div>
           <div class="dm-rule__where mono" data-test="standalone-resource">{{ resourceText(item) }}</div>
         </div>
         <div v-else class="dm-rule">

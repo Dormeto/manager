@@ -5,6 +5,7 @@
 import KindMark from './KindMark.vue';
 import ScheduledMark from './ScheduledMark.vue';
 import { isStandalone } from '../kinds';
+import { rowCloud } from '../format';
 import type { WorkloadSummary } from '../types';
 
 defineProps<{ item: WorkloadSummary }>();
@@ -12,7 +13,7 @@ defineProps<{ item: WorkloadSummary }>();
 
 <template>
   <div class="dm-wl">
-    <span class="dm-wl__head"><router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link><KindMark v-if="isStandalone(item)" kind="standalone" /><ScheduledMark v-if="item.scheduled" /></span>
+    <span class="dm-wl__head"><router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link><KindMark v-if="isStandalone(item)" kind="standalone" :cloud="rowCloud(item)" /><ScheduledMark v-if="item.scheduled" /></span>
     <div v-if="item.summary" class="dm-list-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
     <div v-if="item.name" class="dm-wl__id mono">{{ item.workloadId }}</div>
   </div>

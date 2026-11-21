@@ -100,7 +100,7 @@ describe('demo scenario', () => {
       return answer;
     };
     const { workloads } = await call<{ workloads: { router: string }[] }>('/workloads?limit=1000');
-    expect(workloads).toHaveLength(40 + 2 + 5); // and the demo's two Google Cloud workloads and five standalone ones
+    expect(workloads).toHaveLength(40 + 2 + 5 + 5); // and the demo's two Google Cloud workloads, five standalone ones and five Google Cloud standalone ones
     const { routers } = await call<{ routers: unknown[] }>('/routers');
     expect(routers.length).toBeGreaterThanOrEqual(4);
     const audit = await call<{ entries: { who: string }[] }>('/audit');
@@ -118,8 +118,8 @@ describe('demo scenario', () => {
       return answer;
     };
     type Priced = { costs: { items: { item: { kind: string; machineType?: string; tier?: string; suspended?: true }; hourly: number | null }[]; saved: { unpricedHours: number } }; energy: { estimated: number; kwh: number; co2Kg: number } };
-    const { workloads } = await call<{ workloads: { router: string; workloadId: string; cloud: string }[] }>('/workloads?limit=1000');
-    const google = workloads.filter((w) => w.cloud === 'gcp');
+    const { workloads } = await call<{ workloads: { router: string; workloadId: string; cloud: string; kind?: string }[] }>('/workloads?limit=1000');
+    const google = workloads.filter((w) => w.cloud === 'gcp' && w.kind !== 'standalone');
     expect(google).toHaveLength(2);
     const [vm, mig] = await Promise.all(['vm-demo', 'mig-demo'].map((id) => call<Priced>(`/workloads/${google[0]!.router}/${id}`)));
     expect(vm!.costs.items.map((i) => [i.item.kind, i.item.machineType ?? i.item.tier, i.hourly])).toEqual([['gce', 'e2-small', 0.021], ['cloudsql', 'db-custom-2-7680', 0.1622]]);
@@ -142,10 +142,11 @@ describe('demo scenario', () => {
       vi.runAllTimers();
       return answer;
     };
-    type Row = { id: string; account: string; region: string; cloud?: string; status: string; statusReason: string; targetGroup: string; backend: { kind: string } | null };
+    type Row = { id: string; account: string; region: string; cloud?: string; kind?: string; status: string; statusReason: string; targetGroup: string; backend: { kind: string } | null };
     const all: Row[] = [];
     for (const status of ['pending-onboarding', 'managed', 'ineligible']) all.push(...(await call<{ candidates: Row[] }>(`/discovery/candidates?status=${status}&limit=200`)).candidates);
-    const google = all.filter((c) => c.cloud === 'gcp');
+    // The HTTP ones (the standalone ones: standalone-demo.test.ts).
+    const google = all.filter((c) => c.cloud === 'gcp' && c.kind !== 'standalone');
     expect(google.every((c) => c.account === 'dormeto-dev')).toBe(true);
     expect(google.map((c) => [c.targetGroup, c.status, c.region, c.backend?.kind]).sort()).toEqual([
       ['catalog-bs', 'ineligible', 'global', 'k8s'], ['mig-demo', 'managed', 'europe-west2', 'asg'], ['shared-bs', 'ineligible', 'global', 'instance'],

@@ -7,12 +7,13 @@ import { computed, ref, watch } from 'vue';
 import { mdiTuneVariant } from '@mdi/js';
 import { formOf, settingRows, settingsChanges, sourceText, typeText, type SettingsForm } from '../settings';
 import type { IdleSettings, WorkloadStatus } from '../types';
-import { idleChanges, idleFormOf, standaloneValue, type IdleForm } from '../idle-settings';
+import { idleChanges, idleFormOf, standaloneSettingRows, standaloneValue, type IdleForm } from '../idle-settings';
 import IdleSignalsFields from './IdleSignalsFields.vue';
+import { rowCloud } from '../format';
 import InfoTip from './InfoTip.vue';
 
 const props = withDefaults(defineProps<{
-  modelValue: boolean; subject: string; status: Pick<WorkloadStatus, 'settings' | 'wakeMode' | 'settingsFrom' | 'type' | 'noWakeRules' | 'wakeRules' | 'kind'>;
+  modelValue: boolean; subject: string; status: Pick<WorkloadStatus, 'settings' | 'wakeMode' | 'settingsFrom' | 'type' | 'noWakeRules' | 'wakeRules' | 'kind' | 'cloud' | 'account'>;
   types?: string[]; saving?: boolean; error?: string;
 }>(), { types: () => [], saving: false, error: '' });
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Record<string, unknown>] }>();
@@ -22,13 +23,15 @@ const form = ref<SettingsForm>({ ...initial.value });
 const problem = ref('');
 const standalone = computed(() => props.status.kind === 'standalone');
 const ownIdle = (key: keyof IdleSettings) => props.status.settingsFrom?.[key] === 'workload';
-const idleInitial = ref<IdleForm>(idleFormOf(props.status.settings, ownIdle));
+// Its cloud: its metric's shape and its helps' words.
+const cloud = computed(() => rowCloud(props.status));
+const idleInitial = ref<IdleForm>(idleFormOf(props.status.settings, ownIdle, cloud.value));
 const idle = ref<IdleForm>(JSON.parse(JSON.stringify(idleInitial.value)) as IdleForm);
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   initial.value = formOf(props.status);
   form.value = { ...initial.value };
-  idleInitial.value = idleFormOf(props.status.settings, ownIdle);
+  idleInitial.value = idleFormOf(props.status.settings, ownIdle, cloud.value);
   idle.value = JSON.parse(JSON.stringify(idleInitial.value)) as IdleForm;
   problem.value = '';
 });
@@ -42,7 +45,13 @@ const idlePlaceholders = computed(() => {
 });
 
 // What each field gets when left empty: the value in force when it is inherited now, else just "Inherit".
-const rows = computed(() => settingRows(props.status.settings, props.status.settingsFrom));
+// A standalone workload's idle window and wake timeout explained as its kind's, in its cloud's words.
+const rows = computed(() => {
+  const base = settingRows(props.status.settings, props.status.settingsFrom, cloud.value);
+  if (!standalone.value) return base;
+  const own = standaloneSettingRows(props.status.settings, props.status.settingsFrom, cloud.value);
+  return base.map((r) => ({ ...r, ...((o) => (o ? { help: o.help, range: o.range } : {}))(own.find((x) => x.key === r.key)) }));
+});
 const inheritText = (key: keyof SettingsForm, value: string) => {
   const from = props.status.settingsFrom?.[key as keyof NonNullable<WorkloadStatus['settingsFrom']>];
   return from && from !== 'workload' ? `Inherit (${value}, ${sourceText(from, props.status.type)})` : 'Inherit';
@@ -88,7 +97,7 @@ function save() {
         <template v-if="standalone">
           <div class="dm-eyebrow mt-2 mb-2">Idle signals</div>
           <p class="text-body-small text-medium-emphasis mb-3">It naps when every signal that applies stays under its threshold for its idle window; Off turns an inherited signal off.</p>
-          <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" />
+          <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" :cloud="cloud" />
         </template>
         <template v-else>
         <v-textarea v-model="form.noWakeRules" data-test="setting-noWakeRules" label="No-wake rules of this workload (JSON)" rows="3" auto-grow density="compact" class="dm-json"

@@ -35,13 +35,14 @@ describe('the demo\'s standalone workloads', () => {
   it('lists standalone candidates to onboard and one of each family the router refuses, with the perimeter\'s scan on', async () => {
     const d = state();
     expect(d.config.config.standalone).toBe('on');
-    const standalone = d.candidates.filter((c) => (c as { kind?: string }).kind === 'standalone');
+    // AWS's (Google Cloud's: gcp-standalone.test.ts).
+    const standalone = d.candidates.filter((c) => (c as { kind?: string }).kind === 'standalone' && (c as { cloud?: string }).cloud !== 'gcp');
     expect(standalone.filter((c) => c.status === 'pending-onboarding').length).toBeGreaterThanOrEqual(3);
     expect(standalone.filter((c) => c.status === 'managed').length).toBe(5);
     const reasons = standalone.filter((c) => c.status === 'ineligible').map((c) => c.reason!.split(': ')[0]!.replace(/^\S+ \S+ /, '').replace(/^(group |service |instance |cluster )\S+ /, ''));
     expect(reasons.length).toBe(9);
-    const { candidates } = await mockApi('/discovery/candidates?status=ineligible&kind=standalone&limit=200') as { candidates: { kind?: string }[] };
-    expect(candidates.length).toBe(9);
+    const { candidates } = await mockApi('/discovery/candidates?status=ineligible&kind=standalone&limit=200') as { candidates: { kind?: string; cloud?: string }[] };
+    expect(candidates.filter((c) => c.cloud !== 'gcp').length).toBe(9);
     expect(candidates.every((c) => c.kind === 'standalone')).toBe(true);
     const gone = decide(d, { ...standalone.find((c) => c.status === 'managed')!, goneAt: new Date().toISOString() }, Date.now());
     expect(gone.statusReason).toBe('managed resource not found in the last scan: offboard it');
@@ -52,7 +53,7 @@ describe('the demo\'s standalone history', () => {
   const ON_DEMAND = new Set(['normal', 'probe', 'header', 'pending-wake', 'admin']);
   it('never wakes a standalone workload on a request: its schedule, a person or a start made in AWS', async () => {
     const d = state();
-    const standalone = d.workloads.filter((w) => (w as { kind?: string }).kind === 'standalone');
+    const standalone = d.workloads.filter((w) => (w as { kind?: string }).kind === 'standalone' && w.cloud !== 'gcp');
     expect(standalone).toHaveLength(5);
     for (const w of standalone) {
       for (const e of w.entries.filter((x) => x.to === 'WAKING' || (x.from === 'ASLEEP' && x.to === 'AWAKE'))) {

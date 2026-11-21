@@ -168,7 +168,8 @@ function startText(p: { state: string; cause?: string; by?: string; inferred?: b
   if (!p.cause) return '';
   // The router's own wakes (rules it cannot switch) say "dormeto": no one to name.
   const who = p.by && p.by !== 'dormeto' ? ` by ${p.by}` : '';
-  if (p.cause === 'manager') return `${p.state === 'NAPPING' ? 'napped' : 'woken'} from the manager${who}`;
+  // A person's nap of a failed standalone workload goes straight to ASLEEP (router 4c1fe78): napped too.
+  if (p.cause === 'manager') return `${p.state === 'NAPPING' || p.state === 'ASLEEP' ? 'napped' : 'woken'} from the manager${who}`;
   if (p.cause === 'pause') return `woken for a pause${who}`;
   if (p.cause.startsWith('rule ')) return `the wake rule ${p.cause.slice(5)}`;
   if (p.cause === 'idle' && p.kind === 'standalone') return `the idle check (idle on every signal for its idle window)${who}`;

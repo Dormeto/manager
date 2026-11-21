@@ -16,7 +16,7 @@ import { cloudOf } from '@dormeto/fleet/clouds';
 import { ACCOUNTS, ME, ORG, accountName } from './org';
 import { bursts, checkAfter, entriesOf, sessions, wakeCause, type Burst } from './history';
 import { DAY, HOUR, MINUTE, SECOND, hash, hex, iso, random, uuid } from './util';
-import { STANDALONE_WORKLOADS, standaloneCandidates, standaloneWorkload } from './standalone';
+import { GOOGLE_STANDALONE_WORKLOADS, STANDALONE_WORKLOADS, googleRunProblem, googleStandaloneCandidates, standaloneCandidates, standaloneWorkload } from './standalone';
 
 export class MockError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly body: Record<string, unknown> = {}) {
@@ -700,6 +700,7 @@ function build(now: number): Demo {
   seedAudit(d, now);
   addGoogleCloud(d, now);
   addStandalone(d, now, lastRun);
+  addGoogleStandalone(d, now);
   return d;
 }
 
@@ -721,6 +722,53 @@ function addStandalone(d: Demo, now: number, lastRun: number): void {
   }
   d.config.config = { ...d.config.config, standalone: 'on' };
 }
+
+// Google Cloud's standalone workloads (plan 5): on a second router of dormeto-dev, of 0.42.0 in europe-west1, apart from the
+// first (its HTTP workloads and its version stay); their candidates; the run's Cloud SQL problem in the project shop-prod.
+export const GOOGLE_STANDALONE_ROUTER = 'dmtr-dormeto-dev-europe-west1';
+const GOOGLE_PROBLEM_PROJECT = 'shop-prod';
+// What their naps stop, an hour: approximate europe-west1 list prices (an e2-standard-4, four n2-standard-8, e2-medium; Cloud
+// SQL PostgreSQL db-custom tiers, zonal).
+const GOOGLE_STANDALONE_ITEMS: Record<string, DemoWorkload['items']> = {
+  batch: [{ item: { kind: 'gce', machineType: 'e2-standard-4', family: 'e2', vcpus: 4, memoryGb: 16, os: 'Linux', zone: 'europe-west1-b', count: 1 }, hourly: 0.134 }],
+  'render-workers': [{ item: { kind: 'gce', machineType: 'n2-standard-8', family: 'n2', vcpus: 8, memoryGb: 32, os: 'Linux', zone: 'europe-west1-b', count: 4 }, hourly: 1.554 }],
+  'orders-sql': [{ item: { kind: 'cloudsql', tier: 'db-custom-2-7680', engine: 'postgres', edition: 'enterprise', ha: false, region: 'europe-west1', vcpus: 2, memoryGb: 7.5 }, hourly: 0.1622 }],
+  'etl-vm': [{ item: { kind: 'gce', machineType: 'e2-medium', family: 'e2', vcpus: 1, memoryGb: 4, os: 'Linux', zone: 'europe-west1-b', count: 1 }, hourly: 0.0335 }],
+  'reports-sql': [{ item: { kind: 'cloudsql', tier: 'db-custom-1-3840', engine: 'postgres', edition: 'enterprise', ha: false, region: 'europe-west1', vcpus: 1, memoryGb: 3.75 }, hourly: 0.0811 }],
+};
+function addGoogleStandalone(d: Demo, now: number): void {
+  if (!d.routers.some((r) => r.cloud === 'gcp')) return;
+  const router: DemoRouter = {
+    ...makeRouter({
+      name: GOOGLE_STANDALONE_ROUTER, account: GOOGLE_PROJECT, region: 'europe-west1', source: 'manager', version: '0.42.0', build: 'c4d5e6f7a8b9', installedDays: 3, metrics: null,
+      concurrency: { limit: 0, needed: 0, worstCase: 0 }, peak: 1,
+    }, now),
+    cloud: 'gcp', source: 'cli', readsManager: true,
+  };
+  d.routers.push(router);
+  for (const spec of GOOGLE_STANDALONE_WORKLOADS) {
+    const w = standaloneWorkload(spec, router, (backends) => buildWorkload({ name: spec.name, router: router.name, state: spec.state, profile: spec.state === 'AWAKE' ? 'busy' : 'office', backends, idleMinutes: 120, wakeMode: 'any', source: 'manager', hosts: [`${spec.name}.internal`] }, router, now), now);
+    Object.assign(w, { cloud: 'gcp', source: 'cli', items: GOOGLE_STANDALONE_ITEMS[spec.name] ?? [], itemsKnown: true, hibernate: null, fallbackTypes: [] });
+    d.workloads.push(w);
+  }
+  const lastSeen = Date.parse(d.runs.at(-1)!.record.finishedAt);
+  const candidates = googleStandaloneCandidates(d, router, now, lastSeen);
+  for (const c of candidates) {
+    const next = decide(d, c, now);
+    Object.assign(c, next);
+    c.history = [{ at: c.firstSeenAt, status: c.eligibility === 'ineligible' ? 'ineligible' : 'pending-onboarding', reason: c.eligibility === 'ineligible' ? c.reason ?? '' : 'eligible' }];
+    if (next.status !== c.history[0]!.status) c.history.push({ at: iso(now - DAY), status: next.status, reason: next.statusReason });
+  }
+  d.candidates = [...d.candidates, ...candidates];
+  // The run read them: its record again, with their pairs and the problem.
+  const run = d.runs.at(-1)!;
+  run.record = { ...runRecord(d, Date.parse(run.record.startedAt), Date.parse(run.record.finishedAt), run.record.trigger, run.record.by), status: run.record.status };
+}
+// The run's Google Cloud standalone pairs: the router's region with its candidates, and the project whose Cloud SQL instances
+// discovery could not list.
+const googleTargets = (d: Demo): RunRecord['targets'] => (d.routers.some((r) => r.name === GOOGLE_STANDALONE_ROUTER) ? [
+  { account: GOOGLE_PROBLEM_PROJECT, region: 'europe-west1', status: 'ok' as const, rules: 0, ms: 1400, problems: [googleRunProblem(GOOGLE_PROBLEM_PROJECT)] },
+] : []);
 
 // The demo's Google Cloud router (installed by the CLI in the project dormeto-dev) and its two workloads, a VM and a managed
 // instance group. They are apart from the generated organization (they change none of its workloads or routers); their naps
@@ -854,10 +902,10 @@ export function runRecord(d: Demo, startedAt: number, finishedAt: number, trigge
   for (const c of d.candidates) counts[c.status] = (counts[c.status] ?? 0) + 1;
   return {
     startedAt: iso(startedAt), finishedAt: iso(finishedAt), trigger, ...(by ? { by } : {}), status: 'ok',
-    targets: [...pairs].map(([key, rules]) => {
+    targets: [...[...pairs].map(([key, rules]) => {
       const [account, region] = key.split(' ') as [string, string];
       return { account, region, status: 'ok' as const, rules, ms: Math.round(r.between(900, 3200)) };
-    }),
+    }), ...googleTargets(d)],
     emptyPairs: 8,
     skipped: [{ reason: 'excluded account', accounts: 1, pairs: 3 }, { reason: 'no load balancer in the last 3 scans', accounts: 3, pairs: 4 }],
     counts, lint: lintOf(d.config.config), delegation: 'ok',

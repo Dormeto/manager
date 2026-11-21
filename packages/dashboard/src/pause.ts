@@ -108,11 +108,13 @@ export const capitalised = (text: string) => `${text[0]!.toUpperCase()}${text.sl
 
 // What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account. On Google
 // Cloud: its backend service, its URL map (by their paths) and its project. A standalone candidate: its resource and account.
-export function exclusionTargets(c: { targetGroupArn?: string | null; targetGroup?: string | null; loadBalancerArn?: string; loadBalancer?: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string; kind?: string; resourceArn?: string; name?: string }): TargetOption[] {
+export function exclusionTargets(c: { targetGroupArn?: string | null; targetGroup?: string | null; loadBalancerArn?: string; loadBalancer?: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string; kind?: string; resourceArn?: string; resource?: string; name?: string }): TargetOption[] {
   const words = cloudWords(cloudOf(c.account));
   const label = (kind: ExclusionKind, name: string, scope?: string) => `${capitalised(kindNoun(kind, words))} ${name}${scope ? ` (${scope})` : ''}`;
   const account = { kind: 'account' as const, account: c.account, label: label('account', c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`, 'never read again') };
   if (c.kind === 'standalone' && c.resourceArn) return [{ kind: 'resource' as const, arn: c.resourceArn, label: label('resource', c.name ?? c.resourceArn) }, account];
+  // A Google Cloud resource: by its path.
+  if (c.kind === 'standalone' && c.resource) return [{ kind: 'resource' as const, path: c.resource, label: label('resource', c.name ?? resourceName(c.resource)) }, account];
   if (cloudOf(c.account) === 'gcp') {
     const service = c.backendService ?? c.id;
     return [

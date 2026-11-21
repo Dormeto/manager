@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // A workload's kind as an icon, its name and meaning in a tooltip (kinds.ts `mark`) (the Workloads and Discovery rows mark a standalone one).
 import { computed } from 'vue';
-import { kindInfo, type Kind } from '../kinds';
+import type { Cloud } from '@dormeto/fleet/clouds';
+import { kindInfo, kindMark, type Kind } from '../kinds';
 
-const props = defineProps<{ kind: Kind; size?: number }>();
-const info = computed(() => kindInfo(props.kind));
+const props = defineProps<{ kind: Kind; size?: number; cloud?: Cloud | null }>();
+const info = computed(() => ({ ...kindInfo(props.kind), mark: kindMark(props.kind, props.cloud) }));
 </script>
 
 <template>

@@ -136,6 +136,10 @@ const BEHAVIOUR: { file: string; text: string; why: string }[] = [
     file: 'hibernation.ts', text: "if (cloud === 'gcp' || (m.url === null && m.readAt))",
     why: 'what Inherit reads: a level the manager pushed (Google Cloud\'s, or an answer without its cloud and with no URL), or a URL the router fetches; their states differ',
   },
+  { file: 'components/IdleSignalsFields.vue', text: '<template v-if="shape === \'gcp\' && form.gcp">', why: 'the custom metric\'s fields: Google Cloud\'s type, filter and aligner, or AWS\'s namespace, name, dimensions and statistic (plan 5)' },
+  { file: 'idle-settings.ts', text: "(one ? (isGoogleMetric(one) ? 'gcp' : 'aws') : cloud) === 'gcp' ? { metricCloud: 'gcp' as const } : {}", why: 'the metric\'s shape a form holds: Google Cloud\'s when its metric or its level is' },
+  { file: 'idle-settings.ts', text: "cloud === 'gcp' ? { gcp: { ...EMPTY_GOOGLE } } : {}", why: 'Google Cloud\'s metric fields, empty, for a Google Cloud level' },
+  { file: 'idle-settings.ts', text: "if (form.metricCloud === 'gcp')", why: 'the metric sent: Google Cloud\'s shape { type, filter, aligner, below } or AWS\'s' },
   { file: 'pause.ts', text: "if (cloudOf(c.account) === 'gcp')", why: 'which targets: a backend service and a URL map by their paths, or a target group and a load balancer by their ARNs (their nouns are the table\'s)' },
   { file: 'views/WorkloadView.vue', text: 'gcp.value ? backendConsoleUrl(b, project.value) : null', why: 'a backend\'s console link: Google Cloud\'s only' },
   {

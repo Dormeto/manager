@@ -9,6 +9,7 @@ import { BUILT_IN, builtInText, defaultsFormOf, type Defaults } from '../default
 import { SETTING_KEYS, settingHelp, settingLabel, settingsChanges, type SettingsForm } from '../settings';
 import InfoTip from './InfoTip.vue';
 import IdleSignalsFields from './IdleSignalsFields.vue';
+import type { Cloud } from '@dormeto/fleet/clouds';
 import { IDLE_BUILT_IN, idleChanges, idleFormOf, type IdleForm } from '../idle-settings';
 import type { IdleSettings } from '../types';
 
@@ -16,15 +17,18 @@ const props = withDefaults(defineProps<{
   modelValue: boolean; title: string; level: 'organization' | 'router' | 'type'; name?: string; values: Defaults;
   // What each field gets when empty, said ("45 min, organization"); the organization's is the built-in value.
   inherited?: Partial<Record<string, string>>; saving?: boolean; error?: string;
-  // The level holds the idle signals of its standalone workloads (AWS's levels; a Google Cloud router's has none yet).
+  // The level holds the idle signals of its standalone workloads (a router's from 0.42.0, on either cloud).
   idle?: boolean;
-}>(), { name: undefined, inherited: () => ({}), saving: false, error: '', idle: true });
+  // A router's cloud: its custom metric's shape. The organization's level and a type take either cloud's, picked in the form.
+  cloud?: Cloud;
+}>(), { name: undefined, inherited: () => ({}), saving: false, error: '', idle: true, cloud: 'aws' });
+const metricCloud = computed<Cloud | 'any'>(() => (props.level === 'router' ? props.cloud : 'any'));
 const emit = defineEmits<{ 'update:modelValue': [boolean]; submit: [Record<string, unknown>] }>();
 
 const initial = ref<SettingsForm>(defaultsFormOf(props.values));
 const form = ref<SettingsForm>({ ...initial.value });
 const problem = ref('');
-const idleInitial = ref<IdleForm>(idleFormOf(props.values));
+const idleInitial = ref<IdleForm>(idleFormOf(props.values, undefined, props.level === 'router' ? props.cloud : undefined));
 const idleForm = ref<IdleForm>(JSON.parse(JSON.stringify(idleInitial.value)) as IdleForm);
 // The organization's gate (an idle signal while a router does not know them) and the idle fields' own refusals: shown with them.
 const idleError = computed(() => (props.idle && /idle signal/.test(props.error) ? props.error : ''));
@@ -36,7 +40,7 @@ watch(() => props.modelValue, async (open) => {
   if (!open) return;
   initial.value = defaultsFormOf(props.values);
   form.value = { ...initial.value };
-  idleInitial.value = idleFormOf(props.values);
+  idleInitial.value = idleFormOf(props.values, undefined, props.level === 'router' ? props.cloud : undefined);
   idleForm.value = JSON.parse(JSON.stringify(idleInitial.value)) as IdleForm;
   problem.value = '';
   reach.value = null;
@@ -93,7 +97,7 @@ defineExpose({ BUILT_IN });
         <template v-if="idle">
           <div class="dm-eyebrow mt-6 mb-1" data-test="defaults-group">Standalone workloads</div>
           <p class="text-body-small text-medium-emphasis mb-3">Their idle signals: a standalone workload naps when every one that applies stays under its threshold for its idle window.</p>
-          <IdleSignalsFields v-model="idleForm" :placeholders="idlePlaceholders" :error="idleError" />
+          <IdleSignalsFields v-model="idleForm" :placeholders="idlePlaceholders" :error="idleError" :cloud="metricCloud" />
         </template>
         <v-alert v-if="problem || otherError" data-test="defaults-problem" type="error" variant="tonal" density="compact" class="mt-3" :text="problem || otherError" />
       </v-card-text>

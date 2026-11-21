@@ -5,7 +5,7 @@ import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiDotsH
   mdiPlayCircleOutline, mdiPowerSleep, mdiStopCircleOutline, mdiWeatherSunny } from '@mdi/js';
 import { settingRows, sourceText, typeText } from '../settings';
 import { standaloneSettingRows } from '../idle-settings';
-import { kindOf, resourceKindOfArn } from '../kinds';
+import { kindOf, resourceKindOf } from '../kinds';
 import ActivityCard from '../components/ActivityCard.vue';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
@@ -46,7 +46,7 @@ import { backendCost, barSavings, discountText } from '../costs';
 import { cloudWords } from '../cloud-words';
 import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
-import { failureTitle, retryText } from '../failures';
+import { failureTitle, retriesText, retryText } from '../failures';
 import { useCountUp } from '../count-up';
 import type { Counts, DescriptionInfo, WorkloadStatus } from '../types';
 
@@ -92,7 +92,7 @@ const title = computed(() => status.value?.name ?? props.id);
 // A standalone workload (design §6): no waiting page, route, rule, target, waker, request or URL; its Activity instead.
 const standaloneKind = computed(() => kindOf(status.value) === 'standalone');
 // The settings card's rows: its kind's.
-const settingsRows = computed(() => (!status.value ? [] : standaloneKind.value ? standaloneSettingRows(status.value.settings, status.value.settingsFrom) : settingRows(status.value.settings, status.value.settingsFrom, cloud.value)));
+const settingsRows = computed(() => (!status.value ? [] : standaloneKind.value ? standaloneSettingRows(status.value.settings, status.value.settingsFrom, cloud.value) : settingRows(status.value.settings, status.value.settingsFrom, cloud.value)));
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
 
 const { error, loading, nextAt, run } = usePoll(async () => {
@@ -243,7 +243,7 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
   acting.value = true;
   try {
     await api(`${path.value}/${action}`, { method: 'POST' });
-    notice.value = { type: 'success', text: action === 'nap' ? (standaloneKind.value ? 'Nap requested: its backends stop, then its databases.' : 'Nap requested: the route switches to the waker, then the backends stop.') : 'Wake requested.' };
+    notice.value = { type: 'success', text: action === 'nap' ? (standaloneKind.value ? `Nap requested: its backends stop, then ${words.value.standalone.databases}.` : 'Nap requested: the route switches to the waker, then the backends stop.') : 'Wake requested.' };
     setTimeout(run, 2000);
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -301,6 +301,8 @@ const where = computed(() => ({ account: status.value?.account ?? '', region: st
 // A standalone workload: its resource (the review's M14), as Discovery excludes it.
 const excludeOptions = computed<TargetOption[]>(() => (standaloneKind.value && status.value?.resourceArn
   ? [{ kind: 'resource', arn: status.value.resourceArn, label: `Resource ${status.value.name ?? shortId(status.value.resourceArn)} (this workload)` }]
+  : standaloneKind.value && status.value?.resource
+  ? [{ kind: 'resource', path: status.value.resource, label: `Resource ${status.value.name ?? resourceName(status.value.resource)} (this workload)` }]
   : gcp.value && status.value?.backendService
   ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, status.value.region ?? ''), label: `${capitalised(words.value.target)} ${resourceName(status.value.backendService)} (this workload)` }]
   : status.value?.targetGroupArn
@@ -352,12 +354,15 @@ const rows = (kind: keyof Counts) => {
     .map((key) => ({ key, today: s.today[kind][key] ?? 0, total: s.total[kind][key] ?? 0 }));
 };
 // The last failure (R7b): where, when, how many in a row, and what retries it (its kind's words).
+// A failed standalone workload: a person's nap ends its retries (the router accepts it, router 4c1fe78); an HTTP one naps awake.
+const failedStandalone = computed(() => standaloneKind.value && status.value?.state === 'FAILED');
+const nappable = computed(() => status.value?.state === 'AWAKE' || failedStandalone.value);
 const failureDetail = computed(() => {
   const s = status.value;
   if (!s?.failure) return '';
   const n = s.consecutiveFailures ?? 1;
   const retry = retryText(s, now.value, standaloneKind.value, relative);
-  return [s.failure.backend && `backend ${s.failure.backend}`, relative(s.failure.at, now.value), n > 1 && `${n} failures in a row`, retry].filter(Boolean).join(' · ');
+  return [s.failure.backend && `backend ${s.failure.backend}`, relative(s.failure.at, now.value), n > 1 && `${n} failures in a row`, retriesText(s, standaloneKind.value), retry].filter(Boolean).join(' · ');
 });
 const fallbackText = computed(() => (status.value?.fallbacks ?? []).map((f) => `${f.instance} on ${f.to} instead of ${f.from}`).join(', '));
 
@@ -371,7 +376,7 @@ const summary = computed(() => {
     const latest = !pauses.value.length && s.nap?.latestAt ? `, at the latest ${new Date(s.nap.latestAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '';
     return [
       { label: 'Kind', value: 'Standalone: naps on a schedule, a person\'s word or its idle signals; nothing wakes it on demand' },
-      { label: 'Resource', value: s.resourceArn ?? '—' },
+      { label: 'Resource', value: s.resourceArn ?? s.resource ?? '—' },
       { ...nap, value: `${nap.value}${latest}` },
       { label: since.label, value: relative(since.at, now.value) },
       { label: 'Wakes', value: String(s.wakeCount) },
@@ -455,7 +460,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="status.source === 'terraform'" data-test="tags-terraform" class="text-body-small text-medium-emphasis">set in Terraform</span>
           <v-btn v-else-if="session.isAdmin && managed && status.tags" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
         </div>
-        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :resource="resourceKindOfArn(status.resourceArn)" :savings="barSavings(status.costs)" :width="140" :cloud="cloud" />
+        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :resource="resourceKindOf(status)" :savings="barSavings(status.costs)" :width="140" :cloud="cloud" />
         </div>
       </div>
       <div class="dm-hero__side">
@@ -468,7 +473,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           </template>
           <v-list density="compact" min-width="220">
             <v-list-item v-if="canWake" data-test="action" :prepend-icon="mdiWeatherSunny" title="Wake" :disabled="!['ASLEEP', 'FAILED', 'NAPPING'].includes(status.state)" @click="confirm = 'wake'" />
-            <v-list-item v-if="canNap" data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="status.state !== 'AWAKE' || pauses.length > 0" @click="confirm = 'nap'" />
+            <v-list-item v-if="canNap" data-test="action" :prepend-icon="mdiPowerSleep" title="Nap" :disabled="!nappable || pauses.length > 0" @click="confirm = 'nap'" />
             <template v-if="canNap">
               <v-list-item v-if="ownPause" data-test="action" :prepend-icon="mdiPlay" title="Resume" @click="change('resume')" />
               <v-list-item v-else data-test="action" :prepend-icon="mdiPause" title="Pause" @click="pauseOpen = true" />
@@ -500,6 +505,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   <v-alert v-if="status?.failure" data-test="failure" :type="status.state === 'FAILED' ? 'error' : 'warning'" variant="tonal" class="mb-4" :title="failureTitle(status.failure, cloud)">
     <div class="text-body-medium">{{ status.failure.message }}</div>
     <div class="text-body-small text-medium-emphasis mt-1">{{ failureDetail }}</div>
+    <v-btn v-if="failedStandalone && canNap && !pauses.length" data-test="failure-nap" class="mt-2" size="small" variant="tonal" :prepend-icon="mdiPowerSleep" @click="confirm = 'nap'">{{ status.failure.step === 'nap' ? 'Nap now' : 'Nap to end the retries' }}</v-btn>
   </v-alert>
   <v-alert v-if="fallbackText" data-test="fallbacks" type="info" variant="tonal" class="mb-4" :title="`On fallback ${words.types}`">
     {{ fallbackText }}: {{ words.name }} had no capacity for their own types at the last wake; the next nap gives them back.
@@ -574,9 +580,9 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
       </v-card>
       <HistoryCard :router="router" :id="id" :now="now" :kind="status.kind" />
-      <ActivityCard v-if="standaloneKind" :status="status" :now="now" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" @apply="saveSettings({ idleMinutes: $event })" />
+      <ActivityCard v-if="standaloneKind" :status="status" :cloud="cloud" :now="now" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" @apply="saveSettings({ idleMinutes: $event })" />
       <RequestHeatmap v-else :router="router" :id="id" />
-      <ScheduleCard :standalone="standaloneKind" :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
+      <ScheduleCard :standalone="standaloneKind" :cloud="cloud" :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
       <IdleWindowCard v-if="!standaloneKind" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
     </div>
 
@@ -724,7 +730,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </v-avatar>
       </template>
       <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
-        ? (standaloneKind ? 'Its backends stop, then its databases. Nothing wakes it on demand: a schedule, a person or a start made in AWS does.' : 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.')
+        ? (standaloneKind ? `${failedStandalone ? 'Its wake is no longer retried: its' : 'Its'} backends stop, then ${words.standalone.databases}. Nothing wakes it on demand: a schedule, a person or ${words.standalone.startOutside} does.` : 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.')
         : confirm === 'offboard'
           ? words.offboarding
           : words.waking }}</v-card-text>

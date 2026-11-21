@@ -23,17 +23,8 @@ import IdleSignalsFields from './IdleSignalsFields.vue';
 // several are offered or the API needs one named (`chooseRouter`: the project has several, whatever their versions), the only
 // one offered then chosen already.
 const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean; resource?: ResourceKind | null }>();
-// What a nap and a wake do to a standalone resource, by its kind (the router's backend modules).
-const NAPS: Record<ResourceKind, string> = {
-  instance: 'A nap stops the instance (or hibernates it), then its databases; a wake starts them in reverse.',
-  asg: 'A nap sets the group\'s capacity to 0, then stops its databases; a wake reverses both.',
-  ecs: 'A nap sets the service\'s desired count to 0, then stops its databases; a wake reverses both.',
-  'rds-instance': 'A nap stops the database and a wake starts it; AWS starts it again after 7 days.',
-  'rds-cluster': 'A nap stops the Aurora cluster and a wake starts it; AWS starts it again after 7 days.',
-  // Google Cloud's (plan 5; its dialog's words are M52's).
-  'cloudsql-instance': 'A nap stops the Cloud SQL instance and a wake starts it.',
-};
-const napText = computed(() => (props.resource ? NAPS[props.resource] : ''));
+// What a nap and a wake do to a standalone resource, by its kind (the router's backend modules), in its cloud's words.
+const napText = computed(() => (props.resource ? cloudWords(props.cloud).standalone.naps[props.resource] ?? '' : ''));
 // Its idle signals, each inherited unless set here.
 const idleInitial = idleFormOf({});
 const idle = ref<IdleForm>(JSON.parse(JSON.stringify(idleInitial)) as IdleForm);
@@ -149,20 +140,10 @@ function submit() {
                 <span>The router of its account and region (installed first if needed, with its access entries in the cluster) naps it once idle.</span>
               </li>
             </template>
-            <template v-else-if="gcp">
-              <li class="dm-change">
-                <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
-                <span>The router of its project and region adds the waker to its backend service's routing in the URL map (traffic unchanged) and naps it once idle.</span>
-              </li>
-              <li class="dm-change">
-                <v-avatar color="info" variant="tonal" size="28"><v-icon :icon="mdiCheckCircleOutline" size="16" /></v-avatar>
-                <span>The manager binds the tag <code>dormeto/managed</code> to the VMs, managed instance groups and Cloud SQL instances the preview names, and removes the bindings it made when the router refuses.</span>
-              </li>
-            </template>
             <template v-else-if="resource">
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
-                <span>The router of its account and region tags it and its databases, installing itself first if needed.</span>
+                <span>{{ words.standalone.onboards }}</span>
               </li>
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="info" variant="tonal" size="28"><v-icon :icon="mdiPauseCircleOutline" size="16" /></v-avatar>
@@ -170,7 +151,7 @@ function submit() {
               </li>
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="warning" variant="tonal" size="28"><v-icon :icon="mdiCalendarClock" size="16" /></v-avatar>
-                <span>Nothing wakes it on demand: a schedule, a person or a start made in AWS does.</span>
+                <span>Nothing wakes it on demand: a schedule, a person or {{ words.standalone.startOutside }} does.</span>
               </li>
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="secondary" variant="tonal" size="28"><v-icon :icon="mdiPowerSleep" size="16" /></v-avatar>
@@ -179,6 +160,16 @@ function submit() {
               <li class="dm-change">
                 <span aria-hidden="true" />
                 <span><router-link data-test="onboard-schedule" to="/schedules" class="dm-link">Give it a schedule</router-link> once onboarded, in Schedules.</span>
+              </li>
+            </template>
+            <template v-else-if="gcp">
+              <li class="dm-change">
+                <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
+                <span>The router of its project and region adds the waker to its backend service's routing in the URL map (traffic unchanged) and naps it once idle.</span>
+              </li>
+              <li class="dm-change">
+                <v-avatar color="info" variant="tonal" size="28"><v-icon :icon="mdiCheckCircleOutline" size="16" /></v-avatar>
+                <span>The manager binds the tag <code>dormeto/managed</code> to the VMs, managed instance groups and Cloud SQL instances the preview names, and removes the bindings it made when the router refuses.</span>
               </li>
             </template>
             <li v-else class="dm-change">
@@ -215,11 +206,11 @@ function submit() {
         </v-row>
         <template v-if="resource">
           <div class="dm-eyebrow mt-2 mb-2">Idle signals</div>
-          <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" :error="idleProblem" />
-          <p data-test="onboard-inherit" class="text-body-small text-medium-emphasis mt-1">Empty settings take the levels' (a type, the router, the organization); with none set, the built-ins: a 120-minute idle window, CPU under 5 % (off for a database), network off, no custom metric (a database's connections under 1).</p>
+          <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" :error="idleProblem" :cloud="cloud ?? 'aws'" />
+          <p data-test="onboard-inherit" class="text-body-small text-medium-emphasis mt-1">Empty settings take the levels' (a type, the router, the organization); with none set, the built-ins: {{ words.standalone.inherit }}.</p>
         </template>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
-          :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : `No router of the project is ${GOOGLE_ROUTER_MINIMUM} or later: upgrade one with dormeto gcp routers install`" />
+          :hint="routers?.length ? (resource ? 'The project has several routers and none in the resource\'s region: this one serves the workload' : 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)') : `No router of the project is ${GOOGLE_ROUTER_MINIMUM} or later: upgrade one with dormeto gcp routers install`" />
         <v-text-field v-model="databases" :label="words.databasesLabel" :hint="words.databasesHint" persistent-hint />
         <!-- Fallback types and hibernation: on Google Cloud always, on AWS but for a Kubernetes candidate. -->
         <v-text-field v-if="takesFallbacks" v-model="fallbacks" :label="`Fallback ${words.types} (optional)`" :rules="[fallbackRule]" class="mt-4" :hint="words.fallbacksHint" persistent-hint />

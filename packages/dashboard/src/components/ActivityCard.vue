@@ -16,8 +16,13 @@ import { duration, relative } from '../format';
 import { signalName, signalValue, thresholdText } from '../idle-settings';
 import { sourceText } from '../settings';
 import type { WorkloadStatus } from '../types';
+import type { Cloud } from '@dormeto/fleet/clouds';
+import { cloudWords } from '../cloud-words';
+import { rowCloud } from '../format';
 
-const props = defineProps<{ status: WorkloadStatus; now: number; router?: string; id?: string; canApply?: boolean; source?: 'terraform' | 'manager' | 'cli' }>();
+// `cloud`: the workload's, its row's when not given: its words (cloud-words.ts) for its signals' delay and a missing resource.
+const props = defineProps<{ status: WorkloadStatus; now: number; router?: string; id?: string; canApply?: boolean; source?: 'terraform' | 'manager' | 'cli'; cloud?: Cloud }>();
+const words = computed(() => cloudWords(props.cloud ?? rowCloud(props.status)).standalone);
 const emit = defineEmits<{ apply: [minutes: number] }>();
 interface History {
   from: string; to: string; asleep: { from: string; to: string }[]; advice: IdleWindowAdvice | null; reason?: string;
@@ -41,15 +46,15 @@ provide(GIVEN_ADVICE, () => history.value?.advice ?? null);
 const charts = computed(() => (history.value?.signals ?? []).filter((s) => s.applies && s.values.length));
 const sentence = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}${text.endsWith('.') ? '' : '.'}`;
 const metric = computed(() => props.status.settings.idleMetric);
-const REASONS: Record<string, string> = { off: 'off' };
+// A signal that does not apply: off, or why not (the router's reason, said under the table).
 const rows = computed(() => (props.status.idle ?? []).map((s) => ({
   key: s.signal,
   name: signalName(s.signal, metric.value),
-  threshold: s.applies ? thresholdText(s.signal, s.below) : REASONS[s.reason ?? ''] ?? 'off',
+  threshold: s.applies ? thresholdText(s.signal, s.below) : !s.reason || s.reason === 'off' ? 'off' : 'does not apply',
   from: sourceText(s.from, props.status.type),
   value: signalValue(s.signal, s.value),
   since: !s.applies ? '—' : s.underSince ? relative(s.underSince, props.now) : 'not under',
-  reason: s.applies ? null : s.reason && s.reason !== 'off' ? s.reason : null,
+  reason: s.reason && s.reason !== 'off' ? s.reason : null,
 })));
 // As the HTTP page's Nap row says it.
 const nap = computed(() => {
@@ -70,8 +75,7 @@ const nap = computed(() => {
       <v-card-subtitle class="text-wrap">Idle when every signal that applies stays under its threshold for the idle window</v-card-subtitle>
     </v-card-item>
     <v-alert v-if="status.resourceMissing" data-test="resource-missing" type="warning" variant="tonal" density="compact" class="mx-4 mb-2"
-      title="Its resource is missing">It was deleted, or lost its <code>dormeto:workload</code> tag: nothing of it is stopped or started. Offboard the workload, or tag
-      the resource again (its value is the workload's id): the router finds it at its next check.</v-alert>
+      title="Its resource is missing">{{ words.missing }} {{ words.missingFix }}</v-alert>
     <v-table density="compact" class="dm-activity">
       <thead><tr><th>Signal</th><th>Threshold</th><th>From</th><th>Last value</th><th>Under since</th></tr></thead>
       <tbody>
@@ -83,7 +87,7 @@ const nap = computed(() => {
     </v-table>
     <p v-for="r in rows.filter((x) => x.reason)" :key="`${r.key}-reason`" class="text-body-small text-medium-emphasis px-4 mb-1">{{ r.name }}: {{ r.reason }}</p>
     <v-card-text class="text-body-medium" data-test="nap-estimate">Nap: {{ nap }}</v-card-text>
-    <p class="text-body-small text-medium-emphasis px-4 mb-2">CloudWatch publishes the signals minutes late: an idle nap comes up to 15 minutes after the idle window.</p>
+    <p class="text-body-small text-medium-emphasis px-4 mb-2">{{ words.signalsLate }}</p>
     <DmLoader v-if="reading" label="Reading its signals over 7 days…" :size="40" />
     <v-card-text v-else-if="historyError" class="pt-0">
       <v-alert data-test="activity-error" type="warning" variant="tonal" density="compact">No history: {{ historyError }}</v-alert>

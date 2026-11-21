@@ -79,16 +79,18 @@ export function targetText(t: RunTarget): string {
 export const idleShare = (c: { idleHours7d: number | null }): string | null => (c.idleHours7d === null ? null : percent(c.idleHours7d, 168));
 
 // A standalone candidate's idle share (vision standalone workloads design §4, §6): its default signal, the router's built-in
-// (discovery standalone-idle.ts): a server's CPU under 5 %, a database's connections under 1, at every 5-minute point.
-const STANDALONE_SOURCE = 'From CloudWatch\'s metrics of the resource, the default idle signals of its type (its CPU; a database\'s connections), read by discovery: no onboarding needed. An hour with a missing point is not idle, and a resource stopped all week has no share.';
+// (discovery standalone-idle.ts, gcp-standalone.ts): a server's CPU under 5 %, a database's connections under 1, at every
+// 5-minute point, read from the cloud's metrics (cloud-words.ts).
+const standaloneSource = (cloud: Cloud) => `${cloudWords(cloud).standalone.idleSource}, the default idle signals of its type (its CPU; ${cloudWords(cloud).standalone.database}'s connections), read by discovery: no onboarding needed. An hour with a missing point is not idle, and a resource stopped all week has no share.`;
+const DATABASES: ResourceKind[] = ['rds-instance', 'rds-cluster', 'cloudsql-instance'];
 
 // The idle share in words: hours of the last 7 days (168) without any request to the target group, or the backend service on
 // Google Cloud; a standalone candidate's (`resource`: its kind), hours with its default signal under its threshold, and the
 // share's source.
 export function idleText(c: { idleHours7d: number; requests7d?: number | null; resource?: ResourceKind }, cloud: Cloud = 'aws'): { title: string; detail: string; source?: string } {
   if (c.resource) {
-    const signal = c.resource.startsWith('rds-') ? 'no database connection' : 'its CPU under 5 %';
-    return { title: `Idle ${percent(c.idleHours7d, 168)} of the last 7 days`, detail: `${c.idleHours7d} of 168 hours with ${signal} at every 5-minute point.`, source: STANDALONE_SOURCE };
+    const signal = DATABASES.includes(c.resource) ? 'no database connection' : 'its CPU under 5 %';
+    return { title: `Idle ${cloudWords(cloud).idleAbout}${percent(c.idleHours7d, 168)} of the last 7 days`, detail: `${c.idleHours7d} of 168 hours with ${signal} at every 5-minute point.`, source: standaloneSource(cloud) };
   }
   const requests = !c.requests7d ? 'no request' : `${c.requests7d.toLocaleString('en-US')} request${c.requests7d === 1 ? '' : 's'}`;
   const words = cloudWords(cloud);

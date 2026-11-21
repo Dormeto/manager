@@ -11,8 +11,12 @@ export interface Settings {
 }
 
 // A standalone workload's idle signals (vision standalone workloads design §4; routers 0.42.0): CPU in percent, network
-// bytes in and out a minute, one custom CloudWatch metric, each under its threshold to be idle, or 'off'.
-export interface IdleMetric { namespace: string; name: string; dimensions: Record<string, string> | Record<string, string>[]; statistic: 'Maximum' | 'Average' | 'Sum'; below: number }
+// bytes in and out a minute, one custom metric (CloudWatch's, or Cloud Monitoring's on Google Cloud), each under its threshold to be idle, or 'off'.
+export interface AwsIdleMetric { namespace: string; name: string; dimensions: Record<string, string> | Record<string, string>[]; statistic: 'Maximum' | 'Average' | 'Sum'; below: number }
+// Google Cloud's (plan 5): a Cloud Monitoring metric type, an optional filter (${resource} the resource's name), its aligner.
+export interface GoogleIdleMetric { type: string; filter?: string; aligner: 'ALIGN_MAX' | 'ALIGN_MEAN' | 'ALIGN_SUM'; below: number }
+export type IdleMetric = AwsIdleMetric | GoogleIdleMetric;
+export const isGoogleMetric = (m: IdleMetric): m is GoogleIdleMetric => 'type' in m;
 // A workload's settings as the API answers them: an HTTP workload's have the waker's, a standalone one's only its kind's five
 // (the review's M9): the waker's are optional here.
 export type WaitKey = 'waitSeconds' | 'drainSeconds' | 'maxHolders';
@@ -75,6 +79,7 @@ export interface WorkloadSummary {
   // A standalone workload (routers 0.42.0): its kind and resource, no URL nor wake mode; absent: an HTTP one.
   kind?: 'standalone';
   resourceArn?: string;
+  resource?: string; // a Google Cloud standalone workload's path (plan 5)
   resourceMissing?: true; // its resource deleted or its dormeto:workload tag removed
   account?: string; // the router's account (from its summary), or its Google Cloud project
   cloud?: Cloud; // manager 0.24.0: the account's cloud (absent before: AWS)
@@ -193,6 +198,7 @@ export interface WorkloadStatus {
   // target, waker, request or waiting page (those fields are absent on it).
   kind?: 'standalone';
   resourceArn?: string;
+  resource?: string; // a Google Cloud standalone workload's path (plan 5)
   resourceMissing?: true;
   idle?: IdleSignal[];
   name?: string; // routers 0.20.0 and later

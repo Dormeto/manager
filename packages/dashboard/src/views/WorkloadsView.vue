@@ -28,7 +28,7 @@ import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
 import { tagsList } from '../tags';
 import KindSelect from '../components/KindSelect.vue';
 import WorkloadCell from '../components/WorkloadCell.vue';
-import { isStandalone, kindInfo, resourceKindOfArn, type Kind } from '../kinds';
+import { isStandalone, kindInfo, resourceKindOf, type Kind } from '../kinds';
 import { useSession } from '../stores/session';
 import PageTitle from '../components/PageTitle.vue';
 
@@ -281,7 +281,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       </template>
       <template #[`item.state`]="{ item }"><span class="dm-state"><StateChip :state="item.state" :failure="item.failure" :cloud="rowCloud(item)" /><PauseChip :pauses="item.pauses" /></span></template>
       <template #[`item.states7d`]="{ item }">
-        <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :resource="resourceKindOfArn(item.resourceArn)" :savings="barSavings(item.costs)" :cloud="rowCloud(item)" :facts="facts(item)" />
+        <StateBar class="ml-auto" :width="92" :states="item.states7d" :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :resource="resourceKindOf(item)" :savings="barSavings(item.costs)" :cloud="rowCloud(item)" :facts="facts(item)" />
       </template>
       <template #[`item.url`]="{ item }">
         <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="dm-url" :title="item.url"><span class="dm-url__host">{{ host(item.url) }}</span><v-icon :icon="mdiOpenInNew" size="x-small" class="dm-url__icon" /></a>
