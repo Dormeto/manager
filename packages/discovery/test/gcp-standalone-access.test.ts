@@ -27,6 +27,9 @@ const PERMISSIONS: [RegExp, string[]][] = [
   [/^GET https:\/\/monitoring\.googleapis\.com\/v3\/projects\/[^/]+\/timeSeries\?/, ['monitoring.timeSeries.list']],
   // The activity step's (M51): a group's VMs.
   [/^POST https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/(zones|regions)\/[^/]+\/instanceGroupManagers\/[^/]+\/listManagedInstances$/, ['compute.instanceGroupManagers.get']],
+  // Target pools and target instances (final review I2, the user's decision of 2026-11-21: the role gains their lists).
+  [/^GET https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/aggregated\/targetPools\?/, ['compute.targetPools.list']],
+  [/^GET https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/aggregated\/targetInstances\?/, ['compute.targetInstances.list']],
   // The onboarding's backing check (final review I3): a group's manager.
   [/^GET https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/(zones|regions)\/[^/]+\/instanceGroupManagers\/[^/]+$/, ['compute.instanceGroupManagers.get']],
 ];
@@ -55,6 +58,6 @@ describe.skipIf(!existsSync(ACCESS))('the standalone scan\'s Google Cloud calls'
       for (const p of found![1]) needed.add(p);
     }
     expect([...needed].filter((p) => !granted.has(p))).toEqual([]);
-    for (const p of ['cloudsql.instances.list', 'cloudsql.instances.get', 'monitoring.timeSeries.list', 'compute.instances.list', 'compute.instanceGroupManagers.list']) expect(granted.has(p), p).toBe(true);
+    for (const p of ['cloudsql.instances.list', 'cloudsql.instances.get', 'monitoring.timeSeries.list', 'compute.instances.list', 'compute.instanceGroupManagers.list', 'compute.targetPools.list', 'compute.targetInstances.list']) expect(granted.has(p), p).toBe(true);
   });
 });

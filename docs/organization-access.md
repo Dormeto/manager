@@ -54,7 +54,12 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   projects, folders and organizations, the load balancers' parts, the Cloud Run services (the routers) and Monitoring's
   request counts; for the perimeter's standalone scan, the VMs, managed instance groups and Cloud SQL instances
   (`cloudsql.instances.list` and `get`, in the role since the release that lists Cloud SQL, router `gcp/access.json`) and
-  their CPU and connections. A connection made before needs `dormeto gcp connect` run again to get the two Cloud SQL reads.
+  their CPU and connections, and the target pools and target instances (`compute.targetPools.list` and
+  `compute.targetInstances.list`, same release), which tell a VM a passthrough load balancer uses. A connection made before
+  needs `dormeto gcp connect` run again to get these four reads. Without the last two, a VM of a region with a forwarding rule
+  to a target pool or a target instance is not eligible, and the run says
+  `target pools not listed: the discovery account may not call compute.targetPools.list (run dormeto gcp connect again: …)`
+  (or target instances); with no such rule, the run only says it.
   Until then, and in a project whose Cloud SQL Admin API (`sqladmin.googleapis.com`) is off, the scan lists the VMs and
   managed instance groups, keeps the Cloud SQL candidates it had as they were, and the run says which it is for the project:
   `Cloud SQL instances not listed: the discovery account may not call cloudsql.instances.list (run dormeto gcp connect

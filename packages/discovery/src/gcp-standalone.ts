@@ -73,10 +73,12 @@ const tagsOf = (labels: Record<string, string>[]) => {
 // names it (an HTTP candidate's backend).
 // What backs each backend service; and where the scan cannot tell (the final review's I1, I2): `blind`, a region ('global': the
 // whole project) whose VMs and groups are not eligible, with why (its load balancers could not be read), and `vmsBlind`, a region
-// whose VMs are not (a forwarding rule to a target pool or a target instance, whose members the discovery role cannot read).
+// whose VMs are not (a forwarding rule to a target pool or a target instance the scan could not list).
 export interface Backing {
   vms: Map<string, { service: string; candidate: boolean }>; groups: Map<string, { service: string; candidate: boolean }>;
   blind?: Map<string, string>; vmsBlind?: Map<string, string>;
+  // A VM a target pool lists or a target instance points at: what it serves ("target pool <n>", "target instance <n>").
+  served?: Map<string, string>;
 }
 
 // The Cloud SQL instances of the project, or why they could not be listed (the AWS RDS lists' form, M42): a 403 is the
@@ -149,6 +151,8 @@ export function standaloneRules({ project, instances, managers, sql, backing, ro
       ...(Object.hasOwn(vm.labels ?? {}, GKE_NODE_LABEL) ? [`${label} is a GKE node: onboard the Kubernetes workloads that run on it`] : []),
       ...(vm.guestAccelerators?.length ? [`${label} has a GPU: GPU VMs are not supported`] : []),
       ...(vm.disks?.some((d) => d.type === LOCAL_SSD) ? [`${label} has a local SSD: a stop would lose its data`] : []),
+      // The manager's own (the router cannot see a target pool or a target instance either).
+      ...(backing.served?.has(path) ? [`${label} serves ${backing.served.get(path)}: it belongs to a load balancer`] : []),
       ...blindOf(label, regionOfZone(zone), true),
     ];
     settle({ id: path, region: regionOfZone(zone), name: vm.name, backend: { kind: 'instance', id: vm.name, location: zone, ...(vm.id ? { resourceId: String(vm.id) } : {}) }, tags: tagsOf([vm.labels ?? {}]) }, reasons);

@@ -55,8 +55,11 @@ net the router cannot be (the router cannot see a backend service it does not ro
 - a VM or a group that backs any backend service, through an instance group or a zonal network endpoint group of VMs
   (`GCE_VM_IP_PORT` or `GCE_VM_IP`: a passthrough load balancer's too), is never eligible;
 - a managed group in a target pool is not eligible (its own `targetPools`);
-- every VM of a region with a forwarding rule to a target pool or a target instance is not eligible: the discovery role
-  cannot read their members (`compute.targetPools.list` and `compute.targetInstances.list` would narrow it to them);
+- a VM a target pool lists, or a target instance points at, is not eligible (`… serves target pool <p>` or `… serves target
+  instance <t>: it belongs to a load balancer`); when either list cannot be read (a connection made before the discovery role
+  had `compute.targetPools.list` and `compute.targetInstances.list`: run `dormeto gcp connect` again) or comes back partial,
+  every VM of a region with a forwarding rule to a target pool or a target instance is not eligible, and with no such rule
+  the run only says it;
 - every VM and group of a scope the backend-service or forwarding-rule listing missed (unreachable, or warned) is not
   eligible, `global` covering the whole project;
 - the run says each. Not checked: a hybrid network endpoint group pointing at a VM's IP.

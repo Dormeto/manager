@@ -1,7 +1,7 @@
 // The safety net again, for one Google Cloud standalone resource at its onboarding (final review I3; decisions
 // findings-final-manager-1.md): the scan may be days old, or out of scope. As the discovery account (its role's reads only:
-// backendServices.list, forwardingRules.list, instanceGroups.list and listInstances, networkEndpointGroups.get and its
-// endpoints, instanceGroupManagers.get and listManagedInstances), what backs any backend service, a group in a target pool, a VM in
+// backendServices.list, forwardingRules.list, targetPools.list, targetInstances.list, instanceGroups.list and listInstances,
+// networkEndpointGroups.get and its endpoints, instanceGroupManagers.get and listManagedInstances), what backs any backend service, a group in a target pool, a VM in
 // a region with a load balancer the manager cannot read, or a listing that missed the resource's scope, gives the scan's words
 // (gcp-scan.ts, gcp-standalone.ts). A read that fails throws: the onboarding is refused, never let through.
 import type { GooglePort } from './google.js';
@@ -83,7 +83,14 @@ export async function standaloneBackingProblems(call: Call, project: string, c: 
     } while (token);
   }
   if (kind === 'instance') {
-    const unseen = rules.items.filter(({ scope, item }) => regionOfScope(scope) === c.region && UNSEEN_TARGET.test(item.target ?? '')).map(({ item }) => item.name).sort();
+    // A target pool that lists it, a target instance that points at it (final review I2); either listing refused or missing the
+    // VM's region, a forwarding rule to one in its region refuses it.
+    const quietly = <T>(resource: string) => aggregated<T>(resource).then((r) => ({ ...r, refused: false }), () => ({ items: [] as { scope: string; item: T }[], missed: [] as string[], refused: true }));
+    const [pools, targets] = await Promise.all([quietly<{ name: string; instances?: string[] }>('targetPools'), quietly<{ name: string; instance?: string }>('targetInstances')]);
+    for (const { item } of pools.items) if ((item.instances ?? []).some((u) => pathOf(u) === c.id)) problems.push(`${label} serves target pool ${item.name}: it belongs to a load balancer`);
+    for (const { item } of targets.items) if (item.instance && pathOf(item.instance) === c.id) problems.push(`${label} serves target instance ${item.name}: it belongs to a load balancer`);
+    const notRead = [pools, targets].some((r) => r.refused || r.missed.some((s) => s === 'global' || regionOfScope(s) === c.region));
+    const unseen = notRead ? rules.items.filter(({ scope, item }) => regionOfScope(scope) === c.region && UNSEEN_TARGET.test(item.target ?? '')).map(({ item }) => item.name).sort() : [];
     if (unseen.length) problems.push(`${label}: its region has a load balancer the manager cannot read (a target pool or a target instance): forwarding rule ${unseen[0]}`);
   }
 

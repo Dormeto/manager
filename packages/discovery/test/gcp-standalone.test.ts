@@ -292,19 +292,41 @@ describe('the safety net, where the scan cannot see a load balancer\'s backends'
     expect(reasonOf(rules, `zones/${ZONE}/instanceGroupManagers/pooled`)).toEqual(['ineligible', 'managed group pooled is in target pool web-pool: it belongs to a load balancer']);
   });
 
-  it('I2: a forwarding rule to a target pool or a target instance makes no VM of its region eligible, and the run says it once', async () => {
+  it('I2: a VM a target pool lists or a target instance points at serves it, the others stay eligible', async () => {
+    const w = standaloneProject();
+    w.vm('pool-vm', ZONE);
+    w.vm('fwd-vm', ZONE);
+    w.forwardingRule('web-fr', 'europe-west1', w.targetPool('web-pool', 'europe-west1', [w.link(`zones/${ZONE}/instances/pool-vm`)]));
+    w.forwardingRule('fwd-fr', 'europe-west1', w.targetInstance('fwd-ti', ZONE, w.link(`zones/${ZONE}/instances/fwd-vm`)));
+    const { rules, standalone } = await scan(w);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/pool-vm`)).toEqual(['ineligible', 'VM pool-vm serves target pool web-pool: it belongs to a load balancer']);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/fwd-vm`)).toEqual(['ineligible', 'VM fwd-vm serves target instance fwd-ti: it belongs to a load balancer']);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/build-agent`)).toEqual(['eligible']);
+    expect(standalone!.problems).toEqual([]);
+  });
+
+  it('I2: target pools or target instances not listed (a connection made before the reads) fall back: no VM of a region with a forwarding rule to one is eligible', async () => {
     const w = standaloneProject();
     w.vm('far-vm', 'us-central1-a');
-    for (const [name, target] of [['web-fr', 'targetPools/web-pool'], ['fwd-fr', 'targetInstances/fwd-ti']] as const) {
-      (w.lists.forwardingRules['regions/europe-west1'] ??= []).push({
-        kind: 'compute#forwardingRule', name, region: w.link('regions/europe-west1'), IPProtocol: 'TCP', loadBalancingScheme: 'EXTERNAL',
-        target: w.link(`regions/europe-west1/${target}`), selfLink: w.link(`regions/europe-west1/forwardingRules/${name}`),
-      });
-    }
+    w.forwardingRule('web-fr', 'europe-west1', w.targetPool('web-pool', 'europe-west1', []));
+    w.forwardingRule('fwd-fr', 'europe-west1', w.link(`zones/${ZONE}/targetInstances/fwd-ti`));
+    w.refused = ['targetPools'];
     const { rules, standalone } = await scan(w);
     expect(reasonOf(rules, `zones/${ZONE}/instances/build-agent`)).toEqual(['ineligible', 'VM build-agent: its region has a load balancer the manager cannot read (a target pool or a target instance): forwarding rule fwd-fr']);
     expect(reasonOf(rules, 'zones/us-central1-a/instances/far-vm')).toEqual(['eligible']);
     expect(reasonOf(rules, `zones/${ZONE}/instanceGroupManagers/workers`)).toEqual(['eligible']);
-    expect(standalone!.problems).toEqual(['forwarding rules fwd-fr, web-fr of europe-west1 send to a target pool or a target instance, whose members the manager cannot read: the VMs of europe-west1 are not eligible']);
+    expect(standalone!.problems).toEqual([
+      'target pools not listed: the discovery account may not call compute.targetPools.list (run dormeto gcp connect again: it gives the discovery account the permissions of this release)',
+      'forwarding rules fwd-fr, web-fr of europe-west1 send to a target pool or a target instance the manager could not read: the VMs of europe-west1 are not eligible',
+    ]);
   });
+
+  it('I2: a listing refused with no forwarding rule to a target pool or a target instance only says it', async () => {
+    const w = standaloneProject();
+    w.refused = ['targetInstances'];
+    const { rules, standalone } = await scan(w);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/build-agent`)).toEqual(['eligible']);
+    expect(standalone!.problems).toEqual(['target instances not listed: the discovery account may not call compute.targetInstances.list (run dormeto gcp connect again: it gives the discovery account the permissions of this release)']);
+  });
+
 });

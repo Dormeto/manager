@@ -13,7 +13,7 @@ const V1 = 'https://www.googleapis.com/compute/v1';
 const MONITORING = 'https://monitoring.googleapis.com/v3';
 const API = 'https://compute.googleapis.com/compute/v1';
 const SQLADMIN = 'https://sqladmin.googleapis.com/v1';
-const RESOURCES = ['urlMaps', 'backendServices', 'targetHttpProxies', 'targetHttpsProxies', 'forwardingRules', 'instanceGroupManagers', 'instances'] as const;
+const RESOURCES = ['urlMaps', 'backendServices', 'targetHttpProxies', 'targetHttpsProxies', 'forwardingRules', 'instanceGroupManagers', 'instances', 'targetPools', 'targetInstances'] as const;
 type Resource = (typeof RESOURCES)[number];
 type Item = Record<string, unknown>;
 // Scopes Google lists without anything in them: a warning, no items.
@@ -42,6 +42,21 @@ export function compute(project = PROJECT) {
     calls,
     // Scopes Google could not reach: left out of every aggregated list and named in its unreachables.
     unreachable: [] as string[],
+    // Aggregated lists the discovery account may not call (403: a role without the reads yet).
+    refused: [] as Resource[],
+    // A target pool of VMs, a target instance pointing at a VM, and a forwarding rule to either (a target-pool Network Load
+    // Balancer, protocol forwarding).
+    targetPool(name: string, region: string, vms: string[]) {
+      add('targetPools', `regions/${region}`, { kind: 'compute#targetPool', name, region: link(`regions/${region}`), instances: vms, selfLink: link(`regions/${region}/targetPools/${name}`) });
+      return link(`regions/${region}/targetPools/${name}`);
+    },
+    targetInstance(name: string, zone: string, vm: string) {
+      add('targetInstances', `zones/${zone}`, { kind: 'compute#targetInstance', name, zone: link(`zones/${zone}`), instance: vm, selfLink: link(`zones/${zone}/targetInstances/${name}`) });
+      return link(`zones/${zone}/targetInstances/${name}`);
+    },
+    forwardingRule(name: string, region: string, target: string) {
+      add('forwardingRules', `regions/${region}`, { kind: 'compute#forwardingRule', name, region: link(`regions/${region}`), IPProtocol: 'TCP', loadBalancingScheme: 'EXTERNAL', target, selfLink: link(`regions/${region}/forwardingRules/${name}`) });
+    },
     // Scopes per page of an aggregated list (absent: one page).
     pageScopes: {} as Partial<Record<Resource, number>>,
     // Compute Engine's API turned off in the project.
@@ -245,6 +260,7 @@ export function compute(project = PROJECT) {
     if (aggregated && method === 'GET') {
       const resource = aggregated[1] as Resource;
       if (u.searchParams.get('returnPartialSuccess') !== 'true') throw new Error(`${url}: returnPartialSuccess=true expected`);
+      if (world.refused.includes(resource)) throw new GoogleError({ status: 403, reason: 'IAM_PERMISSION_DENIED', code: 'PERMISSION_DENIED', message: `Required 'compute.${resource}.list' permission for 'projects/${project}'` });
       const scopes = [...new Set([...Object.keys(lists[resource]), ...EMPTY_SCOPES])].filter((s) => !world.unreachable.includes(s)).sort();
       const size = world.pageScopes[resource] ?? scopes.length;
       const at = Number(u.searchParams.get('pageToken') ?? 0);

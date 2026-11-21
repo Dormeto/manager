@@ -33,17 +33,20 @@ while Google Cloud accepts Spot and preemptible VMs (a VM Google preempts is rea
   workload. A VM or a group that backs any backend service, through an instance group or a zonal network endpoint group of
   VMs (a passthrough load balancer's too), is never eligible: the backend of an HTTP candidate is left out, one behind another
   backend service is listed with it (`… backs backend service <s>: it belongs to an HTTP workload`). Where the scan cannot tell,
-  it is not eligible either: a managed group in a target pool; every VM of a region with a forwarding rule to a target pool or a
-  target instance, whose members the discovery role cannot read (`… its region has a load balancer the manager cannot read`);
+  it is not eligible either: a managed group in a target pool, a VM a target pool lists or a target instance points at (`…
+  serves target pool <p>: it belongs to a load balancer`); while the target pools or target instances cannot be listed, every
+  VM of a region with a forwarding rule to one (`… its region has a load balancer the manager cannot read`);
   every VM and group of a scope the backend-service or forwarding-rule listing missed (`… its load balancers could not be
   read: <scope>`). The run says each. At onboarding the API checks the resource again as the discovery account, and refuses
   it when anything serves it, when the check cannot be made, or when its candidate is no longer pending in scope (out of
   scope, excluded, dismissed, gone).
   Criteria take its labels, region and kind (`cloudsql-instance` too); an exclusion takes its path. Its idle share is
   read from Cloud Monitoring: a VM's CPU, each VM of a group's, a Cloud SQL instance's connections. **Run `dormeto gcp connect`
-  again to list Cloud SQL instances:** the discovery account's role `dormetoDiscovery` gains `cloudsql.instances.list` and
-  `cloudsql.instances.get`; until then, or in a project whose Cloud SQL Admin API is off, the VMs and groups are listed, the
-  stored Cloud SQL candidates stay as they were, and the run says which of the two it is.
+  again:** the discovery account's role `dormetoDiscovery` gains `cloudsql.instances.list` and `cloudsql.instances.get`, and
+  `compute.targetPools.list` and `compute.targetInstances.list` (read only). Until then, or in a project whose Cloud SQL Admin
+  API is off, the VMs and groups are listed, the stored Cloud SQL candidates stay as they were, and the run says which of the
+  two it is; without the target pool and target instance lists, the VMs of a region with a forwarding rule to one are not
+  eligible, and the run says which reads are missing.
   - **Google Cloud standalone workloads:** onboarding (`POST /operations`, the resource's path as `candidateId`) goes to the
   router of the resource's region, else the project's only router (`router` names one among several), takes only a resource the
   last scan listed as eligible (another is refused with its reason, an unlisted one with what to do: the router cannot see a

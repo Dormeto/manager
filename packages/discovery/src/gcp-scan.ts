@@ -546,17 +546,48 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     backing.blind.set(where, scope);
     problems.push(`load balancers not read in ${scope}: its VMs and managed instance groups are not eligible`);
   }
-  // A forwarding rule to a target pool or a target instance, whose members the discovery role cannot read (final review, I2).
+  // Target pools and target instances (final review, I2; the user's decision: the discovery role reads them): a VM a pool lists or a
+  // target instance points at serves it. A listing refused (a connection made before these reads) or partial falls back: no VM of
+  // a region with a forwarding rule to one is eligible; with no such rule, the run only says it.
+  const [pools, targets] = await Promise.all([quietly<{ name: string; instances?: string[] }>('targetPools'), quietly<{ name: string; instance?: string }>('targetInstances')]);
+  backing.served = new Map();
+  for (const { item } of pools.items) for (const vm of item.instances ?? []) if (!backing.served.has(pathOf(vm))) backing.served.set(pathOf(vm), `target pool ${item.name}`);
+  for (const { item } of targets.items) if (item.instance && !backing.served.has(pathOf(item.instance))) backing.served.set(pathOf(item.instance), `target instance ${item.name}`);
+  for (const [what, read] of [['target pools', pools], ['target instances', targets]] as const) if (read.problem) problems.push(`${what} not listed: ${read.problem}`);
+  const notRead = (region: string) => [pools, targets].some((r) => r.problem || r.missed.some((scope) => scope === 'global' || regionOfScope(scope) === region));
   backing.vmsBlind = new Map();
   const unseen = new Map<string, string[]>();
   for (const { scope, item } of forwardingRules) {
     if (!/\/(targetPools|targetInstances)\/[^/]+$/.test(item.target ?? '')) continue;
     const region = regionOfScope(scope);
-    unseen.set(region, [...(unseen.get(region) ?? []), item.name].sort());
+    if (notRead(region)) unseen.set(region, [...(unseen.get(region) ?? []), item.name].sort());
   }
   for (const [region, names] of [...unseen].sort()) {
     backing.vmsBlind.set(region, names[0]!);
-    problems.push(`forwarding rule${names.length === 1 ? '' : 's'} ${names.join(', ')} of ${region} send${names.length === 1 ? 's' : ''} to a target pool or a target instance, whose members the manager cannot read: the VMs of ${region} are not eligible`);
+    problems.push(`forwarding rule${names.length === 1 ? '' : 's'} ${names.join(', ')} of ${region} send${names.length === 1 ? 's' : ''} to a target pool or a target instance the manager could not read: the VMs of ${region} are not eligible`);
+  }
+  // An aggregated list read apart: its scopes missed, or why it could not be read (a 403: the role's reads, given by connect).
+  async function quietly<T>(resource: string): Promise<{ items: { scope: string; item: T }[]; missed: string[]; problem?: string }> {
+    const items: { scope: string; item: T }[] = [];
+    const missed: string[] = [];
+    try {
+      let token: string | undefined;
+      do {
+        const query = new URLSearchParams({ returnPartialSuccess: 'true', ...(token ? { pageToken: token } : {}) });
+        const page = await call<AggregatedPage>('GET', `${COMPUTE}/projects/${project}/aggregated/${resource}?${query}`);
+        for (const [scope, entry] of Object.entries(page.items ?? {})) {
+          for (const item of (entry[resource] ?? []) as T[]) items.push({ scope, item });
+          if (entry.warning?.code && entry.warning.code !== 'NO_RESULTS_ON_PAGE') missed.push(scope);
+        }
+        for (const u of page.unreachables ?? []) missed.push(/(?:^|\/)(global|(?:regions|zones)\/[a-z0-9-]+)$/.exec(u)?.[1] ?? 'global');
+        token = page.nextPageToken || undefined;
+      } while (token);
+      return { items, missed };
+    } catch (err) {
+      const permission = `compute.${resource}.list`;
+      if (err instanceof GoogleError && err.status === 403) return { items: [], missed: [], problem: `the discovery account may not call ${permission} (run dormeto gcp connect again: it gives the discovery account the permissions of this release)` };
+      return { items: [], missed: [], problem: failureText(err) };
+    }
   }
   const listed = await listCloudSql(call, project);
   if ('problem' in listed) {

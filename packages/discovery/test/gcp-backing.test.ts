@@ -48,8 +48,18 @@ describe('the safety net at onboarding, for one resource', () => {
     w.unreachable = ['global'];
     expect(await check(w, vm('build-agent'))).toEqual(['VM build-agent: its load balancers could not be read: global']);
     const r = standaloneProject();
-    (r.lists.forwardingRules['regions/europe-west1'] ??= []).push({ name: 'web-fr', target: r.link('regions/europe-west1/targetPools/web-pool'), selfLink: r.link('regions/europe-west1/forwardingRules/web-fr') });
-    expect(await check(r, vm('build-agent'))).toEqual(['VM build-agent: its region has a load balancer the manager cannot read (a target pool or a target instance): forwarding rule web-fr']);
+    r.vm('pool-vm', ZONE);
+    r.forwardingRule('web-fr', 'europe-west1', r.targetPool('web-pool', 'europe-west1', [r.link(`zones/${ZONE}/instances/pool-vm`)]));
+    r.forwardingRule('fwd-fr', 'europe-west1', r.targetInstance('fwd-ti', ZONE, r.link(`zones/${ZONE}/instances/build-agent`)));
+    expect(await check(r, vm('pool-vm'))).toEqual(['VM pool-vm serves target pool web-pool: it belongs to a load balancer']);
+    expect(await check(r, vm('build-agent'))).toEqual(['VM build-agent serves target instance fwd-ti: it belongs to a load balancer']);
+    expect(await check(r, vm('batch'))).toEqual([]);
+    // Not listed (a connection made before the reads): a forwarding rule to one in the VM's region refuses it; none, nothing.
+    r.refused = ['targetPools'];
+    expect(await check(r, vm('batch'))).toEqual(['VM batch: its region has a load balancer the manager cannot read (a target pool or a target instance): forwarding rule fwd-fr']);
+    const quiet = standaloneProject();
+    quiet.refused = ['targetPools', 'targetInstances'];
+    expect(await check(quiet, vm('build-agent'))).toEqual([]);
   });
 
   it('throws when a read fails: the onboarding is refused, never let through', async () => {

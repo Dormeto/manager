@@ -31,13 +31,21 @@ const router = (present ? {
 
 const ZONE = 'europe-west1-b';
 const HOUR = 3_600_000;
-const BACKS = /^.* backs backend service [^:]+: it belongs to an HTTP workload$/;
+// The manager's own reasons: what serves a load balancer the router cannot see (a backend service it does not route, a target
+// pool, a target instance; final review C1, I2), never the router's preview's.
+const BACKS = /^.* (backs backend service [^:]+: it belongs to an HTTP workload|serves target (pool|instance) [^:]+: it belongs to a load balancer)$/;
 const standaloneOf = (rules: DiscoveredRule[]) => rules.filter((r): r is StandaloneRule => r.kind === 'standalone');
 
 describe.skipIf(!router)('the Google Cloud standalone scan against the router\'s preview', () => {
   it('gives each resource the router\'s eligibility and reasons, but the backend service the router cannot see', async () => {
     const w = standaloneProject();
+    // A VM in a target pool and one a target instance points at: the router lists both eligible, the manager not.
+    w.vm('pool-vm', ZONE);
+    w.vm('fwd-vm', ZONE);
+    w.forwardingRule('web-fr', 'europe-west1', w.targetPool('web-pool', 'europe-west1', [w.link(`zones/${ZONE}/instances/pool-vm`)]));
+    w.forwardingRule('fwd-fr', 'europe-west1', w.targetInstance('fwd-ti', ZONE, w.link(`zones/${ZONE}/instances/fwd-vm`)));
     const { rules } = await scanProject(w, { project: PROJECT, managed: [workloadRow('dmt-demo-app')], now: NOW, standalone: true });
+    expect(standaloneOf(rules).find((r) => r.name === 'pool-vm')?.eligibility).toBe('ineligible');
     // The router's Google client: the same world, its errors carrying Google's HTTP code as the router reads it.
     const google = { request: (method: string, url: string, body?: unknown) => w.call(method, url, body).catch((err: { status?: number }) => { throw Object.assign(err as object, { code: err.status }); }) };
     const onboarding = router!.onboarding.createOnboarding({
