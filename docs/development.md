@@ -29,6 +29,18 @@ npm run dev:mock -w @dormeto/manager-dashboard  # the dashboard with demo data, 
 # the build refuses VITE_MOCK (vite.config.ts), and the release a dashboard holding the demo (scripts/release/artifacts.mjs)
 ```
 
+The demo has both kinds of workload. Beside the generated HTTP fleet, `src/mock/standalone.ts` adds five standalone
+workloads on the first AWS router, one of each kind of resource and state: `build-agent` (an instance, awake, with a custom
+metric), `batch-workers` (an Auto Scaling group asleep by its schedule), `queue-worker` (an ECS service asleep on idle),
+`reports-db` (an RDS instance, failed) and `analytics` (an Aurora cluster whose resource is missing). Their history wakes
+by a schedule, a named person or a start made in AWS, never a request; each answers `GET …/activity` with 7 days of its
+signals and the advice replayed on them. The perimeter's standalone scan is on, and the candidates include standalone
+resources to onboard and one of each family the router refuses. To see the views: Workloads or Discovery filtered on
+Standalone (`/workloads?kind=standalone`), a standalone workload's page (its Activity card and history), Onboard on a
+standalone candidate, the Standalone resources switch of Discovery's perimeter, and the two headings of Routers ›
+Workload defaults. A dashboard of your own beside a running one takes another port and cache directory (a Vite
+configuration that sets `server.port` and `cacheDir`).
+
 Screenshots of the dashboard (the website's, for example), signed in as the smoke user, with example values in place of
 real identifiers (account ids, email addresses, organization ids, and the names listed in a mask file kept outside the
 repository: `{ "replacements": [["real name", "Example"]] }`); an image where one remains is not written:

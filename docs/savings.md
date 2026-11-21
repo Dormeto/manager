@@ -117,6 +117,17 @@ card; only the prices, the items and the energy figures are Google's. Estimates,
   earlier manager has no `hours` until the next one.
 - **Changing the window:** the workload module's `idle_minutes`, or offboarding and onboarding again; not from the
   manager yet.
+- **A standalone workload** has no requests: its Activity card reads `GET /api/workloads/{router}/{id}/activity` (viewers
+  too), which invokes the discovery function's step `activity` under `DmtDiscoveryRole` with the router's queries for its
+  backends and resolved signals (`GetMetricData`, 5-minute points, the 7 days to 10 minutes ago). It answers each signal's
+  values (`signals[]`: `signal`, `below`, `applies`, `reason`, `from`, `values`), its hours asleep (`asleep`) and the advice
+  replayed on them against windows from 5 minutes to 24 hours (hours asleep and stops a day; recommended: the knee from 5
+  minutes to 2 hours, since each longer window only avoids the stops of nights and weekends). A point is activity when a
+  signal that applies is at or over its threshold, or has no point while the workload was not asleep; after a nap, the
+  replay starts it again when its history next shows activity (by a schedule or a person). Kept a day as `T#default` /
+  `ACTIVITY#<account>#<region>#<workloadId>`, or until its settings change. A read that fails is a 502
+  `metrics_unreadable` (never an idle week); with no signal that applies, nothing is read and `advice` is null. An HTTP
+  workload's is a 404.
 - **On Google Cloud:** the same card and heatmap read Cloud Monitoring's load balancer request counts per minute (the discovery
   account reads every page, 14 days at most), filtered to the workload's own URL map and its application and waker backend
   services added up: the waker's service is shared, so the URL map keeps another workload's requests out. Monitoring samples

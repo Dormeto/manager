@@ -19,12 +19,14 @@ Each release also publishes `dormeto-access-commands-<version>.sh`, the same wit
 missing: onboarding and router installs are refused where the command role is missing.
 
 `DmtDiscoveryRole` reads the load balancers, their target groups and backends (Auto Scaling, ECS, EC2), CloudWatch's
-request counts, CloudTrail's trails, the EKS clusters and its own role (`discovery-policy.json`; the scanner's
+request counts and the standalone workloads' idle signals (`GetMetricData`: their idle share, their Activity history), CloudTrail's trails, the EKS clusters and its own role (`discovery-policy.json`; the scanner's
 `DISCOVERY_ACTIONS` are kept in line with it by a test). The perimeter's standalone scan (`standalone: "on"`, off by
 default) also reads every instance of a region and the RDS databases: `rds:DescribeDBInstances`, `rds:DescribeDBClusters`
 and `rds:ListTagsForResource`. A role applied before them lists the other kinds and says in the run's pair which RDS list
 it may not read (`RDS instances not listed: the discovery role may not call rds:DescribeDBInstances …`); the RDS candidates
-already stored stay as they were until the role is applied again.
+already stored stay as they were until the role is applied again: apply the `access` module, or run the AWS CLI script, of
+the release in each member account to see the databases. `DmtCommandRole` and `DmtRouterBoundary` need nothing new: a standalone workload is
+onboarded by its router, whose own roles start and stop it.
 
 The routers' events go to the manager's bus (`dmt-<env>-manager`). Its policy admits the organization's principals (the
 manager's account alone without an organization) for the sources `dormeto.router` and `aws.elasticloadbalancing` (the

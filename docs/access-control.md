@@ -29,7 +29,11 @@ its schedule (`joinMinutes`, written with the schedule by whoever may both wake 
 defaults (`GET /api/settings/workloads`) and the workload types (`GET /api/settings/types`); administrators set them (`PUT`
 on both) and a router's (`PUT /api/routers/{router}/settings` with `defaults`), and read what a level reaches
 (`GET /api/settings/reach`); operators and administrators set a manager workload's own settings and type (`PUT
-/api/workloads/{router}/{id}/settings`). A Terraform workload's are set in its `workload` module.
+/api/workloads/{router}/{id}/settings`). A Terraform workload's are set in its `workload` module. The levels hold both
+kinds' settings: the waker's for HTTP workloads, the idle signals (`idleCpuPercent`, `idleNetworkBytes`, `idleMetric`) for
+standalone ones, and a workload refuses the other kind's. An idle signal at the organization's level (its defaults or a
+type) is refused (409, `<n> router(s) must be upgraded first: …`) while a router that does not know them is in the fleet:
+an AWS router before the one that knows standalone workloads, one whose version is unknown, or a Google Cloud router.
 
 The **waiting page** (routers 0.35.0) is read at the organization (`/api/settings/waiting-page`, by every signed-in user, as
 the Hibernate default is), the router (`/api/routers/{router}/waiting-page`, by the built-in roles) and the workload

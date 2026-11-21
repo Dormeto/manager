@@ -7,79 +7,54 @@ CLI script, of the same release).
 
 ## Unreleased
 
-- **Discovery finds standalone resources on AWS, once the perimeter says so:** the perimeter gains `standalone`, `off`
-(the built-in, also when absent: an install that upgrades sees no new candidate and makes no new call) or `on`. On, each
-region's scan also lists the EC2 instances, Auto Scaling groups, ECS services, RDS instances and Aurora clusters that no
-load balancer rule uses, each a candidate of its own resource (`kind: "standalone"`, its ARN as id and `resourceArn`, its
-backend, its default name and its own tags; no load balancer, rule, host or target group field): eligible, ineligible with
-the router's onboarding reasons (in an Auto Scaling group, an instance store root volume, a Spot instance, it feeds a
-target group, EKS nodes, the daemon scheduling strategy, an Aurora member, a read replica, Aurora Serverless v1), or
-managed when the router tagged it as a standalone workload's own resource; a backend of an HTTP candidate, a resource or
-companion of another workload, a Kubernetes node, and the members of a group or cluster left out or managed are left
-out. A region with no load balancer is then scanned every run. The account, region, resource tag and backend kind
-criteria apply to the resource (`backendKinds` also takes `rds-instance` and `rds-cluster`); a load balancer, host or
-target group criterion never matches it. Exclusions take a resource (`target.kind: "resource"`, its ARN). Turned off, the
-standalone candidates are `out-of-scope` (`the perimeter's standalone scan is off`), a managed one pending offboarding;
-a managed resource the scan no longer finds is `gone` (`managed resource not found in the last scan: offboard it`). HTTP
-candidates are unchanged. The discovery role `DmtDiscoveryRole` gains `rds:DescribeDBInstances`,
-`rds:DescribeDBClusters` and `rds:ListTagsForResource`; a role applied before lists the other kinds, says in the run
-which RDS list it may not read, and keeps the stored RDS candidates as they were.
-- **A standalone candidate's idle share:** its hours of the last 7 days with the default idle signal of its type under
-its threshold at every 5-minute point (the router's built-ins: a server's CPU under 5 %, a database's connections under
-1), read with `GetMetricData` for the eligible and managed candidates, 500 queries a call. An hour with a missing point is
-not idle; a resource with no point all week (stopped, a service at 0) has no share; a read that fails keeps the stored
-share (none for a candidate never read) and says so in the run. Discovery's idle bar says which signal was under and
-where it comes from.
-- **Onboarding and offboarding a standalone candidate:** `POST /operations` with `type: "onboard"` and the candidate's
-resource ARN as `candidateId` starts an operation on the resource (claim `RES#<arn>`; a second one of the same resource
-is a conflict naming it): no load balancer to lock, the router's onboarder asked with `resourceArn` (preview, then
-onboard), the workload verified AWAKE with its resource among its backends, its candidate managed. A waker's setting
-(`waitSeconds`, `drainSeconds`, `maxHolders`, `failedRetrySeconds`, `wakeMode`, `noWakeRules`, `wakeRules`) is refused
-before the operation in the router's words; the router's preview checks the rest, and its refusals are relayed as it says
-them. A router that does not know standalone workloads fails the preview with `router <name> is older than 0.42.0:
-upgrade it to onboard a standalone resource`. Offboarding wakes the workload, as an HTTP one's does, then offboards it and
-gives its candidate back.
-- **Standalone workloads in the fleet and the API:** a standalone workload's row keeps `kind: "standalone"`, `resourceArn`,
-`resourceMissing` (while its resource is deleted or untagged) and its kind's five settings (`idleMinutes`,
-`wakeTimeoutSeconds`, `idleCpuPercent`, `idleNetworkBytes`, `idleMetric`) with their `settingsFrom`; it has no `url`, its
-page none either, and its idle share is its candidate's. An HTTP row is unchanged (no `kind`). The idle signals are taken
-at every level of AWS's in the router's words (a number from 0 to 100, a whole number up to 10000000000, a metric, or
-`off`); a workload refuses the other kind's keys (a standalone one the waker's, an HTTP one the idle signals, also at
-its onboarding); a router that does not know them answers 409 `upgrade the router to 0.42.0`; a Google Cloud router's
-level has none. **An idle signal in the organization's defaults or a type is refused (409) while a router before 0.42.0,
-one whose version is not known, or a Google Cloud router is in the fleet**, naming them (`<n> router(s) must be upgraded
-first: …`); the idle window is not held back, nor a write that keeps or removes them. Google Cloud routers are never pushed
-the idle signals. A standalone workload's waiting page and a target group exclusion naming it are refused before its router
-is called (409, the router's words); the router's refusal of a nap window's `wake` is relayed. What a level reaches counts
-the idle signals where a standalone workload holds them. The history says the check's `retry` of a failed wake; the
-router's `resource-missing` warning alerts with what to do (offboard it, or tag the resource again: the router finds it at the next check).
-- **The dashboard shows the two kinds:** Workloads and Discovery mark a standalone row with its icon and filter on the
-kind (`kind=http|standalone` on `GET /workloads` and `GET /discovery/candidates`); a standalone candidate is said by its
-name and resource, with no rule; Exclude offers its resource; the perimeter has a Standalone resources switch, and a
-backend type criterion takes `rds-instance` and `rds-cluster`.
-- **A standalone workload's page:** no waiting page, rules, targets, wake filtering, request cards or URL; an Activity card
-gives each idle signal (CPU, Network, the custom metric by its name) with its threshold, the level it comes from, its
-last value and since when it is under it, when it may nap on idle, and its missing resource; its Settings card shows its
-kind's five settings; its history says an idle nap as "idle on every signal for its idle window".
-- **The dashboard's dialogs for standalone workloads:** the settings dialogs take the idle signals (CPU and network as
-numbers or Off, the custom metric as a namespace, a name, dimensions with `${resource}`, a statistic and a threshold, or
-Off; empty inherits, the placeholder saying what and from where); a standalone workload's has no waker's setting; the
-organization's, a type's and an AWS router's defaults show the HTTP and the standalone settings under two headings, and
-the organization-level gate's refusal on the idle signals; onboarding a resource says what a nap does to it, that nothing
-wakes it on demand, takes its idle signals and links to Schedules; a standalone workload's nap windows have no wake choice.
-- **The demo mode shows standalone workloads:** one of each kind of resource (awake, asleep by its schedule, asleep on
-idle, failed, its resource missing), standalone candidates to onboard and one of each family the router refuses, and the
-perimeter's standalone scan on.
-- **A standalone workload's activity history:** `GET /workloads/{router}/{id}/activity` reads its idle signals over the
-last 7 days (5-minute points to 10 minutes ago) through the discovery function under `DmtDiscoveryRole`, with the router's
-queries for its backends and resolved settings, and answers each signal's values, its hours asleep and the idle window
-advice replayed on them from 5 minutes to 24 hours (hours asleep and stops a day at each; the knee recommended from 5
-minutes to 2 hours, the longer windows shown to compare). A point is activity when a signal that applies is at or over its
-threshold, or has no point while the workload was awake; after a nap the replay starts it again when its history next shows
-activity. Kept a day, or until its settings change. A read that fails answers 502 `metrics_unreadable`, never an idle week;
-with no signal that applies, nothing is read. An HTTP workload has none (404). The Activity card draws a line a signal against
-its threshold, the hours asleep shaded, and the advice's table with "Use N minutes"; a failed read keeps the card's rows and
-says the metrics could not be read. The demo mode has data for it.
+- **Standalone workloads on AWS: resources with no load balancer, napped when idle or by schedule.** A workload is now
+of one of two kinds. An HTTP workload is behind an Application Load Balancer, as before: its requests wake it, and its
+rows and answers are unchanged (no `kind`; absent means HTTP). A standalone workload is one resource that no load balancer
+rule uses: an EC2 instance outside an Auto Scaling group, an Auto Scaling group with no target group, an ECS service with
+no load balancer, an RDS instance or an Aurora cluster. It naps when its idle signals stay under their thresholds for its
+idle window, or by its schedule; nothing wakes it on demand: a schedule, a person (Wake) or a start made in AWS does. It
+needs the router that knows standalone workloads; an older one refuses its preview and asks to be upgraded. Google Cloud
+has none yet.
+  - **Turn it on:** the discovery perimeter's `standalone` is `off` (the built-in, also when absent: an upgraded install
+  sees no new candidate and makes no new call) until set to `on` (the Discovery view's Standalone resources switch). On,
+  each region's scan lists those resources, each a candidate of its own resource (`kind: "standalone"`, its ARN as `id`
+  and `resourceArn`, its `backend { kind, id, arn }`, its name and its own tags; no load balancer, rule, host or target
+  group field), eligible, or ineligible in the router's words (in an Auto Scaling group, an instance store root volume, a
+  Spot instance, it feeds a target group, EKS nodes, the daemon scheduling strategy, an Aurora member, a read replica,
+  Aurora Serverless v1), or managed once onboarded. The account, region, resource tag and backend kind criteria apply to
+  the resource (`backendKinds` takes `rds-instance` and `rds-cluster`); exclusions take a resource (`target.kind:
+  "resource"`). Its idle share is its hours of the last 7 days with its type's default signal under its threshold at every
+  5-minute point (a server's CPU under 5 %, a database's connections under 1); a resource with no point all week has none.
+  `kind=http|standalone` filters `GET /discovery/candidates` and `GET /workloads`.
+  - **Apply the access module (or the AWS CLI script) again to see databases:** `DmtDiscoveryRole` gains
+  `rds:DescribeDBInstances`, `rds:DescribeDBClusters` and `rds:ListTagsForResource`. Until then the scan lists the other
+  kinds, says in the run which RDS list it may not read, and keeps the RDS candidates it had.
+  - **The idle signals:** `idleCpuPercent` (0 to 100), `idleNetworkBytes` (bytes a minute, a whole number up to
+  10000000000), `idleMetric` (a CloudWatch metric: namespace, name, dimensions where `${resource}` is the resource's id, a
+  statistic and a threshold), each a value or `off`, with `idleMinutes` and `wakeTimeoutSeconds`: the five settings of a
+  standalone workload. They are set at every AWS level, as the HTTP settings are: the organization's defaults, a type, a
+  router, the workload. A workload refuses the other kind's keys (a standalone one the waker's, an HTTP one the idle
+  signals, at its onboarding too). **An idle signal at the organization's level (its defaults or a type) is refused (409,
+  naming them: `<n> router(s) must be upgraded first: …`) while any router does not know them yet**: an AWS router before
+  the router that knows standalone workloads, one whose version is unknown, or any Google Cloud router. Upgrade those
+  routers first; the idle window and a write that keeps or removes the signals are not held back. A router that does not
+  know them refuses its own level's (409).
+  - **Onboarding:** `POST /operations` with `type: "onboard"` and the candidate's resource ARN as `candidateId`
+  (claim `RES#<arn>`): the router's preview, then its onboarding with `resourceArn`, verified awake with its resource
+  among its backends. A waker's setting is refused before the operation. Offboarding wakes it, then gives its candidate
+  back. The dialog says what a nap does to the resource, that nothing wakes it on demand, takes its idle signals and
+  links to Schedules.
+  - **The workload:** its row and status carry `kind: "standalone"`, `resourceArn`, `resourceMissing` (its resource
+  deleted or untagged: the router warns `resource-missing`; offboard it or tag it again) and its five settings with
+  their `settingsFrom`; no `url`, waiting page, rules, targets or wake filtering (a waiting page and a target group
+  exclusion naming it are refused). Its page has an Activity card: each signal's threshold, where it comes from, its last
+  value and since when it is under, when it may nap, and its history: `GET /workloads/{router}/{id}/activity` reads the
+  signals of the last 7 days through the discovery role, draws each against its threshold with the hours asleep, and
+  replays them through the idle window advisor from 5 minutes to 24 hours (hours asleep and stops a day; the
+  recommendation from 5 minutes to 2 hours). A point is activity when a signal is at or over its threshold or missing
+  while awake; a read that fails answers 502 `metrics_unreadable` and the card says so, never an idle week. The history
+  names the causes `external-start`, `external-stop`, `recovered` and the check's `retry`. The demo mode has one
+  standalone workload of each kind and state, candidates and the scan on.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

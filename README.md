@@ -17,7 +17,8 @@
 </div>
 
 Dormeto stops the workloads behind your AWS or Google Cloud Application Load Balancer when nobody uses them, and starts them again when a
-real visitor arrives. Awake, traffic goes straight to your application: Dormeto is out of the request path.
+real visitor arrives. Awake, traffic goes straight to your application: Dormeto is out of the request path. On AWS it also
+naps standalone resources, with no load balancer, when their activity says they are idle or by schedule.
 
 This repository is the **manager**, which runs in one account of your organization: a dashboard, an API, and the
 discovery and operations it runs in your other accounts through roles you create. It finds what could nap in every
@@ -52,6 +53,13 @@ flowchart TB
 3. **Wake just in time.** The first real request starts the backends. The visitor is held while they start and
    redirected as soon as the application answers, or sees a page that reloads by itself. The rules then switch back to
    your application.
+
+**Two kinds of workload.** An HTTP workload is the above: an application behind a load balancer, woken by its requests.
+A standalone workload (AWS) is one resource no load balancer rule uses (an EC2 instance, an Auto Scaling group, an ECS
+service, an RDS instance or an Aurora cluster), such as a build agent, a queue worker or a reporting database: its router
+naps it when its idle signals (CPU, network, or a CloudWatch metric of your choice) stay under their thresholds for its
+idle window, or by its schedule, and only a schedule, a person or a start made in AWS wakes it. Discovery lists them once
+its perimeter's standalone scan is on ([Operations](docs/operations.md#standalone-workloads)).
 
 **On Google Cloud** the same three steps run in a Cloud Run router, behind a Google Cloud Application Load Balancer, for
 Compute Engine VMs, GKE pods and Cloud SQL databases. The CLI installs, upgrades and uninstalls the routers and sets
@@ -125,6 +133,8 @@ account, one change per load balancer at a time.</p>
 - **EC2, Auto Scaling, ECS, EKS, RDS; Compute Engine, GKE, Cloud SQL.** Instances stop (or, on request, are suspended on Google Cloud);
   Auto Scaling groups, ECS services and Kubernetes Deployments scale to zero; databases stop after their application and
   start before it.
+- **Standalone resources too.** Build agents, workers and databases with no load balancer nap on their CPU, network or
+  a CloudWatch metric, and their Activity card replays 7 days of those signals to choose the idle window.
 - **Savings you can check.** AWS and Google Cloud list prices of what each nap stopped (Google's from the Cloud Billing
   Catalog), Spot capacity at Spot prices, less the discounts you set, net of Dormeto's own cost. Each workload's idle
   window card replays its last 14 days of requests to choose the window (estimated on Google Cloud, whose request counts

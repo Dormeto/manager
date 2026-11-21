@@ -15,6 +15,31 @@ roles under `/dormeto/router/`), and the role may only create roles there carryi
 `DmtRouterBoundary`, and change or delete only `dmtr-*` resources, never a router written in Terraform nor the manager. In the manager's account both are created by the `access` module (see below); one operation at a
 time per target group, router or workload, one per load balancer (lock), three per account and region.
 
+## Standalone workloads
+
+A standalone workload (AWS) is one resource that no load balancer rule uses: an EC2 instance outside an Auto Scaling
+group, an Auto Scaling group with no target group, an ECS service with no load balancer, an RDS instance or an Aurora
+cluster. Its router naps it when its idle signals stay under their thresholds for its idle window, or by its schedule;
+nothing wakes it on demand (a schedule, a person's Wake, or a start made in AWS that the router sees). Discovery lists them
+once the perimeter's `standalone` is `on`; each is a candidate of its own resource (`kind: "standalone"`, its ARN as `id`).
+
+- **Onboarding** (`POST /api/operations`, `type: "onboard"`, the resource's ARN as `candidateId`) runs an HTTP
+  candidate's steps, its router installed first where the region has none; `lock load balancer` is skipped (there is
+  none), and one operation at a time holds the resource (`RES#<arn>`, a second one is a conflict naming it): the
+  router's onboarder is asked with `resourceArn`, its preview has the last word on eligibility, and `verify` waits for the
+  workload awake with its resource among its backends. A waker's setting (`waitSeconds`, `drainSeconds`, `maxHolders`,
+  `failedRetrySeconds`, `wakeMode`, `noWakeRules`, `wakeRules`) is refused before the operation; a router that does not know
+  standalone workloads fails the preview, asking to be upgraded.
+- **Offboarding** is an HTTP workload's: it wakes the workload, offboards it and gives its candidate back.
+- **Its settings** are `idleMinutes`, `wakeTimeoutSeconds` and the three idle signals (`idleCpuPercent`, `idleNetworkBytes`,
+  `idleMetric`, each a value or `off`), at every AWS level ([Access control](access-control.md)); the router checks them.
+- **What it refuses:** a waiting page, a target group exclusion naming it and a nap window's `wake` (409, the router's words).
+  A resource deleted or untagged sets `resourceMissing` and the router's `resource-missing` warning, which alerts: offboard it,
+  or tag the resource again (`dormeto:workload` with the workload's id) and the router finds it at its next check.
+- **Its history** names who started or stopped it: `schedule`, `manager` (a person), `idle`, `external-start` and
+  `external-stop` (a start or stop made in AWS), `recovered`, and the check's `retry` of a failed wake. Its Activity history
+  is in [Savings](savings.md#idle-window-advisor).
+
 ## Onboarding and offboarding on Google Cloud
 
 The same operations, on the routers the CLI installed (0.40.0 or later; an older one is a 409 `router_too_old` with the
