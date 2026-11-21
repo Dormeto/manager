@@ -37,6 +37,7 @@ import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import DmTable from '../components/DmTable.vue';
+import RunProblems from '../components/RunProblems.vue';
 import IdleBar from '../components/IdleBar.vue';
 import RegionLabel from '../components/RegionLabel.vue';
 import StatusHelp from '../components/StatusHelp.vue';
@@ -683,6 +684,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <v-alert v-if="lastRun.error" type="error" variant="tonal" density="compact" class="mt-4" :text="lastRun.error" />
         <p v-if="lastRun.skippedReason" class="text-body-medium text-medium-emphasis mt-3">Skipped: {{ lastRun.skippedReason }}.</p>
         <p v-if="refused" class="text-body-medium text-medium-emphasis mt-3">Run now {{ relative(refused.startedAt, now) }}<template v-if="refused.by"> by {{ refused.by }}</template> was refused: {{ refused.skippedReason }}.</p>
+        <RunProblems :targets="lastRun.targets" />
         <ul v-if="failed.length" class="dm-run__failed mt-4">
           <li v-for="t in failed" :key="`${t.account}/${t.region}`" class="text-body-medium">
             <v-icon :icon="mdiAlertCircleOutline" color="error" size="16" class="dm-run__failed-icon" />

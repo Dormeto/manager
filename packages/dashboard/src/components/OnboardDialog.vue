@@ -15,7 +15,7 @@ import { useSession } from '../stores/session';
 import { accessText, gitopsSnippet, onboardingTexts, type ClusterAccess, type KubernetesCandidate } from '../kubernetes';
 import { terraformSnippet } from '../terraform';
 import type { ResourceKind } from '@dormeto/discovery/types';
-import { idleChanges, idleFormOf, IDLE_BUILT_IN, type IdleForm } from '../idle-settings';
+import { idleChanges, idleFormOf, type IdleForm } from '../idle-settings';
 import IdleSignalsFields from './IdleSignalsFields.vue';
 
 // On Google Cloud (`cloud`): the candidate's labels come in `awsTags` (the candidate's `tags`), and `routers` are the project's routers
@@ -36,7 +36,9 @@ const napText = computed(() => (props.resource ? NAPS[props.resource] : ''));
 const idleInitial = idleFormOf({});
 const idle = ref<IdleForm>(JSON.parse(JSON.stringify(idleInitial)) as IdleForm);
 const idleProblem = ref('');
-const idlePlaceholders = { idleCpuPercent: `Inherit (built-in ${IDLE_BUILT_IN.idleCpuPercent})`, idleNetworkBytes: `Inherit (built-in ${IDLE_BUILT_IN.idleNetworkBytes})`, idleMetric: `Inherit (built-in ${IDLE_BUILT_IN.idleMetric})` };
+// Inherit alone: a type, the router or the organization may replace a built-in, which the dialog cannot know before the
+// router resolves them (the review's M13); the line below the fields says it.
+const idlePlaceholders = { idleCpuPercent: 'Inherit', idleNetworkBytes: 'Inherit', idleMetric: 'Inherit' };
 const gcp = computed(() => props.cloud === 'gcp');
 const words = computed(() => cloudWords(props.cloud));
 const waiting = computed(() => gcp.value && props.routers === null);
@@ -203,7 +205,7 @@ function submit() {
         <v-text-field v-model="name" label="Name" :rules="[nameRule]" counter="64" :hint="resource ? 'Shown in the manager; the resource\'s name if empty. It can be changed later.' : `Shown in the manager; the ${words.target} name if empty. It can be changed later.`" persistent-hint autofocus class="mb-3" />
         <v-row dense>
           <v-col cols="12" sm="5">
-            <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" :placeholder="resource ? 'Inherit (built-in 120)' : 'Inherit'" persistent-placeholder clearable />
+            <v-text-field v-model="idleMinutes" type="number" label="Idle window (minutes)" min="5" max="1440" :placeholder="'Inherit'" persistent-placeholder clearable />
           </v-col>
           <v-col v-if="!resource" cols="12" sm="7">
             <v-select v-model="wakeMode" data-test="onboard-wakeMode" :items="[{ title: 'Inherit', value: null }, { title: 'Any request that passes the filters wakes', value: 'any' }, { title: 'Browser: only the waiter page, the header or a wake rule wakes', value: 'browser' }]" label="Wake mode" />
@@ -212,6 +214,7 @@ function submit() {
         <template v-if="resource">
           <div class="dm-eyebrow mt-2 mb-2">Idle signals</div>
           <IdleSignalsFields v-model="idle" :placeholders="idlePlaceholders" :error="idleProblem" />
+          <p data-test="onboard-inherit" class="text-body-small text-medium-emphasis mt-1">Empty settings take the levels' (a type, the router, the organization); with none set, the built-ins: a 120-minute idle window, CPU under 5 % (off for a database), network off, no custom metric (a database's connections under 1).</p>
         </template>
         <v-select v-if="several" v-model="router" :items="(routers ?? []).map((r) => ({ title: `${r.name} (${r.region})`, value: r.name }))" label="Router" class="mb-3" persistent-hint
           :hint="routers?.length ? 'The project has several routers: this one serves the workload (a global load balancer has no region of its own)' : `No router of the project is ${GOOGLE_ROUTER_MINIMUM} or later: upgrade one with dormeto gcp routers install`" />

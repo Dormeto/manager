@@ -6,6 +6,7 @@
 import { computed, onMounted, provide, ref } from 'vue';
 import { GIVEN_ADVICE } from '../idle-window';
 import { api } from '../api';
+import { STANDALONE_ROUTER } from '@dormeto/fleet/idle-signals';
 import DmLoader from './DmLoader.vue';
 import IdleWindowCard from './IdleWindowCard.vue';
 import SignalChart from './SignalChart.vue';
@@ -55,7 +56,9 @@ const nap = computed(() => {
   const s = props.status;
   if (s.pauses?.length) return 'never while paused';
   if (!s.nap) return (s.idle ?? []).some((x) => x.applies) ? 'not while a signal is over its threshold' : 'never on idle: no idle signal applies (schedules and people only)';
-  return s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)';
+  // The router's latest time: the signals read 10 minutes behind, at a check every 5 minutes (the review's M12).
+  const latest = s.nap.latestAt ? `, at the latest ${new Date(s.nap.latestAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '';
+  return `${s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)'}${latest}`;
 });
 </script>
 
@@ -75,11 +78,12 @@ const nap = computed(() => {
         <tr v-for="r in rows" :key="r.key" data-test="signal" :class="{ 'text-medium-emphasis': r.threshold === 'off' }">
           <td>{{ r.name }}</td><td>{{ r.threshold }}</td><td>{{ r.from }}</td><td class="dm-num">{{ r.value }}</td><td>{{ r.since }}</td>
         </tr>
-        <tr v-if="!rows.length"><td colspan="5" class="text-medium-emphasis">The router says no signal (a router before 0.42.0).</td></tr>
+        <tr v-if="!rows.length"><td colspan="5" class="text-medium-emphasis">The router says no signal (a router before {{ STANDALONE_ROUTER }}).</td></tr>
       </tbody>
     </v-table>
     <p v-for="r in rows.filter((x) => x.reason)" :key="`${r.key}-reason`" class="text-body-small text-medium-emphasis px-4 mb-1">{{ r.name }}: {{ r.reason }}</p>
     <v-card-text class="text-body-medium" data-test="nap-estimate">Nap: {{ nap }}</v-card-text>
+    <p class="text-body-small text-medium-emphasis px-4 mb-2">CloudWatch publishes the signals minutes late: an idle nap comes up to 15 minutes after the idle window.</p>
     <DmLoader v-if="reading" label="Reading its signals over 7 days…" :size="40" />
     <v-card-text v-else-if="historyError" class="pt-0">
       <v-alert data-test="activity-error" type="warning" variant="tonal" density="compact">No history: {{ historyError }}</v-alert>

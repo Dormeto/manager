@@ -13,6 +13,11 @@ export interface Settings {
 // A standalone workload's idle signals (vision standalone workloads design §4; routers 0.42.0): CPU in percent, network
 // bytes in and out a minute, one custom CloudWatch metric, each under its threshold to be idle, or 'off'.
 export interface IdleMetric { namespace: string; name: string; dimensions: Record<string, string> | Record<string, string>[]; statistic: 'Maximum' | 'Average' | 'Sum'; below: number }
+// A workload's settings as the API answers them: an HTTP workload's have the waker's, a standalone one's only its kind's five
+// (the review's M9): the waker's are optional here.
+export type WaitKey = 'waitSeconds' | 'drainSeconds' | 'maxHolders';
+export type WorkloadSettings = Omit<Settings, WaitKey> & Partial<Pick<Settings, WaitKey>> & IdleSettings;
+
 export interface IdleSettings {
   idleCpuPercent?: number | 'off';
   idleNetworkBytes?: number | 'off';
@@ -103,7 +108,7 @@ export interface WorkloadSummary {
   pauses?: Pause[]; // routers 0.16 and later
   stats7d: { ignored?: number; deferred?: number; wakes: number } | null; // a standalone workload's: its wakes only
   // A standalone workload's: idleMinutes, wakeTimeoutSeconds and its idle signals only.
-  settings: Settings & IdleSettings;
+  settings: WorkloadSettings;
   settingsFrom?: SettingsFrom;
   type?: string;
 }
@@ -246,7 +251,7 @@ export interface WorkloadStatus {
   ignoredTargets: { id: string; reason: string }[];
   recommendations: { backend: string; message: string }[];
   targets: { id: string; state: string }[];
-  settings: Settings & IdleSettings;
+  settings: WorkloadSettings;
   stats: { days: number; since: string; today: Counts; total: Counts } | { error: string } | null;
   ipLists: { name: string; action: string; url?: string; entries: number; fetchedAt: string | null; error?: string }[];
   wakeMode: string;
@@ -366,7 +371,7 @@ export interface RouterDetails {
   };
 }
 
-// resource: a standalone candidate's (its ARN, manager 0.25.0).
+// resource: a standalone candidate's (its ARN).
 export type ExclusionKind = 'target-group' | 'load-balancer' | 'account' | 'resource';
 
 export interface ExclusionTarget {

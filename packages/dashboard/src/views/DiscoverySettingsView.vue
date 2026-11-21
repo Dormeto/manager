@@ -177,6 +177,7 @@ onMounted(() => { void load(); void loadConnection(); });
                   <p class="text-body-small text-medium-emphasis mt-2 mb-0">Also lists the EC2 instances, Auto Scaling groups, ECS services, RDS instances and Aurora
                     clusters that no load balancer rule uses, on AWS. The discovery role reads the databases with <code>rds:DescribeDBInstances</code>,
                     <code>rds:DescribeDBClusters</code> and <code>rds:ListTagsForResource</code>: apply the access module of this release again.</p>
+                  <p data-test="standalone-off" class="text-body-small text-medium-emphasis mt-1 mb-0">Turned off, its managed standalone workloads become To offboard, as a workload that leaves the perimeter does.</p>
                 </div>
               </v-col>
             </v-row>

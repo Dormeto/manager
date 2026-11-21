@@ -122,6 +122,13 @@ describe('The perimeter\'s standalone scan', () => {
     w.unmount();
   });
 
+  it('says beside the switch that turning it off puts the managed standalone workloads to offboard (the review\'s M6)', async () => {
+    const w = await mountAt('/discovery/settings', DiscoverySettingsView);
+    expect(w.find('[data-test="standalone-off"]').text()).toBe('Turned off, its managed standalone workloads become To offboard, as a workload that leaves the perimeter does.');
+    await sleep(0);
+    w.unmount();
+  });
+
   it('takes the databases\' kinds in a backend type criterion', () => {
     expect(setDimension({}, 'backendKinds', 'instance, rds-instance, rds-cluster, lambda').backendKinds).toEqual(['instance', 'rds-instance', 'rds-cluster']);
     expect(dimensionOf('backendKinds').hint).toBe('instance, asg, ecs, k8s; for standalone resources also rds-instance, rds-cluster');

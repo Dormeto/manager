@@ -81,7 +81,7 @@ describe('a standalone workload\'s page', () => {
       ['Network', 'off', 'built-in', '—', '—'],
       ['QueueDepth', 'under 1', 'type instance', '3', 'not under'],
     ]);
-    expect(card.find('[data-test="nap-estimate"]').text()).toBe('Nap: eligible in 1 h 20 min');
+    expect(card.find('[data-test="nap-estimate"]').text()).toMatch(/^Nap: eligible in 1 h 20 min, at the latest /);
     expect(card.find('[data-test="resource-missing"]').text()).toContain('Its resource is missing');
     w.unmount();
   });
@@ -90,6 +90,22 @@ describe('a standalone workload\'s page', () => {
     const w = await mountView();
     const settings = w.findAll('.dm-setting').map((s) => s.find('strong').element.parentElement!.firstChild!.textContent!.trim() + ' ' + s.find('strong').text());
     expect(settings).toEqual(['Idle window 120 min', 'Wake timeout 10 min', 'CPU under 5 %', 'Network off', 'Custom metric QueueDepth under 1 (Maximum)']);
+    w.unmount();
+  });
+});
+
+describe('excluding a standalone workload from its page (the review\'s M14)', () => {
+  it('offers its resource and posts a resource exclusion, with no target group hint', async () => {
+    const { api } = await import('../src/api');
+    const w = await mountView();
+    const { default: ExcludeDialog } = await import('../src/components/ExcludeDialog.vue');
+    const dialog = w.findComponent(ExcludeDialog);
+    expect((dialog.props('options') as { kind: string; arn?: string; label: string }[]).map((o) => [o.kind, o.arn, o.label])).toEqual([['resource', ARN, 'Resource build-agent (this workload)']]);
+    vi.mocked(api).mockClear();
+    dialog.vm.$emit('submit', { target: { kind: 'resource', arn: ARN }, reason: 'r' });
+    await flushPromises();
+    const post = vi.mocked(api).mock.calls.find(([path]) => path === '/exclusions')!;
+    expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ target: { kind: 'resource', arn: ARN }, reason: 'r' });
     w.unmount();
   });
 });

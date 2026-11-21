@@ -42,3 +42,17 @@ describe('a standalone workload\'s empty schedule', () => {
     expect(mountCard(false).text()).toContain('No schedule: the workload naps when idle and wakes on requests, at any hour.');
   });
 });
+
+describe('onboarding a resource\'s inherited settings (the review\'s M13)', () => {
+  it('says Inherit, not a built-in a level may replace, and where empty settings come from', async () => {
+    setActivePinia(createPinia());
+    const w = mount(OnboardDialog, { props: { modelValue: false, title: 'r', defaultName: 'r', resource: 'instance' as never }, attachTo: document.body, global: { plugins: [createVuetify({ components, directives }), router()] } });
+    await w.setProps({ modelValue: true });
+    await flushPromises();
+    const placeholders = [...document.querySelectorAll('input[placeholder]')].map((e) => e.getAttribute('placeholder'));
+    expect(placeholders.filter((p) => p?.startsWith('Inherit'))).toEqual(['Inherit', 'Inherit', 'Inherit']);
+    expect(document.body.textContent).not.toContain('built-in 120');
+    expect(document.querySelector('[data-test="onboard-inherit"]')!.textContent!.trim()).toBe('Empty settings take the levels\' (a type, the router, the organization); with none set, the built-ins: a 120-minute idle window, CPU under 5 % (off for a database), network off, no custom metric (a database\'s connections under 1).');
+    w.unmount();
+  });
+});

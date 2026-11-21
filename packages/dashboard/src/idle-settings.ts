@@ -1,11 +1,12 @@
 // A standalone workload's idle signals and settings in words (vision standalone workloads design §4; the router's
 // settings-levels.mjs ranges): the idle window, the wake timeout, CPU, network bytes, a custom CloudWatch metric, or off.
 import { duration } from './format';
+import { IDLE_KEYS as IDLE_SIGNAL_KEYS } from '@dormeto/fleet/idle-signals';
 import type { IdleMetric, IdleSettings, IdleSignal, Settings, SettingsFrom } from './types';
 
 export type StandaloneKey = 'idleMinutes' | 'wakeTimeoutSeconds' | keyof IdleSettings;
 export const STANDALONE_KEYS: StandaloneKey[] = ['idleMinutes', 'wakeTimeoutSeconds', 'idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
-export const IDLE_KEYS: (keyof IdleSettings)[] = ['idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
+export const IDLE_KEYS = IDLE_SIGNAL_KEYS as (keyof IdleSettings)[];
 // The waker's settings, an HTTP workload's only.
 export const WAKER_KEYS = ['waitSeconds', 'drainSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode', 'noWakeRules', 'wakeRules'];
 export const IDLE_NETWORK_BYTES_MAX = 10_000_000_000;
@@ -29,7 +30,7 @@ export const thresholdText = (signal: IdleSignal['signal'], below: number | null
 export interface StandaloneRow { key: StandaloneKey; label: string; value: string; help: string; range: string; from?: string }
 
 const HELP: Record<StandaloneKey, { label: string; help: string; range: string }> = {
-  idleMinutes: { label: 'Idle window', help: 'Time with every idle signal under its threshold before the workload naps; the check reads them every 5 minutes. Nothing wakes it on demand: a schedule, a person or a start made in AWS does.', range: '5 to 1,440 min; built-in 120 min.' },
+  idleMinutes: { label: 'Idle window', help: 'Time with every idle signal under its threshold before the workload naps; the check reads them every 5 minutes, and an idle nap comes up to 15 minutes after the window, as CloudWatch publishes the signals late. Nothing wakes it on demand: a schedule, a person or a start made in AWS does.', range: '5 to 1,440 min; built-in 120 min.' },
   wakeTimeoutSeconds: { label: 'Wake timeout', help: 'Longest a wake may take before the workload is marked FAILED; the check retries it.', range: '60 to 3,600 s; built-in 10 min, 30 min for a database.' },
   idleCpuPercent: { label: 'CPU', help: 'Idle while the CPU\'s maximum stays under this percentage (CloudWatch\'s CPUUtilization of the instance, group, service or database).', range: '0 to 100, or off; built-in 5, off for a database.' },
   idleNetworkBytes: { label: 'Network', help: 'Idle while the bytes in and out, a minute, stay under this number (EC2\'s NetworkIn and NetworkOut, RDS\'s throughput); an ECS service has none without Container Insights.', range: '0 to 10,000,000,000, or off; built-in off.' },

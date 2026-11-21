@@ -5,7 +5,7 @@ import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiDotsH
   mdiPlayCircleOutline, mdiPowerSleep, mdiStopCircleOutline, mdiWeatherSunny } from '@mdi/js';
 import { settingRows, sourceText, typeText } from '../settings';
 import { standaloneSettingRows } from '../idle-settings';
-import { kindOf } from '../kinds';
+import { kindOf, resourceKindOfArn } from '../kinds';
 import ActivityCard from '../components/ActivityCard.vue';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
@@ -46,7 +46,7 @@ import { backendCost, barSavings, discountText } from '../costs';
 import { cloudWords } from '../cloud-words';
 import type { Backend } from '../types';
 import RefreshIndicator from '../components/RefreshIndicator.vue';
-import { failureTitle } from '../failures';
+import { failureTitle, retryText } from '../failures';
 import { useCountUp } from '../count-up';
 import type { Counts, DescriptionInfo, WorkloadStatus } from '../types';
 
@@ -298,7 +298,10 @@ const googlePath = (collection: 'backendServices' | 'urlMaps', name: string) => 
 const urlMapLink = computed(() => (status.value?.urlMap ? urlMapConsoleUrl(googlePath('urlMaps', status.value.urlMap), status.value.lb, project.value) : null));
 // Where the workload is: the ARNs of its backends and targets.
 const where = computed(() => ({ account: status.value?.account ?? '', region: status.value?.region ?? '' }));
-const excludeOptions = computed<TargetOption[]>(() => (gcp.value && status.value?.backendService
+// A standalone workload: its resource (the review's M14), as Discovery excludes it.
+const excludeOptions = computed<TargetOption[]>(() => (standaloneKind.value && status.value?.resourceArn
+  ? [{ kind: 'resource', arn: status.value.resourceArn, label: `Resource ${status.value.name ?? shortId(status.value.resourceArn)} (this workload)` }]
+  : gcp.value && status.value?.backendService
   ? [{ kind: 'target-group', path: googleResourcePath(status.value.account ?? '', 'backendServices', status.value.backendService, status.value.lb, status.value.region ?? ''), label: `${capitalised(words.value.target)} ${resourceName(status.value.backendService)} (this workload)` }]
   : status.value?.targetGroupArn
   ? [{ kind: 'target-group', arn: status.value.targetGroupArn, label: `${capitalised(cloudWords('aws').target)} ${shortId(status.value.targetGroupArn.replace(/\/[0-9a-f]+$/, ''))} (this workload)` }]
@@ -322,7 +325,9 @@ async function exclude(body: object) {
   excludeOpen.value = false;
   acting.value = true;
   try {
-    const { operation } = await api<{ operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify({ ...body, workload: { router: props.router, id: props.id } }) });
+    // The workload's hint goes with a target group exclusion only (a resource names the workload itself).
+    const resource = (body as { target?: { kind?: string } }).target?.kind === 'resource';
+    const { operation } = await api<{ operation: { id: string } }>('/exclusions', { method: 'POST', body: JSON.stringify(resource ? body : { ...body, workload: { router: props.router, id: props.id } }) });
     notice.value = { type: 'success', text: `Excluded: it is being paused (operation ${operation.id}): woken and never napped, waiting for offboarding. Lift the exclusion in Discovery.`, operation: operation.id };
     setTimeout(run, 3000);
   } catch (err) {
@@ -346,13 +351,12 @@ const rows = (kind: keyof Counts) => {
   return Object.keys(s.total[kind]).sort((a, b) => (s.total[kind][b] ?? 0) - (s.total[kind][a] ?? 0))
     .map((key) => ({ key, today: s.today[kind][key] ?? 0, total: s.total[kind][key] ?? 0 }));
 };
-// The last failure (R7b): where, when, how many in a row, and when a request may retry it.
+// The last failure (R7b): where, when, how many in a row, and what retries it (its kind's words).
 const failureDetail = computed(() => {
   const s = status.value;
   if (!s?.failure) return '';
   const n = s.consecutiveFailures ?? 1;
-  const retry = s.state !== 'FAILED' ? 'the next request wakes it again'
-    : s.nextAttemptAt && Date.parse(s.nextAttemptAt) > now.value ? `next attempt ${relative(s.nextAttemptAt, now.value)}` : 'the next request retries it';
+  const retry = retryText(s, now.value, standaloneKind.value, relative);
   return [s.failure.backend && `backend ${s.failure.backend}`, relative(s.failure.at, now.value), n > 1 && `${n} failures in a row`, retry].filter(Boolean).join(' · ');
 });
 const fallbackText = computed(() => (status.value?.fallbacks ?? []).map((f) => `${f.instance} on ${f.to} instead of ${f.from}`).join(', '));
@@ -363,10 +367,12 @@ const summary = computed(() => {
   const since = stateSince(s);
   const nap = { label: 'Nap', value: pauses.value.length ? 'never while paused' : s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' };
   if (standaloneKind.value) {
+    // Its latest time: an idle nap comes up to 15 minutes after the window (the signals read 10 minutes behind).
+    const latest = !pauses.value.length && s.nap?.latestAt ? `, at the latest ${new Date(s.nap.latestAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : '';
     return [
       { label: 'Kind', value: 'Standalone: naps on a schedule, a person\'s word or its idle signals; nothing wakes it on demand' },
       { label: 'Resource', value: s.resourceArn ?? '—' },
-      nap,
+      { ...nap, value: `${nap.value}${latest}` },
       { label: since.label, value: relative(since.at, now.value) },
       { label: 'Wakes', value: String(s.wakeCount) },
       { label: 'Pending wake', value: s.pendingWake ? 'yes' : 'no' },
@@ -449,7 +455,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="status.source === 'terraform'" data-test="tags-terraform" class="text-body-small text-medium-emphasis">set in Terraform</span>
           <v-btn v-else-if="session.isAdmin && managed && status.tags" data-test="edit-tags" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="tagsOpen = true">Edit tags</v-btn>
         </div>
-        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :savings="barSavings(status.costs)" :width="140" :cloud="cloud" />
+        <StateBar v-if="status" block legend class="dm-hero__week" :states="status.states7d" :idle-hours7d="status.idleHours7d" :requests7d="status.requests7d" :resource="resourceKindOfArn(status.resourceArn)" :savings="barSavings(status.costs)" :width="140" :cloud="cloud" />
         </div>
       </div>
       <div class="dm-hero__side">

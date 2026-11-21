@@ -61,7 +61,7 @@ export const settingHelp = (key: keyof Settings): string => `${DESCRIPTIONS[key]
 
 // Each setting the router gives (an older one gives no retry), with the level it comes from when it says so, explained in its
 // cloud's words: Google Cloud's own where they differ (its G5 levels: what Google fixes at 0, its waker a Cloud Run service).
-export const settingRows = (settings: Settings, from?: SettingsFrom, cloud: Cloud = 'aws'): SettingRow[] => ORDER.filter((key) => typeof settings[key] === 'number').map((key) => {
+export const settingRows = (settings: Partial<Settings>, from?: SettingsFrom, cloud: Cloud = 'aws'): SettingRow[] => ORDER.filter((key) => typeof settings[key] === 'number').map((key) => {
   const d = DESCRIPTIONS[key];
   const { help, range } = cloudWords(cloud).settings[key] ?? d;
   return { key, label: d.label, value: d.format(settings[key] as number), help, range, ...(from?.[key] ? { from: from[key] } : {}) };

@@ -6,7 +6,8 @@
 // note, the bar of all workloads. block: as wide as its parent; legend: each state's share under the bar. facts: a Workloads
 // row's since when, wake mode and wakes (M37, state.ts' runFacts), a labelled line each after the states, in its name too.
 import { computed } from 'vue';
-import { idleText } from '../discovery';
+import { idleLine } from '../discovery';
+import type { ResourceKind } from '@dormeto/discovery/types';
 import { cloudWords } from '../cloud-words';
 import { MONTH_HOURS, discountText, type BarSavings } from '../costs';
 import { longDuration, stateColor, usd } from '../format';
@@ -18,6 +19,7 @@ const props = withDefaults(defineProps<{
   states?: { from: string; to: string; totals: Record<string, number> } | null;
   idleHours7d?: number | null;
   requests7d?: number | null;
+  resource?: ResourceKind; // a standalone workload's resource kind
   savings?: BarSavings | null;
   title?: string;
   note?: string | null;
@@ -82,7 +84,8 @@ const estimates = computed(() => {
     + `for the time asleep the baseline would have run.${words.priceNotes ? ` ${words.priceNotes}` : ''}`;
 });
 // What the requests went to in the workload's cloud: its target group, or its backend service.
-const idle = computed(() => (typeof props.idleHours7d === 'number' ? `Requests: ${idleText({ idleHours7d: props.idleHours7d, requests7d: props.requests7d }, props.cloud).detail}` : null));
+// A standalone workload's (`resource`: its kind): its hours by its default signal (the review's M2).
+const idle = computed(() => (typeof props.idleHours7d === 'number' ? idleLine({ idleHours7d: props.idleHours7d, requests7d: props.requests7d, ...(props.resource ? { resource: props.resource } : {}) }, props.cloud) : null));
 </script>
 
 <template>

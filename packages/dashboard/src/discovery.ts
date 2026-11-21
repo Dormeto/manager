@@ -99,6 +99,11 @@ export function idleText(c: { idleHours7d: number; requests7d?: number | null; r
   };
 }
 
+// The 7-day bar's idle line: a standalone workload's hours by its default signal, an HTTP one's by its requests.
+export function idleLine(c: { idleHours7d: number; requests7d?: number | null; resource?: ResourceKind }, cloud: Cloud = 'aws'): string {
+  return `${c.resource ? 'Idle' : 'Requests'}: ${idleText(c, cloud).detail}`;
+}
+
 // From red (always busy) through amber to green (always idle: the most to save).
 export const idleColor = (idleHours7d: number): string => `hsl(${Math.round((120 * Math.min(Math.max(idleHours7d, 0), 168)) / 168)} 70% 42%)`;
 
