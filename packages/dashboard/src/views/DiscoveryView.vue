@@ -9,7 +9,7 @@ import { mdiAlertCircleOutline, mdiAlertOutline, mdiCancel, mdiCheckCircleOutlin
 import type { AnyCandidate, ResourceKind, RunRecord, Status } from '@dormeto/discovery/types';
 import { useRoute } from 'vue-router';
 import KindMark from '../components/KindMark.vue';
-import { KINDS, isStandalone, kindInfo, type Kind } from '../kinds';
+import { isStandalone, kindInfo, type Kind } from '../kinds';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
 import CloudMark from '../components/CloudMark.vue';
@@ -37,6 +37,7 @@ import DiscoveryStatusChip from '../components/DiscoveryStatusChip.vue';
 import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import DmTable from '../components/DmTable.vue';
+import KindSelect from '../components/KindSelect.vue';
 import RunProblems from '../components/RunProblems.vue';
 import IdleBar from '../components/IdleBar.vue';
 import RegionLabel from '../components/RegionLabel.vue';
@@ -720,8 +721,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template #toolbar>
         <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
         <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
-        <v-select :model-value="kindFilter" :items="KINDS" item-title="short" item-value="value" label="Kind" clearable density="compact" hide-details max-width="210"
-          class="dm-filter" data-test="kind-filter" @update:model-value="filterByKind($event as Kind | null)" />
+        <KindSelect :model-value="kindFilter" max-width="210" class="dm-filter" @update:model-value="filterByKind($event)" />
         <v-spacer />
         <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
           <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">

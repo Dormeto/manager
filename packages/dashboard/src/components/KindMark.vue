@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// A workload's kind as an icon, its name and meaning in a tooltip (the Workloads and Discovery rows mark a standalone one).
+// A workload's kind as an icon, its name and meaning in a tooltip (kinds.ts `mark`) (the Workloads and Discovery rows mark a standalone one).
 import { computed } from 'vue';
 import { kindInfo, type Kind } from '../kinds';
 
@@ -8,7 +8,7 @@ const info = computed(() => kindInfo(props.kind));
 </script>
 
 <template>
-  <span class="dm-kind-wrap"><v-tooltip location="top" max-width="380" :text="info.help">
+  <span class="dm-kind-wrap"><v-tooltip location="top" max-width="380" :text="info.mark">
     <template #activator="{ props: tip }">
       <v-icon v-bind="tip" data-test="kind-mark" :data-kind="kind" :icon="info.icon" :size="size ?? 16" class="dm-kind" tabindex="0" role="img" :aria-label="info.title" :aria-hidden="false" />
     </template>

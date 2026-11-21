@@ -8,9 +8,17 @@ export type Kind = 'http' | 'standalone';
 export const kindOf = (row: { kind?: unknown } | null | undefined): Kind => (row?.kind === 'standalone' ? 'standalone' : 'http');
 export const isStandalone = (row: { kind?: unknown } | null | undefined): boolean => kindOf(row) === 'standalone';
 
-export const KINDS: { value: Kind; title: string; short: string; icon: string; help: string }[] = [
-  { value: 'http', title: 'HTTP workload', short: 'HTTP', icon: mdiWeb, help: 'A route of a load balancer and its backends: it naps when no request comes for its idle window, and the next request wakes it.' },
-  { value: 'standalone', title: 'Standalone workload', short: 'Standalone', icon: mdiServerOutline, help: 'A resource with no load balancer: it naps on a schedule, on a person\'s word or when its idle signals stay under their thresholds; nothing wakes it on demand.' },
+// Each kind's one definition: its icon (the rows' mark, the Kind filter, the workload's page, Discovery), its names, its
+// meaning, and `mark`, the row icon's tooltip in one line.
+export const KINDS: { value: Kind; title: string; short: string; icon: string; help: string; mark: string }[] = [
+  {
+    value: 'http', title: 'HTTP workload', short: 'HTTP', icon: mdiWeb, help: 'A route of a load balancer and its backends: it naps when no request comes for its idle window, and the next request wakes it.',
+    mark: 'HTTP: a route of a load balancer. Its next request wakes it.',
+  },
+  {
+    value: 'standalone', title: 'Standalone workload', short: 'Standalone', icon: mdiServerOutline, help: 'A resource with no load balancer: it naps on a schedule, on a person\'s word or when its idle signals stay under their thresholds; nothing wakes it on demand.',
+    mark: 'Standalone: a resource with no load balancer. A schedule, a person or a start made in AWS wakes it.',
+  },
 ];
 export const kindInfo = (kind: Kind) => KINDS.find((k) => k.value === kind)!;
 

@@ -71,6 +71,10 @@ has none yet.
   `instance_ids`, `waiting_page`, `admin_enabled`, `rule_arn(s)`) with it; tag the resource and its databases
   `dormeto:workload` yourself. Every Spot instance is refused. A standalone workload refuses a waiting page, a route repair
   and a target group pause. The router needs no new permission.
+- **Workloads' marks explained:** every icon of the Workloads view's Workload column has a tooltip and an accessible name:
+the standalone kind ("Standalone: a resource with no load balancer. A schedule, a person or a start made in AWS wakes it.")
+and a schedule ("Has a schedule: it naps and wakes at set hours (its Schedule card says when)."). The Kind filter of
+Workloads and Discovery shows each kind's icon, the web for HTTP and the server for standalone, in its list and its value.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

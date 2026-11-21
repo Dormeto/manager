@@ -4,7 +4,7 @@
 import { useNow } from '../now';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { mdiCalendarClock, mdiOpenInNew, mdiTagOutline } from '@mdi/js';
+import { mdiOpenInNew, mdiTagOutline } from '@mdi/js';
 import { api } from '../api';
 import { usePoll } from '../poll';
 import { backendLabel, checkHealth, cloudMark, exactTime, percent, relative, rowCloud, usd } from '../format';
@@ -26,8 +26,9 @@ import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
 import { tagsList } from '../tags';
-import KindMark from '../components/KindMark.vue';
-import { KINDS, isStandalone, kindInfo, resourceKindOfArn, type Kind } from '../kinds';
+import KindSelect from '../components/KindSelect.vue';
+import WorkloadCell from '../components/WorkloadCell.vue';
+import { isStandalone, kindInfo, resourceKindOfArn, type Kind } from '../kinds';
 import { useSession } from '../stores/session';
 import PageTitle from '../components/PageTitle.vue';
 
@@ -251,10 +252,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         </div>
         <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
           class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
-        <v-select :model-value="kindFilter" :items="KINDS" item-title="short" item-value="value" label="Kind" clearable density="compact" hide-details
-          class="dm-toolbar__kind" data-test="kind-filter" @update:model-value="filterByKind($event as Kind | null)">
-          <template #item="{ props: item, item: choice }"><v-list-item v-bind="item" :prepend-icon="(choice as unknown as { icon: string }).icon" /></template>
-        </v-select>
+        <KindSelect :model-value="kindFilter" class="dm-toolbar__kind" @update:model-value="filterByKind($event)" />
       </template>
       <template #loading><DmLoader label="Reading the workloads…" :size="56" /></template>
       <template #no-data>
@@ -266,13 +264,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       </template>
       <template #[`item.account`]="{ item }"><span class="mono dm-account"><CloudMark :cloud="rowCloud(item)" class="mr-1" />{{ item.account }}</span></template>
       <template #[`item.name`]="{ item }">
-        <div class="dm-wl">
-          <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link>
-          <KindMark v-if="isStandalone(item)" kind="standalone" class="ml-1" />
-          <v-icon v-if="item.scheduled" data-test="scheduled" :icon="mdiCalendarClock" size="16" class="ml-1 text-medium-emphasis" title="Has a schedule" aria-label="Has a schedule" />
-          <div v-if="item.summary" class="dm-list-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
-          <div v-if="item.name" class="dm-wl__id mono">{{ item.workloadId }}</div>
-        </div>
+        <WorkloadCell :item="item" />
       </template>
       <template #[`item.backends`]="{ item }"><BackendKinds :kinds="item.backends ?? []" :cloud="rowCloud(item)" /></template>
       <template #[`item.router`]="{ item }">
@@ -330,15 +322,11 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-workloads :deep(.v-data-table-column--align-end) { font-variant-numeric: tabular-nums; }
 
 .dm-account { font-size: 0.7rem; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); }
-.dm-wl { min-width: 0; }
-.dm-wl__name { display: inline-block; font-weight: 600; letter-spacing: -0.01em; color: rgb(var(--v-theme-on-surface)); text-decoration: none; white-space: nowrap; transition: color 0.2s; }
-.dm-wl__name:hover { color: rgb(var(--v-theme-primary)); }
-.dm-wl__id { margin-top: 1px; font-size: 0.7rem; letter-spacing: 0.02em; color: rgba(var(--v-theme-on-surface), 0.5); }
 .dm-link { color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); text-decoration: none; font-size: 0.84rem; transition: color 0.2s; }
 .dm-link:hover { color: rgb(var(--v-theme-primary)); }
 /* A long router name breaks at its hyphens, never inside a word. */
 .dm-router { display: inline-block; min-width: 5.8rem; max-width: 7.5rem; line-height: 1.3; }
-.dm-wl__name:focus-visible, .dm-link:focus-visible, .dm-url:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; border-radius: 4px; }
+.dm-link:focus-visible, .dm-url:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; border-radius: 4px; }
 .dm-url { display: inline-flex; align-items: center; gap: 4px; max-width: 5.5rem; color: rgb(var(--v-theme-primary)); text-decoration: none; font-size: 0.86rem; }
 .dm-url:hover .dm-url__host { text-decoration: underline; text-underline-offset: 3px; }
 .dm-url__host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
