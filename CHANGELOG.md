@@ -52,7 +52,7 @@ first: …`); the idle window is not held back, nor a write that keeps or remove
 the idle signals. A standalone workload's waiting page and a target group exclusion naming it are refused before its router
 is called (409, the router's words); the router's refusal of a nap window's `wake` is relayed. What a level reaches counts
 the idle signals where a standalone workload holds them. The history says the check's `retry` of a failed wake; the
-router's `resource-missing` warning alerts with what to do.
+router's `resource-missing` warning alerts with what to do (offboard it, or tag the resource again: the router finds it at the next check).
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

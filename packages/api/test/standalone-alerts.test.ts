@@ -17,7 +17,7 @@ describe('a router\'s standalone workloads without their resource', () => {
     const [observation] = routerObservations({ terraformRouters: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'c' }] as never, installed: [], summaries: [summary], managerAccount: MANAGER, now: NOW });
     expect(observation!.problems).toEqual([{
       code: 'resource-missing', level: 'warning', text: TEXT,
-      hint: 'Offboard a workload whose resource was deleted; tag a resource that lost its dormeto:workload tag again (its value is the workload\'s id). Until then the workload naps and wakes nothing.',
+      hint: 'Offboard a workload whose resource was deleted; tag a resource that lost its dormeto:workload tag again (its value is the workload\'s id): the router finds it again at the next check. Until then the workload naps and wakes nothing.',
     }]);
   });
 });

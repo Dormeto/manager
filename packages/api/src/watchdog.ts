@@ -85,7 +85,7 @@ function reportedProblems(summary: RouterSummary): Problem[] {
 // What to do about a reported problem, by its code: the router's text says what it is.
 const REPORTED_HINTS: Record<string, string> = {
   // Standalone workloads without their resource (routers 0.42.0).
-  'resource-missing': 'Offboard a workload whose resource was deleted; tag a resource that lost its dormeto:workload tag again (its value is the workload\'s id). Until then the workload naps and wakes nothing.',
+  'resource-missing': 'Offboard a workload whose resource was deleted; tag a resource that lost its dormeto:workload tag again (its value is the workload\'s id): the router finds it again at the next check. Until then the workload naps and wakes nothing.',
 };
 
 // What a silent router's owner checks first, per cloud; for a Google Cloud router, what the watchdog's probe last met.
