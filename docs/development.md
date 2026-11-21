@@ -38,7 +38,14 @@ signals and the advice replayed on them. The perimeter's standalone scan is on, 
 resources to onboard and one of each family the router refuses. To see the views: Workloads or Discovery filtered on
 Standalone (`/workloads?kind=standalone`), a standalone workload's page (its Activity card and history), Onboard on a
 standalone candidate, the Standalone resources switch of Discovery's perimeter, and the two headings of Routers ›
-Workload defaults. A dashboard of your own beside a running one takes another port and cache directory (a Vite
+Workload defaults. On Google Cloud it adds a second router of the project `dormeto-dev`, `dmtr-dormeto-dev-europe-west1` (0.42.0),
+with five standalone workloads: `batch` (a VM, awake, with its own Cloud Monitoring metric), `render-workers` (a managed
+instance group asleep by its schedule), `orders-sql` (a Cloud SQL instance asleep on its connections, its network set and
+not read), `etl-vm` (a VM whose wake timed out, retried) and `reports-sql` (a Cloud SQL instance with a kept permission
+failure naming the tag `dormeto=managed`). The project's candidates add a VM, an empty group and a Cloud SQL instance to
+onboard (the last in europe-west3, where the project has no router: the dialog asks which), one of each family the scan
+refuses, and the run says the project `shop-prod`'s Cloud SQL instances were not listed. The first router of `dormeto-dev`
+keeps its HTTP workloads and its version. A dashboard of your own beside a running one takes another port and cache directory (a Vite
 configuration that sets `server.port` and `cacheDir`).
 
 Screenshots of the dashboard (the website's, for example), signed in as the smoke user, with example values in place of

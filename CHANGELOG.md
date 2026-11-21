@@ -7,13 +7,25 @@ CLI script, of the same release).
 
 ## Unreleased
 
-- **Standalone workloads on AWS: resources with no load balancer, napped when idle or by schedule.** A workload is now
-of one of two kinds. An HTTP workload is behind an Application Load Balancer, as before: its requests wake it, and its
+- **Standalone workloads on AWS and Google Cloud: resources with no load balancer, napped when idle or by schedule.** A
+workload is now of one of two kinds. An HTTP workload is behind a load balancer, as before: its requests wake it, and its
 rows and answers are unchanged (no `kind`; absent means HTTP). A standalone workload is one resource that no load balancer
-rule uses: an EC2 instance outside an Auto Scaling group, an Auto Scaling group with no target group, an ECS service with
-no load balancer, an RDS instance or an Aurora cluster. It naps when its idle signals stay under their thresholds for its
-idle window, or by its schedule; nothing wakes it on demand: a schedule, a person (Wake) or a start made in AWS does. It
-needs the router that knows standalone workloads; an older one refuses its preview and asks to be upgraded.
+uses: on AWS an EC2 instance outside an Auto Scaling group, an Auto Scaling group with no target group, an ECS service with
+no load balancer, an RDS instance or an Aurora cluster; on Google Cloud a Compute Engine VM outside a managed instance group,
+a managed instance group, or a Cloud SQL instance, that no backend service uses. It naps when its idle signals stay under
+their thresholds for its idle window, or by its schedule; nothing wakes it on demand: a schedule, a person (Wake) or a start
+made in the cloud does. A wake that fails is retried by the router's check until it succeeds or a person naps the workload
+(Nap is offered on a failed one, and ends the retries); the workload's page says when the next attempt comes, or that none is
+coming while a pause, a nap window, its resource or a nap asked holds it, and a failed nap is tried again after the idle
+window. It needs the router that knows standalone workloads, on either cloud; an older one refuses its preview and asks to be
+upgraded. What differs between the clouds: the resources above; the custom metric's shape (a CloudWatch metric on AWS, a
+Cloud Monitoring metric type with an optional filter and an aligner on Google Cloud: the dashboard's form takes the level's
+cloud's, and the organization's level and a type pick the cloud, a router of the other cloud ignoring it); what marks the
+resource (AWS's tag `dormeto:workload` with the workload's id, which the router reads, so an untagged resource is missing;
+on Google Cloud the tag `dormeto=managed` the manager binds, which the router's roles require but cannot read, so a resource
+is missing only once Google says it is deleted, and a permission failure names that tag); a Cloud SQL instance's network,
+not a signal; the wake timeout, at most 1,700 s on Google Cloud; and Spot capacity: every Spot instance is refused on AWS,
+while Google Cloud accepts Spot and preemptible VMs (a VM Google preempts is read as a stop made outside Dormeto).
   - **Google Cloud's discovery:** with the same switch on, each project's scan also lists its Compute Engine VMs, managed
   instance groups and Cloud SQL instances, each a candidate of its own path (`id` and `resource`, `cloud: "gcp"`, no
   `resourceArn`): eligible, ineligible in the Google Cloud router's words (a managed group's member, a GKE node, a GPU, a local
@@ -58,8 +70,9 @@ needs the router that knows standalone workloads; an older one refuses its previ
   standalone workload. They are set at every AWS level, as the HTTP settings are: the organization's defaults, a type, a
   router, the workload. A workload refuses the other kind's keys (a standalone one the waker's, an HTTP one the idle
   signals, at its onboarding too). **An idle signal at the organization's level (its defaults or a type) is refused (409,
-  naming them: `<n> router(s) must be upgraded first: …`) while any router does not know them yet**: an AWS router before
-  the router that knows standalone workloads, one whose version is unknown, or any Google Cloud router. Upgrade those
+  naming them: `the organization's idle signals need every router at <version> or later: <n> router(s) must be upgraded first: …`)
+  while any router does not know them yet**: a router of either cloud before its cloud's first version that knows them, or
+  one whose version is unknown. Upgrade those
   routers first; the idle window and a write that keeps or removes the signals are not held back. A router that does not
   know them refuses its own level's (409).
   - **Onboarding:** `POST /operations` with `type: "onboard"` and the candidate's resource ARN as `candidateId`
@@ -76,8 +89,11 @@ needs the router that knows standalone workloads; an older one refuses its previ
   replays them through the idle window advisor from 5 minutes to 24 hours (hours asleep and stops a day; the
   recommendation from 5 minutes to 2 hours). A point is activity when a signal is at or over its threshold or missing
   while awake; a read that fails answers 502 `metrics_unreadable` and the card says so, never an idle week. The history
-  names the causes `external-start`, `external-stop`, `recovered` and the check's `retry`. The demo mode has one
-  standalone workload of each kind and state, candidates and the scan on.
+  names the causes `external-start`, `external-stop`, `recovered` and the check's `retry`; a person's nap of a failed one
+  is `manager` with who asked, the check's own release `failed-released`. The demo mode has one standalone workload of each
+  kind and state on both clouds (on Google Cloud a VM with its own Cloud Monitoring metric, a group asleep by its schedule, a
+  Cloud SQL instance asleep on its connections, a VM whose wake is retried, a Cloud SQL instance with a kept permission
+  failure), candidates eligible and not, the scan on, and a run that could not list a project's Cloud SQL instances.
   - **A resource deleted or untagged:** the router's health warns `resource-missing` and nothing is stopped or started;
   offboarding such a workload no longer wakes it: it is offboarded in any state, what is gone skipped. Tag the resource
   again (`dormeto:workload` with the workload's id) to keep it.

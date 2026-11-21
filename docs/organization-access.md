@@ -53,8 +53,12 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   set of each role name). It holds read-only access, through the custom role `dormetoDiscovery`, at each scope: the
   projects, folders and organizations, the load balancers' parts, the Cloud Run services (the routers) and Monitoring's
   request counts; for the perimeter's standalone scan, the VMs, managed instance groups and Cloud SQL instances
-  (`cloudsql.instances.list` and `get`, in the role since the release that lists Cloud SQL: a connection made before needs
-  `dormeto gcp connect` again; until then the scan lists the VMs and groups and says it) and their CPU and connections. It also reads Google's list prices from the Cloud Billing Catalog (the savings job, no role needed, the host
+  (`cloudsql.instances.list` and `get`, in the role since the release that lists Cloud SQL, router `gcp/access.json`) and
+  their CPU and connections. A connection made before needs `dormeto gcp connect` run again to get the two Cloud SQL reads.
+  Until then, and in a project whose Cloud SQL Admin API (`sqladmin.googleapis.com`) is off, the scan lists the VMs and
+  managed instance groups, keeps the Cloud SQL candidates it had as they were, and the run says which it is for the project:
+  `Cloud SQL instances not listed: the discovery account may not call cloudsql.instances.list (run dormeto gcp connect
+  again: …)`, or `… the Cloud SQL Admin API (sqladmin.googleapis.com) is not enabled in project <project>`. It also reads Google's list prices from the Cloud Billing Catalog (the savings job, no role needed, the host
   project's `cloudbilling.googleapis.com` API enabled).
 - **`dmt-<env>-command@<host>.iam.gserviceaccount.com`**, twin of `DmtCommandRole`, is impersonated by
   `dmt-<env>-manager-operations`, `-api` and `-fleet`. In each project that has a router it holds

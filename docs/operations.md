@@ -17,7 +17,7 @@ time per target group, router or workload, one per load balancer (lock), three p
 
 ## Standalone workloads
 
-A standalone workload (AWS) is one resource that no load balancer rule uses: an EC2 instance outside an Auto Scaling
+A standalone workload (AWS here, Google Cloud [below](#on-google-cloud)) is one resource that no load balancer rule uses: an EC2 instance outside an Auto Scaling
 group, an Auto Scaling group with no target group, an ECS service with no load balancer, an RDS instance or an Aurora
 cluster. Its router naps it when its idle signals stay under their thresholds for its idle window, or by its schedule;
 nothing wakes it on demand (a schedule, a person's Wake, or a start made in AWS that the router sees). Discovery lists them
@@ -45,6 +45,36 @@ once the perimeter's `standalone` is `on`; each is a candidate of its own resour
 - **Its history** names who started or stopped it: `schedule`, `manager` (a person), `idle`, `external-start` and
   `external-stop` (a start or stop made in AWS), `recovered`, and the check's `retry` of a failed wake. Its Activity history
   is in [Savings](savings.md#idle-window-advisor).
+
+### On Google Cloud
+
+A Google Cloud standalone workload is a Compute Engine VM outside a managed instance group, a managed instance group, or a
+Cloud SQL instance, that no backend service uses. With the perimeter's `standalone` on, each project's scan lists them, each a
+candidate of its path (`id` and `resource`, `cloud: "gcp"`), with the Google Cloud router's reasons; a VM or a group that backs
+any backend service is never eligible (the router cannot see one it does not route).
+
+- **Onboarding** takes the resource's path as `candidateId`, only from the last scan's eligible candidates. It goes to the
+  router of the resource's region, else the project's only router; with several and none in that region, `router` names one
+  (the dialog asks). The manager binds the tag `dormeto=managed` to the resource and its Cloud SQL companions, then the router
+  records the workload; `verify` waits for it awake with its resource among its backends.
+- **What marks the resource** is the tag `dormeto=managed`, which the router's roles require for every change but cannot
+  read: the workload is missing (`resourceMissing`) only once Google says the resource is deleted. A tag binding removed
+  shows as a permission failure naming the tag, kept on the workload until a nap or a wake succeeds.
+- **Its settings** are AWS's five, at a Google Cloud router's and workload's levels, with `idleMetric` in Google Cloud's shape
+  (`{ type, filter?, aligner, below }`, `${resource}` in the filter the resource's name); the organization's level and a type
+  hold either cloud's metric, which a router of the other cloud ignores. A Cloud SQL instance's network is not a signal; the
+  wake timeout is at most 1,700 s.
+- **A Cloud SQL instance the router may not read** (a router installed without `--with cloud-sql`) is neither napped nor
+  woken nor retried, and the router's health warns `cloud-sql-unreadable` with the count of such workloads: install it again
+  with `--with cloud-sql`, or offboard the workload.
+
+### A failed wake, on both clouds
+
+A standalone workload's failed wake is retried by the router's check until it succeeds or a person naps the workload: its
+page says when (`nextAttemptAt`), or that no retry is coming while a keepAsleep pause, a nap window, its unreadable settings or
+resource, or a nap asked holds it. **Nap** is offered on a failed one: the router stops the retries at once and stops the
+resource; its history says `manager` with who asked. A nap that fails leaves it failed with a nap's failure, tried again after
+its idle window (`failed-released` in the history once it succeeds).
 
 ## Onboarding and offboarding on Google Cloud
 
