@@ -284,6 +284,10 @@ function standaloneOf(w: Json, cloud: Cloud | null): Json {
     if (key === 'backends' && w.resourceMissing === true) kept.resourceMissing = true;
     if (key === 'pauses') kept.stats7d = numbers(w.stats7d, new Set(['wakes'])) ?? null;
   }
+  // No failure, no retry coming (router 4c1fe78: after a release, or while a pause, a nap window, its resource or a person's nap
+  // holds the retry): null as the router says it, which the dashboard tells from an older router's absent one.
+  if (w.failure === null && kept.failure === undefined) kept.failure = null;
+  if (w.nextAttemptAt === null && kept.nextAttemptAt === undefined) kept.nextAttemptAt = null;
   return defined({ ...kept, settings: standaloneSettingsOf(w.settings, cloud), type: kept.type, settingsFrom: kept.settingsFrom });
 }
 
