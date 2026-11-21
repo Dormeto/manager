@@ -2,7 +2,8 @@
 // A workload's idle window advice (R10): its last 14 days of requests replayed against idle windows from 5 to 120
 // minutes, each window's savings a month (or hours asleep), wakes and wait a day, and the window at the knee recommended.
 // The API computes it at most once a day: read once with the page.
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, inject } from 'vue';
+import { GIVEN_ADVICE } from '../idle-window';
 import { duration, usd } from '../format';
 import { adviceSentence, hoursText, perDay } from '../idle';
 import { readIdleWindow } from '../idle-window';
@@ -14,10 +15,15 @@ import type { IdleWindowAdvice, IdleWindowRow } from '../types';
 // levels: its router takes a workload's settings from the manager (0.37.0 and later).
 const props = defineProps<{ router: string; id: string; source?: 'terraform' | 'manager' | 'cli'; canApply?: boolean; levels?: boolean }>();
 const emit = defineEmits<{ apply: [minutes: number] }>();
-const advice = ref<IdleWindowAdvice | null>(null);
+// The advice read by the card around it (a standalone workload's Activity history, replayed on its idle signals over 7
+// days): shown as it is, with that replay's words. Provided, so an HTTP workload's card keeps its props.
+const given = inject<(() => IdleWindowAdvice | null) | null>(GIVEN_ADVICE, null)?.() ?? null;
+const standalone = Boolean(given);
+const advice = ref<IdleWindowAdvice | null>(given);
 const error = ref('');
-const loading = ref(true);
+const loading = ref(!given);
 onMounted(async () => {
+  if (given) return;
   try {
     const answer = await readIdleWindow(props.router, props.id);
     // An answer without windows is not drawn (it would fail the whole card).
@@ -39,6 +45,8 @@ const peaks = computed(() => {
 const width = (v: number, peak: number) => (v > 0 ? `max(2px, ${(v / peak) * 100}%)` : '0');
 // No request in 14 days: no wake for any window, and asleep about all the time.
 const quiet = computed(() => Boolean(advice.value?.windows.every((w) => w.wakesPerDay === 0 && w.asleepHours >= 23.5)));
+// The days replayed: 14 of requests, a standalone workload's 7 of signals.
+const days = standalone ? 7 : 14;
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 </script>
@@ -51,7 +59,7 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
       <template v-else-if="advice">
         <div class="dm-idle__advice mb-4">
           <v-avatar color="primary" variant="tonal" rounded="lg" size="34"><v-icon :icon="mdiLightbulbOnOutline" size="18" /></v-avatar>
-          <div class="text-body-1">{{ adviceSentence(advice) }}.</div>
+          <div class="text-body-1">{{ adviceSentence(advice, standalone ? 'stops' : 'wakes') }}.</div>
         </div>
         <div class="dm-idle__table">
           <v-table density="compact">
@@ -59,8 +67,8 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
               <tr>
                 <th>Window</th>
                 <th>{{ advice.priced ? 'Savings a month' : 'Asleep a day' }}</th>
-                <th>Wakes a day</th>
-                <th class="text-end">Wait a day</th>
+                <th>{{ standalone ? 'Stops a day' : 'Wakes a day' }}</th>
+                <th v-if="!standalone" class="text-end">Wait a day</th>
               </tr>
             </thead>
             <tbody>
@@ -83,7 +91,7 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
                     <span class="track"><span data-test="idle-bar" class="bar bg-warning" :style="{ width: width(w.wakesPerDay, peaks.wakes) }" /></span>
                   </div>
                 </td>
-                <td class="text-no-wrap text-end dm-num">{{ w.waitSecondsPerDay === null ? '—' : duration(Math.round(w.waitSecondsPerDay)) }}</td>
+                <td v-if="!standalone" class="text-no-wrap text-end dm-num">{{ w.waitSecondsPerDay === null ? '—' : duration(Math.round(w.waitSecondsPerDay)) }}</td>
               </tr>
             </tbody>
           </v-table>
@@ -92,6 +100,16 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
           <v-btn data-test="use-window" color="primary" variant="tonal" size="small" @click="emit('apply', advice.recommended)">Use {{ advice.recommended }} minutes</v-btn>
         </div>
         <div class="dm-idle__notes text-body-small text-medium-emphasis mt-3">
+          <template v-if="standalone">
+            <span v-if="quiet">Idle on every signal for 7 days: the workload sleeps whatever the window.</span>
+            <span data-test="idle-assumption">After a nap, it is started again when its history next shows activity, by a schedule or a person.</span>
+            <span v-if="advice.wakeSeconds === null">No wake measured yet: how long a start takes is unknown.</span>
+            <span v-if="!advice.priced">Nothing priced yet (no nap described, or an item without a price): hours asleep instead of dollars.</span>
+            <span v-if="source === 'terraform'">To change it: <code>idle_minutes</code> in the workload's Terraform module.</span>
+            <span v-else-if="!canApply && advice.recommended !== advice.current">An operator can apply it from here.</span>
+            <span>A point counts as activity when a signal is at or over its threshold, or missing while it was awake. Computed {{ when(advice.computedAt) }}, from the {{ days }} days to {{ date(advice.to) }}.</span>
+          </template>
+          <template v-else>
           <span v-if="quiet">No request in 14 days: the workload sleeps whatever the window.</span>
           <span v-if="advice.actual.noisy">The replay counts {{ advice.actual.replayedWakes }} wakes over the 14 days for {{ advice.actual.wakes }} that happened: requests the waker ignores (scanners, no-wake rules, IP lists) count here as wakes, so real wakes are fewer.</span>
           <span v-if="advice.wakeSeconds === null">No wake measured yet: the visitors' wait is unknown.</span>
@@ -102,6 +120,7 @@ const date = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day:
           <span v-else-if="levels === false">To change it: upgrade its router to 0.37.0, or offboard the workload and onboard it again.</span>
           <span v-else-if="!canApply && advice.recommended !== advice.current">An operator can apply it from here.</span>
           <span>Every request counts as activity and as a wake. Computed {{ when(advice.computedAt) }}, from the 14 days to {{ date(advice.to) }}.</span>
+          </template>
         </div>
       </template>
     </v-card-text>

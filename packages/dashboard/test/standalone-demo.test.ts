@@ -67,3 +67,24 @@ describe('the demo\'s standalone history', () => {
     }
   });
 });
+
+describe('the demo\'s standalone activity', () => {
+  it('has 7 days of each applying signal, none while asleep, and the advice from 5 minutes to 24 hours', async () => {
+    const d = state();
+    for (const w of d.workloads.filter((x) => (x as { kind?: string }).kind === 'standalone')) {
+      const a = await mockApi(`/workloads/${w.router}/${w.workloadId}/activity`) as { signals: { applies: boolean; values: (number | null)[] }[]; asleep: { from: string; to: string }[]; advice: { windows: { minutes: number }[] } | null; from: string };
+      const applying = a.signals.filter((s) => s.applies);
+      expect(applying.length, w.name).toBeGreaterThan(0);
+      for (const s of applying) {
+        expect(s.values).toHaveLength(7 * 288);
+        for (const p of a.asleep) {
+          const i = Math.ceil((Date.parse(p.from) - Date.parse(a.from)) / 300_000) + 1;
+          if (i >= 0 && i < s.values.length && Date.parse(p.to) - Date.parse(p.from) > 900_000) expect(s.values[i], w.name).toBeNull();
+        }
+      }
+      expect(a.advice!.windows.map((x) => x.minutes)).toEqual([5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720, 1440]);
+    }
+    const http = d.workloads.find((x) => (x as { kind?: string }).kind !== 'standalone')!;
+    await expect(mockApi(`/workloads/${http.router}/${http.workloadId}/activity`)).rejects.toThrow('is an HTTP workload');
+  });
+});

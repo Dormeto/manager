@@ -3,6 +3,9 @@
 import { api } from './api';
 import type { IdleWindowAdvice } from './types';
 
+// The advice a card around the Idle window card gives it (a standalone workload's Activity history).
+export const GIVEN_ADVICE = Symbol('given idle window advice');
+
 const reading = new Map<string, Promise<IdleWindowAdvice>>();
 
 export function readIdleWindow(router: string, id: string): Promise<IdleWindowAdvice> {

@@ -19,7 +19,7 @@ import { updateChanges, updateRequest, updateState } from './update';
 import { MockError, advance, fail, lintOf, pausesOf, routerOf, state, workloadOf, type Demo } from './state';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import {
-  accessReport, alerts, candidateView, exclusionView, fleetStates, idleAdvice, ipLists, operationView, googleConnection, routerDetails, routerRow, savingsSummary, workloadHistory,
+  accessReport, alerts, candidateView, exclusionView, fleetStates, idleAdvice, ipLists, operationView, googleConnection, routerDetails, routerRow, savingsSummary, workloadActivity, workloadHistory,
   workloadRow, workloadStatus,
 } from './views';
 
@@ -124,6 +124,7 @@ function route(d: Demo, method: string, parts: string[], q: URLSearchParams, bod
         return workloadHistory(d, workloadOf(d, a, b), days, now);
       }
       if (method === 'GET' && action === 'idle-window') return idleAdvice(d, workloadOf(d, a, b), now);
+      if (method === 'GET' && action === 'activity') return workloadActivity(d, workloadOf(d, a, b), now);
       if (action === 'waiting-page' && ['GET', 'PUT', 'DELETE'].includes(method)) return workloadPage(d, a, b, method, body, now);
       if (method === 'GET' && action === 'description') return { description: workloadOf(d, a, b).description };
       if (method === 'PUT' && action === 'settings') return setWorkloadSettings(d, a, b, body, now);

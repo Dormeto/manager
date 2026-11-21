@@ -70,6 +70,16 @@ wakes it on demand, takes its idle signals and links to Schedules; a standalone 
 - **The demo mode shows standalone workloads:** one of each kind of resource (awake, asleep by its schedule, asleep on
 idle, failed, its resource missing), standalone candidates to onboard and one of each family the router refuses, and the
 perimeter's standalone scan on.
+- **A standalone workload's activity history:** `GET /workloads/{router}/{id}/activity` reads its idle signals over the
+last 7 days (5-minute points to 10 minutes ago) through the discovery function under `DmtDiscoveryRole`, with the router's
+queries for its backends and resolved settings, and answers each signal's values, its hours asleep and the idle window
+advice replayed on them from 5 minutes to 24 hours (hours asleep and stops a day at each; the knee recommended from 5
+minutes to 2 hours, the longer windows shown to compare). A point is activity when a signal that applies is at or over its
+threshold, or has no point while the workload was awake; after a nap the replay starts it again when its history next shows
+activity. Kept a day, or until its settings change. A read that fails answers 502 `metrics_unreadable`, never an idle week;
+with no signal that applies, nothing is read. An HTTP workload has none (404). The Activity card draws a line a signal against
+its threshold, the hours asleep shaded, and the advice's table with "Use N minutes"; a failed read keeps the card's rows and
+says the metrics could not be read. The demo mode has data for it.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

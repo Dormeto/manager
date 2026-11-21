@@ -173,3 +173,58 @@ export function standaloneCandidates(d: Demo, router: DemoRouter, now: number, l
 
 // The time a standalone workload's nap and wake take in the demo (a database is slow to start).
 export const standaloneTimings = (kind: ResourceKind) => (kind.startsWith('rds-') ? { wakeMs: 7 * MINUTE, napMs: 2 * MINUTE } : { wakeMs: 70 * SECOND, napMs: 40 * SECOND });
+
+// Its Activity history (GET …/activity, M47): each applying signal's 5-minute values over the 7 days to 10 minutes ago, none
+// while it was asleep (stopped), its hours asleep, and the advice replayed on the busy points from 5 minutes to 24 hours. The
+// demo's signals: busy on weekdays' working hours with a short job at night, idle otherwise; the custom metric follows the CPU.
+const STANDALONE_WINDOWS = [5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 480, 720, 1440];
+const POINT = 5 * MINUTE;
+export function standaloneActivity(w: DemoWorkload, now: number, view: (from: number, to: number) => { phases: { state: string; from: string; to: string }[]; wakes: { medianMs: number | null } },
+  replay: (list: { start: number; end: number; requests: number }[], current: number, from: number, to: number, wakeMs: number, napMs: number, hourly: number | null, tried: number[], recommendable: number[]) => { rows: unknown[]; recommended: number; replayedWakes: number }) {
+  const to = Math.floor((now - 10 * MINUTE) / POINT) * POINT;
+  const from = to - 7 * DAY;
+  const settings = w.settings as unknown as Record<string, unknown>;
+  const phases = view(from, to).phases;
+  const asleep = phases.filter((p) => p.state === 'ASLEEP').map((p) => ({ from: p.from, to: p.to }));
+  const awakeAt = (t: number) => phases.some((p) => p.state === 'AWAKE' && Date.parse(p.from) <= t && Date.parse(p.to) >= t + POINT);
+  const level = (t: number, p: number) => {
+    const hour = new Date(t).getUTCHours();
+    const weekday = new Date(t).getUTCDay() % 6 !== 0;
+    const busy = (weekday && hour >= 8 && hour < 17 && (p % 9 !== 0)) || (hour === 2 && new Date(t).getUTCMinutes() < 20);
+    return busy ? 25 + ((p * 37) % 50) : 0.4 + ((p * 13) % 17) / 10;
+  };
+  const signalOf = (signal: 'cpu' | 'network' | 'metric', key: string) => {
+    const v = settings[key];
+    const below = v === 'off' || v === undefined ? null : typeof v === 'number' ? v : (v as { below: number }).below;
+    const applies = below !== null && !(signal === 'network' && (w as { resourceKind?: string }).resourceKind === 'ecs');
+    const values = !applies ? [] : Array.from({ length: (to - from) / POINT }, (_, p) => {
+      const t = from + p * POINT;
+      if (!awakeAt(t)) return null;
+      const cpu = level(t, p);
+      return signal === 'cpu' ? Math.round(cpu * 10) / 10 : signal === 'metric' ? (cpu > 5 ? Math.max(below!, Math.round(cpu / 10)) : 0) : Math.round(cpu * 4000);
+    });
+    return { signal, below, applies, ...(applies ? {} : { reason: below === null ? 'off' : 'an ECS service has no network metric without Container Insights' }), from: 'default', values };
+  };
+  const signals = [signalOf('cpu', 'idleCpuPercent'), signalOf('network', 'idleNetworkBytes'), signalOf('metric', 'idleMetric')];
+  const applying = signals.filter((s) => s.applies);
+  if (!applying.length) return { from: iso(from), to: iso(to), signals, asleep, advice: null, reason: 'no idle signal applies: it naps on its schedule and on people\'s word only' };
+  // The busy points as bursts of activity: a point at or over a threshold, or missing while awake.
+  const list: { start: number; end: number; requests: number }[] = [];
+  for (let p = 0; p < (to - from) / POINT; p += 1) {
+    const t = from + p * POINT;
+    if (!awakeAt(t)) continue;
+    if (applying.some((s) => s.values[p] === null || s.values[p]! >= s.below!)) list.push({ start: t, end: t + POINT, requests: 1 });
+  }
+  const month = view(now - 30 * DAY, now);
+  const wakeMs = month.wakes.medianMs ?? w.wakeMs;
+  const current = Number(settings.idleMinutes ?? 120);
+  const { rows, recommended, replayedWakes } = replay(list, current, from, to, wakeMs, w.napMs, null, STANDALONE_WINDOWS, STANDALONE_WINDOWS.filter((m) => m <= 120));
+  const actual = phases.filter((p, i) => i > 0 && p.state === 'WAKING').length;
+  return {
+    from: iso(from), to: iso(to), signals, asleep,
+    advice: {
+      computedAt: iso(now - 37 * MINUTE), from: iso(from), to: iso(to), current, recommended, checkMinutes: 5, wakeSeconds: month.wakes.medianMs === null ? null : Math.round(month.wakes.medianMs / SECOND),
+      priced: false, windows: rows, actual: { wakes: actual, replayedWakes, noisy: replayedWakes > actual * 1.2 + 2 }, wakerTargetGroup: false,
+    },
+  };
+}

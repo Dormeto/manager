@@ -568,7 +568,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </div>
       </v-card>
       <HistoryCard :router="router" :id="id" :now="now" :kind="status.kind" />
-      <ActivityCard v-if="standaloneKind" :status="status" :now="now" />
+      <ActivityCard v-if="standaloneKind" :status="status" :now="now" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" @apply="saveSettings({ idleMinutes: $event })" />
       <RequestHeatmap v-else :router="router" :id="id" />
       <ScheduleCard :standalone="standaloneKind" :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
       <IdleWindowCard v-if="!standaloneKind" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />

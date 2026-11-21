@@ -7,7 +7,8 @@ import type { IdleWindowAdvice } from './types';
 export const perDay = (n: number): string => String(n >= 10 ? Math.round(n) : Math.round(n * 10) / 10);
 export const hoursText = (hours: number): string => `${Math.round(hours * 10) / 10} h`;
 
-export function adviceSentence(a: IdleWindowAdvice): string {
+// unit: what a replayed wake is called (a standalone workload's: a stop, nobody waiting for its start).
+export function adviceSentence(a: IdleWindowAdvice, unit: 'wakes' | 'stops' = 'wakes'): string {
   if (a.recommended === a.current) return `The current window, ${a.current} minutes, is the recommended one`;
   const r = a.windows.find((w) => w.minutes === a.recommended);
   const c = a.windows.find((w) => w.minutes === a.current);
@@ -16,7 +17,7 @@ export function adviceSentence(a: IdleWindowAdvice): string {
     ? `saves about ${usd(Math.abs(r.usdMonth - c.usdMonth))} a month ${r.usdMonth >= c.usdMonth ? 'more' : 'less'} than now`
     : `about ${perDay(Math.abs(r.asleepHours - c.asleepHours))} ${r.asleepHours >= c.asleepHours ? 'more' : 'fewer'} hours asleep a day`;
   const more = r.wakesPerDay - c.wakesPerDay;
-  const wakes = more === 0 ? 'the same wakes' : `${perDay(Math.abs(more))} ${more > 0 ? 'more' : 'fewer'} wakes a day`;
-  const wait = more > 0 && a.wakeSeconds !== null ? ` (about ${Math.round(a.wakeSeconds)} seconds each)` : '';
+  const wakes = more === 0 ? `the same ${unit}` : `${perDay(Math.abs(more))} ${more > 0 ? 'more' : 'fewer'} ${unit} a day`;
+  const wait = more > 0 && a.wakeSeconds !== null && unit === 'wakes' ? ` (about ${Math.round(a.wakeSeconds)} seconds each)` : '';
   return `Recommended: ${a.recommended} minutes, ${gain}, with ${wakes}${wait}`;
 }

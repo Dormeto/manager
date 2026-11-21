@@ -10,7 +10,7 @@ import type {
   GoogleConnectionAnswer, SavingsSummary, StoppedItem, WorkloadHistory, WorkloadStatus, WorkloadSummary,
 } from '../types';
 import { ROUTER_RULES } from './fixtures';
-import { isStandaloneDemo, standaloneRow, standaloneStatus } from './standalone';
+import { isStandaloneDemo, standaloneActivity, standaloneRow, standaloneStatus } from './standalone';
 import { ACCOUNTS, ORG } from './org';
 import { historyView, replayWindows, timeIn, type Burst } from './history';
 import {
@@ -499,4 +499,10 @@ export function operationView(op: DemoOperation, now: number): Operation {
     id: op.id, type: op.type, target: op.target, input: op.input, ...(op.context ? { context: op.context } : {}), status, steps, cursor, by: op.by,
     createdAt: iso(op.createdAt), updatedAt: iso(last), ...(status !== 'running' ? { finishedAt: iso(last) } : {}), ...(status === 'failed' && op.error ? { error: op.error } : {}),
   };
+}
+
+// A standalone workload's Activity history; an HTTP workload has none (the API's 404).
+export function workloadActivity(_d: Demo, w: DemoWorkload, now: number) {
+  if (!isStandaloneDemo(w)) fail(404, 'not_found', `workload ${w.workloadId} is an HTTP workload: its requests are on its idle window card`);
+  return standaloneActivity(w, now, (from, to) => historyView(w.entries, from, to), replayWindows);
 }

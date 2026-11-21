@@ -171,9 +171,10 @@ export const timeIn = (view: View, state: string): number => view.phases.filter(
 // request counts as a wake, the scanners' too.
 const WINDOWS = [5, 10, 15, 20, 30, 45, 60, 90, 120];
 const KNEE = 0.9;
-export function replayWindows(list: Burst[], current: number, from: number, to: number, wakeMs: number, napMs: number, hourly: number | null): { rows: IdleWindowRow[]; recommended: number; replayedWakes: number } {
+// tried: the windows (a standalone workload's 5 minutes to 24 hours), the HTTP nine by default.
+export function replayWindows(list: Burst[], current: number, from: number, to: number, wakeMs: number, napMs: number, hourly: number | null, tried: number[] = WINDOWS, recommendable: number[] = tried): { rows: IdleWindowRow[]; recommended: number; replayedWakes: number } {
   const days = (to - from) / DAY;
-  const minutes = [...new Set([...WINDOWS, current])].sort((a, b) => a - b);
+  const minutes = [...new Set([...tried, current])].sort((a, b) => a - b);
   const replayed = minutes.map((m) => {
     const s = sessions(list, m * MINUTE, () => wakeMs, napMs);
     const awake = s.reduce((n, x) => n + Math.min(x.asleep, to) - x.start, 0);
@@ -185,7 +186,7 @@ export function replayWindows(list: Burst[], current: number, from: number, to: 
     };
   });
   // The knee (fleet recommendWindow): the shortest window that avoids 90% of the wakes the longest one avoids.
-  const candidates = replayed.filter((r) => WINDOWS.includes(r.minutes));
+  const candidates = replayed.filter((r) => recommendable.includes(r.minutes));
   const shortest = candidates[0]!.wakes;
   const longest = candidates.at(-1)!.wakes;
   const limit = longest + (1 - KNEE) * (shortest - longest);
