@@ -52,7 +52,8 @@ export interface ProbeDeps {
 export function createProbe({ store, registry, google, settings, env, routerVersion, events, now = Date.now, log }: ProbeDeps) {
   type Run = {
     connection: GoogleConnection; google: Pick<Google, 'request'>; deadline: number;
-    etag: () => Promise<string | null>; document: () => Promise<{ etag: string; settings: unknown } | null>;
+    // document: settings.json for a router of that version (the idle signals once it knows them), read once.
+    etag: () => Promise<string | null>; document: (version: string) => Promise<{ etag: string; settings: unknown } | null>;
   };
   type Known = { checkedAt: string | null; checkSchedule: string | null; probe: RouterProbe | null };
   const keyOf = (r: { account: string; region: string }) => `${r.account}#${r.region}`;
@@ -109,7 +110,7 @@ export function createProbe({ store, registry, google, settings, env, routerVers
           log?.info('ReportsAsked', { ...named(router), version });
         }
         const current = await run.etag();
-        const doc = current && current !== held ? await run.document() : null;
+        const doc = current && current !== held ? await run.document(version) : null;
         if (doc) {
           await act({ action: 'manager-settings', settings: doc.settings, etag: doc.etag, ...(events ? { events } : {}) });
           log?.info('ManagerSettingsPushed', { ...named(router), etag: doc.etag });
@@ -159,7 +160,7 @@ export function createProbe({ store, registry, google, settings, env, routerVers
     const run: Run = {
       ...current, deadline: started + PROBE_BUDGET_MS,
       etag: once(() => settings.etag()),
-      document: once(() => settingsDocument(settings)),
+      document: ((read = once(() => settings.read())) => (version: string) => settingsDocument({ read }, { version }))(),
     };
     let next = 0;
     let probed = 0;

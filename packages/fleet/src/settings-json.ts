@@ -2,7 +2,7 @@
 // it to the Google Cloud routers (Google Cloud manager design §5.5; router push design §6.2, §6.3): its ETag as S3 gives it
 // (quotes included), and its text; none while it doesn't exist.
 import { GetObjectCommand, HeadObjectCommand, type S3Client } from '@aws-sdk/client-s3';
-import { withoutIdleSignals } from './idle-signals.js';
+import { knowsIdleSignals, withoutIdleSignals } from './idle-signals.js';
 
 // The S3 client's bounds: 3 s to connect, then 10 s of silence (socketTimeout; past a requestTimeout the HTTP handler only
 // logs, unless told to throw).
@@ -38,14 +38,16 @@ export function createSettingsJson({ s3, bucket }: { s3: Pick<S3Client, 'send'>;
 
 export type SettingsJson = Pick<ReturnType<typeof createSettingsJson>, 'etag' | 'read'>;
 
-// settings.json as `manager-settings` pushes it, with its ETag; pushed as it is when it is not JSON: the router reads it as
-// unset and says it is unreadable, as an AWS router does. Null while it doesn't exist. Without the idle signals: a Google
-// Cloud router has none yet (standalone workloads).
-export async function settingsDocument(settings: Pick<SettingsJson, 'read'>): Promise<{ etag: string; settings: unknown } | null> {
+// settings.json as `manager-settings` pushes it to a Google Cloud router, with its ETag; pushed as it is when it is not JSON: the
+// router reads it as unset and says it is unreadable, as an AWS router does. Null while it doesn't exist. The idle signals only
+// to a router whose version knows them (plan 5: Google Cloud's first, STANDALONE_ROUTERS.gcp), never to one before or of a version
+// not known.
+export async function settingsDocument(settings: Pick<SettingsJson, 'read'>, { version = null }: { version?: string | null } = {}): Promise<{ etag: string; settings: unknown } | null> {
   const read = await settings.read();
   if (!read) return null;
   try {
-    return { etag: read.etag, settings: withoutIdleSignals(JSON.parse(read.text) as unknown) };
+    const doc = JSON.parse(read.text) as unknown;
+    return { etag: read.etag, settings: knowsIdleSignals('gcp', version) ? doc : withoutIdleSignals(doc) };
   } catch {
     return { etag: read.etag, settings: read.text };
   }

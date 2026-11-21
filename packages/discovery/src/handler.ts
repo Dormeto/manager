@@ -15,6 +15,7 @@ import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormet
 import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestsStep } from './requests-step.js';
 import { activityStep } from './activity-step.js';
+import { googleActivityStep } from './gcp-activity.js';
 import { routeOf } from './route.js';
 import { createStore } from './store.js';
 
@@ -85,6 +86,15 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
         return { elbv2: ports.elbv2, cloudwatch: ports.cloudwatch! };
       },
     }, event as Record<string, unknown>, Date.now());
+  }
+  if (route === 'activity' && (event as { cloud?: unknown }).cloud === 'gcp') {
+    // A Google Cloud workload's (plan 5): Cloud Monitoring as the discovery account.
+    const current = await googleSource.current();
+    if (!current) throw new Error('no Google Cloud connection: dormeto gcp connect makes one');
+    const e = event as Record<string, unknown>;
+    return googleActivityStep((method, url, body) => current.google.call('discovery', method, url, body), {
+      project: String(e.account), backends: e.backends as never, settings: (e.settings ?? {}) as never, days: e.days as number, now: Date.now(),
+    });
   }
   if (route === 'activity') {
     return activityStep(async (account, where) => ({ cloudwatch: scanPorts(regionalClients(await assumeDiscovery(account), where)).cloudwatch! }), event as Record<string, unknown>, Date.now());

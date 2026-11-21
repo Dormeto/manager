@@ -116,8 +116,31 @@ function idleMetricProblems(value: unknown): string[] {
   if (typeof value.below !== 'number' || !Number.isFinite(value.below)) problems.push('idleMetric: below must be a number');
   return problems;
 }
-function idleProblems(key: string, value: unknown): string[] {
-  if (key === 'idleMetric') return idleMetricProblems(value);
+// Google Cloud's idleMetric (the router's gcpIdleMetricProblems, R28): off, or one Cloud Monitoring metric type, an optional filter
+// (`${resource}` the only value replaced), its aligner and threshold.
+export const IDLE_METRIC_ALIGNERS = ['ALIGN_MAX', 'ALIGN_MEAN', 'ALIGN_SUM'];
+const METRIC_TYPE = /^[a-z0-9][a-z0-9.-]*\/[A-Za-z0-9_./-]+$/;
+function gcpIdleMetricProblems(value: unknown): string[] {
+  if (value === 'off') return [];
+  if (!isObject(value)) return ['idleMetric: must be off or a metric { type, filter, aligner, below }'];
+  const problems: string[] = [];
+  const fields = ['type', 'filter', 'aligner', 'below'];
+  problems.push(...Object.keys(value).filter((key) => !fields.includes(key)).map((key) => `idleMetric: unknown field ${key}`));
+  if (!isText(value.type, 512) || !METRIC_TYPE.test(value.type as string)) problems.push('idleMetric: type must be a Cloud Monitoring metric type of at most 512 characters, such as custom.googleapis.com/queue/depth');
+  if (value.filter !== undefined && value.filter !== null) {
+    if (!isText(value.filter, 2048)) problems.push('idleMetric: filter must be text of 1 to 2048 characters');
+    else if ((value.filter as string).replaceAll(RESOURCE, '').includes('${')) problems.push(`idleMetric: filter: only ${RESOURCE} is replaced`);
+  }
+  if (!IDLE_METRIC_ALIGNERS.includes(value.aligner as string)) problems.push(`idleMetric: aligner must be ${IDLE_METRIC_ALIGNERS.slice(0, -1).join(', ')} or ${IDLE_METRIC_ALIGNERS.at(-1)}`);
+  if (typeof value.below !== 'number' || !Number.isFinite(value.below)) problems.push('idleMetric: below must be a number');
+  return problems;
+}
+// The cloud whose shape an idleMetric has: Google Cloud's names a `type`, AWS's a `namespace`; null for off or neither.
+export const metricCloudOf = (value: unknown): Cloud | null => (isObject(value) ? ('type' in value ? 'gcp' : 'namespace' in value ? 'aws' : null) : null);
+// The shapes a level takes: its router's cloud's, or either at the organization's (a router ignores the other cloud's).
+export type MetricShape = Cloud | 'any';
+function idleProblems(key: string, value: unknown, shape: MetricShape = 'aws'): string[] {
+  if (key === 'idleMetric') return (shape === 'gcp' || (shape === 'any' && metricCloudOf(value) === 'gcp')) ? gcpIdleMetricProblems(value) : idleMetricProblems(value);
   if (value === 'off') return [];
   if (key === 'idleCpuPercent') return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? [] : ['idleCpuPercent: must be a number from 0 to 100, or off'];
   return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= IDLE_NETWORK_BYTES_MAX ? [] : [`idleNetworkBytes: must be a whole number from 0 to ${IDLE_NETWORK_BYTES_MAX}, or off`];
@@ -130,17 +153,19 @@ export const notForKind = (key: string, kind: Kind) => (kind === 'standalone'
 // A level's settings: each a value or null (unset); `type` only at a workload's; `cloud` the router's, for a router's or a
 // workload's. `idle`: the idle signals are known (AWS's levels: a type, a router or the organization holds both kinds' keys);
 // `kind`: a workload's, which refuses the other kind's keys whatever their value. A Google Cloud router has no idle signal yet.
-export function defaultsProblems(defaults: unknown, { workload = false, cloud = 'aws', idle = false, kind = null }: { workload?: boolean; cloud?: Cloud; idle?: boolean; kind?: Kind | null } = {}): string[] {
+// `metric`: the idleMetric's shape, the level's cloud's by default; 'any' at the organization's (plan 5).
+export function defaultsProblems(defaults: unknown, { workload = false, cloud = 'aws', idle = false, kind = null, metric = cloud }: { workload?: boolean; cloud?: Cloud; idle?: boolean; kind?: Kind | null; metric?: MetricShape } = {}): string[] {
   if (!isObject(defaults)) return ['settings must be an object'];
   const problems: string[] = [];
-  const idleKnown = cloud !== 'gcp' && (idle || kind !== null);
+  // Both clouds' levels know them (plan 5); without `idle` or a kind they are unknown settings, as before a router knew them.
+  const idleKnown = idle || kind !== null;
   for (const [key, value] of Object.entries(defaults)) {
-    if (cloud !== 'gcp' && kind !== null && (kind === 'standalone' ? WAKER_KEYS : IDLE_KEYS).includes(key)) {
+    if (kind !== null && (kind === 'standalone' ? WAKER_KEYS : IDLE_KEYS).includes(key)) {
       problems.push(notForKind(key, kind));
       continue;
     }
     if (idleKnown && IDLE_KEYS.includes(key)) {
-      if (value !== null) problems.push(...idleProblems(key, value));
+      if (value !== null) problems.push(...idleProblems(key, value, metric));
       continue;
     }
     if (value === null && (SCALAR_KEYS.includes(key) || RULE_KEYS.includes(key) || (workload && key === 'type'))) continue;
@@ -162,7 +187,7 @@ export function defaultsProblems(defaults: unknown, { workload = false, cloud = 
 const customTypes = (types: unknown[]) => types.filter((t) => isObject(t) && !BUILT_IN_TYPES.includes(t.name as string));
 
 // The organization's types: the built-in ones' defaults (no tags) and at most 20 custom ones, each selected by its tags.
-export function typesProblems(types: unknown, { idle = false }: { idle?: boolean } = {}): string[] {
+export function typesProblems(types: unknown, { idle = false, metric = 'aws' }: { idle?: boolean; metric?: MetricShape } = {}): string[] {
   if (!Array.isArray(types)) return ['types must be a list'];
   if (customTypes(types).length > TYPES_MAX) return [`at most ${TYPES_MAX} custom types`];
   const problems: string[] = [];
@@ -186,7 +211,7 @@ export function typesProblems(types: unknown, { idle = false }: { idle?: boolean
     if (type.description !== undefined && type.description !== null && (typeof type.description !== 'string' || type.description.length > DESCRIPTION_MAX)) {
       problems.push(`${at}: description must be text of at most ${DESCRIPTION_MAX} characters`);
     }
-    if (type.settings !== undefined && type.settings !== null) problems.push(...defaultsProblems(type.settings, { idle }).map((p) => `${at}: settings: ${p}`));
+    if (type.settings !== undefined && type.settings !== null) problems.push(...defaultsProblems(type.settings, { idle, metric }).map((p) => `${at}: settings: ${p}`));
   }
   return problems;
 }
@@ -195,14 +220,14 @@ export function typesProblems(types: unknown, { idle = false }: { idle?: boolean
 // The organization's level knows the idle signals (AWS's routers read them; a Google Cloud router is never pushed them).
 export function validDefaults(value: unknown): Json {
   if (!isObject(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter(([key, v]) => v !== null && !defaultsProblems({ [key]: v }, { idle: true }).length));
+  return Object.fromEntries(Object.entries(value).filter(([key, v]) => v !== null && !defaultsProblems({ [key]: v }, { idle: true, metric: 'any' }).length));
 }
 
 // The valid types of a stored list, each on its own.
 export function validTypes(value: unknown): Json[] {
-  if (!Array.isArray(value) || typesProblems(value, { idle: true }).some((p) => p.startsWith('at most'))) return [];
+  if (!Array.isArray(value) || typesProblems(value, { idle: true, metric: 'any' }).some((p) => p.startsWith('at most'))) return [];
   const kept: Json[] = [];
-  for (const type of value) if (!typesProblems([...kept, type], { idle: true }).length) kept.push(type as Json);
+  for (const type of value) if (!typesProblems([...kept, type], { idle: true, metric: 'any' }).length) kept.push(type as Json);
   return kept;
 }
 

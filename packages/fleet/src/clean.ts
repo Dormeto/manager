@@ -191,9 +191,21 @@ const RESOURCE_ARN = /^arn:aws[a-z-]*:[a-z0-9-]+:[a-z0-9-]*:\d{12}:[^\s]{1,1024}
 // 10,000,000,000, a metric { namespace, name, dimensions, statistic, below } (its dimensions an object, or a list of them for
 // the built-in connections of several databases), each or 'off'. One that is not of its shape is dropped.
 const STATISTICS = new Set(['Maximum', 'Average', 'Sum']);
+// A Google Cloud standalone workload's resource (router gcp/src/resources.mjs): a VM, a managed instance group, a Cloud SQL instance.
+const GOOGLE_RESOURCE = /^projects\/[a-z][-a-z0-9.:]{0,62}\/((zones|regions)\/[a-z0-9-]{1,64}\/(instances|instanceGroupManagers)|instances)\/[a-z]([-a-z0-9]{0,96}[a-z0-9])?$/;
+const ALIGNERS = new Set(['ALIGN_MAX', 'ALIGN_MEAN', 'ALIGN_SUM']);
+// Google Cloud's idleMetric (the router's R28): { type, filter?, aligner, below }, `filter` a text or a list of texts.
+function googleMetricOf(v: Json): Json | undefined {
+  const { type, filter, aligner, below } = v;
+  const filtered = (f: unknown) => typeof f === 'string' && f.length >= 1 && f.length <= 2048;
+  if (typeof type !== 'string' || type.length < 1 || type.length > 512 || !ALIGNERS.has(aligner as string) || typeof below !== 'number' || !Number.isFinite(below)) return undefined;
+  if (filter !== undefined && !(filtered(filter) || (Array.isArray(filter) && filter.length <= 20 && filter.every(filtered)))) return undefined;
+  return defined({ type, filter, aligner, below });
+}
 const dimensionsOf = (v: unknown) => isObject(v) && Object.keys(v).length <= 30 && Object.entries(v).every(([k, d]) => k.length >= 1 && k.length <= 255 && typeof d === 'string' && d.length >= 1 && d.length <= 1024);
-function idleSettingOf(key: string, v: unknown): unknown {
+function idleSettingOf(key: string, v: unknown, cloud: Cloud | null = 'aws'): unknown {
   if (v === 'off') return 'off';
+  if (key === 'idleMetric' && cloud === 'gcp') return isObject(v) ? googleMetricOf(v) : undefined;
   if (key === 'idleCpuPercent') return typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? v : undefined;
   if (key === 'idleNetworkBytes') return Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 10_000_000_000 ? v : undefined;
   if (!isObject(v)) return undefined;
@@ -204,16 +216,16 @@ function idleSettingOf(key: string, v: unknown): unknown {
   return { namespace, name, dimensions, statistic, below };
 }
 // A standalone workload's settings: its kind's five (the router's STANDALONE_KEYS), nothing of the waker's.
-function standaloneSettingsOf(v: unknown): Json | undefined {
+function standaloneSettingsOf(v: unknown, cloud: Cloud | null = 'aws'): Json | undefined {
   if (!isObject(v)) return undefined;
-  return defined({ ...numbers(v, new Set(['idleMinutes', 'wakeTimeoutSeconds'])), ...Object.fromEntries(IDLE_KEYS.map((key) => [key, idleSettingOf(key, v[key])])) });
+  return defined({ ...numbers(v, new Set(['idleMinutes', 'wakeTimeoutSeconds'])), ...Object.fromEntries(IDLE_KEYS.map((key) => [key, idleSettingOf(key, v[key], cloud)])) });
 }
 
 // A workload of a check, or null when it has no valid id. A standalone one (`kind: 'standalone'`, routers 0.42.0) has its
 // resource instead of a target group, no URL nor wake mode, and its kind's settings; an HTTP one has no `kind`.
 export function workloadOf(w: unknown, cloud: Cloud | null = 'aws'): Json | null {
   if (!isObject(w) || typeof w.workloadId !== 'string' || !WORKLOAD_ID.test(w.workloadId)) return null;
-  if (cloud !== 'gcp' && w.kind === 'standalone') return standaloneOf(w, cloud);
+  if (w.kind === 'standalone') return standaloneOf(w, cloud);
   return defined({
     workloadId: w.workloadId,
     name: text(w.name, 64),
@@ -257,16 +269,22 @@ export function workloadOf(w: unknown, cloud: Cloud | null = 'aws'): Json | null
 
 // A standalone workload's row (the router's handover, "The row"): the HTTP row's fields of both kinds, its kind and resource.
 function standaloneOf(w: Json, cloud: Cloud | null): Json {
-  const { targetGroupArn: _t, url: _u, wakeMode: _w, settings: _s, stats7d: _x, ...shared } = workloadOf({ ...w, kind: undefined }, cloud)!;
+  // On Google Cloud (plan 5): its resource's path in place of AWS's ARN, none of an HTTP row's load balancer.
+  const google = cloud === 'gcp';
+  const { targetGroupArn: _t, url: _u, wakeMode: _w, settings: _s, stats7d: _x, backendService: _b, wakerBackendService: _k, urlMap: _m, lb: _l, ...shared } = workloadOf({ ...w, kind: undefined, backendService: undefined, wakerBackendService: undefined, urlMap: undefined, lb: undefined }, cloud)!;
   const kept: Json = {};
   for (const [key, value] of Object.entries(shared)) {
     kept[key] = value;
-    if (key === 'name') Object.assign(kept, defined({ kind: 'standalone', resourceArn: typeof w.resourceArn === 'string' && RESOURCE_ARN.test(w.resourceArn) ? w.resourceArn : undefined }));
+    if (key === 'name') {
+      Object.assign(kept, defined(google
+        ? { kind: 'standalone', resource: typeof w.resource === 'string' && GOOGLE_RESOURCE.test(w.resource) ? w.resource : undefined }
+        : { kind: 'standalone', resourceArn: typeof w.resourceArn === 'string' && RESOURCE_ARN.test(w.resourceArn) ? w.resourceArn : undefined }));
+    }
     // Its resource deleted or untagged (the router's check): said after its backends, absent otherwise.
     if (key === 'backends' && w.resourceMissing === true) kept.resourceMissing = true;
     if (key === 'pauses') kept.stats7d = numbers(w.stats7d, new Set(['wakes'])) ?? null;
   }
-  return defined({ ...kept, settings: standaloneSettingsOf(w.settings), type: kept.type, settingsFrom: kept.settingsFrom });
+  return defined({ ...kept, settings: standaloneSettingsOf(w.settings, cloud), type: kept.type, settingsFrom: kept.settingsFrom });
 }
 
 const TYPE_NAME = /^[a-z][a-z0-9-]{0,31}$/;

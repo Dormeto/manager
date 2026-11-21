@@ -4,8 +4,8 @@
 import { GoogleError, tagTargets, type TagTarget, type Tags } from '@dormeto/google';
 import { cloudOf, googlePath, googleServicePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS } from '@dormeto/fleet/router-call';
-import { RESOURCE_KIND_TEXT, STANDALONE_ROUTER } from '@dormeto/fleet/idle-signals';
-import { exclusionCriterion, isStandalone, matches, restatus, type AnyCandidate, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
+import { RESOURCE_KIND_TEXT, STANDALONE_ROUTER, STANDALONE_ROUTERS } from '@dormeto/fleet/idle-signals';
+import { exclusionCriterion, isStandalone, matches, restatus, type AnyCandidate, type Candidate, type DiscoveryStore, type Exclusion, type StandaloneCandidate, GOOGLE_RESOURCE_PATH, notListed } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, Records, WorkflowType } from './records.js';
@@ -160,6 +160,7 @@ const withPauses = (recorded: Pause[] = [], added: Pause[]) => {
 const iso = (ms: number) => new Date(ms).toISOString();
 // The first router that onboards a standalone resource (plan 1's handover: "Not released yet: router 0.42.0").
 const STANDALONE_SINCE = STANDALONE_ROUTER;
+const STANDALONE_SINCE_GCP = STANDALONE_ROUTERS.gcp;
 // How long a standalone onboarding's verification waits for its resource among the workload's backends.
 const VERIFY_RESOURCE_MS = 3 * 60_000;
 // The router's labels of a backend (router lambda/src/lib/onboarding.mjs KIND_TEXT).
@@ -174,6 +175,19 @@ const loadBalancerOfRule = (ruleArn: string) => ruleArn.replace(':listener-rule/
 // A Google Cloud onboarding's target (§8): the candidate's project, backend service and URL map (paths), the router the API
 // chose (its name and region) and the project's number, which the tag bindings name. The slot is the project's and the
 // router's region, the claim the backend service's.
+
+// A Google Cloud standalone candidate's target (plan 5): its resource, the router chosen and the project's number, which the tag
+// bindings name; the claim its path. The safety net of plan 5's ruling: only a resource the last scan listed as eligible, since
+// the router cannot see a backend service that uses it.
+function googleStandaloneTarget(c: StandaloneCandidate, input: Record<string, unknown>): { target: Record<string, string>; activeKey: string } {
+  if (c.eligibility === 'ineligible' || c.status === 'gone') throw new Error(`cannot onboard ${c.id}: ${c.eligibility === 'ineligible' ? c.reason ?? 'the last discovery run found it ineligible' : 'the last discovery run did not find it'}`);
+  if (c.eligibility === 'managed') throw new Error(`cannot onboard ${c.id}: it is onboarded already${c.workloadId ? ` (workload ${c.workloadId})` : ''}`);
+  if (typeof input.router !== 'string' || !input.router) throw new Error(`bad router: ${input.router}`);
+  if (!isRegion('gcp', input.region)) throw new Error(`bad router region: ${input.region}`);
+  if (typeof input.projectNumber !== 'string' || !PROJECT_NUMBER.test(input.projectNumber)) throw new Error(`bad project number: ${input.projectNumber}`);
+  return { target: { account: c.account, region: input.region, router: input.router, resource: c.id, projectNumber: input.projectNumber }, activeKey: `RES#${c.id}` };
+}
+
 function googleOnboardTarget(c: Candidate, input: Record<string, unknown>): { target: Record<string, string>; activeKey: string } {
   if (!googlePath(c.backendService) || !googlePath(c.urlMap)) throw new Error(`candidate ${c.id} names no backend service and URL map`);
   if (typeof input.router !== 'string' || !input.router) throw new Error(`bad router: ${input.router}`);
@@ -403,9 +417,10 @@ export function createEngine(deps: EngineDeps) {
     const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
     const name = String(op.context.name ?? op.context.workloadId);
     if (status?.state === 'FAILED') throw new Error(`${name} FAILED`);
-    const resource = op.target.resourceArn!;
-    const backends = (status?.backends ?? []) as { kind: string; id: string; status?: string }[];
-    const own = status?.resourceMissing ? undefined : backends.find((b) => b.id === resource || resource.endsWith(`/${b.id}`) || resource.endsWith(`:${b.id}`));
+    // AWS's ARN, or Google Cloud's path (its backends by their names, a companion marked).
+    const resource = op.target.resourceArn ?? op.target.resource!;
+    const backends = (status?.backends ?? []) as { kind: string; id: string; status?: string | null; companion?: boolean }[];
+    const own = status?.resourceMissing ? undefined : backends.find((b) => !b.companion && (b.id === resource || resource.endsWith(`/${b.id}`) || resource.endsWith(`:${b.id}`)));
     if (!own) {
       const started = Date.parse(op.steps[op.cursor]!.startedAt ?? iso(now()));
       if (now() - started < VERIFY_RESOURCE_MS) return { status: 'wait', seconds: 15, detail: `waiting for ${resource} among its backends` };
@@ -438,6 +453,8 @@ export function createEngine(deps: EngineDeps) {
   // AWS's onboarder payload with the URL map and the backend service by their names (the router's project's), and the
   // load balancer's kind.
   async function googlePayload(op: Operation): Promise<Record<string, unknown>> {
+    // A standalone workload's: its resource in place of the URL map and the backend service (plan 5).
+    if (op.target.resource) return { resource: op.target.resource, settings: op.input.settings ?? {}, databases: op.input.databases ?? [], ...(op.input.tags ? { tags: op.input.tags } : {}) };
     const kind = await loadBalancerKindOf(op);
     return {
       urlMap: googlePath(op.target.urlMap)!.name, backendService: googlePath(op.target.backendService)!.name, ...(kind ? { loadBalancer: kind } : {}),
@@ -449,12 +466,30 @@ export function createEngine(deps: EngineDeps) {
   // binds), kept in the operation.
   async function googlePreviewOf(op: Operation) {
     const preview = await invokeRouter(op, 'onboarder', { action: 'preview', ...(op.input.name ? { name: op.input.name } : {}), ...(await googlePayload(op)) });
+    if (op.target.resource) return googleStandalonePreview(op, preview);
     op.context.workloadId = preview?.workloadId;
     op.context.name = preview?.name;
     op.context.vms = ((preview?.vms ?? []) as { zone: string; name?: string; id: unknown }[]).map(({ zone, name, id }) => ({ zone, name, id: String(id) }));
     op.context.groups = ((preview?.groups ?? []) as { kind: string; location: string; name?: string; id: unknown }[])
       .map(({ kind, location, name, id }) => ({ kind, location, name, id: String(id) }));
     return preview as { ok: boolean; problems?: string[]; workloadId: string; name: string };
+  }
+
+  // A standalone resource's preview (plan 5): a router that does not know them answers no kind. What the tag step binds: the
+  // resource (a VM's or a group's by the numeric id the scan read: the router's preview names none) and the companions.
+  async function googleStandalonePreview(op: Operation, preview: Record<string, unknown> | null) {
+    if (preview?.kind !== 'standalone') throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than ${STANDALONE_SINCE_GCP}: upgrade it to onboard a standalone resource (dormeto gcp routers install --project ${op.target.account} --region ${op.target.region})`);
+    op.context.workloadId = preview.workloadId;
+    op.context.name = preview.name;
+    op.context.resource = op.target.resource;
+    const c = await deps.discovery?.getCandidate(String(op.target.resource));
+    const backend = c && isStandalone(c) ? c.backend : null;
+    const location = backend?.location ?? '';
+    op.context.vms = backend?.kind === 'instance' && backend.resourceId ? [{ zone: location, name: backend.id, id: backend.resourceId }] : [];
+    op.context.groups = backend?.kind === 'asg' && backend.resourceId ? [{ kind: ZONE.test(location) ? 'zonal' : 'regional', location, name: backend.id, id: backend.resourceId }] : [];
+    if ((backend?.kind === 'instance' || backend?.kind === 'asg') && !backend.resourceId) throw new Error(`the last discovery run read no id of ${op.target.resource}: run discovery again, then onboard it`);
+    op.context.resourceDatabase = backend?.kind === 'cloudsql-instance' ? backend.id : null;
+    return preview as unknown as { ok: boolean; problems?: string[]; workloadId: string; name: string };
   }
 
   // The Cloud SQL instances the onboarding was given, by name.
@@ -473,7 +508,9 @@ export function createEngine(deps: EngineDeps) {
     if (!op.context.tagTargets) {
       const value = await tags.tagValueOf(project);
       const databases: { name: string; region: string }[] = [];
-      for (const name of cloudSqlNamesOf(op)) databases.push({ name, region: await tags.sqlRegionOf(project, name) });
+      // A Cloud SQL resource first, then the companions.
+      const names = [...(op.context.resourceDatabase ? [String(op.context.resourceDatabase)] : []), ...cloudSqlNamesOf(op)];
+      for (const name of names) databases.push({ name, region: await tags.sqlRegionOf(project, name) });
       op.context.tagTargets = tagTargets({
         project, number: op.target.projectNumber!, databases,
         vms: (op.context.vms ?? []) as { zone: string; name?: string; id: string }[],
@@ -570,6 +607,14 @@ export function createEngine(deps: EngineDeps) {
   // Whether the router has the operation's workload on the candidate's backend service (`onboarded`: the step's detail);
   // `unread`: its status was lost too (no code), which can't tell. A refused status (the workload unknown) is no.
   async function onboardedEarlier(op: Operation): Promise<{ onboarded?: string; unread?: string }> {
+    if (op.target.resource) {
+      try {
+        const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
+        return status?.resource === op.target.resource ? { onboarded: `the router already had workload ${op.context.workloadId} on ${op.target.resource}: an earlier attempt onboarded it` } : {};
+      } catch (err) {
+        return (err as { code?: unknown }).code ? {} : { unread: (err as Error).message };
+      }
+    }
     const service = googlePath(op.target.backendService)!.name;
     try {
       const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
@@ -581,6 +626,7 @@ export function createEngine(deps: EngineDeps) {
 
   // The router's status of the new workload: the candidate's backend service, no issue, not FAILED.
   async function googleVerify(op: Operation): Promise<Outcome> {
+    if (op.target.resource) return standaloneVerify(op);
     const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
     const expected = googlePath(op.target.backendService)!.name;
     const issues = (status?.issues ?? []) as string[];
@@ -614,10 +660,18 @@ export function createEngine(deps: EngineDeps) {
     const why = backends.some((b) => b.kind === 'k8s') ? 'a GKE workload\'s Kubernetes access is the CLI\'s to remove'
       : status?.requestLogs?.before ? 'its onboarding turned its backend service\'s request logs on, which the CLI sets back' : null;
     if (why) throw new Error(`cannot offboard ${workloadId} through the manager: ${why}: dormeto gcp workloads offboard ${workloadId} --project ${project} --region ${region}`);
-    if (typeof status?.backendService !== 'string' || typeof status?.urlMap !== 'string') throw new Error(`the router's status of ${workloadId} names no backend service and URL map`);
-    const lb = status.lb as { kind?: string; region?: string } | undefined;
-    op.context.backendService = googlePathOf(op, 'backendServices', status.backendService, lb);
-    op.context.urlMap = googlePathOf(op, 'urlMaps', status.urlMap, lb);
+    if (status?.kind === 'standalone') {
+      // A standalone workload (plan 5): its resource, the candidate's id; no URL map to lock. Its resource missing: nothing to
+      // wake, the router offboards it in any state (the AWS rule, plan 1's fix wave).
+      if (typeof status.resource !== 'string') throw new Error(`the router's status of ${workloadId} names no resource`);
+      op.context.resource = status.resource;
+      if (status.resourceMissing === true) op.context.resourceMissing = true;
+    } else {
+      if (typeof status?.backendService !== 'string' || typeof status?.urlMap !== 'string') throw new Error(`the router's status of ${workloadId} names no backend service and URL map`);
+      const lb = status.lb as { kind?: string; region?: string } | undefined;
+      op.context.backendService = googlePathOf(op, 'backendServices', status.backendService, lb);
+      op.context.urlMap = googlePathOf(op, 'urlMaps', status.urlMap, lb);
+    }
     op.context.wakeTimeoutSeconds = status.settings?.wakeTimeoutSeconds ?? 600;
     op.context.name = status.name ?? workloadId;
     const vms: { zone: string; id: string; name?: string }[] = [];
@@ -649,7 +703,7 @@ export function createEngine(deps: EngineDeps) {
     op.context.untagByHand = byHand;
     const unknown = byHand.length ? `; no resource id stored for ${byHand.join(', ')} (an older onboarding): the manager can't remove the tag dormeto/managed there` : '';
     const missing = gone.length ? `; ${gone.join(', ')} not found: nothing to untag there` : '';
-    return { status: 'done', detail: `${op.context.name} ${status.state}${unknown}${missing}` };
+    return { status: 'done', detail: `${op.context.name} ${status.state}${op.context.resourceMissing ? ', its resource missing' : ''}${unknown}${missing}` };
   }
 
   // The router's offboarding, as AWS's step. Run again after an attempt whose answer was lost, it finds the workload gone
@@ -712,8 +766,11 @@ export function createEngine(deps: EngineDeps) {
     if (type === 'onboard') {
       const c = await deps.discovery?.getCandidate(String(input.candidateId));
       // A standalone candidate (vision standalone workloads design §6): its resource is the target and the claim.
+      if (c && isStandalone(c) && c.cloud === 'gcp') return googleStandaloneTarget(c, input);
       if (c && isStandalone(c)) return { target: { account: c.account, region: c.region, resourceArn: c.resourceArn ?? c.id }, activeKey: `RES#${c.resourceArn ?? c.id}` };
       if (c && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
+      // A Google Cloud resource the last scan did not list (plan 5's safety net: the router cannot see a backend service).
+      if (!c && GOOGLE_RESOURCE_PATH.test(String(input.candidateId))) throw new Error(notListed(String(input.candidateId)));
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
       return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn ?? '' }, activeKey: `TG#${c.targetGroupArn}` };
     }
@@ -844,7 +901,7 @@ export function createEngine(deps: EngineDeps) {
 
   async function updateCandidate(op: Operation, change: (c: AnyCandidate) => AnyCandidate): Promise<Outcome> {
     // An offboarding's candidate: its target group, a Google Cloud one's backend service (its path).
-    const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? op.context.backendService ?? op.context.resourceArn ?? '');
+    const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? op.context.backendService ?? op.context.resourceArn ?? op.context.resource ?? '');
     const c = id ? await deps.discovery?.getCandidate(id) : null;
     if (!c) return { status: 'skipped', detail: 'no discovery candidate' };
     await deps.discovery!.replaceCandidates([restatus(change(c), iso(now()))], [c]);
@@ -1123,7 +1180,7 @@ export function createEngine(deps: EngineDeps) {
       }
       case 'lock load balancer': {
         // A Google Cloud load balancer is its URL map (an offboarding's, from the router's status).
-        if (op.target.resourceArn || op.context.resourceArn) return { status: 'skipped', detail: 'a standalone workload: no load balancer to lock' };
+        if (op.target.resourceArn || op.context.resourceArn || op.target.resource || op.context.resource) return { status: 'skipped', detail: 'a standalone workload: no load balancer to lock' };
         const lb = op.target.urlMap ?? (op.context.urlMap as string | undefined) ?? op.target.loadBalancerArn ?? (op.context.loadBalancerArn as string | null);
         if (!lb) return { status: 'skipped', detail: 'no rule left: no load balancer to lock' };
         return lock(op, `LB#${lb}`, 'load balancer');

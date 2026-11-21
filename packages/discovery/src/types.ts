@@ -141,7 +141,8 @@ export interface StandaloneRule {
   resource?: string; // Google Cloud's
   cloud?: 'gcp';
   name: string; // the router's default name: the instance's Name tag or its id, the group's, service's or database's name
-  backend: { kind: ResourceKind; id: string; arn?: string; location?: string };
+  // `resourceId`: a Google Cloud VM's or group's numeric id, which the onboarding's tag binding names.
+  backend: { kind: ResourceKind; id: string; arn?: string; location?: string; resourceId?: string };
   tags: Record<string, string[]>; // the resource's own tags (labels on Google Cloud), one value each
   eligibility: 'managed' | 'eligible' | 'ineligible';
   reason?: string;
@@ -154,6 +155,10 @@ export interface StandaloneRule {
 
 // What a scan finds: HTTP candidates, and with the perimeter's standalone scan on, standalone ones.
 export type DiscoveredRule = ScannedRule | StandaloneRule;
+// A Google Cloud standalone resource the last scan did not list (plan 5's safety net: the router cannot see a backend service that
+// uses it), as the API and the operations refuse it.
+export const GOOGLE_RESOURCE_PATH = /^projects\/[^/]+\/((zones|regions)\/[^/]+\/(instances|instanceGroupManagers)|instances)\/[^/]+$/;
+export const notListed = (path: string) => `${path} is not a standalone candidate of the last discovery run: turn on Standalone resources in the discovery perimeter, run discovery, then onboard it from its candidate (the scan checks what the router cannot: that no backend service uses it)`;
 export const isStandalone = <T extends { kind?: string }>(c: T): c is Extract<T, { kind: 'standalone' }> => c.kind === 'standalone';
 
 export interface Decision {

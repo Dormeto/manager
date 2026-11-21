@@ -2,7 +2,7 @@
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
 import { createHash } from 'node:crypto';
 import {
-  CANDIDATE_STATUSES, EXCLUSION_KINDS, InvalidCursor, activeExclusions, defaultConfig, isStandalone, lint, rescope, restatus, validateConfig, withExclusions,
+  CANDIDATE_STATUSES, EXCLUSION_KINDS, GOOGLE_RESOURCE_PATH, InvalidCursor, notListed, activeExclusions, defaultConfig, isStandalone, lint, rescope, restatus, validateConfig, withExclusions,
   type AnyCandidate, type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type RunRecord, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
@@ -11,7 +11,7 @@ import type { Refusal } from '@dormeto/google/router';
 // The commands that fix what the manager can't do on Google Cloud, as the watchdog's probe records them too.
 import { cloudOf, googlePath, googleScopeOf, googleServicePath, googleSourceOf, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
-import { STANDALONE_RECOMMENDABLE, STANDALONE_ROUTER, STANDALONE_WINDOWS, activityPlan, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { STANDALONE_RECOMMENDABLE, STANDALONE_ROUTER, STANDALONE_ROUTERS, STANDALONE_WINDOWS, knowsIdleSignals, activityPlan, googleActivityPlan, type ActivityQuery, type GoogleBackend, type PlannedSignal, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
@@ -20,7 +20,7 @@ import type { IdleActivity, IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 import { atLeastCore, compareVersions, VERSION, type UpdateService } from './update.js';
-import { BUILT_IN_TYPES, IDLE_KEYS, WAKER_KEYS, defaultsProblems, idleSignalsOf, notForKind, reachOf, typesProblems, validDefaults, validTypes, withoutIdleSignals, type Kind } from './settings-levels.js';
+import { BUILT_IN_TYPES, IDLE_KEYS, WAKER_KEYS, defaultsProblems, idleSignalsOf, metricCloudOf, notForKind, reachOf, typesProblems, validDefaults, validTypes, withoutIdleSignals, type Kind, type MetricShape } from './settings-levels.js';
 
 export type Router = FleetRouter;
 
@@ -618,7 +618,7 @@ function joinMinutesOf(body: Record<string, unknown>): number | null {
 // one is refused here: the router would take it and change nothing. Its defaults are checked as the router's cloud takes them.
 function routerSettingsOf(body: Record<string, unknown>, cloud: Cloud): { hibernate?: boolean | null; joinMinutes?: number | null; defaults?: Record<string, unknown> | null } {
   if (body.hibernate === undefined && body.joinMinutes === undefined && body.defaults === undefined) throw new HttpError(400, 'bad_request', 'hibernate, joinMinutes or defaults is required');
-  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults, cloud, cloud === 'aws') }) };
+  return { ...(body.hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...(body.joinMinutes === undefined ? {} : { joinMinutes: joinMinutesOf(body) }), ...(body.defaults === undefined ? {} : { defaults: defaultsOf(body.defaults, cloud, true) }) };
 }
 // What a save of the types changed, for the audit (settings at scale design §8): each type added or removed, each changed
 // key of a type with its value before and after (review, 2026-11-04).
@@ -644,12 +644,14 @@ function typesChangeText(before: Record<string, unknown>[], after: { name: strin
 // What a router before 0.42.0 answers to an idle signal (vision standalone workloads design §4): unknown.
 const IDLE_SETTING_UNKNOWN = /^settings: (defaults: )?unknown setting (idleCpuPercent|idleNetworkBytes|idleMetric)$/;
 const IDLE_SINCE = STANDALONE_ROUTER;
+
 const LEVEL_SETTING_UNKNOWN = /^settings: unknown setting (defaults|idleMinutes|waitSeconds|drainSeconds|wakeTimeoutSeconds|maxHolders|failedRetrySeconds|wakeMode|noWakeRules|wakeRules|type)$/;
 // A level's defaults in a body (settings at scale design §8): each key a value or null, null for all of them; refused in the router's words.
-// cloud: a router's (the organization's level, both clouds', is AWS's); idle: the level holds the idle signals (AWS's).
-function defaultsOf(defaults: unknown, cloud: Cloud = 'aws', idle = false): Record<string, unknown> | null {
+// cloud: a router's (the organization's level, both clouds', is AWS's); idle: the level holds the idle signals (both clouds' since
+// plan 5); metric: the idleMetric's shape, the router's cloud's, either at the organization's.
+function defaultsOf(defaults: unknown, cloud: Cloud = 'aws', idle = false, metric: MetricShape = cloud): Record<string, unknown> | null {
   if (defaults === null) return null;
-  const problems = defaultsProblems(defaults, { cloud, idle });
+  const problems = defaultsProblems(defaults, { cloud, idle, metric });
   if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
   return defaults as Record<string, unknown>;
 }
@@ -659,7 +661,7 @@ function workloadSettingsOf(body: Record<string, unknown>, cloud: Cloud, kind: K
   if (body.joinMinutes !== undefined) throw new HttpError(400, 'bad_request', 'settings: a workload\'s joinMinutes is on its schedule');
   if (!Object.keys(body).length) throw new HttpError(400, 'bad_request', 'a setting is required');
   const { hibernate, ...rest } = body;
-  const problems = defaultsProblems(rest, { workload: true, cloud, kind, idle: cloud === 'aws' });
+  const problems = defaultsProblems(rest, { workload: true, cloud, kind, idle: true });
   if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
   return { ...(hibernate === undefined ? {} : { hibernate: hibernateOf(body) }), ...rest };
 }
@@ -1300,9 +1302,11 @@ export function createApi({
   async function pushSettings(settings: unknown, etag: string | void, only: (r: Router) => boolean = () => true) {
     const targets = routers.filter((r) => r.cloud === 'gcp' && r.controller && !routerTooOld(r.installed?.version ?? '') && only(r));
     if (!targets.length) return;
-    // A Google Cloud router has no idle signal yet: it is never pushed one (settings.json keeps them for AWS's).
-    const payload = { action: 'manager-settings', settings: withoutIdleSignals(settings), etag: etag ?? '', ...(routerReports ? { events: routerReports.events } : {}) };
-    const results = await each(targets, (r) => invoke(r, payload), callTimeout);
+    // The idle signals only to a router whose version knows them (plan 5), never before or to one of a version not known.
+    const summaries = fleet ? await fleet.listRouters().catch(() => [] as RouterSummary[]) : [];
+    const versionOf = (r: Router) => (summaries.find((x) => x.account === accountOfRouter(r) && x.region === r.region)?.version ?? r.installed?.version ?? null) as string | null;
+    const payloadOf = (r: Router) => ({ action: 'manager-settings', settings: knowsIdleSignals('gcp', versionOf(r)) ? settings : withoutIdleSignals(settings), etag: etag ?? '', ...(routerReports ? { events: routerReports.events } : {}) });
+    const results = await each(targets, (r) => invoke(r, payloadOf(r)), callTimeout);
     results.forEach((result, i) => {
       if (result.status === 'rejected') console.warn(JSON.stringify({ level: 'warn', event: 'ManagerSettingsNotPushed', router: targets[i]!.name, error: (result.reason as Error).message }));
     });
@@ -1321,15 +1325,17 @@ export function createApi({
     if (!added) return;
     await refreshRouters();
     const summaries = fleet ? await fleet.listRouters().catch(() => [] as RouterSummary[]) : [];
+    // Each router by its cloud's first version that knows them (plan 5: a Google Cloud router too, from its own).
     const behind = routers.flatMap((r): string[] => {
-      if (r.cloud === 'gcp') return [`${r.name} (Google Cloud)`];
+      const cloud = r.cloud === 'gcp' ? 'gcp' : 'aws';
       const summary = summaries.find((x) => x.account === accountOfRouter(r) && x.region === r.region);
       const version = (typeof summary?.version === 'string' ? summary.version : null) ?? r.installed?.version ?? null;
       if (!version) return [`${r.name} (version not known)`];
-      return atLeastCore(version, IDLE_SINCE) ? [] : [`${r.name} (${version})`];
+      return knowsIdleSignals(cloud, version) ? [] : [`${r.name} (${version})`];
     });
     if (behind.length) {
-      throw new HttpError(409, 'conflict', `the organization's idle signals need every router at ${IDLE_SINCE} or later and no Google Cloud router: ${behind.length} router${behind.length === 1 ? '' : 's'} must be upgraded first: ${behind.join(', ')}`);
+      const floor = STANDALONE_ROUTERS.aws === STANDALONE_ROUTERS.gcp ? STANDALONE_ROUTERS.aws : `${STANDALONE_ROUTERS.aws} on AWS, ${STANDALONE_ROUTERS.gcp} on Google Cloud,`;
+      throw new HttpError(409, 'conflict', `the organization's idle signals need every router at ${floor} or later: ${behind.length} router${behind.length === 1 ? '' : 's'} must be upgraded first: ${behind.join(', ')}`);
     }
   }
   // settings.json as written, null while it does not exist; 'unreadable' when it is not JSON or not an object (written
@@ -1557,6 +1563,8 @@ export function createApi({
           endedWindowDays: isEndedDays(endedWindowDays) ? endedWindowDays : null,
           // The organization's defaults of the workload settings (settings at scale design §6), their valid keys.
           defaults: validDefaults(defaults),
+          // Which cloud its idleMetric applies to (plan 5: a router ignores the other cloud's shape).
+          ...(metricCloudOf(validDefaults(defaults).idleMetric) ? { idleMetricCloud: metricCloudOf(validDefaults(defaults).idleMetric) } : {}),
           updatedAt: typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         };
       };
@@ -1569,7 +1577,7 @@ export function createApi({
       if (hibernate !== undefined && typeof hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'hibernate must be true or false');
       const joinMinutes = body.joinMinutes === undefined ? undefined : joinMinutesOf(body);
       const endedWindowDays = body.endedWindowDays === undefined ? undefined : endedDaysOf(body);
-      const defaults = body.defaults === undefined ? undefined : defaultsOf(body.defaults, 'aws', true);
+      const defaults = body.defaults === undefined ? undefined : defaultsOf(body.defaults, 'aws', true, 'any');
       return audited(identity, 'settings', 'workloads', async () => {
         // The whole document is read and written back: another key (a later setting) is kept, and the last write wins.
         const found = await readSettings();
@@ -1605,6 +1613,9 @@ export function createApi({
     if (resource === 'settings' && a === 'types' && !b && (method === 'GET' || method === 'PUT')) {
       const shownTypes = (doc: Record<string, unknown> | null | 'unreadable') => ({
         types: doc === 'unreadable' ? [] : validTypes((doc?.workloads as Record<string, unknown> | undefined)?.types), builtIn: BUILT_IN_TYPES,
+        // By type, which cloud its idleMetric applies to (plan 5).
+        ...((clouds) => (Object.keys(clouds).length ? { idleMetricClouds: clouds } : {}))(Object.fromEntries((doc === 'unreadable' ? [] : validTypes((doc?.workloads as Record<string, unknown> | undefined)?.types))
+          .flatMap((t) => { const c = metricCloudOf((t.settings as Record<string, unknown> | undefined)?.idleMetric); return c ? [[t.name as string, c]] : []; }))),
         updatedAt: doc !== 'unreadable' && typeof doc?.updatedAt === 'string' ? doc.updatedAt : null, updatedBy: doc !== 'unreadable' && typeof doc?.updatedBy === 'string' ? doc.updatedBy : null,
         ...(doc === 'unreadable' ? { error: 'settings.json is unreadable' } : {}),
       });
@@ -1612,7 +1623,7 @@ export function createApi({
       await needAudited(identity, 'admin', 'types', 'organization');
       if (!globalSettings) throw new HttpError(404, 'not_found', 'no settings in this manager');
       const { types } = bodyOf(event);
-      const problems = typesProblems(types, { idle: true });
+      const problems = typesProblems(types, { idle: true, metric: 'any' });
       if (problems.length) throw new HttpError(400, 'bad_request', problems.join('; '));
       return audited(identity, 'types', 'organization', async () => {
         const found = await readSettings();
@@ -1963,26 +1974,33 @@ export function createApi({
       if (method === 'GET' && action === 'activity' && !parts[4]) {
         if (!fleet?.listHistory || !fleet.historyBefore || !idleActivity) throw new HttpError(404, 'not_found', 'no activity history in this manager');
         const account = accountOfRouter(router);
-        const status = await statusNow() as { kind?: string; resourceArn?: string; backends?: ActivityBackend[]; settings?: Record<string, unknown>; settingsFrom?: Record<string, string> } | null;
+        const status = await statusNow() as { kind?: string; resourceArn?: string; resource?: string; backends?: ActivityBackend[]; settings?: Record<string, unknown>; settingsFrom?: Record<string, string> } | null;
         if (status?.kind !== 'standalone') throw new HttpError(404, 'not_found', `workload ${id} is an HTTP workload: its requests are on its idle window card`);
         const settings = status.settings ?? {};
-        const plan = activityPlan(status.backends ?? [], settings as ActivitySettings);
+        // On Google Cloud (plan 5): the router's reads, planned by the discovery step once it read a group's VMs; here, whether any
+        // signal applies.
+        const google = router.cloud === 'gcp';
+        const googleBackends = ((status.backends ?? []) as (ActivityBackend & { location?: string })[]).map(({ kind, id: name, location, companion }) => ({ kind, id: name, ...(location ? { location } : {}), ...(companion ? { companion } : {}) })) as GoogleBackend[];
+        let plan: { signals: PlannedSignal[]; queries: ActivityQuery[] } = google
+          ? { signals: googleActivityPlan(googleBackends, settings as never, account).signals, queries: [] }
+          : activityPlan(status.backends ?? [], settings as ActivitySettings);
         const current = typeof settings.idleMinutes === 'number' ? settings.idleMinutes : STANDALONE_IDLE_MINUTES;
-        const key = JSON.stringify([status.resourceArn, settings, plan.queries]);
+        const key = JSON.stringify([status.resourceArn ?? status.resource, settings, google ? googleBackends : plan.queries]);
         const kept = await fleet.getActivity?.(account, router.region, id).catch(() => null) as { key?: string; answer?: unknown } | null | undefined;
         if (kept?.key === key && kept.answer) return reply(200, kept.answer);
-        const signalsOf = (values: { signal: string; values: (number | null)[] }[]) => plan.signals.map((s) => ({
+        const signalsOf = (values: { signal: string; values: (number | null)[] }[]) => plan.signals.map((s: PlannedSignal) => ({
           signal: s.signal, below: s.below, applies: s.applies, ...(s.reason ? { reason: s.reason } : {}),
           from: status.settingsFrom?.[{ cpu: 'idleCpuPercent', network: 'idleNetworkBytes', metric: 'idleMetric' }[s.signal]] ?? 'default',
           values: values.find((v) => v.signal === s.signal)?.values ?? [],
         }));
-        if (!plan.queries.length) return reply(200, { signals: signalsOf([]), asleep: [], advice: null, reason: 'no idle signal applies: it naps on its schedule and on people\'s word only' });
+        if (!plan.signals.some((s) => s.applies)) return reply(200, { signals: signalsOf([]), asleep: [], advice: null, reason: 'no idle signal applies: it naps on its schedule and on people\'s word only' });
         let read: Awaited<ReturnType<IdleActivity>>;
         try {
-          read = await idleActivity(account, router.region, plan.queries, ACTIVITY_DAYS);
+          read = await idleActivity(account, router.region, google ? { cloud: 'gcp', backends: googleBackends, settings } : plan.queries, ACTIVITY_DAYS);
         } catch (err) {
           throw new HttpError(502, 'metrics_unreadable', `the metrics could not be read: ${(err as Error).message}`);
         }
+        if (google && read.signals) plan = { signals: read.signals, queries: [] };
         const t = now();
         const summary = () => fleet.getWorkload(account, router.region, id).catch(() => null);
         const [month, period, routerSummary, discounts] = await Promise.all([
@@ -2410,7 +2428,7 @@ export function createApi({
   // backend service, by the path its row's name gives in the scope of its load balancer (the candidate's id).
   function candidateIdOf(w: Record<string, unknown>, account: string, region: string): string | null {
     // A standalone workload's candidate is its resource.
-    if (w.kind === 'standalone') return typeof w.resourceArn === 'string' ? w.resourceArn : null;
+    if (w.kind === 'standalone') return typeof w.resourceArn === 'string' ? w.resourceArn : typeof w.resource === 'string' ? w.resource : null;
     if (cloudOf(account) !== 'gcp') return typeof w.targetGroupArn === 'string' ? w.targetGroupArn : null;
     return typeof w.backendService === 'string' ? googleServicePath(account, 'backendServices', w.backendService, w.lb as WorkloadSummary['lb'], region) : null;
   }
@@ -2615,6 +2633,14 @@ export function createApi({
       if (!isAccount(account) && !isProject(account)) throw new HttpError(400, 'bad_request', 'target.account must be a 12-digit account ID or a project ID');
       return { kind, account, name: inventoryName(account) };
     }
+    // A Google Cloud standalone resource by its path (plan 5).
+    if (kind === 'resource' && target.path !== undefined) {
+      const path = String(target.path);
+      if (!GOOGLE_RESOURCE_PATH.test(path)) throw new HttpError(400, 'bad_request', 'target.path must be the path of a Compute Engine VM (projects/<project>/zones/<zone>/instances/<name>), a managed instance group (projects/<project>/zones|regions/<location>/instanceGroupManagers/<name>) or a Cloud SQL instance (projects/<project>/instances/<name>)');
+      const parts = path.split('/');
+      const location = parts.length === 6 ? parts[3]! : '';
+      return { kind, path, account: parts[1]!, ...(location ? { region: /-[a-z]$/.test(location) ? location.replace(/-[a-z]$/, '') : location } : {}), name: parts.at(-1)! };
+    }
     if (kind === 'resource') {
       const arn = String(target.arn ?? '');
       const m = RESOURCE_ARN.exec(arn);
@@ -2707,7 +2733,7 @@ export function createApi({
         }
         // A standalone workload has no target group to exclude (the router's refusal, said before any change).
         const row = fleet ? await fleet.getWorkload(router.account ?? managerAccount ?? '', router.region, String(workload.id)).catch(() => null) : null;
-        if (row?.kind === 'standalone') throw new HttpError(409, 'conflict', `workload ${workload.id} is a standalone workload: it has no target group to exclude`);
+        if (row?.kind === 'standalone') throw new HttpError(409, 'conflict', `workload ${workload.id} is a standalone workload: it has no ${router.cloud === 'gcp' ? 'backend service' : 'target group'} to exclude`);
         hint = { id: String(workload.id) };
       }
       const exclusion: Exclusion = { id: newId(), target, reason, by: identity.email, at: new Date(now()).toISOString(), ...(expiresAt ? { expiresAt } : {}) };
@@ -2815,19 +2841,25 @@ export function createApi({
       const name = nameOf(body.name, { required: false });
       const candidateId = String(body.candidateId ?? '');
       const c = await discovery?.store.getCandidate(candidateId);
+      // A Google Cloud resource the last scan did not list: plan 5's safety net, in words that say what to do.
+      if (!c && GOOGLE_RESOURCE_PATH.test(candidateId) && isProject(candidateId.split('/')[1] ?? '')) throw new HttpError(400, 'bad_request', notListed(candidateId));
       if (!c || !sees(identity, c.account, c.region)) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
+      // A Google Cloud standalone candidate the last scan found ineligible or onboarded (the router cannot see a backend service).
+      if (isStandalone(c) && c.cloud === 'gcp' && c.eligibility !== 'eligible') {
+        throw new HttpError(409, 'conflict', `cannot onboard ${c.id}: ${c.eligibility === 'managed' ? `it is onboarded already${c.workloadId ? ` (workload ${c.workloadId})` : ''}` : c.reason ?? 'the last discovery run found it ineligible'}`);
+      }
       await needCommandRole(c.account);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
       const onGoogle = isProject(c.account);
       // A standalone candidate's settings by its kind (the waker's keys refused in the router's words); its idle keys are the
       // router's preview's to check.
-      if (!onGoogle) kindSettingsFailures(body.settings as Record<string, unknown> | undefined, isStandalone(c) ? 'standalone' : 'http');
+      kindSettingsFailures(body.settings as Record<string, unknown> | undefined, isStandalone(c) ? 'standalone' : 'http');
       settingsOfFailures(body.settings as Record<string, unknown> | undefined, onGoogle ? 'gcp' : 'aws');
       if (onGoogle) cloudSqlFailures((body.databases ?? []) as unknown[]);
       else rdsFailures((body.databases ?? []) as unknown[]);
       // A Google Cloud router is 0.40.0 or later (checked with its choice): it takes Hibernate.
-      const router = onGoogle && !isStandalone(c) ? googleRouterOf(c, body.router, identity) : null;
+      const router = onGoogle ? (isStandalone(c) ? googleStandaloneRouterOf(c, body.router, identity) : googleRouterOf(c, body.router, identity)) : null;
       // A router before 0.32.0 would refuse the setting at the preview ("unknown setting hibernate"): refused here, with the
       // upgrade it needs. Without a router there, the onboarding installs the manager's own.
       if (!onGoogle && (body.settings as Record<string, unknown> | undefined)?.hibernate !== undefined) {
@@ -2896,6 +2928,24 @@ export function createApi({
     if (summary && reporting(summary, now())) return (router.installed && Date.parse(router.installed.at) > Date.parse(summary.checkedAt) ? router.installed : summary).version;
     const answer = await invoke(router, { action: 'router' }).catch(() => null) as { router?: { version?: unknown } } | null;
     return typeof answer?.router?.version === 'string' ? answer.router.version : null;
+  }
+
+  // A Google Cloud standalone resource's router (plan 5): the one the body names among the project's; else the router of the
+  // resource's region; else the project's only one (a router serves its whole project). Too old for standalone workloads: the CLI
+  // upgrades it.
+  function googleStandaloneRouterOf(c: AnyCandidate, asked: unknown, identity: Identity): Router {
+    const ofProject = routers.filter((r) => r.cloud === 'gcp' && r.account === c.account && sees(identity, r.account, r.region));
+    const names = ofProject.map((r) => r.name).join(', ');
+    let router: Router | undefined;
+    if (asked !== undefined) {
+      router = ofProject.find((r) => r.name === asked);
+      if (!router) throw new HttpError(400, 'bad_request', `router: ${JSON.stringify(asked)} is not a router of project ${c.account}${names ? ` (${names})` : ''}`);
+    } else router = ofProject.find((r) => r.region === c.region) ?? (ofProject.length === 1 ? ofProject[0] : undefined);
+    if (!router && ofProject.length > 1) throw new HttpError(400, 'bad_request', `project ${c.account} has ${ofProject.length} routers and none in ${c.region}: name the one to onboard on in router (${names})`);
+    if (!router) throw new HttpError(400, 'bad_request', `no router in project ${c.account}: ${installCommand(c.account, c.region === 'global' ? '<region>' : c.region, routerVersion)}`);
+    const version = router.installed?.version ?? '';
+    if (routerTooOld(version)) throw new HttpError(409, 'router_too_old', tooOldText(version, c.account, router.region, routerVersion));
+    return router;
   }
 
   // A Google Cloud candidate's router (Google Cloud manager design §8): a regional load balancer's is the router of its

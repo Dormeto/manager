@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { STANDALONE_ROUTER } from '../src/idle-signals.js';
+import { STANDALONE_ROUTER, STANDALONE_ROUTERS } from '../src/idle-signals.js';
 
 const ROUTER = resolve(import.meta.dirname, '../../../../router');
 const DOC = resolve(ROUTER, 'docs/scenarios/standalone.md');
@@ -18,7 +18,8 @@ const atLeast = (a: string, b: string) => {
 describe.skipIf(!existsSync(DOC))('the first router that knows standalone workloads', () => {
   it('is the router\'s', () => {
     const named = /Not released yet: router (\d+\.\d+\.\d+)/.exec(readFileSync(DOC, 'utf8'))?.[1];
-    if (named) expect(STANDALONE_ROUTER).toBe(named);
+    // The router's one release line names both clouds' (its docs: one sentence for AWS and Google Cloud).
+    if (named) expect([STANDALONE_ROUTER, STANDALONE_ROUTERS.aws, STANDALONE_ROUTERS.gcp]).toEqual([named, named, named]);
     else expect(atLeast((JSON.parse(readFileSync(resolve(ROUTER, 'package.json'), 'utf8')) as { version: string }).version, STANDALONE_ROUTER)).toBe(true);
   });
 });

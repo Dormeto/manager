@@ -21,7 +21,8 @@ export interface ActivitySettings { idleCpuPercent?: number | 'off'; idleNetwork
 export interface ActivityQuery { id: string; namespace: string; name: string; dimensions: { Name: string; Value: string }[]; stat: string }
 // How a signal's queries make one value a point: each series the sum of its queries, scaled to the signal's unit; the
 // largest series is the signal's value (the router's `measured`).
-export type Scale = 'same' | 'ec2PerMinute' | 'rdsPerMinute';
+// percent: Google Cloud's CPU utilization, a ratio (× 100).
+export type Scale = 'same' | 'ec2PerMinute' | 'rdsPerMinute' | 'percent';
 export interface PlannedSignal { signal: 'cpu' | 'network' | 'metric'; below: number | null; applies: boolean; reason?: string; series: { ids: string[]; scale: Scale }[] }
 
 const lastSegment = (arn: string) => String(arn).split('/').at(-1)!;
@@ -101,7 +102,83 @@ export function activityPlan(backends: ActivityBackend[], settings: ActivitySett
   return { signals, queries };
 }
 
-const scaled = (scale: Scale, sum: number) => (scale === 'ec2PerMinute' ? sum / PERIOD_MINUTES : scale === 'rdsPerMinute' ? sum * 60 : sum);
+const scaled = (scale: Scale, sum: number) => (scale === 'ec2PerMinute' ? sum / PERIOD_MINUTES : scale === 'rdsPerMinute' ? sum * 60 : scale === 'percent' ? sum * 100 : sum);
+
+// ---- Google Cloud (plan 5): the router's gcp/src/idle-signals.mjs plan ----
+
+// A Google Cloud standalone workload's backend, as its status names it (AWS's entries): a VM, a managed group with its VMs' names
+// (read by the discovery account: the status lists none), a Cloud SQL instance (`companion` when it is not the resource).
+export interface GoogleBackend { kind: string; id: string; location?: string; companion?: boolean; vms?: string[] }
+// One Cloud Monitoring read: its filter and aligner; its series' points merged by `label` (a VM's name, the database, all).
+export interface GoogleSpec { id: string; filter: string; aligner: string; label: 'instance_name' | 'db' | 'all'; merge: 'max' | 'sum' }
+export interface GoogleMetric { type: string; filter?: string | string[]; aligner: string; below: number }
+const GCP_CPU = 'compute.googleapis.com/instance/cpu/utilization';
+const GCP_RECEIVED = 'compute.googleapis.com/instance/network/received_bytes_count';
+const GCP_SENT = 'compute.googleapis.com/instance/network/sent_bytes_count';
+const GCP_SQL_CPU = 'cloudsql.googleapis.com/database/cpu/utilization';
+const NO_SQL_NETWORK = 'a Cloud SQL instance\'s network is not read: its connections are its signal';
+const isSql = (b: GoogleBackend) => b.kind === 'cloudsql-instance';
+const vmsOf = (b: GoogleBackend) => (b.kind === 'instance' ? [b.id] : b.vms ?? []);
+const vmFilter = (type: string, names: string[]) => `metric.type = "${type}" AND resource.type = "gce_instance" AND metric.labels.instance_name = one_of(${names.map((n) => JSON.stringify(n)).join(', ')})`;
+
+// The signals of a Google Cloud workload's resolved settings and their reads (the router's plan): CPU a ratio to percent, a group's
+// every VM a series, Cloud SQL's CPU by its database id; network in and out summed as bytes a minute, none for Cloud SQL; the
+// custom metric's filter with `${resource}` the resource's name. A group whose VMs are not known applies with no series (never idle).
+export function googleActivityPlan(backends: GoogleBackend[], settings: { idleCpuPercent?: number | 'off'; idleNetworkBytes?: number | 'off'; idleMetric?: GoogleMetric | 'off' }, project: string): { signals: PlannedSignal[]; specs: GoogleSpec[] } {
+  const primaries = backends.filter((b) => !isSql(b));
+  const own = primaries.length ? primaries : backends.filter(isSql);
+  const signals: PlannedSignal[] = [];
+  const specs: GoogleSpec[] = [];
+  const off = (signal: PlannedSignal['signal'], below: number | null, reason: string): PlannedSignal => ({ signal, below, applies: false, reason, series: [] });
+  const unknownGroup = own.find((b) => b.kind === 'asg' && !vmsOf(b).length);
+
+  const cpu = settings.idleCpuPercent ?? 'off';
+  if (cpu === 'off') signals.push(off('cpu', null, 'off'));
+  else if (!own.length) signals.push(off('cpu', cpu, 'no backend to read'));
+  else if (unknownGroup) signals.push({ signal: 'cpu', below: cpu, applies: true, reason: `the VMs of group ${unknownGroup.id} are not known`, series: [] });
+  else {
+    signals.push({ signal: 'cpu', below: cpu, applies: true, series: own.flatMap((b, i) => {
+      const id = `cpu_${i}`;
+      if (isSql(b)) {
+        specs.push({ id, filter: `metric.type = "${GCP_SQL_CPU}" AND resource.labels.database_id = "${project}:${b.id}"`, aligner: 'ALIGN_MAX', label: 'db', merge: 'max' });
+        return [{ ids: [`${id}:db`], scale: 'percent' as const }];
+      }
+      specs.push({ id, filter: vmFilter(GCP_CPU, vmsOf(b)), aligner: 'ALIGN_MAX', label: 'instance_name', merge: 'max' });
+      return vmsOf(b).map((name) => ({ ids: [`${id}:${name}`], scale: 'percent' as const }));
+    }) });
+  }
+
+  const network = settings.idleNetworkBytes ?? 'off';
+  if (network === 'off') signals.push(off('network', null, 'off'));
+  else if (!own.length) signals.push(off('network', network, 'no backend to read'));
+  else if (own.every(isSql)) signals.push(off('network', network, NO_SQL_NETWORK));
+  else if (unknownGroup) signals.push({ signal: 'network', below: network, applies: true, reason: `the VMs of group ${unknownGroup.id} are not known`, series: [] });
+  else {
+    signals.push({ signal: 'network', below: network, applies: true, series: own.filter((b) => !isSql(b)).map((b, i) => {
+      const names = vmsOf(b);
+      specs.push({ id: `rx_${i}`, filter: vmFilter(GCP_RECEIVED, names), aligner: 'ALIGN_SUM', label: 'instance_name', merge: 'sum' });
+      specs.push({ id: `tx_${i}`, filter: vmFilter(GCP_SENT, names), aligner: 'ALIGN_SUM', label: 'instance_name', merge: 'sum' });
+      return { ids: names.flatMap((name) => [`rx_${i}:${name}`, `tx_${i}:${name}`]), scale: 'ec2PerMinute' as const };
+    }) });
+  }
+
+  const metric = settings.idleMetric ?? 'off';
+  if (metric === 'off') signals.push(off('metric', null, 'off'));
+  else {
+    const resource = own[0]?.id ?? null;
+    const filters = Array.isArray(metric.filter) ? metric.filter : [metric.filter ?? null];
+    if (resource === null && filters.some((f) => typeof f === 'string' && f.includes(RESOURCE))) signals.push(off('metric', metric.below, `no backend to replace ${RESOURCE}`));
+    else {
+      signals.push({ signal: 'metric', below: metric.below, applies: true, series: filters.map((f, j) => {
+        const id = `metric_${j}`;
+        const extra = typeof f === 'string' && f ? ` AND (${f.replaceAll(RESOURCE, resource ?? '')})` : '';
+        specs.push({ id, filter: `metric.type = "${metric.type}"${extra}`, aligner: metric.aligner, label: 'all', merge: 'max' });
+        return { ids: [`${id}:all`], scale: 'same' as const };
+      }) });
+    }
+  }
+  return { signals, specs };
+}
 
 // The points read: by query id, each point's minute from `from` and its value.
 export interface ActivityPoints { from: string; to: string; points: Record<string, [number, number][]> }

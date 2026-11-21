@@ -66,9 +66,11 @@ describe('a Google Cloud project\'s standalone candidates', () => {
     const found = byId((await scan(standaloneProject())).rules);
     expect(found[path(`zones/${ZONE}/instances/build-agent`)]).toEqual({
       kind: 'standalone', id: path(`zones/${ZONE}/instances/build-agent`), account: PROJECT, region: 'europe-west1', resource: path(`zones/${ZONE}/instances/build-agent`), cloud: 'gcp',
-      name: 'build-agent', backend: { kind: 'instance', id: 'build-agent', location: ZONE }, tags: { team: ['ci'] }, eligibility: 'eligible', idleHours7d: null,
+      name: 'build-agent', backend: { kind: 'instance', id: 'build-agent', location: ZONE, resourceId: found[path(`zones/${ZONE}/instances/build-agent`)]!.backend.resourceId }, tags: { team: ['ci'] }, eligibility: 'eligible', idleHours7d: null,
     });
     expect(found[path(`zones/${ZONE}/instanceGroupManagers/workers`)]).toMatchObject({ region: 'europe-west1', name: 'workers', backend: { kind: 'asg', id: 'workers', location: ZONE }, tags: { team: ['batch'] } });
+    // A VM's and a group's numeric id (the aggregated list's), which the onboarding's tag binding names.
+    expect([found[path(`zones/${ZONE}/instances/build-agent`)]!.backend.resourceId, found[path(`zones/${ZONE}/instanceGroupManagers/workers`)]!.backend.resourceId].every((id) => /^\d+$/.test(id ?? ''))).toBe(true);
     expect(found[path('regions/europe-west1/instanceGroupManagers/spread')]).toMatchObject({ region: 'europe-west1', backend: { kind: 'asg', id: 'spread', location: 'europe-west1' } });
     expect(found[path('instances/orders')]).toMatchObject({ region: 'europe-west1', name: 'orders', backend: { kind: 'cloudsql-instance', id: 'orders' }, tags: { team: ['shop'] } });
     expect(found[path(`zones/${ZONE}/instances/batch`)]).toMatchObject({ eligibility: 'managed', workloadId: 'batch' });

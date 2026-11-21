@@ -71,7 +71,7 @@ export function createSettingsPush({ settings, registry, google, events, env = '
         log?.warn('ManagerSettingsNotPushed', { account, region, error: 'the router is not registered' });
         return;
       }
-      const doc = await settingsDocument(settings);
+      const doc = await settingsDocument(settings, { version: router.version ?? null });
       if (!doc) return;
       const answer = await actOnRouter(await google.current(), router, {
         action: 'manager-settings', settings: doc.settings, etag: doc.etag, ...(events ? { events } : {}),

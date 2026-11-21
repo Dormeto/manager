@@ -25,6 +25,8 @@ const PERMISSIONS: [RegExp, string[]][] = [
   [/^POST https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/zones\/[^/]+\/networkEndpointGroups\/[^/]+\/listNetworkEndpoints$/, ['compute.networkEndpointGroups.list']],
   [/^GET https:\/\/sqladmin\.googleapis\.com\/v1\/projects\/[^/]+\/instances(\?|$)/, ['cloudsql.instances.list']],
   [/^GET https:\/\/monitoring\.googleapis\.com\/v3\/projects\/[^/]+\/timeSeries\?/, ['monitoring.timeSeries.list']],
+  // The activity step's (M51): a group's VMs.
+  [/^POST https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/(zones|regions)\/[^/]+\/instanceGroupManagers\/[^/]+\/listManagedInstances$/, ['compute.instanceGroupManagers.get']],
 ];
 
 describe.skipIf(!existsSync(ACCESS))('the standalone scan\'s Google Cloud calls', () => {
@@ -35,6 +37,10 @@ describe.skipIf(!existsSync(ACCESS))('the standalone scan\'s Google Cloud calls'
     w.vm('neg-vm', 'europe-west1-b');
     w.backendService('neg-svc', [w.neg('neg-1', 'europe-west1-b', { vms: [w.link('zones/europe-west1-b/instances/neg-vm')] })]);
     await scanProject(w, { project: PROJECT, managed: [workloadRow('dmt-demo-app')], now: NOW, standalone: true });
+    // The activity step of a group and of a Cloud SQL resource (M51), as the discovery account.
+    const { googleActivityStep } = await import('../src/gcp-activity.js');
+    await googleActivityStep(w.call.bind(w) as never, { project: PROJECT, backends: [{ kind: 'asg', id: 'workers', location: 'europe-west1-b' }], settings: { idleCpuPercent: 5, idleNetworkBytes: 1000, idleMetric: 'off' }, days: 1, now: NOW() });
+    await googleActivityStep(w.call.bind(w) as never, { project: PROJECT, backends: [{ kind: 'cloudsql-instance', id: 'orders' }], settings: { idleCpuPercent: 'off', idleNetworkBytes: 'off', idleMetric: { type: 'cloudsql.googleapis.com/database/network/connections', filter: 'resource.type = "cloudsql_database"', aligner: 'ALIGN_MAX', below: 1 } }, days: 1, now: NOW() });
     const needed = new Set<string>();
     for (const call of w.calls) {
       const found = PERMISSIONS.find(([re]) => re.test(call));

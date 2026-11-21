@@ -25,6 +25,19 @@ needs the router that knows standalone workloads; an older one refuses its previ
   again to list Cloud SQL instances:** the discovery account's role `dormetoDiscovery` gains `cloudsql.instances.list` and
   `cloudsql.instances.get`; until then, or in a project whose Cloud SQL Admin API is off, the VMs and groups are listed, the
   stored Cloud SQL candidates stay as they were, and the run says which of the two it is.
+  - **Google Cloud standalone workloads:** onboarding (`POST /operations`, the resource's path as `candidateId`) goes to the
+  router of the resource's region, else the project's only router (`router` names one among several), takes only a resource the
+  last scan listed as eligible (another is refused with its reason, an unlisted one with what to do: the router cannot see a
+  backend service), binds the tag `dormeto/managed` to the resource (a VM or a group by its id) and its Cloud SQL companions,
+  and verifies it awake with its resource among its backends; offboarding wakes it first, unless its resource is missing. The
+  rows and statuses keep `kind`, `resource`, `resourceMissing` and the five settings (`idleMetric` in Google Cloud's shape:
+  `{ type, filter?, aligner, below }`); an exclusion takes a resource by its path (`target.path`). The settings routes take the
+  idle signals at a Google Cloud router's and workload's level in Google Cloud's shape, and either cloud's at the
+  organization's, the answer saying which cloud each applies to (`idleMetricCloud`, `idleMetricClouds`). The organization's
+  idle signals are pushed to a Google Cloud router whose version knows them, never before; the gate and the watchdog's
+  `idle-signals-unknown` warning hold a router of either cloud only while it is older than its cloud's first version that
+  knows them. The Activity history reads Cloud Monitoring with the router's queries. A router's `cloud-sql-unreadable`
+  warning says what to do.
   - **Turn it on:** the discovery perimeter's `standalone` is `off` (the built-in, also when absent: an upgraded install
   sees no new candidate and makes no new call) until set to `on` (the Discovery view's Standalone resources switch). On,
   each region's scan lists those resources, each a candidate of its own resource (`kind: "standalone"`, its ARN as `id`

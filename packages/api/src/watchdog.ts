@@ -4,7 +4,7 @@
 // function probes the Google Cloud routers that are silent or never reported (router push design 2026-11-14 §6.3, §6.4):
 // what it met (a refusal, a router too old to report) is said instead of silent.
 import { InvokeCommand } from '@aws-sdk/client-lambda';
-import { IDLE_SIGNAL_KEYS, STANDALONE_ROUTER, reporting, type RouterProbe, type RouterSummary } from '@dormeto/fleet';
+import { IDLE_SIGNAL_KEYS, STANDALONE_ROUTERS, knowsIdleSignals, reporting, type RouterProbe, type RouterSummary } from '@dormeto/fleet';
 import { below, cloudOf, GOOGLE_REPORT_MINIMUM, reportsTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import type { InstalledRouter } from '@dormeto/operations';
 import { fleetRouters, type TerraformRouter } from './routers.js';
@@ -85,6 +85,8 @@ function reportedProblems(summary: RouterSummary): Problem[] {
 // What to do about a reported problem, by its code: the router's text says what it is.
 const REPORTED_HINTS: Record<string, string> = {
   // Standalone workloads without their resource (routers 0.42.0).
+  // A Google Cloud standalone workload's Cloud SQL resource the router cannot read (router 5be13fa).
+  'cloud-sql-unreadable': 'The router cannot read the Cloud SQL instance: install it again with --with cloud-sql (dormeto gcp routers install … --with cloud-sql), or offboard the workload.',
   'resource-missing': 'Offboard a workload whose resource was deleted; tag a resource that lost its dormeto:workload tag again (its value is the workload\'s id): the router finds it again at the next check. Until then the workload naps and wakes nothing.',
 };
 
@@ -110,14 +112,20 @@ export function idleLevelsOf(doc: unknown): string[] {
 function idleSignalsProblem(levels: string[], cloud: Cloud, version: string | null): Problem | null {
   if (!levels.length) return null;
   const where = levels.join(', ');
+  // Each cloud's first router that knows them (plan 5). A Google Cloud router before it is pushed the levels without them.
+  if (knowsIdleSignals(cloud === 'gcp' ? 'gcp' : 'aws', version)) return null;
+  const floor = STANDALONE_ROUTERS[cloud === 'gcp' ? 'gcp' : 'aws'];
   if (cloud === 'gcp') {
-    return { code: 'idle-signals-unknown', level: 'warning', text: `the organization's idle signals are set (${where}) and a Google Cloud router has none yet: it is given those levels without them`, hint: 'Nothing to do for its HTTP workloads; standalone workloads come to Google Cloud later.' };
+    return {
+      code: 'idle-signals-unknown', level: 'warning',
+      text: `the organization's idle signals are set (${where}) and this router (${version ?? 'version not known'}) does not know them: it is given those levels without them`,
+      hint: `Upgrade the router to ${floor} or later with the CLI (dormeto gcp routers install), or remove the idle signals from those levels.`,
+    };
   }
-  if (version && /^\d+\.\d+\.\d+/.test(version) && !below(version, STANDALONE_ROUTER)) return null;
   return {
     code: 'idle-signals-unknown', level: 'warning',
     text: `the organization's idle signals are set (${where}) and this router (${version ?? 'version not known'}) does not know them: it ignores those levels whole, their HTTP settings included`,
-    hint: `Upgrade the router to ${STANDALONE_ROUTER} or later, or remove the idle signals from those levels.`,
+    hint: `Upgrade the router to ${floor} or later, or remove the idle signals from those levels.`,
   };
 }
 

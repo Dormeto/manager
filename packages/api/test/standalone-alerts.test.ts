@@ -53,3 +53,26 @@ describe('a router that does not know the organization\'s idle signals', () => {
     expect(idleLevelsOf(null)).toEqual([]);
   });
 });
+
+describe('a Google Cloud router and the organization\'s idle signals (plan 5)', () => {
+  const installed = (version: string) => ({ name: 'dmtr-europe-west2', account: 'dormeto-dev', region: 'europe-west2', controller: 'https://c', onboarder: '', version, build: '', installedBy: 'cli', cloud: 'gcp', installedAt: new Date(NOW - 3_600_000).toISOString() });
+  const summary = (version: string) => ({
+    account: 'dormeto-dev', region: 'europe-west2', name: 'dmtr-europe-west2', version, build: 'b', checkSchedule: 'rate(5 minutes)', checkedAt: new Date(NOW - 60_000).toISOString(), durationMs: 1,
+    health: { status: 'ok', problems: [] }, pauses: [], counts: {}, check: { checkedAt: new Date(NOW - 60_000).toISOString(), total: 1, received: [0] },
+  }) as unknown as RouterSummary;
+  const observe = (version: string) => routerObservations({ terraformRouters: [], installed: [installed(version)] as never, summaries: [summary(version)], managerAccount: MANAGER, now: NOW, idleLevels: ['the defaults'] })[0]!.problems;
+
+  it('warns while it is before its cloud\'s first version that knows them, never for being Google Cloud', () => {
+    expect(observe('0.41.0')).toEqual([{
+      code: 'idle-signals-unknown', level: 'warning',
+      text: 'the organization\'s idle signals are set (the defaults) and this router (0.41.0) does not know them: it is given those levels without them',
+      hint: 'Upgrade the router to 0.42.0 or later with the CLI (dormeto gcp routers install), or remove the idle signals from those levels.',
+    }]);
+    expect(observe('0.42.0')).toEqual([]);
+  });
+
+  it('says what to do about a Cloud SQL resource it cannot read', () => {
+    const s = { ...summary('0.42.0'), health: { status: 'warning', problems: [{ level: 'warning', code: 'cloud-sql-unreadable', text: '1 standalone workload with a Cloud SQL instance the router cannot read: install it with --with cloud-sql' }] } } as unknown as RouterSummary;
+    expect(routerObservations({ terraformRouters: [], installed: [installed('0.42.0')] as never, summaries: [s], managerAccount: MANAGER, now: NOW })[0]!.problems[0]).toMatchObject({ code: 'cloud-sql-unreadable', hint: expect.stringContaining('--with cloud-sql') });
+  });
+});

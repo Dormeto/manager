@@ -44,11 +44,11 @@ const CONNECT_AGAIN = 'run dormeto gcp connect again: it gives the discovery acc
 
 // ---- Google's answers, the fields read ----
 export interface GInstance {
-  name: string; selfLink: string; zone?: string; labels?: Record<string, string>; status?: string;
+  name: string; id?: string; selfLink: string; zone?: string; labels?: Record<string, string>; status?: string;
   metadata?: { items?: { key?: string; value?: string }[] }; disks?: { type?: string }[]; guestAccelerators?: unknown[];
 }
 export interface GManager {
-  name: string; selfLink?: string; zone?: string; region?: string; instanceGroup?: string; targetSize?: number;
+  name: string; id?: string; selfLink?: string; zone?: string; region?: string; instanceGroup?: string; targetSize?: number;
   status?: { stateful?: { hasStatefulConfig?: boolean } }; distributionPolicy?: { targetShape?: string }; updatePolicy?: { instanceRedistributionType?: string };
 }
 export interface SqlInstance { name: string; region?: string; masterInstanceName?: string; instanceType?: string; settings?: { userLabels?: Record<string, string> } }
@@ -136,7 +136,7 @@ export function standaloneRules({ project, instances, managers, sql, backing, ro
       ...(vm.guestAccelerators?.length ? [`${label} has a GPU: GPU VMs are not supported`] : []),
       ...(vm.disks?.some((d) => d.type === LOCAL_SSD) ? [`${label} has a local SSD: a stop would lose its data`] : []),
     ];
-    settle({ id: path, region: regionOfZone(zone), name: vm.name, backend: { kind: 'instance', id: vm.name, location: zone }, tags: tagsOf([vm.labels ?? {}]) }, reasons);
+    settle({ id: path, region: regionOfZone(zone), name: vm.name, backend: { kind: 'instance', id: vm.name, location: zone, ...(vm.id ? { resourceId: String(vm.id) } : {}) }, tags: tagsOf([vm.labels ?? {}]) }, reasons);
   }
 
   // A managed group: resourceRead's mig (stateful, a regional EVEN shape with redistribution on, GKE nodes). One sized 0 is eligible
@@ -157,7 +157,7 @@ export function standaloneRules({ project, instances, managers, sql, backing, ro
         ? [`regional ${label} has the target shape EVEN with instance redistribution on: Google cannot stop or suspend its VMs one by one, set its instance redistribution type to NONE or change its target shape, then onboard again`] : []),
       ...(vms.some((vm) => Object.hasOwn(vm.labels ?? {}, GKE_NODE_LABEL)) ? [`${label} holds GKE nodes: onboard the Kubernetes workloads that run on them`] : []),
     ];
-    settle({ id: path, region: regional ? location : regionOfZone(location), name: m.name, backend: { kind: 'asg', id: m.name, location }, tags: tagsOf(vms.map((vm) => vm.labels ?? {})) }, reasons);
+    settle({ id: path, region: regional ? location : regionOfZone(location), name: m.name, backend: { kind: 'asg', id: m.name, location, ...(m.id ? { resourceId: String(m.id) } : {}) }, tags: tagsOf(vms.map((vm) => vm.labels ?? {})) }, reasons);
   }
 
   // A Cloud SQL instance: a read replica cannot be stopped (companionProblem).

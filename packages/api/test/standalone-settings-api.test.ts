@@ -21,7 +21,7 @@ const STANDALONE = { account: MANAGER, region: 'eu-west-1', router: 'dmt-dev', w
 const HTTP = { account: MANAGER, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'web', name: 'web', state: 'AWAKE', targetGroupArn: `arn:aws:elasticloadbalancing:eu-west-1:${MANAGER}:targetgroup/web/0123456789abcdef`, url: 'https://web.example.com' };
 const METRIC = { namespace: 'Custom/Jobs', name: 'Queue', dimensions: { Instance: '${resource}' }, statistic: 'Maximum', below: 1 };
 
-function setup(opts: { version?: string | null; google?: boolean; doc?: Record<string, unknown> | null; invoke?: Invoke } = {}) {
+function setup(opts: { version?: string | null; google?: boolean; gcpVersion?: string; doc?: Record<string, unknown> | null; invoke?: Invoke } = {}) {
   const audit: AuditEntry[] = [];
   const calls: [string, Record<string, unknown>][] = [];
   const store = { doc: opts.doc ?? null, writes: [] as Record<string, unknown>[] };
@@ -42,7 +42,7 @@ function setup(opts: { version?: string | null; google?: boolean; doc?: Record<s
       listWorkloads: async () => [STANDALONE, HTTP] as never,
       getWorkload: async (_a: string, _r: string, id: string) => ([STANDALONE, HTTP].find((w) => w.workloadId === id) ?? null) as never,
     },
-    ...(opts.google ? { operations: { installedRouters: async () => [GCP_INSTALLED], create: async () => { throw new Error('no operation'); }, list: async () => [], get: async () => null } } : {}),
+    ...(opts.google ? { operations: { installedRouters: async () => [{ ...GCP_INSTALLED, version: opts.gcpVersion ?? GCP_INSTALLED.version }], create: async () => { throw new Error('no operation'); }, list: async () => [], get: async () => null } } : {}),
   });
   return { api, audit, calls, store };
 }
@@ -60,8 +60,10 @@ describe('the idle signals\' checks', () => {
       'idleNetworkBytes: must be a whole number from 0 to 10000000000, or off',
       'idleMetric: unknown field extra', 'idleMetric: statistic must be Maximum, Average or Sum',
     ]);
-    // A Google Cloud router's level has none yet.
+    // Without them (a router before), they are unknown settings; a Google Cloud router's level takes them in its metric's shape (plan 5).
     expect(defaultsProblems({ idleCpuPercent: 5 }, { cloud: 'gcp' })).toEqual(['unknown setting idleCpuPercent']);
+    expect(defaultsProblems({ idleCpuPercent: 5, idleMetric: { type: 'custom.googleapis.com/q', aligner: 'ALIGN_MAX', below: 1 } }, { cloud: 'gcp', idle: true })).toEqual([]);
+    expect(defaultsProblems({ idleMetric: METRIC }, { cloud: 'gcp', idle: true })).toEqual(['idleMetric: unknown field namespace', 'idleMetric: unknown field name', 'idleMetric: unknown field dimensions', 'idleMetric: unknown field statistic', 'idleMetric: type must be a Cloud Monitoring metric type of at most 512 characters, such as custom.googleapis.com/queue/depth', 'idleMetric: aligner must be ALIGN_MAX, ALIGN_MEAN or ALIGN_SUM']);
     expect(typesProblems([{ name: 'ecs', settings: { idleCpuPercent: 'off' } }], { idle: true })).toEqual([]);
   });
 
@@ -102,6 +104,25 @@ describe.skipIf(!router)('the idle signals\' checks against the router\'s', () =
   });
 });
 
+describe.skipIf(!router)('Google Cloud\'s idle signals\' checks against the router\'s (plan 5)', () => {
+  const GCP = { type: 'custom.googleapis.com/queue/depth', filter: 'resource.labels.instance_id = "${resource}"', aligner: 'ALIGN_MAX', below: 1 };
+  const docs: Record<string, unknown>[] = [
+    { idleMetric: GCP }, { idleMetric: { ...GCP, filter: undefined } }, { idleMetric: { ...GCP, other: 1 } }, { idleMetric: { ...GCP, type: 'no slash' } }, { idleMetric: { ...GCP, type: 'x'.repeat(513) } },
+    { idleMetric: { ...GCP, filter: '' } }, { idleMetric: { ...GCP, filter: 'a = "${other}"' } }, { idleMetric: { ...GCP, aligner: 'ALIGN_P99' } }, { idleMetric: { ...GCP, below: '1' } },
+    { idleMetric: METRIC }, { idleMetric: 'off' }, { idleMetric: 'on' }, { idleCpuPercent: 3, idleNetworkBytes: 'off' },
+  ];
+  it('gives the router\'s verdict for a Google Cloud level and workload, and either shape at the organization\'s', () => {
+    for (const doc of docs) {
+      const clean = JSON.parse(JSON.stringify(doc)) as Record<string, unknown>;
+      expect(defaultsProblems(clean, { cloud: 'gcp', idle: true }), JSON.stringify(doc)).toEqual(router!.defaultsProblems(clean, { idle: true, cloud: 'gcp' }));
+      for (const kind of ['standalone', 'http'] as const) expect(defaultsProblems(clean, { workload: true, kind, cloud: 'gcp' }), `${kind} ${JSON.stringify(doc)}`).toEqual(router!.defaultsProblems(clean, { workload: true, kind, cloud: 'gcp' }));
+      // The organization's: each shape as its cloud's router checks it.
+      const shape = (clean.idleMetric as { type?: unknown } | undefined)?.type !== undefined ? 'gcp' : 'aws';
+      expect(defaultsProblems(clean, { idle: true, metric: 'any' }), `any ${JSON.stringify(doc)}`).toEqual(router!.defaultsProblems(clean, { idle: true, cloud: shape }));
+    }
+  });
+});
+
 describe('the organization\'s idle signals', () => {
   it('are written once every router knows them, the idle window not held back', async () => {
     const s = setup();
@@ -117,18 +138,31 @@ describe('the organization\'s idle signals', () => {
       const s = setup({ version });
       for (const [path, body] of [['/api/settings/workloads', { defaults: { idleNetworkBytes: 1000 } }], ['/api/settings/types', { types: [{ name: 'api', tags: { kind: 'api' }, settings: { idleCpuPercent: 'off' } }] }]] as const) {
         const res = await s.api(event('PUT', path, 'dmt-admin', body));
-        expect([res.statusCode, json(res).message], path).toEqual([409, `the organization's idle signals need every router at 0.42.0 or later and no Google Cloud router: 1 router must be upgraded first: ${named}`]);
+        expect([res.statusCode, json(res).message], path).toEqual([409, `the organization's idle signals need every router at 0.42.0 or later: 1 router must be upgraded first: ${named}`]);
       }
       expect(s.store.writes).toEqual([]);
       expect((await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleMinutes: 30 } }))).statusCode).toBe(200);
     }
   });
 
-  it('are refused while a Google Cloud router is in the fleet, and removing one is never', async () => {
-    const s = setup({ google: true, doc: { workloads: { defaults: { idleCpuPercent: 3 } } } });
+  it('are refused while a Google Cloud router before its first version that knows them is in the fleet, never for being Google Cloud; removing one is never', async () => {
+    const s = setup({ google: true, gcpVersion: '0.41.0', doc: { workloads: { defaults: { idleCpuPercent: 3 } } } });
     const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleCpuPercent: 4 } }));
-    expect([res.statusCode, json(res).message]).toEqual([409, 'the organization\'s idle signals need every router at 0.42.0 or later and no Google Cloud router: 1 router must be upgraded first: dmtr-dormeto-dev-europe-west2 (Google Cloud)']);
+    expect([res.statusCode, json(res).message]).toEqual([409, 'the organization\'s idle signals need every router at 0.42.0 or later: 1 router must be upgraded first: dmtr-dormeto-dev-europe-west2 (0.41.0)']);
     expect((await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleCpuPercent: null } }))).statusCode).toBe(200);
+    const known = setup({ google: true, gcpVersion: '0.42.0', doc: { workloads: { defaults: { idleCpuPercent: 3 } } } });
+    expect((await known.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleCpuPercent: 4 } }))).statusCode).toBe(200);
+  });
+
+  it('take either cloud\'s metric at the organization\'s, and say which cloud each applies to', async () => {
+    const GCP = { type: 'custom.googleapis.com/queue/depth', filter: 'resource.labels.instance_id = "${resource}"', aligner: 'ALIGN_MAX', below: 1 };
+    const s = setup();
+    const res = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleMetric: GCP } }));
+    expect([res.statusCode, json(res).defaults, json(res).idleMetricCloud]).toEqual([200, { idleMetric: GCP }, 'gcp']);
+    const types = await s.api(event('PUT', '/api/settings/types', 'dmt-admin', { types: [{ name: 'ecs', settings: { idleMetric: METRIC } }, { name: 'databases', settings: { idleMetric: GCP } }, { name: 'api', tags: { k: 'v' } }] }));
+    expect([types.statusCode, json(types).idleMetricClouds]).toEqual([200, { ecs: 'aws', databases: 'gcp' }]);
+    const bad = await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { defaults: { idleMetric: { ...GCP, aligner: 'ALIGN_P99' } } }));
+    expect([bad.statusCode, json(bad).message]).toEqual([400, 'idleMetric: aligner must be ALIGN_MAX, ALIGN_MEAN or ALIGN_SUM']);
   });
 
   it('kept as they are by another write of the file (the waiting page), which is not held back', async () => {
@@ -144,18 +178,23 @@ describe('the organization\'s idle signals', () => {
     expect(source).toMatch(/async function writeSettings\([^)]*\)[^{]*\{\n\s+await idleGate\(/);
   });
 
-  it('are never pushed to a Google Cloud router', async () => {
-    const s = setup({ google: true, doc: { workloads: { hibernate: false, defaults: { idleCpuPercent: 3, idleMinutes: 30 }, types: [{ name: 'ecs', settings: { idleMetric: METRIC, idleMinutes: 60 } }] } } });
-    await s.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: true }));
-    const pushed = s.calls.find(([, p]) => p.action === 'manager-settings')![1];
-    expect((pushed.settings as { workloads: unknown }).workloads).toEqual({ hibernate: true, defaults: { idleMinutes: 30 }, types: [{ name: 'ecs', settings: { idleMinutes: 60 } }] });
-    // The file keeps them for the AWS routers.
-    expect(s.store.doc).toMatchObject({ workloads: { defaults: { idleCpuPercent: 3 } } });
+  it('are pushed to a Google Cloud router whose version knows them, never to one before', async () => {
+    const DOC = { workloads: { hibernate: false, defaults: { idleCpuPercent: 3, idleMinutes: 30 }, types: [{ name: 'ecs', settings: { idleMetric: METRIC, idleMinutes: 60 } }] } };
+    const old = setup({ google: true, gcpVersion: '0.41.0', version: null, doc: DOC });
+    await old.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: true }));
+    const stripped = old.calls.find(([, p]) => p.action === 'manager-settings')![1];
+    expect((stripped.settings as { workloads: unknown }).workloads).toEqual({ hibernate: true, defaults: { idleMinutes: 30 }, types: [{ name: 'ecs', settings: { idleMinutes: 60 } }] });
+    // The file keeps them for the routers that know them.
+    expect(old.store.doc).toMatchObject({ workloads: { defaults: { idleCpuPercent: 3 } } });
+    const known = setup({ google: true, gcpVersion: '0.42.0', doc: DOC });
+    await known.api(event('PUT', '/api/settings/workloads', 'dmt-admin', { hibernate: true }));
+    const pushed = known.calls.find(([, p]) => p.action === 'manager-settings')![1];
+    expect((pushed.settings as { workloads: unknown }).workloads).toEqual({ ...DOC.workloads, hibernate: true });
   });
 });
 
 describe('a router\'s and a workload\'s idle signals', () => {
-  it('go to an AWS router, which says whether it knows them; a Google Cloud router\'s level has none', async () => {
+  it('go to a router of either cloud, which says whether it knows them; a Google Cloud router\'s in its metric\'s shape', async () => {
     const s = setup();
     expect((await s.api(event('PUT', '/api/routers/dmt-dev/settings', 'dmt-admin', { defaults: { idleCpuPercent: 3 } }))).statusCode).toBe(200);
     const old = setup({ invoke: async () => ({ problems: ['settings: defaults: unknown setting idleCpuPercent'] }) });
@@ -163,7 +202,9 @@ describe('a router\'s and a workload\'s idle signals', () => {
     expect([res.statusCode, json(res).message]).toEqual([409, 'upgrade the router to 0.42.0']);
     const g = setup({ google: true });
     const gcp = await g.api(event('PUT', '/api/routers/dmtr-dormeto-dev-europe-west2/settings', 'dmt-admin', { defaults: { idleCpuPercent: 3 } }));
-    expect([gcp.statusCode, json(gcp).message]).toEqual([400, 'unknown setting idleCpuPercent']);
+    expect(gcp.statusCode).toBe(200);
+    const shape = await g.api(event('PUT', '/api/routers/dmtr-dormeto-dev-europe-west2/settings', 'dmt-admin', { defaults: { idleMetric: METRIC } }));
+    expect([shape.statusCode, json(shape).message.split('; ')[0]]).toEqual([400, 'idleMetric: unknown field namespace']);
   });
 
   it('are a standalone workload\'s, never an HTTP one\'s; the waker\'s keys an HTTP one\'s only', async () => {
