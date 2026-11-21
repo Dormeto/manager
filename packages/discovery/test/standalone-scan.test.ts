@@ -115,6 +115,14 @@ describe('the standalone scan', () => {
     }]);
   });
 
+  it('describes the ECS services without their tags when they may not be read with them, and says so', async () => {
+    const reports: { problems: string[]; unread: string[] }[] = [];
+    const found = byArn(await scanRegion(standalonePorts({ deny: ['ecs:DescribeServices with tags'] }).ports, WHERE, { now: NOW, standalone: true, onStandalone: (r) => reports.push(r) }));
+    expect(Object.keys(found)).toEqual(Object.keys(EXPECTED));
+    expect(found[serviceArn('main', 'worker')]!.tags).toEqual({});
+    expect(reports).toEqual([{ problems: ['resource tags of ECS services could not be read: the discovery role may not describe them with their tags; they are listed without them'], unread: [] }]);
+  });
+
   it('reports nothing missing when every kind was read', async () => {
     const reports: unknown[] = [];
     await scanRegion(standalonePorts().ports, WHERE, { now: NOW, standalone: true, onStandalone: (r) => reports.push(r) });

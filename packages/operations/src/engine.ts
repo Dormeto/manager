@@ -4,6 +4,7 @@
 import { GoogleError, tagTargets, type TagTarget, type Tags } from '@dormeto/google';
 import { cloudOf, googlePath, googleServicePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS } from '@dormeto/fleet/router-call';
+import { RESOURCE_KIND_TEXT, STANDALONE_ROUTER } from '@dormeto/fleet/idle-signals';
 import { exclusionCriterion, isStandalone, matches, restatus, type AnyCandidate, type Candidate, type DiscoveryStore, type Exclusion } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
@@ -158,9 +159,11 @@ const withPauses = (recorded: Pause[] = [], added: Pause[]) => {
 
 const iso = (ms: number) => new Date(ms).toISOString();
 // The first router that onboards a standalone resource (plan 1's handover: "Not released yet: router 0.42.0").
-const STANDALONE_SINCE = '0.42.0';
+const STANDALONE_SINCE = STANDALONE_ROUTER;
+// How long a standalone onboarding's verification waits for its resource among the workload's backends.
+const VERIFY_RESOURCE_MS = 3 * 60_000;
 // The router's labels of a backend (router lambda/src/lib/onboarding.mjs KIND_TEXT).
-const KIND_TEXT: Record<string, string> = { instance: 'instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'RDS cluster' };
+const KIND_TEXT = RESOURCE_KIND_TEXT;
 // Lambda releases a deleted proxy's network interfaces in minutes: the removal looks again every 30 seconds.
 const RELEASE_WAIT_S = 30;
 // The operations that go on without the proxies where the command role refuses them (an onboarding fails if its cluster
@@ -393,7 +396,9 @@ export function createEngine(deps: EngineDeps) {
     return preview as { ok: boolean; problems?: string[]; workloadId: string; name: string };
   }
 
-  // The workload AWAKE with its resource among its backends (the router's status; no route).
+  // The workload AWAKE with its resource among its backends (the router's status; no route). The router finds an ECS service
+  // by its tag through the Resource Groups Tagging API, which lists a tag added seconds ago only later: the step waits for
+  // the resource, a poll each 15 s, for 3 minutes before failing (the workload stays onboarded: the error says so).
   async function standaloneVerify(op: Operation): Promise<Outcome> {
     const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
     const name = String(op.context.name ?? op.context.workloadId);
@@ -401,7 +406,11 @@ export function createEngine(deps: EngineDeps) {
     const resource = op.target.resourceArn!;
     const backends = (status?.backends ?? []) as { kind: string; id: string; status?: string }[];
     const own = status?.resourceMissing ? undefined : backends.find((b) => b.id === resource || resource.endsWith(`/${b.id}`) || resource.endsWith(`:${b.id}`));
-    if (!own) throw new Error(`${name} has no backend for ${resource}`);
+    if (!own) {
+      const started = Date.parse(op.steps[op.cursor]!.startedAt ?? iso(now()));
+      if (now() - started < VERIFY_RESOURCE_MS) return { status: 'wait', seconds: 15, detail: `waiting for ${resource} among its backends` };
+      throw new Error(`${name} is onboarded, but its status has no backend for ${resource} after 3 minutes: see it in Workloads, and offboard it there if it should not stay`);
+    }
     if (status.state !== 'AWAKE') throw new Error(`${name} ${status.state}, not AWAKE`);
     return { status: 'done', detail: `${name} AWAKE, ${backends.map((b) => `${KIND_TEXT[b.kind] ?? b.kind} ${b.id} ${b.status ?? 'unknown'}`).join(', ')}${await reported(op)}` };
   }
@@ -1104,11 +1113,13 @@ export function createEngine(deps: EngineDeps) {
         op.context.targetGroupArn = status?.targetGroupArn;
         // A standalone workload's resource: its candidate's id (no target group, no rule).
         if (status?.kind === 'standalone') op.context.resourceArn = status.resourceArn;
+        // Its resource deleted or untagged: nothing to wake; the router offboards it whatever its state.
+        if (status?.kind === 'standalone' && status.resourceMissing === true) op.context.resourceMissing = true;
         op.context.loadBalancerArn = ruleArn ? loadBalancerOfRule(ruleArn) : null;
         op.context.wakeTimeoutSeconds = status?.settings?.wakeTimeoutSeconds ?? 600;
         // The name people see (routers 0.20.0 and later), for the operation's title.
         op.context.name = status?.name ?? op.target.workloadId;
-        return { status: 'done', detail: `${op.context.name} ${status?.state}` };
+        return { status: 'done', detail: `${op.context.name} ${status?.state}${op.context.resourceMissing ? ', its resource missing' : ''}` };
       }
       case 'lock load balancer': {
         // A Google Cloud load balancer is its URL map (an offboarding's, from the router's status).
@@ -1164,10 +1175,12 @@ export function createEngine(deps: EngineDeps) {
         return { status: 'done', detail: `${op.context.name} ${status.state}, route app${await reported(op)}` };
       }
       case 'pause': {
+        if (op.context.resourceMissing) return { status: 'skipped', detail: 'its resource is missing: nothing to wake' };
         const result = await invokeRouter(op, 'controller', { action: 'pause', workloadId: op.target.workloadId, by: op.by, reason: 'offboarding', keepAsleep: false });
         return { status: 'done', ...(result?.woken?.length ? { detail: 'woken' } : {}) };
       }
       case 'wait awake': {
+        if (op.context.resourceMissing) return { status: 'skipped', detail: 'its resource is missing: nothing to wake' };
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.target.workloadId });
         if (status?.state === 'AWAKE') return { status: 'done' };
         const started = Date.parse((op.steps[op.cursor]!.startedAt) ?? iso(now()));

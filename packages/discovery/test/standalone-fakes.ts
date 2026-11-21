@@ -115,6 +115,8 @@ export function standalonePorts({ deny = [] as string[] } = {}) {
       async listClusters() { return { clusterArns: [MAIN] }; },
       async listServices(input) { return page(input.cluster === MAIN ? SERVICES.map((s) => s.serviceArn) : [], 'serviceArns', input.nextToken, 'nextToken'); },
       async describeServices(input) {
+        // A role that may describe services but not with their tags (to be checked live: the review's question).
+        if (deny.includes('ecs:DescribeServices with tags') && (input as { include?: string[] }).include?.includes('TAGS')) throw denied('ecs:ListTagsForResource');
         return { services: SERVICES.filter((s) => input.services.includes(s.serviceArn)).map(({ tags, ...s }) => ({ ...s, ...((input as { include?: string[] }).include?.includes('TAGS') ? { tags } : {}) })) };
       },
     },

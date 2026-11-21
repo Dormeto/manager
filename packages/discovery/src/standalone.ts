@@ -6,12 +6,13 @@
 import { createHash } from 'node:crypto';
 import { all, type AutoScalingGroup, type DbCluster, type DbInstance, type Instance, type ScanPorts, type Service, type Tag, type TargetGroup } from './scan.js';
 import type { ResourceKind, StandaloneRule } from './types.js';
+import { RESOURCE_KIND_TEXT } from '@dormeto/fleet/idle-signals';
 
 const WORKLOAD_TAG = 'dormeto:workload';
 const GROUP_TAG = 'aws:autoscaling:groupName';
 // The tags EKS, its node groups, eksctl, Karpenter and the cluster autoscaler put on a cluster's nodes (the router's).
 const EKS_NODE_TAG = /^(eks:cluster-name|eks:nodegroup-name|alpha\.eksctl\.io\/cluster-name|karpenter\.sh\/|kubernetes\.io\/cluster\/|k8s\.io\/cluster-autoscaler\/)/;
-const KIND_TEXT: Record<ResourceKind, string> = { instance: 'instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'RDS cluster' };
+const KIND_TEXT = RESOURCE_KIND_TEXT as Record<ResourceKind, string>;
 const AGAIN = 'apply the access module or the AWS CLI script of this release again';
 
 // The router's workload id of a resource: the first 16 hex characters of the SHA-256 of its ARN.
@@ -24,7 +25,7 @@ export interface StandaloneReport { problems: string[]; unread: ResourceKind[] }
 const tagsOf = (list: Tag[] = []): Record<string, string> => Object.fromEntries(list.map((t) => [t.Key ?? '', t.Value ?? '']));
 const targetGroupName = (arn: string) => arn.split(':').at(-1)!.split('/')[1] ?? arn;
 const partitionOf = (region: string) => (region.startsWith('cn-') ? 'aws-cn' : region.startsWith('us-gov-') ? 'aws-us-gov' : 'aws');
-const refused = (err: unknown) => /AccessDenied|UnauthorizedOperation|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`);
+export const refused = (err: unknown) => /AccessDenied|UnauthorizedOperation|not authorized/i.test(`${(err as Error).name} ${(err as Error).message}`);
 const isNode = (tags: Record<string, string>) => Object.keys(tags).some((k) => EKS_NODE_TAG.test(k));
 const feeds = (label: string, arns: string[]) => arns.map((arn) => `${label} feeds target group ${targetGroupName(arn)}: it belongs to an HTTP workload (onboard its target group)`);
 

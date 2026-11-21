@@ -10,7 +10,8 @@
     "./clouds": "./src/clouds.ts",
     "./google-report": "./src/google-report.ts",
     "./registry": "./src/registry.ts",
-    "./router-call": "./src/router-call.ts"
+    "./router-call": "./src/router-call.ts",
+    "./idle-signals": "./src/idle-signals.ts"
   },
   "scripts": {
     "test": "vitest run",

@@ -136,12 +136,13 @@ describe('onboarding a standalone candidate', () => {
     expect(s.invocations.some(([, p]) => p.action === 'onboard')).toBe(false);
   });
 
-  it('fails the verification when the workload is not AWAKE, is FAILED, or its resource is missing from its backends', async () => {
+  it('fails the verification when the workload is not AWAKE, is FAILED, or its resource stays missing from its backends for 3 minutes', async () => {
+    const late = `verify: Build agent is onboarded, but its status has no backend for ${ARN} after 3 minutes: see it in Workloads, and offboard it there if it should not stay`;
     for (const [change, error] of [
       [(r: ReturnType<typeof setup>['router']) => { r.state = 'FAILED'; }, 'verify: Build agent FAILED'],
       [(r: ReturnType<typeof setup>['router']) => { r.state = 'ASLEEP'; }, 'verify: Build agent ASLEEP, not AWAKE'],
-      [(r: ReturnType<typeof setup>['router']) => { r.backends = []; }, `verify: Build agent has no backend for ${ARN}`],
-      [(r: ReturnType<typeof setup>['router']) => { r.resourceMissing = true; }, `verify: Build agent has no backend for ${ARN}`],
+      [(r: ReturnType<typeof setup>['router']) => { r.backends = []; }, late],
+      [(r: ReturnType<typeof setup>['router']) => { r.resourceMissing = true; }, late],
     ] as const) {
       const s = setup();
       change(s.router);
@@ -150,6 +151,23 @@ describe('onboarding a standalone candidate', () => {
       expect((await s.records.getOperation(op.id))!.error).toBe(error);
       expect(s.items.get(ARN)!.status).toBe('pending-onboarding');
     }
+  });
+});
+
+describe('the verification of a standalone onboarding', () => {
+  it('waits for the resource among the backends, 15 s a poll: an ECS service\'s tag listed late by the tagging API', async () => {
+    const s = setup();
+    s.router.backends = [];
+    let polls = 0;
+    const op = await s.engine.create('onboard', { candidateId: ARN, name: 'Build agent' }, 'ops');
+    const result = await s.drive(op.id, () => {
+      const statuses = s.invocations.filter(([, p]) => p.action === 'status').length;
+      if (statuses > polls) polls = statuses;
+      if (polls >= 2) s.router.backends = [{ kind: 'instance', id: 'i-0abc', status: 'running' }];
+    });
+    expect(result).toEqual({ done: true, status: 'succeeded' });
+    expect(s.invocations.filter(([, p]) => p.action === 'status').length).toBe(3);
+    expect(s.items.get(ARN)).toMatchObject({ status: 'managed' });
   });
 });
 
@@ -177,6 +195,21 @@ describe('offboarding a standalone workload', () => {
     expect(await s.drive(op.id)).toEqual({ done: true, status: 'failed' });
     expect((await s.records.getOperation(op.id))!.error).toBe(`offboard: cannot offboard ${WORKLOAD_ID}: it is ASLEEP, wake it first`);
     expect(s.items.get(ARN)!.status).toBe('managed');
+  });
+
+  it('offboards one whose resource is missing without waking it, whatever its state (the router offboards it)', async () => {
+    for (const state of ['ASLEEP', 'FAILED', 'AWAKE']) {
+      const s = setup({ candidates: [managed()] });
+      Object.assign(s.router, { state, resourceMissing: true, backends: [] });
+      const op = await s.engine.create('offboard', { router: 'dmt-dev', account: ACCOUNT, region: 'eu-west-3', workloadId: WORKLOAD_ID }, 'ops');
+      expect(await s.drive(op.id), state).toEqual({ done: true, status: 'succeeded' });
+      expect((await s.records.getOperation(op.id))!.steps.map((x) => [x.name, x.status, x.detail]), state).toEqual([
+        ['locate', 'done', `build-agent ${state}, its resource missing`], ['slot', 'done', undefined], ['lock load balancer', 'skipped', 'a standalone workload: no load balancer to lock'],
+        ['pause', 'skipped', 'its resource is missing: nothing to wake'], ['wait awake', 'skipped', 'its resource is missing: nothing to wake'],
+        ['offboard', 'done', 'untag resource and databases, workload configuration'], ['candidate', 'done', undefined],
+      ]);
+      expect(s.invocations.map(([, p]) => p.action), state).toEqual(['status', 'offboard']);
+    }
   });
 
   it('refuses a workload written by Terraform before waking it', async () => {

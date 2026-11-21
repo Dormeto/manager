@@ -82,6 +82,11 @@ export async function standaloneIdle(cloudwatch: NonNullable<ScanPorts['cloudwat
         });
         // A query's points may come over several pages.
         for (const r of page.MetricDataResults ?? []) {
+          // A result CloudWatch could not read has no values: a failed read, never a week without a point.
+          if (r.StatusCode && r.StatusCode !== 'Complete' && r.StatusCode !== 'PartialData') {
+            const why = r.Messages?.map((m) => m.Value ?? m.Code).filter(Boolean).join('; ');
+            throw new Error(`CloudWatch could not read the metrics (${r.StatusCode}${why ? `: ${why}` : ''})`);
+          }
           const series = points.get(r.Id ?? '') ?? new Map<number, number>();
           (r.Timestamps ?? []).forEach((t, k) => {
             const v = r.Values?.[k];

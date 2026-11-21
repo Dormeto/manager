@@ -3,6 +3,7 @@
 // state always wins, so one event dated in the future would pin a summary for good.
 
 import { cloudOf, isRegion, type Cloud } from './clouds.js';
+import { IDLE_KEYS } from './idle-signals.js';
 
 // Clock difference accepted between a router and the manager.
 export const SKEW_MS = 5 * 60_000;
@@ -202,7 +203,6 @@ function idleSettingOf(key: string, v: unknown): unknown {
   if (!named(namespace) || !named(name) || !dims || !STATISTICS.has(statistic as string) || typeof below !== 'number' || !Number.isFinite(below)) return undefined;
   return { namespace, name, dimensions, statistic, below };
 }
-const IDLE_KEYS = ['idleCpuPercent', 'idleNetworkBytes', 'idleMetric'];
 // A standalone workload's settings: its kind's five (the router's STANDALONE_KEYS), nothing of the waker's.
 function standaloneSettingsOf(v: unknown): Json | undefined {
   if (!isObject(v)) return undefined;

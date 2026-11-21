@@ -91,6 +91,17 @@ describe('the idle share of standalone candidates', () => {
     expect(calls.map((c) => [c.queries, c.token ?? null])).toEqual([[500, null], [500, '1000'], [500, '2000'], [1, null], [1, '1000'], [1, '2000']]);
   });
 
+  it('takes a result CloudWatch could not read (its own status code) as a failed read of its batch: no share, the reason said', async () => {
+    const port = {
+      async getMetricData() {
+        return { MetricDataResults: [{ Id: 's0', StatusCode: 'InternalError', Messages: [{ Code: 'InternalError', Value: 'try again' }], Timestamps: [], Values: [] }, { Id: 's1', StatusCode: 'Complete', Timestamps: [], Values: [] }] };
+      },
+    };
+    const { shares, failed } = await standaloneIdle(port as never, [LONE, SHOP], { now: () => NOW });
+    expect(shares.size).toBe(0);
+    expect(failed).toEqual([{ ids: [LONE.id, SHOP.id], error: 'Error: CloudWatch could not read the metrics (InternalError: try again)' }]);
+  });
+
   it('gives no share and says why when CloudWatch fails, never an idle hour', async () => {
     const { port } = cloudwatch({}, { fail: () => Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' }) });
     const { shares, failed } = await standaloneIdle(port, [LONE, SHOP], { now: () => NOW });

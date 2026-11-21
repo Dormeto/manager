@@ -15,7 +15,7 @@ export const GOOGLE_REPORT_MINIMUM = '0.41.0';
 // A known version below a floor, by major.minor.patch alone (a dev router's 0.40.0-dev.1 meets 0.40.0, 0.39.0-dev.3 doesn't;
 // the registry keeps the version as the router reports it); an unknown one ('' or not a version) is called, and its answer
 // says.
-function below(version: string, minimum: string): boolean {
+export function below(version: string, minimum: string): boolean {
   const v = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
   if (!v) return false;
   const floor = minimum.split('.').map(Number);

@@ -3,7 +3,7 @@
 // Ported from the router discovery (router lambda/src/lib/candidates.mjs).
 import { errorText } from './error-text.js';
 import type { BackendKind, DiscoveredRule, IdleShare, RuleRef, ScannedRule } from './types.js';
-import { standaloneRules, type StandaloneReport } from './standalone.js';
+import { refused, standaloneRules, type StandaloneReport } from './standalone.js';
 import { standaloneIdle } from './standalone-idle.js';
 import { EKS_ACTIONS, clustersOf, kubernetesBackend, type Cluster, type KubernetesBackend, type KubernetesPorts } from './kubernetes.js';
 
@@ -129,7 +129,9 @@ export function nodeClusterOf(tags: Tag[] = []): string | null {
 }
 
 // asgs and described: every group and service as read (the standalone scan's).
-type Owners = { groups: Map<string, { name: string; arn?: string; cluster?: string }>; services: Map<string, string>; asgs: AutoScalingGroup[]; described: Service[] };
+// problems: what the standalone scan says the run could not read (the services' tags).
+type Owners = { groups: Map<string, { name: string; arn?: string; cluster?: string }>; services: Map<string, string>; asgs: AutoScalingGroup[]; described: Service[]; problems: string[] };
+export const ECS_TAGS_UNREAD = 'resource tags of ECS services could not be read: the discovery role may not describe them with their tags; they are listed without them';
 
 // standalone: the services are described with their tags.
 async function backendOwners({ autoscaling, ecs }: ScanPorts, { standalone = false } = {}): Promise<Owners> {
@@ -137,6 +139,21 @@ async function backendOwners({ autoscaling, ecs }: ScanPorts, { standalone = fal
   const services = new Map<string, string>();
   let asgs: AutoScalingGroup[] = [];
   const everyService: Service[] = [];
+  const problems: string[] = [];
+  // With their tags while that is allowed: a refusal describes them without (and the run says so), never fails the region.
+  let tagged = standalone;
+  const describe = async (cluster: string, batch: string[]) => {
+    if (tagged) {
+      try {
+        return await ecs!.describeServices({ cluster, services: batch, include: ['TAGS'] });
+      } catch (err) {
+        if (!refused(err)) throw err;
+        tagged = false;
+        problems.push(ECS_TAGS_UNREAD);
+      }
+    }
+    return ecs!.describeServices({ cluster, services: batch });
+  };
   if (autoscaling) {
     asgs = await all<AutoScalingGroup>((i) => autoscaling.describeAutoScalingGroups(i), 'AutoScalingGroups', { in: 'NextToken', out: 'NextToken' });
     for (const g of asgs) {
@@ -149,13 +166,13 @@ async function backendOwners({ autoscaling, ecs }: ScanPorts, { standalone = fal
     for (const cluster of clusters) {
       const arns = await all<string>((i) => ecs.listServices({ ...i, cluster }), 'serviceArns', { in: 'nextToken', out: 'nextToken' });
       for (const batch of chunks(arns, 10)) {
-        const { services: described = [] } = await ecs.describeServices({ cluster, services: batch, ...(standalone ? { include: ['TAGS' as const] } : {}) });
+        const { services: described = [] } = await describe(cluster, batch);
         everyService.push(...described);
         for (const s of described) for (const lb of s.loadBalancers ?? []) if (lb.targetGroupArn && s.serviceArn) services.set(lb.targetGroupArn, s.serviceArn);
       }
     }
   }
-  return { groups, services, asgs, described: everyService };
+  return { groups, services, asgs, described: everyService, problems };
 }
 
 interface Forward {
@@ -375,7 +392,7 @@ export async function scanRegion(ports: ScanPorts, where: { account: string; reg
       log?.warn('CloudWatchIdleFailed', { ...where, standalone: f.ids.length, error: f.error.slice(0, 300) });
     }
   }
-  onStandalone?.({ problems: found.problems, unread: found.unread });
+  onStandalone?.({ problems: [...owners.problems, ...found.problems], unread: found.unread });
   return [...candidates, ...found.rules];
 }
 
