@@ -30,6 +30,15 @@ its threshold at every 5-minute point (the router's built-ins: a server's CPU un
 not idle; a resource with no point all week (stopped, a service at 0) has no share; a read that fails keeps the stored
 share (none for a candidate never read) and says so in the run. Discovery's idle bar says which signal was under and
 where it comes from.
+- **Onboarding and offboarding a standalone candidate:** `POST /operations` with `type: "onboard"` and the candidate's
+resource ARN as `candidateId` starts an operation on the resource (claim `RES#<arn>`; a second one of the same resource
+is a conflict naming it): no load balancer to lock, the router's onboarder asked with `resourceArn` (preview, then
+onboard), the workload verified AWAKE with its resource among its backends, its candidate managed. A waker's setting
+(`waitSeconds`, `drainSeconds`, `maxHolders`, `failedRetrySeconds`, `wakeMode`, `noWakeRules`, `wakeRules`) is refused
+before the operation in the router's words; the router's preview checks the rest, and its refusals are relayed as it says
+them. A router that does not know standalone workloads fails the preview with `router <name> is older than 0.42.0:
+upgrade it to onboard a standalone resource`. Offboarding wakes the workload, as an HTTP one's does, then offboards it and
+gives its candidate back.
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

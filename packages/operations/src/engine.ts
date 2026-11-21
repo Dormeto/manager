@@ -157,6 +157,10 @@ const withPauses = (recorded: Pause[] = [], added: Pause[]) => {
 };
 
 const iso = (ms: number) => new Date(ms).toISOString();
+// The first router that onboards a standalone resource (plan 1's handover: "Not released yet: router 0.42.0").
+const STANDALONE_SINCE = '0.42.0';
+// The router's labels of a backend (router lambda/src/lib/onboarding.mjs KIND_TEXT).
+const KIND_TEXT: Record<string, string> = { instance: 'instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'RDS cluster' };
 // Lambda releases a deleted proxy's network interfaces in minutes: the removal looks again every 30 seconds.
 const RELEASE_WAIT_S = 30;
 // The operations that go on without the proxies where the command role refuses them (an onboarding fails if its cluster
@@ -357,6 +361,7 @@ export function createEngine(deps: EngineDeps) {
 
   async function previewOf(op: Operation) {
     if (onGoogle(op.target)) return googlePreviewOf(op);
+    if (op.target.resourceArn) return standalonePreviewOf(op);
     const kubernetes = await kubernetesOf(op);
     const preview = await invokeRouter(op, 'onboarder', {
       action: 'preview', targetGroupArn: op.target.targetGroupArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [], ...(op.input.tags ? { tags: op.input.tags } : {}),
@@ -369,6 +374,36 @@ export function createEngine(deps: EngineDeps) {
     op.context.workloadId = preview.workloadId;
     op.context.name = preview.name;
     return preview as { ok: boolean; problems?: string[]; workloadId: string; name: string };
+  }
+
+  // --- A standalone resource (vision standalone workloads design §5, §6; the router's onboarder, plan 1's handover) --------
+
+  // The onboarder's payload: the resource in place of the target group; the router derives the workload id from it.
+  const standalonePayload = (op: Operation) => ({
+    resourceArn: op.target.resourceArn, ...(op.input.name ? { name: op.input.name } : {}), settings: op.input.settings ?? {}, databases: op.input.databases ?? [],
+    ...(op.input.tags ? { tags: op.input.tags } : {}),
+  });
+
+  async function standalonePreviewOf(op: Operation) {
+    const preview = await invokeRouter(op, 'onboarder', { action: 'preview', ...standalonePayload(op) });
+    // A router before standalone workloads takes the payload for a target group's and answers no kind.
+    if (preview?.kind !== 'standalone') throw new Error(`router ${(await routerOf(op))?.name ?? ''} is older than ${STANDALONE_SINCE}: upgrade it to onboard a standalone resource`);
+    op.context.workloadId = preview.workloadId;
+    op.context.name = preview.name;
+    return preview as { ok: boolean; problems?: string[]; workloadId: string; name: string };
+  }
+
+  // The workload AWAKE with its resource among its backends (the router's status; no route).
+  async function standaloneVerify(op: Operation): Promise<Outcome> {
+    const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
+    const name = String(op.context.name ?? op.context.workloadId);
+    if (status?.state === 'FAILED') throw new Error(`${name} FAILED`);
+    const resource = op.target.resourceArn!;
+    const backends = (status?.backends ?? []) as { kind: string; id: string; status?: string }[];
+    const own = status?.resourceMissing ? undefined : backends.find((b) => b.id === resource || resource.endsWith(`/${b.id}`) || resource.endsWith(`:${b.id}`));
+    if (!own) throw new Error(`${name} has no backend for ${resource}`);
+    if (status.state !== 'AWAKE') throw new Error(`${name} ${status.state}, not AWAKE`);
+    return { status: 'done', detail: `${name} AWAKE, ${backends.map((b) => `${KIND_TEXT[b.kind] ?? b.kind} ${b.id} ${b.status ?? 'unknown'}`).join(', ')}${await reported(op)}` };
   }
 
   // --- Google Cloud onboarding (Google Cloud manager design §8) ----------------------------------------------------------
@@ -667,8 +702,9 @@ export function createEngine(deps: EngineDeps) {
     }
     if (type === 'onboard') {
       const c = await deps.discovery?.getCandidate(String(input.candidateId));
-      // A standalone candidate has no target group: its onboarding comes with the standalone onboarding (plan 2, M44).
-      if (c && !isStandalone(c) && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
+      // A standalone candidate (vision standalone workloads design §6): its resource is the target and the claim.
+      if (c && isStandalone(c)) return { target: { account: c.account, region: c.region, resourceArn: c.resourceArn }, activeKey: `RES#${c.resourceArn}` };
+      if (c && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
       if (!c || !c.targetGroupArn) throw new Error(`unknown candidate: ${input.candidateId}`);
       return { target: { account: c.account, region: c.region, targetGroupArn: c.targetGroupArn, loadBalancerArn: c.loadBalancerArn ?? '' }, activeKey: `TG#${c.targetGroupArn}` };
     }
@@ -799,7 +835,7 @@ export function createEngine(deps: EngineDeps) {
 
   async function updateCandidate(op: Operation, change: (c: AnyCandidate) => AnyCandidate): Promise<Outcome> {
     // An offboarding's candidate: its target group, a Google Cloud one's backend service (its path).
-    const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? op.context.backendService ?? '');
+    const id = String(op.input.candidateId ?? op.context.targetGroupArn ?? op.context.backendService ?? op.context.resourceArn ?? '');
     const c = id ? await deps.discovery?.getCandidate(id) : null;
     if (!c) return { status: 'skipped', detail: 'no discovery candidate' };
     await deps.discovery!.replaceCandidates([restatus(change(c), iso(now()))], [c]);
@@ -1066,6 +1102,8 @@ export function createEngine(deps: EngineDeps) {
         if (status?.source === 'terraform') throw new Error(`workload ${op.target.workloadId} was written in Terraform: remove its workload module instead`);
         const ruleArn = status?.rules?.[0]?.arn as string | undefined;
         op.context.targetGroupArn = status?.targetGroupArn;
+        // A standalone workload's resource: its candidate's id (no target group, no rule).
+        if (status?.kind === 'standalone') op.context.resourceArn = status.resourceArn;
         op.context.loadBalancerArn = ruleArn ? loadBalancerOfRule(ruleArn) : null;
         op.context.wakeTimeoutSeconds = status?.settings?.wakeTimeoutSeconds ?? 600;
         // The name people see (routers 0.20.0 and later), for the operation's title.
@@ -1074,6 +1112,7 @@ export function createEngine(deps: EngineDeps) {
       }
       case 'lock load balancer': {
         // A Google Cloud load balancer is its URL map (an offboarding's, from the router's status).
+        if (op.target.resourceArn || op.context.resourceArn) return { status: 'skipped', detail: 'a standalone workload: no load balancer to lock' };
         const lb = op.target.urlMap ?? (op.context.urlMap as string | undefined) ?? op.target.loadBalancerArn ?? (op.context.loadBalancerArn as string | null);
         if (!lb) return { status: 'skipped', detail: 'no rule left: no load balancer to lock' };
         return lock(op, `LB#${lb}`, 'load balancer');
@@ -1102,6 +1141,10 @@ export function createEngine(deps: EngineDeps) {
         if (onGoogle(op.target)) return googleOnboard(op);
         // An operation started by a manager that did not keep the preview's id yet: ask again.
         if (!op.context.workloadId) await previewOf(op);
+        if (op.target.resourceArn) {
+          const done = await invokeRouter(op, 'onboarder', { action: 'onboard', ...standalonePayload(op), by: op.by });
+          return { status: 'done', detail: (done?.steps ?? []).filter((x: { status: string }) => x.status === 'done').map((x: { name: string }) => x.name).join(', ') };
+        }
         const kubernetes = await kubernetesOf(op);
         const result = await invokeRouter(op, 'onboarder', {
           action: 'onboard', workloadId: op.context.workloadId, targetGroupArn: op.target.targetGroupArn, name: op.context.name,
@@ -1113,6 +1156,7 @@ export function createEngine(deps: EngineDeps) {
       case 'verify': {
         if (onGoogle(op.target)) return googleVerify(op);
         if (!op.context.workloadId) await previewOf(op);
+        if (op.target.resourceArn) return standaloneVerify(op);
         const status = await invokeRouter(op, 'controller', { action: 'status', workloadId: op.context.workloadId });
         if (status?.route !== 'app' || (status?.issues ?? []).length) throw new Error(`route ${status?.route}${status?.issues?.length ? `, issues: ${status.issues.join('; ')}` : ''}`);
         // Not FAILED either, as on Google Cloud (googleVerify): the router keeps it, the operation fails here.

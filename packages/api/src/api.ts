@@ -553,6 +553,13 @@ function settingsOfFailures(settings: Record<string, unknown> | undefined, cloud
   }
   if (settings?.hibernate !== undefined && typeof settings.hibernate !== 'boolean') throw new HttpError(400, 'bad_request', 'settings: hibernate must be true or false');
 }
+// The waker's keys, which a standalone workload has none of (router lambda/src/lib/settings-levels.mjs WAKER_KEYS, and its
+// text, prefixed as its preview prefixes it; a test reads them from the router's checkout).
+const WAKER_KEYS = ['waitSeconds', 'drainSeconds', 'maxHolders', 'failedRetrySeconds', 'wakeMode', 'noWakeRules', 'wakeRules'];
+function standaloneSettingsFailures(settings: Record<string, unknown> | undefined) {
+  const key = Object.keys(settings ?? {}).find((k) => WAKER_KEYS.includes(k));
+  if (key) throw new HttpError(400, 'bad_request', `settings: ${key}: a standalone workload has no waker: ${key} is for an HTTP workload`);
+}
 // An AWS onboarding's databases: RDS instances and clusters, as the onboarder takes them (router lambda/src/lib/onboarding.mjs's
 // databasesOf: a kind and an identifier), refused here in one message form before an operation starts.
 function rdsFailures(databases: unknown[]) {
@@ -2705,6 +2712,9 @@ export function createApi({
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
       if (body.databases !== undefined && !Array.isArray(body.databases)) throw new HttpError(400, 'bad_request', 'databases must be a list');
       const onGoogle = isProject(c.account);
+      // A standalone candidate's settings by its kind (the waker's keys refused in the router's words); its idle keys are the
+      // router's preview's to check.
+      if (isStandalone(c)) standaloneSettingsFailures(body.settings as Record<string, unknown> | undefined);
       settingsOfFailures(body.settings as Record<string, unknown> | undefined, onGoogle ? 'gcp' : 'aws');
       if (onGoogle) cloudSqlFailures((body.databases ?? []) as unknown[]);
       else rdsFailures((body.databases ?? []) as unknown[]);
