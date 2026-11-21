@@ -11,12 +11,12 @@ import type { Refusal } from '@dormeto/google/router';
 // The commands that fix what the manager can't do on Google Cloud, as the watchdog's probe records them too.
 import { cloudOf, googlePath, googleScopeOf, googleServicePath, googleSourceOf, installCommand, isAccount, isCandidateRegion, isProject, isRegion, routerTooOld, tooOldText, type Cloud } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS, routerCaller, type GoogleCalls, type LambdaSend } from '@dormeto/fleet/router-call';
-import { baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
+import { STANDALONE_RECOMMENDABLE, STANDALONE_WINDOWS, activityPlan, busyMinutes, signalValues, type ActivityBackend, type ActivitySettings, baselineHours, checkMinutesOf, descriptionProblem, summaryOf, type Description, type DescriptionKey, historyView, idleWindowAdvice, reporting, savingsOf, type Baseline, type Discounts, type Group, type HistoryEntry, type RouterSummary, type SavingsDay, type SavingsSettings, type SavingsSummary, type UpdateCheck, type UpdateResult, type IdleWindowAdvice, type StoppedItem, type WorkloadSummary } from '@dormeto/fleet';
 import { addEnergy, savedEnergy, type Energy } from '@dormeto/fleet/energy';
 import { builtInGrants, can, effective, grantsProblem, groupNameProblem, tagsProblem, type Grant, type Permission } from './access.js';
 import { createGroupGrants } from './group-grants.js';
 import { cleanPage, pageWarnings, problemsText, validatePage } from './page-settings.js';
-import type { IdleRequests } from './idle-requests.js';
+import type { IdleActivity, IdleRequests } from './idle-requests.js';
 import { fleetRouters, type FleetRouter } from './routers.js';
 import type { Alarm, ListStatusLine } from './watchdog.js';
 import { atLeastCore, compareVersions, VERSION, type UpdateService } from './update.js';
@@ -287,9 +287,14 @@ export interface ApiOptions {
     // A workload's idle window advice (R10), kept a day.
     getIdleWindow?(account: string, region: string, id: string): Promise<IdleWindowAdvice | null>;
     putIdleWindow?(account: string, region: string, id: string, advice: IdleWindowAdvice): Promise<void>;
+    // A standalone workload's Activity history, kept a day with the settings it was computed for.
+    getActivity?(account: string, region: string, id: string): Promise<unknown>;
+    putActivity?(account: string, region: string, id: string, value: unknown): Promise<void>;
   };
   // The idle window advisor (R10): a workload's requests per minute, read by the discovery function.
   idleRequests?: IdleRequests;
+  // A standalone workload's signals over its last days (vision standalone workloads design §6), read by the discovery function.
+  idleActivity?: IdleActivity;
   // A period's savings (R9): AWS's and Google's list prices of what the naps stopped, within the baseline; Spot prices and the
   // discounts (R9.5).
   savings?: { baseline: Baseline; hourly(region: string, item: StoppedItem, discounts?: Discounts): Promise<number | null> };
@@ -360,6 +365,9 @@ const COSTS_DAYS = 30;
 // The idle window advisor (R10): the days of requests replayed (CloudWatch keeps one-minute data 15 days), and the
 // router's idle window when the summary has none.
 const IDLE_DAYS = 14;
+// A standalone workload's Activity history: 7 days of its signals; its idle window's built-in (the router's STANDALONE_BUILT_IN).
+const ACTIVITY_DAYS = 7;
+const STANDALONE_IDLE_MINUTES = 120;
 const DEFAULT_IDLE_MINUTES = 15;
 const STATES_MS = 300_000;
 const STATES_KEPT_MAX = 10_000;
@@ -691,7 +699,7 @@ const settingsText = ({ hibernate, joinMinutes, endedWindowDays, defaults }: { h
 ].join(', ');
 export function createApi({
   routers: terraformRouters, invoke, audit, now = Date.now, newId = () => crypto.randomUUID(), version, users, install, update, preferences, discovery, google, operations, managerAccount, discoveryMode, routerVersion, alerts, ipLists, mfa, savings, globalSettings,
-  fleet, idleRequests, routerReports, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
+  fleet, idleRequests, idleActivity, routerReports, visible = () => true, historyDays = 400, callTimeoutMs = 5_000, googleCallTimeoutMs = GOOGLE_CALL_MS, callConcurrency = 10, callDeadlineMs = 20_000, accessRoles, statesCacheMs = 3_600_000,
 }: ApiOptions) {
   // Routers of this request: written in Terraform, then installed by the manager (a unique name each: the AWS name is the
   // same in every region).
@@ -1876,7 +1884,7 @@ export function createApi({
         throw err;
       }));
       // An unreadable workload does not exist for the caller; a readable one without the permission is refused, audited.
-      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window' || action === 'description' || action === 'waiting-page')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
+      const guarded = (method === 'GET' && (!action || action === 'history' || action === 'idle-window' || action === 'activity' || action === 'description' || action === 'waiting-page')) || (method === 'POST' && ['wake', 'nap', 'pause', 'resume'].includes(action ?? '')) || ((method === 'PUT' || method === 'DELETE') && action === 'schedule');
       if (guarded && !everyWorkload(identity, 'read') && !can(identity.grants, await tagsNow(), 'read')) throw new HttpError(404, 'not_found', `unknown workload: ${id}`);
       const allow = async (name: string, permission: Permission) => permit(identity, name, `${router.name}/${id}`, everyWorkload(identity, permission) ? undefined : await tagsNow(), permission);
       // Its description alone, from the manager's store: read while its router cannot be reached.
@@ -1947,6 +1955,57 @@ export function createApi({
         });
         await fleet.putIdleWindow?.(account, router.region, id, advice).catch(() => undefined);
         return reply(200, advice);
+      }
+      // A standalone workload's Activity history (vision standalone workloads design §6, §7): its signals over 7 days, read with
+      // the router's queries from its status by the discovery function, each one's 5-minute values, its hours asleep, and the idle
+      // window advice replayed on them from 5 minutes to 24 hours (a busy point is activity and, after a nap, a start). Kept a day,
+      // or until its settings change. A failed read is a 502: never an idle week.
+      if (method === 'GET' && action === 'activity' && !parts[4]) {
+        if (!fleet?.listHistory || !fleet.historyBefore || !idleActivity) throw new HttpError(404, 'not_found', 'no activity history in this manager');
+        const account = accountOfRouter(router);
+        const status = await statusNow() as { kind?: string; resourceArn?: string; backends?: ActivityBackend[]; settings?: Record<string, unknown>; settingsFrom?: Record<string, string> } | null;
+        if (status?.kind !== 'standalone') throw new HttpError(404, 'not_found', `workload ${id} is an HTTP workload: its requests are on its idle window card`);
+        const settings = status.settings ?? {};
+        const plan = activityPlan(status.backends ?? [], settings as ActivitySettings);
+        const current = typeof settings.idleMinutes === 'number' ? settings.idleMinutes : STANDALONE_IDLE_MINUTES;
+        const key = JSON.stringify([status.resourceArn, settings, plan.queries]);
+        const kept = await fleet.getActivity?.(account, router.region, id).catch(() => null) as { key?: string; answer?: unknown } | null | undefined;
+        if (kept?.key === key && kept.answer) return reply(200, kept.answer);
+        const signalsOf = (values: { signal: string; values: (number | null)[] }[]) => plan.signals.map((s) => ({
+          signal: s.signal, below: s.below, applies: s.applies, ...(s.reason ? { reason: s.reason } : {}),
+          from: status.settingsFrom?.[{ cpu: 'idleCpuPercent', network: 'idleNetworkBytes', metric: 'idleMetric' }[s.signal]] ?? 'default',
+          values: values.find((v) => v.signal === s.signal)?.values ?? [],
+        }));
+        if (!plan.queries.length) return reply(200, { signals: signalsOf([]), asleep: [], advice: null, reason: 'no idle signal applies: it naps on its schedule and on people\'s word only' });
+        let read: Awaited<ReturnType<IdleActivity>>;
+        try {
+          read = await idleActivity(account, router.region, plan.queries, ACTIVITY_DAYS);
+        } catch (err) {
+          throw new HttpError(502, 'metrics_unreadable', `the metrics could not be read: ${(err as Error).message}`);
+        }
+        const t = now();
+        const summary = () => fleet.getWorkload(account, router.region, id).catch(() => null);
+        const [month, period, routerSummary, discounts] = await Promise.all([
+          historyOf(account, router.region, id, new Date(t - COSTS_DAYS * DAY_MS).toISOString(), new Date(t).toISOString(), summary),
+          historyOf(account, router.region, id, read.from, read.to, summary),
+          fleet.listRouters().then((all) => all.find((r) => r.account === account && r.region === router.region) ?? null).catch(() => null),
+          savings ? discountsOf().catch(() => null) : null,
+        ]);
+        const phases = period.view.phases;
+        const values = signalValues(plan.signals, read);
+        const requests = busyMinutes(plan.signals, values, read, phases.filter((p) => p.state === 'AWAKE').map((p) => ({ from: p.from, to: p.to })));
+        const last = [...month.view.phases].reverse().find((p) => p.state === 'ASLEEP' && p.stopped);
+        const { hours: _hours, ...advice } = await idleWindowAdvice({
+          requests, current, checkMinutes: checkMinutesOf(routerSummary?.checkSchedule ?? null), wakeMs: month.view.wakes.medianMs,
+          startAsleep: phases[0]?.state === 'ASLEEP', actualWakes: period.view.wakes.count,
+          actualFrom: period.truncated ? null : phases.find((p) => p.state !== 'UNKNOWN')?.from ?? null,
+          stopped: savings && discounts ? last?.stopped ?? null : null,
+          hourly: (item) => (savings && discounts ? savings.hourly(router.region, item, discounts).catch(() => null) : Promise.resolve(null)),
+          baseline: savings?.baseline ?? { kind: 'always' }, wakerTargetGroup: false, estimated: false, now: t, windows: STANDALONE_WINDOWS, recommendable: STANDALONE_RECOMMENDABLE,
+        });
+        const answer = { from: read.from, to: read.to, signals: signalsOf(values), asleep: phases.filter((p) => p.state === 'ASLEEP').map((p) => ({ from: p.from, to: p.to })), advice };
+        await fleet.putActivity?.(account, router.region, id, { key, answer }).catch(() => undefined);
+        return reply(200, answer);
       }
       if (method === 'GET' && !action) {
         // Its link comes from its summary (the router's status has none): one read, not the whole list.

@@ -453,6 +453,17 @@ export function createFleetStore({ dynamo, table, now = Date.now, historyDays = 
       }));
     },
 
+    // A standalone workload's Activity history (vision standalone workloads design §6), kept a day as the idle window advice is.
+    async getActivity(account: string, region: string, id: string): Promise<unknown> {
+      const { Item } = await dynamo.send(new GetItemCommand({ TableName: table, Key: key(`ACTIVITY#${account}#${region}#${id}`) }));
+      return Item && Number(Item.expiresAt?.N ?? 0) > now() / 1000 ? data<unknown>(Item) : null;
+    },
+    async putActivity(account: string, region: string, id: string, value: unknown): Promise<void> {
+      await dynamo.send(new PutItemCommand({
+        TableName: table, Item: { ...key(`ACTIVITY#${account}#${region}#${id}`), data: { S: JSON.stringify(value) }, expiresAt: { N: String(Math.floor(now() / 1000) + 86_400) } },
+      }));
+    },
+
     // The last entry before a time: the state a period starts in.
     async historyBefore(account: string, region: string, id: string, at: string): Promise<HistoryEntry | null> {
       const { Items = [] } = await dynamo.send(new QueryCommand({

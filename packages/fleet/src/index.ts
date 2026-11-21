@@ -7,4 +7,5 @@ export { DORMETO_COST, baselineHours, savingsOf, type Baseline, type Savings } f
 export { IDLE_WINDOWS, checkMinutesOf, idleWindowAdvice, recommendWindow, replayIdle, requestHours, windowsFor, type IdleWindowAdvice, type IdleWindowRow, type ReplayedWindow, type RequestHours, type RequestMinutes } from './idle.js';
 export { DESCRIPTION_MAX, descriptionProblem, summaryOf } from './description.js';
 export { IDLE_KEYS as IDLE_SIGNAL_KEYS, withoutIdleSignals } from './idle-signals.js';
+export { STANDALONE_RECOMMENDABLE, STANDALONE_WINDOWS, activityPlan, busyMinutes, signalValues, METRIC_LAG_MS, PERIOD_MS, type ActivityBackend, type ActivityPoints, type ActivityQuery, type ActivitySettings, type PlannedSignal } from './activity.js';
 export { cloudOf, fiveFieldMinutes, isAccount, isCandidateRegion, isProject, isRegion, type Cloud } from './clouds.js';

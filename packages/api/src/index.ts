@@ -23,7 +23,7 @@ import { createEngine, createRecords, type InstalledRouter } from '@dormeto/oper
 import { createGoogle, createGoogleSource, type GoogleConnection, type ServiceAccount } from '@dormeto/google';
 import { createApi, routerInvoker, type AuditEntry, type MfaMode, type Preferences, type PreferencesStore, type Router } from './api.js';
 import { createAlarmStore } from './alarms.js';
-import { createIdleRequests } from './idle-requests.js';
+import { createIdleActivity, createIdleRequests } from './idle-requests.js';
 import { etagOf, readJson, readJsonWithEtag, writeJson } from './s3-json.js';
 import { absent, createUpdate, fetchText, missingStream, type Build, type Pending } from './update.js';
 import { createUsers, type CognitoPort, type SesPort } from './users.js';
@@ -111,6 +111,10 @@ const sfn = new SFNClient({});
 const discoveryLambda = new LambdaClient({ maxAttempts: 1, requestHandler: { connectionTimeout: 3_000, requestTimeout: 25_000, socketTimeout: 25_000, throwOnRequestTimeout: true } });
 const idleRequests = process.env.DISCOVERY_FUNCTION
   ? createIdleRequests({ functionName: process.env.DISCOVERY_FUNCTION, invoke: (input) => discoveryLambda.send(new InvokeCommand(input)) })
+  : undefined;
+// A standalone workload's Activity history: its signals, read by the same function (step activity).
+const idleActivity = process.env.DISCOVERY_FUNCTION
+  ? createIdleActivity({ functionName: process.env.DISCOVERY_FUNCTION, invoke: (input) => discoveryLambda.send(new InvokeCommand(input)) })
   : undefined;
 
 // Discovery: items of the manager table, runs on demand by the discovery state machine (plan, accounts, finalize).
@@ -310,6 +314,7 @@ export const handler = createApi({
   // Routers and workloads as the routers report them (scale design §4).
   fleet,
   idleRequests,
+  idleActivity,
   // A workload view's savings (R9): AWS's list prices (the Price List API answers in us-east-1) and Google's, cached in the table;
   // Spot prices and the discounts (R9.5).
   savings: { baseline: baselineOf(process.env.SAVINGS_BASELINE, process.env.SAVINGS_TIMEZONE), hourly: (region, item, discounts) => prices.hourly(region, item, discounts) },

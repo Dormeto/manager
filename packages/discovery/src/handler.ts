@@ -14,6 +14,7 @@ import { createFleetStore } from '../../fleet/src/store.js';
 import { createGoogle, createGoogleSource, type GoogleConnection } from '@dormeto/google';
 import { createProxyPrefixes } from './proxy-prefix.js';
 import { requestsStep } from './requests-step.js';
+import { activityStep } from './activity-step.js';
 import { routeOf } from './route.js';
 import { createStore } from './store.js';
 
@@ -84,6 +85,9 @@ export const handler = async (event: Event = {}, context?: { getRemainingTimeInM
         return { elbv2: ports.elbv2, cloudwatch: ports.cloudwatch! };
       },
     }, event as Record<string, unknown>, Date.now());
+  }
+  if (route === 'activity') {
+    return activityStep(async (account, where) => ({ cloudwatch: scanPorts(regionalClients(await assumeDiscovery(account), where)).cloudwatch! }), event as Record<string, unknown>, Date.now());
   }
   managerAccount ??= (await sts.send(new GetCallerIdentityCommand({}))).Account ?? '';
   const deps: RunDeps = {

@@ -52,9 +52,9 @@ export function requestHours(requests: RequestMinutes): RequestHours {
   return { from: new Date(start).toISOString(), counts };
 }
 
-// The windows tried: the nine, and the current one when it is not among them.
-export function windowsFor(current: number): number[] {
-  return [...new Set([...IDLE_WINDOWS, current])].sort((a, b) => a - b);
+// The windows tried: the nine (a standalone workload's: 5 minutes to 24 hours), and the current one when it is not among them.
+export function windowsFor(current: number, base: number[] = IDLE_WINDOWS): number[] {
+  return [...new Set([...base, current])].sort((a, b) => a - b);
 }
 
 // A router's check period from its schedule: rate(n minutes), rate(n hours) or cron(0/n * * * ? *) (routers 0.31.0),
@@ -121,9 +121,9 @@ export function replayIdle({ requests, windows, checkMinutes, wakeSeconds, start
 
 // The shortest of the nine windows whose wakes are at most wakes(longest) + 10% of what the longest avoids against the
 // shortest; the same wakes everywhere (no request, or no gap), the shortest, which saves the most at no cost.
-export function recommendWindow(rows: { minutes: number; wakes: number }[]): number {
-  const candidates = IDLE_WINDOWS.map((minutes) => rows.find((r) => r.minutes === minutes)).filter((r): r is { minutes: number; wakes: number } => r !== undefined);
-  if (!candidates.length) return IDLE_WINDOWS[0]!;
+export function recommendWindow(rows: { minutes: number; wakes: number }[], base: number[] = IDLE_WINDOWS): number {
+  const candidates = base.map((minutes) => rows.find((r) => r.minutes === minutes)).filter((r): r is { minutes: number; wakes: number } => r !== undefined);
+  if (!candidates.length) return base[0]!;
   const shortest = candidates[0]!.wakes;
   const longest = candidates.at(-1)!.wakes;
   const limit = longest + (1 - KNEE) * (shortest - longest);
@@ -148,13 +148,15 @@ function intersect(a: { from: string; to: string }[], b: { from: string; to: str
 // running: the backend's measured running periods (sorted, disjoint), when it does not run all the time (an instance
 // stopped at night by a schedule): its asleep time is worth something only while it ran. The hours asleep and the
 // wakes stay the replay's.
-export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs, startAsleep, actualWakes, actualFrom, stopped, hourly, baseline, wakerTargetGroup, estimated = false, now, running = null }: {
+// windows: those tried (a standalone workload's STANDALONE_WINDOWS), the HTTP nine by default; recommendable: those the knee
+// chooses from (all those tried by default).
+export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs, startAsleep, actualWakes, actualFrom, stopped, hourly, baseline, wakerTargetGroup, estimated = false, now, running = null, windows: tried = IDLE_WINDOWS, recommendable = tried }: {
   requests: RequestMinutes; current: number; checkMinutes: number; wakeMs: number | null; startAsleep: boolean; actualWakes: number; actualFrom: string | null;
   stopped: StoppedItem[] | null; hourly: (item: StoppedItem) => Promise<number | null>; baseline: Baseline; wakerTargetGroup: boolean; estimated?: boolean; now: number;
-  running?: { from: string; to: string }[] | null;
+  running?: { from: string; to: string }[] | null; windows?: number[]; recommendable?: number[];
 }): Promise<IdleWindowAdvice> {
   const wakeSeconds = wakeMs === null ? null : wakeMs / 1000;
-  const replayed = replayIdle({ requests, windows: windowsFor(current), checkMinutes, wakeSeconds: wakeSeconds ?? 0, startAsleep });
+  const replayed = replayIdle({ requests, windows: windowsFor(current, tried), checkMinutes, wakeSeconds: wakeSeconds ?? 0, startAsleep });
   const days = (Date.parse(requests.to) - Date.parse(requests.from)) / DAY_MS;
   // Priced only when every item of what the latest nap stopped has a price: never a partial dollar figure.
   let priced = Boolean(stopped?.length);
@@ -177,7 +179,7 @@ export async function idleWindowAdvice({ requests, current, checkMinutes, wakeMs
   const own = replayed.find((r) => r.minutes === current)!;
   const replayedWakes = actualFrom === null ? own.wakes : own.wokeAt.filter((at) => at >= actualFrom).length;
   return {
-    computedAt: new Date(now).toISOString(), from: requests.from, to: requests.to, current, recommended: recommendWindow(replayed), checkMinutes,
+    computedAt: new Date(now).toISOString(), from: requests.from, to: requests.to, current, recommended: recommendWindow(replayed, recommendable), checkMinutes,
     wakeSeconds, priced, windows,
     actual: { wakes: actualWakes, replayedWakes, noisy: actualFrom !== null && replayedWakes > 1.5 * actualWakes && replayedWakes >= actualWakes + 3 },
     wakerTargetGroup, estimated, hours: requestHours(requests),
