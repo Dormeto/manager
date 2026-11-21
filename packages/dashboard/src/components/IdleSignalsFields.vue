@@ -19,6 +19,8 @@ const RESOURCE = '${resource}';
 const shape = computed<Cloud>(() => (props.cloud === 'any' ? form.value.metricCloud ?? 'aws' : props.cloud));
 // Google Cloud's fields, added once shown.
 watch(shape, (c) => { if (c === 'gcp' && !form.value.gcp) form.value.gcp = { ...EMPTY_GOOGLE }; }, { immediate: true });
+// A Google Cloud level's metric is Google Cloud's whatever form it was given (final review I4: the onboarding's).
+watch([() => props.cloud, form], ([cloud]) => { if (cloud === 'gcp' && form.value.metricCloud !== 'gcp') form.value.metricCloud = 'gcp'; }, { immediate: true });
 const metricCloud = computed({ get: () => shape.value, set: (c: Cloud) => { form.value.metricCloud = c; } });
 const helpCloud = computed<Cloud | null>(() => (props.cloud === 'any' ? null : props.cloud));
 const words = computed(() => cloudWords(shape.value).standalone);

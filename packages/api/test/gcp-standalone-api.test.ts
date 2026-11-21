@@ -36,7 +36,7 @@ const STATUS = {
 // The discovery account's Compute Engine answers for the onboarding's backing check (final review I3): the backend services
 // named, an instance group's VMs, or a refusal.
 interface Compute { services?: { name: string; backends: { group: string }[] }[]; members?: Record<string, string[]>; refuse?: boolean }
-function setup({ installed = [registered('europe-west2')], read, compute = {}, stored = [] }: { installed?: InstalledRouter[]; read?: IdleActivity; compute?: Compute; stored?: AnyCandidate[] } = {}) {
+function setup({ installed = [registered('europe-west2')], read, compute = {}, stored = [], rows = [ROW] }: { installed?: InstalledRouter[]; read?: IdleActivity; compute?: Compute; stored?: AnyCandidate[]; rows?: Record<string, unknown>[] } = {}) {
   const audit: AuditEntry[] = [];
   const created: [string, Record<string, unknown>][] = [];
   const calls: [string, Record<string, unknown>][] = [];
@@ -72,7 +72,7 @@ function setup({ installed = [registered('europe-west2')], read, compute = {}, s
       list: async () => [], get: async () => null, installedRouters: async () => installed,
     },
     fleet: {
-      listRouters: async () => [] as never, listWorkloads: async () => [ROW] as never, getWorkload: async () => ROW as never,
+      listRouters: async () => [] as never, listWorkloads: async () => rows as never, getWorkload: async (account: string, region: string, id: string) => (rows.find((r) => r.account === account && r.region === region && r.workloadId === id) ?? null) as never,
       listHistory: async () => ({ entries: [], truncated: false }), historyBefore: async () => ({ account: PROJECT, region: 'europe-west2', workloadId: 'build-agent', at: new Date(NOW - 8 * 86_400_000).toISOString(), from: 'WAKING', to: 'AWAKE' }) as never,
       getActivity: async () => null, putActivity: async () => {},
     } as never,
@@ -158,6 +158,19 @@ describe('onboarding a Google Cloud standalone resource: the safety net at onboa
     const res = await s.api(onboard({ candidateId: VM }));
     expect([res.statusCode, json(res).message]).toEqual([409, `cannot onboard ${VM}: the manager could not check that no load balancer uses it (Google refused: compute.backendServices.list denied): try again`]);
     expect(s.created).toEqual([]);
+  });
+});
+
+describe('a managed Google Cloud standalone candidate\'s workload (final review I5)', () => {
+  it('is found by its resource on the router that holds it, in another region or beside another router', async () => {
+    const at = `projects/${PROJECT}/zones/${ZONE}/instances/agent`;
+    const row = { ...ROW, workloadId: 'agent', name: 'Agent', resource: at, region: 'us-central1', router: 'dmtr-us-central1' };
+    for (const installed of [[registered('us-central1')], [registered('us-central1'), registered('europe-west2')]]) {
+      const s = setup({ rows: [row], installed, stored: [standalone(at, { eligibility: 'managed', workloadId: 'agent', status: 'managed' })] });
+      const res = await s.api({ ...event('GET', '/api/discovery/candidates', 'dmt-operator'), queryStringParameters: { status: 'managed' } });
+      const found = (json(res).candidates as { id: string; workload?: unknown }[]).find((c) => c.id === at);
+      expect(found?.workload, installed.map((r) => r.region).join()).toEqual({ router: `dmtr-${PROJECT}-us-central1`, workloadId: 'agent', name: 'Agent' });
+    }
   });
 });
 

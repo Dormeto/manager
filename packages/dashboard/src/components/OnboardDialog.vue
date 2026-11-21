@@ -90,7 +90,8 @@ watch(() => props.modelValue, (open) => {
   preselect();
   tagRows.value = [];
   copyNote.value = '';
-  idle.value = JSON.parse(JSON.stringify(idleInitial)) as IdleForm;
+  // In the candidate's cloud's shape (final review I4).
+  idle.value = idleFormOf({}, undefined, props.cloud);
   idleProblem.value = '';
 });
 

@@ -2442,6 +2442,14 @@ export function createApi({
       const router = routers.find((r) => r.cloud === 'gcp' && r.account === row.account && r.region === row.region);
       return { ...c, workload: { router: router?.name ?? row.router, workloadId: c.workloadId, name: (row.name as string | undefined) ?? c.workloadId } };
     }
+    // A Google Cloud standalone one: its row by its resource, on the router that holds it (another region's, or the one named;
+    // final review I5).
+    if (cloudOf(c.account) === 'gcp') {
+      const row = (await rows()).find((w) => w.account === c.account && (w as { resource?: unknown }).resource === c.id);
+      if (!row) return c;
+      const router = routers.find((r) => r.cloud === 'gcp' && r.account === row.account && r.region === row.region);
+      return { ...c, workload: { router: router?.name ?? row.router, workloadId: (row.workloadId as string | undefined) ?? c.workloadId, name: (row.name as string | undefined) ?? c.workloadId } };
+    }
     const router = routers.find((r) => accountOfRouter(r) === c.account && r.region === c.region);
     const summary = fleet ? await fleet.getWorkload(c.account, c.region, c.workloadId).catch(() => null) : null;
     if (!router && !summary) return c;

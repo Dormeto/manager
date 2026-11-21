@@ -238,3 +238,26 @@ describe('the demo\'s Google Cloud standalone workloads', () => {
     expect(discovery.lastRun.targets.flatMap((t) => t.problems ?? []).some((p) => p.startsWith('Cloud SQL instances not listed'))).toBe(true);
   });
 });
+
+describe('onboarding a Google Cloud resource with a custom metric (final review I4)', () => {
+  it('sends the metric in Google Cloud\'s shape', async () => {
+    setActivePinia(createPinia());
+    const w = mount(OnboardDialog, { props: { modelValue: false, title: 'batch', defaultName: 'batch', resource: 'instance', cloud: 'gcp' }, attachTo: document.body, global: { plugins: plugins() } });
+    await w.setProps({ modelValue: true });
+    await flushPromises();
+    (w.vm as unknown as { idle: { metricMode: string } }).idle.metricMode = 'metric';
+    await flushPromises();
+    const type = async (test: string, value: string) => {
+      const el = document.querySelector(`[data-test="${test}"] input`) as HTMLInputElement;
+      el.value = value;
+      el.dispatchEvent(new Event('input'));
+      await flushPromises();
+    };
+    await type('idle-metric-type', 'custom.googleapis.com/queue/depth');
+    await type('idle-metric-below', '1');
+    [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Onboard')!.click();
+    await flushPromises();
+    expect((w.emitted('submit')?.[0]?.[0] as { settings: Record<string, unknown> }).settings).toEqual({ idleMetric: { type: 'custom.googleapis.com/queue/depth', aligner: 'ALIGN_MAX', below: 1 } });
+    w.unmount();
+  });
+});
