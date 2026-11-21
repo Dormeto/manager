@@ -3,13 +3,14 @@
 import type { Cloud } from '@dormeto/fleet/clouds';
 import type { KubernetesCandidate } from './kubernetes.js';
 
-export type BackendKind = 'instance' | 'asg' | 'ecs' | 'k8s' | 'rds-instance' | 'rds-cluster';
+export type BackendKind = 'instance' | 'asg' | 'ecs' | 'k8s' | 'rds-instance' | 'rds-cluster' | 'cloudsql-instance';
 // The backends of an HTTP candidate (the dashboard's filter).
 export const BACKEND_KINDS: readonly BackendKind[] = ['instance', 'asg', 'ecs', 'k8s'];
 // The resource of a standalone candidate (vision standalone workloads design §2): the router's kinds (router lambda/src/lib/
-// settings-levels.mjs resourceKindOf).
-export type ResourceKind = 'instance' | 'asg' | 'ecs' | 'rds-instance' | 'rds-cluster';
-export const RESOURCE_KINDS: readonly ResourceKind[] = ['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster'];
+// settings-levels.mjs resourceKindOf; on Google Cloud, a VM `instance`, a managed instance group `asg`, a Cloud SQL instance
+// `cloudsql-instance`, as the router's preview names them).
+export type ResourceKind = 'instance' | 'asg' | 'ecs' | 'rds-instance' | 'rds-cluster' | 'cloudsql-instance';
+export const RESOURCE_KINDS: readonly ResourceKind[] = ['instance', 'asg', 'ecs', 'rds-instance', 'rds-cluster', 'cloudsql-instance'];
 // What a criterion's backendKinds may name: both.
 export const CRITERION_BACKEND_KINDS: readonly BackendKind[] = [...new Set([...BACKEND_KINDS, ...RESOURCE_KINDS])];
 
@@ -127,17 +128,21 @@ export interface ScannedRule {
   lb?: { kind: 'global' | 'classic' | 'regional' | 'internal' | 'cross-region-internal' };
 }
 
-// A standalone candidate (vision standalone workloads design §6): one stoppable resource on AWS that no route uses, by its
-// ARN (`id` and `resourceArn`), with no load balancer, listener, rule, host or target group field.
+// A standalone candidate (vision standalone workloads design §6): one stoppable resource that no route uses, with no load
+// balancer, listener, rule, host or target group field. On AWS by its ARN (`id` and `resourceArn`); on Google Cloud (plan 5,
+// `cloud: 'gcp'`) by its path (`id` and `resource`: projects/<p>/zones/<z>/instances/<n>, …/instanceGroupManagers/<n>,
+// projects/<p>/instances/<n>), its backend's `location` the zone or region, no `arn`.
 export interface StandaloneRule {
   kind: 'standalone';
-  id: string; // the resource's ARN
-  account: string;
+  id: string; // the resource's ARN, or its Google Cloud path
+  account: string; // the AWS account, or the Google Cloud project
   region: string;
-  resourceArn: string;
+  resourceArn?: string; // AWS's
+  resource?: string; // Google Cloud's
+  cloud?: 'gcp';
   name: string; // the router's default name: the instance's Name tag or its id, the group's, service's or database's name
-  backend: { kind: ResourceKind; id: string; arn: string };
-  tags: Record<string, string[]>; // the resource's own tags, one value each
+  backend: { kind: ResourceKind; id: string; arn?: string; location?: string };
+  tags: Record<string, string[]>; // the resource's own tags (labels on Google Cloud), one value each
   eligibility: 'managed' | 'eligible' | 'ineligible';
   reason?: string;
   workloadId?: string;

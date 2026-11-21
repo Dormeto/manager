@@ -18,6 +18,7 @@ const arnOf = (kind: ResourceKind, id: string, account: string, region: string, 
   asg: `arn:aws:autoscaling:${region}:${account}:autoScalingGroup:${hex(`asg:${id}`, 8)}-0000-4000-8000-${hex(`asg2:${id}`, 12)}:autoScalingGroupName/${id}`,
   ecs: `arn:aws:ecs:${region}:${account}:service/${cluster}/${id}`,
   'rds-instance': `arn:aws:rds:${region}:${account}:db:${id}`,
+  'cloudsql-instance': `projects/${account}/instances/${id}`,
   'rds-cluster': `arn:aws:rds:${region}:${account}:cluster:${id}`,
 }[kind]);
 const resourceId = (kind: ResourceKind, name: string) => (kind === 'instance' ? `i-0${hex(`standalone:${name}`, 16)}` : name);
@@ -146,7 +147,7 @@ const REASONS = (label: (kind: ResourceKind, name: string) => string): Candidate
   { name: 'orders-replica', kind: 'rds-instance', reason: `${label('rds-instance', 'orders-replica')} is a read replica: it cannot be stopped` },
   { name: 'legacy-serverless', kind: 'rds-cluster', reason: `${label('rds-cluster', 'legacy-serverless')} is Aurora Serverless v1: it cannot be stopped` },
 ];
-const LABELS: Record<ResourceKind, string> = { instance: 'instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'RDS cluster' };
+const LABELS: Record<ResourceKind, string> = { instance: 'instance', asg: 'Auto Scaling group', ecs: 'ECS service', 'rds-instance': 'RDS instance', 'rds-cluster': 'RDS cluster', 'cloudsql-instance': 'Cloud SQL instance' };
 
 export function standaloneCandidates(d: Demo, router: DemoRouter, now: number, lastSeen: number): Candidate[] {
   const { account, region } = router;

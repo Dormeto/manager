@@ -13,8 +13,18 @@ rows and answers are unchanged (no `kind`; absent means HTTP). A standalone work
 rule uses: an EC2 instance outside an Auto Scaling group, an Auto Scaling group with no target group, an ECS service with
 no load balancer, an RDS instance or an Aurora cluster. It naps when its idle signals stay under their thresholds for its
 idle window, or by its schedule; nothing wakes it on demand: a schedule, a person (Wake) or a start made in AWS does. It
-needs the router that knows standalone workloads; an older one refuses its preview and asks to be upgraded. Google Cloud
-has none yet.
+needs the router that knows standalone workloads; an older one refuses its preview and asks to be upgraded.
+  - **Google Cloud's discovery:** with the same switch on, each project's scan also lists its Compute Engine VMs, managed
+  instance groups and Cloud SQL instances, each a candidate of its own path (`id` and `resource`, `cloud: "gcp"`, no
+  `resourceArn`): eligible, ineligible in the Google Cloud router's words (a managed group's member, a GKE node, a GPU, a local
+  SSD, a stateful group, a regional group with the target shape EVEN, a read replica), or managed by a router's standalone
+  workload. A VM or a group that backs any backend service is never eligible: the backend of an HTTP candidate is left out,
+  one behind another backend service is listed with it (`… backs backend service <s>: it belongs to an HTTP workload`).
+  Criteria take its labels, region and kind (`cloudsql-instance` too); an exclusion takes its path. Its idle share is
+  read from Cloud Monitoring: a VM's CPU, each VM of a group's, a Cloud SQL instance's connections. **Run `dormeto gcp connect`
+  again to list Cloud SQL instances:** the discovery account's role `dormetoDiscovery` gains `cloudsql.instances.list` and
+  `cloudsql.instances.get`; until then, or in a project whose Cloud SQL Admin API is off, the VMs and groups are listed, the
+  stored Cloud SQL candidates stay as they were, and the run says which of the two it is.
   - **Turn it on:** the discovery perimeter's `standalone` is `off` (the built-in, also when absent: an upgraded install
   sees no new candidate and makes no new call) until set to `on` (the Discovery view's Standalone resources switch). On,
   each region's scan lists those resources, each a candidate of its own resource (`kind: "standalone"`, its ARN as `id`

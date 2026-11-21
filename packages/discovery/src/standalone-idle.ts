@@ -37,7 +37,7 @@ export function defaultSignals(backend: StandaloneRule['backend']): DefaultSigna
     case 'asg': return cpu('AWS/EC2', [{ Name: 'AutoScalingGroupName', Value: backend.id }]);
     case 'ecs': {
       // service/<cluster>/<name>, or service/<name> in the default cluster (an ARN of the old format).
-      const path = backend.arn.split(':service/')[1] ?? backend.id;
+      const path = (backend.arn ?? backend.id).split(':service/')[1] ?? backend.id;
       const [cluster, name] = path.includes('/') ? [path.split('/')[0]!, path.split('/').at(-1)!] : ['default', path];
       return cpu('AWS/ECS', [{ Name: 'ClusterName', Value: cluster }, { Name: 'ServiceName', Value: name }]);
     }

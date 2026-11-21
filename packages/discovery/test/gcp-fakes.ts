@@ -12,6 +12,7 @@ export const PROJECT = 'dormeto-dev';
 const V1 = 'https://www.googleapis.com/compute/v1';
 const MONITORING = 'https://monitoring.googleapis.com/v3';
 const API = 'https://compute.googleapis.com/compute/v1';
+const SQLADMIN = 'https://sqladmin.googleapis.com/v1';
 const RESOURCES = ['urlMaps', 'backendServices', 'targetHttpProxies', 'targetHttpsProxies', 'forwardingRules', 'instanceGroupManagers', 'instances'] as const;
 type Resource = (typeof RESOURCES)[number];
 type Item = Record<string, unknown>;
@@ -54,12 +55,25 @@ export function compute(project = PROJECT) {
     monitoringError: undefined as GoogleError | undefined,
     pageSeries: undefined as number | undefined,
     service: (name: string, region?: string) => link(`${scopeOf(region)}/backendServices/${name}`),
-    vm(name: string, zone: string, labels: Record<string, string> = {}) {
+    // The standalone scan's (plan 5): Cloud SQL instances (the Cloud SQL Admin API's list and get), a refusal of its list, the
+    // 5-minute points of a VM's CPU (`vm:<zone>/<name>`) or a Cloud SQL instance's connections (`db:<project>:<name>`), by point
+    // start, and a refusal of those reads; the machine types with GPUs (the router reads them, the scan cannot).
+    sql: [] as Item[],
+    sqlError: undefined as GoogleError | undefined,
+    sqlPage: undefined as number | undefined,
+    points: {} as Record<string, (t: number) => number | undefined>,
+    pointsError: undefined as GoogleError | undefined,
+    gpuTypes: [] as string[],
+    vm(name: string, zone: string, labels: Record<string, string> = {}, extra: Item = {}) {
       add('instances', `zones/${zone}`, {
         kind: 'compute#instance', name, zone: link(`zones/${zone}`), machineType: link(`zones/${zone}/machineTypes/e2-small`), status: 'RUNNING',
         labels, labelFingerprint: '42WmSpB8rSM=', selfLink: link(`zones/${zone}/instances/${name}`),
+        disks: [{ type: 'PERSISTENT', boot: true }], ...extra,
       });
       return link(`zones/${zone}/instances/${name}`);
+    },
+    cloudSql(name: string, extra: Item = {}) {
+      world.sql.push({ kind: 'sql#instance', name, project, region: 'europe-west1', databaseVersion: 'POSTGRES_16', state: 'RUNNABLE', instanceType: 'CLOUD_SQL_INSTANCE', settings: { activationPolicy: 'ALWAYS', userLabels: {} }, selfLink: `https://sqladmin.googleapis.com/v1/projects/${project}/instances/${name}`, ...extra });
     },
     // An unmanaged instance group, or a managed group's (its manager added by mig). location: a zone, or a region with regional.
     group(name: string, location: string, vms: string[], { regional = false } = {}) {
@@ -67,13 +81,18 @@ export function compute(project = PROJECT) {
       groups[`projects/${project}/${scope}/instanceGroups/${name}`] = vms.map((vm) => link(`zones/${regional ? `${location}-b` : location}/instances/${vm}`));
       return link(`${scope}/instanceGroups/${name}`);
     },
-    mig(name: string, location: string, vms: string[], { regional = false } = {}) {
+    // Its VMs' created-by metadata names it, as Google writes it (the project's number).
+    mig(name: string, location: string, vms: string[], { regional = false, extra = {} as Item } = {}) {
       const scope = regional ? `regions/${location}` : `zones/${location}`;
       add('instanceGroupManagers', scope, {
         kind: 'compute#instanceGroupManager', name, ...(regional ? { region: link(scope) } : { zone: link(scope) }),
         instanceTemplate: link(`global/instanceTemplates/${name}-20261029`), instanceGroup: link(`${scope}/instanceGroups/${name}`),
-        baseInstanceName: name, targetSize: vms.length, status: { isStable: true }, selfLink: link(`${scope}/instanceGroupManagers/${name}`),
+        baseInstanceName: name, targetSize: vms.length, status: { isStable: true, stateful: { hasStatefulConfig: false } }, selfLink: link(`${scope}/instanceGroupManagers/${name}`),
+        ...extra,
       });
+      for (const vm of Object.values(lists.instances).flat().filter((i) => vms.includes(String(i.name)))) {
+        vm.metadata = { items: [{ key: 'created-by', value: `projects/123456789012/${scope}/instanceGroupManagers/${name}` }] };
+      }
       return world.group(name, location, vms, { regional });
     },
     // A zonal network endpoint group, its endpoints the VMs named.
@@ -123,13 +142,64 @@ export function compute(project = PROJECT) {
       world.maxInFlight = Math.max(world.maxInFlight, inFlight);
       try {
         await new Promise((resolve) => setTimeout(resolve, world.delayMs));
+        if (url.startsWith(MONITORING) && new URL(url).searchParams.get('aggregation.alignmentPeriod') === '300s') return points(url) as T;
         if (url.startsWith(MONITORING)) return timeSeries(url) as T;
+        if (url.startsWith(SQLADMIN)) return sqlAnswer(method, url) as T;
         return answer(method, url, body) as T;
       } finally {
         inFlight -= 1;
       }
     },
   };
+
+  // The Cloud SQL Admin API: the project's instances in pages, one by its name.
+  function sqlAnswer(method: string, url: string) {
+    if (world.sqlError) throw world.sqlError;
+    const u = new URL(url);
+    const one = /^\/v1\/projects\/[^/]+\/instances\/([^/]+)$/.exec(u.pathname);
+    if (one && method === 'GET') {
+      const found = world.sql.find((i) => i.name === one[1]);
+      if (!found) throw Object.assign(new GoogleError({ status: 404, reason: 'instanceDoesNotExist', message: 'The Cloud SQL instance does not exist.', host: 'sqladmin.googleapis.com' }), { code: 404 });
+      return found;
+    }
+    if (u.pathname !== `/v1/projects/${project}/instances` || method !== 'GET') throw new Error(`unexpected call ${method} ${url}`);
+    const size = world.sqlPage ?? world.sql.length;
+    const at = Number(u.searchParams.get('pageToken') ?? 0);
+    return { kind: 'sql#instancesList', items: world.sql.slice(at, at + size), ...(at + size < world.sql.length ? { nextPageToken: String(at + size) } : {}) };
+  }
+
+  // timeSeries.list in 5-minute points (the standalone signals): the filter's metric type and its one_of or ends_with values,
+  // a series each with the labels Monitoring gives (a VM's zone and instance_name, a database's database_id), aligned points
+  // whose interval ends a period after the point's start.
+  function points(url: string) {
+    const u = new URL(url);
+    world.queries.push(u);
+    if (world.pointsError) throw world.pointsError;
+    const q = u.searchParams;
+    const filter = q.get('filter') ?? '';
+    const type = /metric\.type = "([^"]+)"/.exec(filter)?.[1] ?? '';
+    const start = Date.parse(q.get('interval.startTime')!);
+    const end = Date.parse(q.get('interval.endTime')!);
+    const values = [...(/one_of\(([^)]*)\)/.exec(filter)?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    const endsWith = /ends_with\("([^"]+)"\)/.exec(filter)?.[1];
+    const keys = Object.keys(world.points).filter((key) => {
+      if (type.startsWith('cloudsql.')) return key.startsWith('db:') && (values.includes(key.slice(3)) || (endsWith !== undefined && key.endsWith(endsWith)));
+      return key.startsWith('vm:') && values.includes(key.slice(key.indexOf('/') + 1));
+    });
+    const series = keys.map((key) => {
+      const value = world.points[key]!;
+      const pts = [];
+      for (let t = start; t < end; t += 300_000) {
+        const v = value(t);
+        if (v !== undefined) pts.push({ interval: { startTime: new Date(t).toISOString(), endTime: new Date(t + 300_000).toISOString() }, value: { doubleValue: type.endsWith('/connections') ? undefined : v, ...(type.endsWith('/connections') ? { int64Value: String(v) } : {}) } });
+      }
+      const [zone, name] = key.slice(3).split('/');
+      return key.startsWith('db:')
+        ? { metric: { type }, resource: { type: 'cloudsql_database', labels: { database_id: key.slice(3), project_id: project } }, points: pts.reverse() }
+        : { metric: { type, labels: { instance_name: name } }, resource: { type: 'gce_instance', labels: { zone, instance_id: '1', project_id: project } }, points: pts.reverse() };
+    });
+    return { timeSeries: series };
+  }
 
   // timeSeries.list: the series of the metric type asked for, as the query's aggregation groups them. A series' hours are given
   // as hours before the window's end (1 = the last hour).
@@ -205,6 +275,22 @@ export function compute(project = PROJECT) {
       if (!found) throw notFound(url);
       return { kind: 'compute#networkEndpointGroupsListNetworkEndpoints', items: found.endpoints };
     }
+    // The router's own reads (its preview, for the parity test): a VM, a managed group and its VMs, a machine type.
+    const vm = /^zones\/([^/]+)\/instances\/([^/]+)$/.exec(path);
+    if (vm && method === 'GET') {
+      const found = (lists.instances[`zones/${vm[1]}`] ?? []).find((i) => i.name === vm[2]);
+      if (!found) throw Object.assign(notFound(url), { code: 404 });
+      return found;
+    }
+    const manager = /^((?:zones|regions)\/[^/]+)\/instanceGroupManagers\/([^/]+)(\/listManagedInstances)?$/.exec(path);
+    if (manager) {
+      const found = (lists.instanceGroupManagers[manager[1]!] ?? []).find((i) => i.name === manager[2]);
+      if (!found) throw Object.assign(notFound(url), { code: 404 });
+      if (!manager[3] && method === 'GET') return found;
+      if (manager[3] && method === 'POST') return { managedInstances: (groups[`projects/${project}/${manager[1]}/instanceGroups/${manager[2]}`] ?? []).map((instance) => ({ instance, instanceStatus: 'RUNNING' })) };
+    }
+    const type = /^zones\/([^/]+)\/machineTypes\/([^/]+)$/.exec(path);
+    if (type && method === 'GET') return { name: type[2], ...(world.gpuTypes.includes(type[2]!) ? { accelerators: [{ guestAcceleratorType: 'nvidia-l4', guestAcceleratorCount: 1 }] } : {}) };
     throw new Error(`unexpected call ${method} ${url}`);
   }
   return world;

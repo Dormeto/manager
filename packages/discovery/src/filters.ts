@@ -45,7 +45,7 @@ export function matches(c: Criterion, account: Account, rule: DiscoveredRule, in
     if (c.loadBalancers || c.hosts || c.targetGroups) return false;
     if (c.resourceTags && !resourceTagsMatch(c.resourceTags, rule.tags)) return false;
     if (c.backendKinds && !c.backendKinds.includes(rule.backend.kind)) return false;
-    return !c.resources || c.resources.includes(rule.resourceArn);
+    return !c.resources || c.resources.includes(rule.id); // its ARN, or its Google Cloud path
   }
   if (c.resources) return false;
   if (c.loadBalancers && !c.loadBalancers.some((p) => (p.startsWith('projects/') ? pathMatches(p, rule) : p.startsWith('arn:') ? p === rule.loadBalancerArn : globMatches(p, rule.loadBalancer)))) return false;

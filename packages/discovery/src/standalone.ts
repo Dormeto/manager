@@ -52,7 +52,7 @@ export async function standaloneRules(ports: ScanPorts, where: { account: string
       return [];
     }
   };
-  const byKind: Record<ResourceKind, StandaloneRule[]> = { instance: [], asg: [], ecs: [], 'rds-instance': [], 'rds-cluster': [] };
+  const byKind: Record<ResourceKind, StandaloneRule[]> = { instance: [], asg: [], ecs: [], 'rds-instance': [], 'rds-cluster': [], 'cloudsql-instance': [] };
   // Managed: the router's tag of the resource's own workload. Left out: tagged by another workload (its backend or its
   // companion), or `leftOut` (an HTTP candidate's backend, a Kubernetes node, a member of a group left out or managed).
   const settle = (r: Resource, leftOut = false): Outcome => {

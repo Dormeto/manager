@@ -151,7 +151,7 @@ describe.skipIf(!router)('the standalone scan against the router\'s onboarding p
     const found = standaloneOf(await scanRegion(ports, WHERE, { now: NOW, standalone: true })).filter((c) => c.eligibility !== 'managed');
     const onboarding = router!.createOnboarding({ ...ports, store: { listConfigs: async () => [] }, router: { name: 'dmtr-dev-eu-west-1' }, log: { info() {}, warn() {} } });
     for (const c of found) {
-      const preview = await onboarding.preview({ resourceArn: c.resourceArn });
+      const preview = await onboarding.preview({ resourceArn: c.resourceArn! });
       expect([preview.problems, preview.name], c.id).toEqual([c.reason ? c.reason.split('; ') : [], c.name]);
     }
     expect(found.length).toBe(Object.keys(EXPECTED).length - 1);

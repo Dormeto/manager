@@ -181,7 +181,7 @@ const idleMark = (c: Listed) => cloudWords(rowCloud(c)).idleMark;
 // A standalone candidate's resource kind (its idle share is by its signals).
 const resourceOf = (c: Listed): ResourceKind | undefined => (c.kind === 'standalone' ? c.backend.kind : undefined);
 // A standalone candidate is its resource (design §6): its name, and its kind and id as the router names them.
-const resourceText = (c: Listed) => (c.kind === 'standalone' ? `${backendLabel(c.backend.kind, 'aws')} ${c.backend.kind === 'ecs' ? c.backend.arn.split(':service/')[1] ?? c.backend.id : c.backend.id}` : '');
+const resourceText = (c: Listed) => (c.kind === 'standalone' ? `${backendLabel(c.backend.kind, 'aws')} ${c.backend.kind === 'ecs' ? (c.backend.arn ?? c.backend.id).split(':service/')[1] ?? c.backend.id : c.backend.id}` : '');
 // One kind of candidates (the API's filter), from the address too.
 const route = useRoute();
 const kindFilter = ref<Kind | null>(route.query.kind === 'http' || route.query.kind === 'standalone' ? route.query.kind : null);

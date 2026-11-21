@@ -52,7 +52,9 @@ the manager. The manager never changes a Google Cloud IAM policy, and no `gcloud
   roles `dmt-<env>-manager-discovery`, `-api` and `-savings` (`roles/iam.workloadIdentityUser`, granted to the principal
   set of each role name). It holds read-only access, through the custom role `dormetoDiscovery`, at each scope: the
   projects, folders and organizations, the load balancers' parts, the Cloud Run services (the routers) and Monitoring's
-  request counts. It also reads Google's list prices from the Cloud Billing Catalog (the savings job, no role needed, the host
+  request counts; for the perimeter's standalone scan, the VMs, managed instance groups and Cloud SQL instances
+  (`cloudsql.instances.list` and `get`, in the role since the release that lists Cloud SQL: a connection made before needs
+  `dormeto gcp connect` again; until then the scan lists the VMs and groups and says it) and their CPU and connections. It also reads Google's list prices from the Cloud Billing Catalog (the savings job, no role needed, the host
   project's `cloudbilling.googleapis.com` API enabled).
 - **`dmt-<env>-command@<host>.iam.gserviceaccount.com`**, twin of `DmtCommandRole`, is impersonated by
   `dmt-<env>-manager-operations`, `-api` and `-fleet`. In each project that has a router it holds

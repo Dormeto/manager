@@ -18,20 +18,23 @@ import type { WorkloadSummary } from '@dormeto/fleet';
 import { GoogleError } from '@dormeto/google';
 import { errorText } from './error-text.js';
 import { idleOfProject } from './gcp-idle.js';
+import { idleTargetOf, listCloudSql, standaloneIdleOf, standaloneRules, type Backing, type GInstance, type GManager, type SqlInstance, type StandaloneRow } from './gcp-standalone.js';
 import type { GooglePort } from './google.js';
-import type { BackendKind, Candidate, ScannedRule } from './types.js';
+import type { BackendKind, Candidate, DiscoveredRule, ResourceKind, ScannedRule, StandaloneRule } from './types.js';
 
 type Call = GooglePort['call'];
 type LbKind = NonNullable<ScannedRule['lb']>['kind'];
 
 // The router's row of a workload (WS#<project>#<region>#<id>), as the router's reports write it: names, not paths.
 export type ManagedRow = Pick<WorkloadSummary, 'workloadId' | 'region' | 'backendService' | 'wakerBackendService' | 'urlMap' | 'lb'>;
-// A candidate of the project the store holds: where it is, and the idle share it was given last.
-export type StoredCandidate = Pick<Candidate, 'id' | 'region' | 'idleHours7d' | 'requests7d' | 'goneAt'>;
+// A candidate of the project the store holds: where it is, and the idle share it was given last (a standalone one's requests none).
+export type StoredCandidate = Pick<Candidate, 'id' | 'region' | 'idleHours7d' | 'goneAt'> & { requests7d?: number | null; kind?: string };
 
 export interface ProjectScan {
-  rules: ScannedRule[];
+  rules: DiscoveredRule[];
   regions: { region: string; ok: boolean; error?: string }[]; // `global` and each region where the scan found something
+  // With the standalone scan (plan 5): what it could not read, and the kinds whose stored candidates stay as they were.
+  standalone?: { problems: string[]; unread: ResourceKind[] };
 }
 
 const COMPUTE = 'https://compute.googleapis.com/compute/v1';
@@ -82,8 +85,8 @@ interface UrlMap { name: string; selfLink: string; description?: string; default
 interface BackendService { name: string; selfLink: string; backends?: { group?: string }[] }
 interface Proxy { name: string; selfLink: string; urlMap?: string; description?: string }
 interface ForwardingRule { name: string; target?: string; loadBalancingScheme?: string; description?: string }
-interface Manager { name: string; instanceGroup?: string }
-interface Instance { selfLink: string; labels?: Record<string, string> }
+type Manager = GManager;
+type Instance = GInstance;
 interface Neg { name: string; networkEndpointType?: string; description?: string; annotations?: Record<string, string> }
 interface AggregatedPage { items?: Record<string, Record<string, unknown> & { warning?: { code?: string; message?: string } }>; unreachables?: string[]; nextPageToken?: string }
 // What names a backend service: the map and its matchers by their defaults, the rules by their service and route action.
@@ -236,9 +239,12 @@ const failureText = (err: unknown) => (err instanceof RegionFailed ? err.message
 
 // `managed`: the rows of the project's routers. `stored`: the project's candidates in the store (an unreachable region where
 // one is fails; a Monitoring that fails keeps their idle share). `now`: the clock of the idle share (§7.3).
-export async function scanProject(port: Pick<GooglePort, 'call'>, { project, managed, stored = [], now, log }: {
-  project: string; managed: ManagedRow[]; stored?: StoredCandidate[]; now: () => number; log?: { warn(event: string, data?: object): void };
-}): Promise<ProjectScan> {
+// `standalone`: the perimeter's standalone scan is on (plan 5): the VMs, the managed groups and the Cloud SQL instances too, with
+// the backends of every backend service read (the safety net); off, not one call more.
+type ScanOptions = { project: string; managed: (ManagedRow & StandaloneRow)[]; stored?: StoredCandidate[]; now: () => number; log?: { warn(event: string, data?: object): void }; standalone?: boolean };
+export async function scanProject(port: Pick<GooglePort, 'call'>, options: ScanOptions & { standalone?: false }): Promise<ProjectScan & { rules: ScannedRule[] }>;
+export async function scanProject(port: Pick<GooglePort, 'call'>, options: ScanOptions): Promise<ProjectScan>;
+export async function scanProject(port: Pick<GooglePort, 'call'>, { project, managed, stored = [], now, log, standalone = false }: ScanOptions): Promise<ProjectScan> {
   const call = limited(port.call.bind(port), AT_ONCE);
   const seen = new Set<string>(['global']);
   const unlisted = new Map<string, string>(); // region -> why the lists miss part of it
@@ -481,10 +487,59 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
   const idle = await idleOfProject(port, {
     project, now, log,
     candidates: kept.filter((r) => r.eligibility !== 'ineligible').map((r) => ({ id: r.id, backendService: r.targetGroup ?? '', urlMap: r.loadBalancer, region: r.region, kind: r.lb?.kind })),
-    stored: new Map(stored.map((c) => [c.id, { idleHours7d: c.idleHours7d, requests7d: c.requests7d }])),
+    stored: new Map(stored.filter((c) => c.kind !== 'standalone').map((c) => [c.id, { idleHours7d: c.idleHours7d, requests7d: c.requests7d ?? null }])),
   });
-  return {
-    rules: kept.map((r) => ({ ...r, ...idle.get(r.id) })),
-    regions: [...seen].sort().map((region) => (failed.has(region) ? { region, ok: false, error: failed.get(region)! } : { region, ok: true })),
-  };
+  const http = kept.map((r) => ({ ...r, ...idle.get(r.id) }));
+  if (!standalone) return { rules: http, regions: regionsOf() };
+
+  // ---- The standalone scan (plan 5, M50) ----
+  // What backs each backend service of the project, whether a URL map names it or not: a backend read that fails fails its
+  // region (the reachable rule), as a candidate's own read does.
+  const backing: Backing = { vms: new Map(), groups: new Map() };
+  await Promise.all(services.map(async ({ item }) => {
+    const id = pathOf(item.selfLink);
+    const candidate = candidates.has(id);
+    for (const b of item.backends ?? []) {
+      const url = b.group ?? '';
+      const group = INSTANCE_GROUP.exec(url);
+      try {
+        const read = await backendOf(url, item.name);
+        for (const vm of read.vms) if (!backing.vms.get(vm)?.candidate) backing.vms.set(vm, { service: item.name, candidate });
+        if (group && read.kind === 'asg') {
+          const path = `projects/${project}/${group[1]}/${group[2]}/instanceGroupManagers/${group[3]}`;
+          if (!backing.groups.get(path)?.candidate) backing.groups.set(path, { service: item.name, candidate });
+        }
+      } catch (err) {
+        const location = group?.[2] ?? NEG_URL.exec(url)?.[2] ?? '';
+        fail(group?.[1] === 'regions' ? location : location ? regionOfZone(location) : 'global', failureText(err));
+      }
+    }
+  }));
+  const problems: string[] = [];
+  const unread: ResourceKind[] = [];
+  const listed = await listCloudSql(call, project);
+  if ('problem' in listed) {
+    problems.push(listed.problem);
+    unread.push('cloudsql-instance');
+  }
+  const found = standaloneRules({
+    project, instances: instances.map((i) => i.item), managers: managers.map((m) => m.item), sql: 'instances' in listed ? listed.instances : null, backing,
+    rows: managed.filter((r) => (r as StandaloneRow).kind === 'standalone'),
+  });
+  for (const r of found) seen.add(r.region);
+  const standaloneKept = found.filter((r) => !failed.has(r.region));
+  // Their idle share by the default signals, a read that fails keeping the stored share and said in the run.
+  const read = standaloneKept.filter((r) => r.eligibility !== 'ineligible');
+  const share = await standaloneIdleOf(call, { project, now, targets: read.map((r) => idleTargetOf(r, instances.map((i) => i.item))) });
+  const storedShare = new Map(stored.map((c) => [c.id, c.idleHours7d]));
+  for (const r of read) r.idleHours7d = share.shares.has(r.id) ? share.shares.get(r.id)! : storedShare.get(r.id) ?? null;
+  for (const f of share.failed) {
+    problems.push(`the idle share of ${f.ids.length} standalone candidate${f.ids.length === 1 ? '' : 's'} could not be read: ${f.error}`);
+    log?.warn('GoogleStandaloneIdleFailed', { project, standalone: f.ids.length, error: f.error.slice(0, 300) });
+  }
+  return { rules: [...http, ...standaloneKept satisfies StandaloneRule[]], regions: regionsOf(), standalone: { problems, unread } };
+
+  function regionsOf() {
+    return [...seen].sort().map((region) => (failed.has(region) ? { region, ok: false, error: failed.get(region)! } : { region, ok: true }));
+  }
 }

@@ -30,6 +30,8 @@ const NAPS: Record<ResourceKind, string> = {
   ecs: 'A nap sets the service\'s desired count to 0, then stops its databases; a wake reverses both.',
   'rds-instance': 'A nap stops the database and a wake starts it; AWS starts it again after 7 days.',
   'rds-cluster': 'A nap stops the Aurora cluster and a wake starts it; AWS starts it again after 7 days.',
+  // Google Cloud's (plan 5; its dialog's words are M52's).
+  'cloudsql-instance': 'A nap stops the Cloud SQL instance and a wake starts it.',
 };
 const napText = computed(() => (props.resource ? NAPS[props.resource] : ''));
 // Its idle signals, each inherited unless set here.

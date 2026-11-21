@@ -438,8 +438,8 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
     if (!google || !connected) throw new Error(NO_CONNECTION);
     routers = (await google.registry.list()).filter((r) => r.cloud === 'gcp' && r.account === account);
     const managed = (await Promise.all(routers.map((r) => google.routerWorkloads(account, r.region)))).flat();
-    // A project's candidates are HTTP ones (no standalone scan on Google Cloud yet).
-    scan = await scanProject(google, { project: account, managed, stored: stored.filter((c): c is Candidate => !isStandalone(c)), now, log: deps.log });
+    // Its HTTP candidates, and with the perimeter's standalone scan on, its standalone ones (plan 5).
+    scan = await scanProject(google, { project: account, managed, stored, now, log: deps.log, standalone: config.standalone === 'on' });
   } catch (err) {
     error = errorText(err);
     cause = err;
@@ -454,6 +454,9 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
   const skipped: { reason: string; pairs: number }[] = [];
   const own = { accounts: inventory.accounts.filter((a) => a.id === account), ous: inventory.ous };
   const skip = skipOf(skipped);
+  // The standalone scan's problems are the project's: said once, on its first pair scanned; the kinds it could not read, on each.
+  let problems = scan?.standalone?.problems.length ? scan.standalone.problems : undefined;
+  const unread = scan?.standalone?.unread.length ? scan.standalone.unread : undefined;
   for (const p of targetPairs(config, own, { [account]: known })) {
     if (!p.scan) {
       skip(p.reason);
@@ -465,7 +468,8 @@ async function scanProjectStep(deps: RunDeps, { runId, account, at, config, inve
       continue;
     }
     const rules = scan.rules.filter((r) => r.region === p.region);
-    results.push({ account, region: p.region, ok: true, rules, ms });
+    results.push({ account, region: p.region, ok: true, rules, ms, ...(problems ? { problems } : {}), ...(unread ? { unread } : {}) });
+    problems = undefined;
     scannedRegion(regions, p.region, rules, at);
   }
 
