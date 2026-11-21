@@ -51,10 +51,16 @@ export function standaloneWorkload(spec: StandaloneSpec, router: DemoRouter, bui
     resourceId: id, resourceMissing: Boolean(spec.missing), hosts: [], ruleArns: [], targetGroupArn: '', loadBalancerArn: '', source: 'manager', settings, ownKeys: spec.metric ? ['idleMetric'] : [],
     wakeRules: [], noWakeRules: [], schedule: spec.by === 'schedule' ? NIGHTS : null, instanceId: id,
   });
-  // Nothing wakes it on demand: its wakes are its schedule's, else a person's (the generated history says requests).
+  // Nothing wakes it on demand (the generated history says requests): its wakes are its schedule's, else a person's (named)
+  // or a start made in AWS, by turns; no request reaches it either.
+  let turn = 0;
   for (const e of w.entries) {
-    if (e.to === 'WAKING' && e.cause && !['manager', 'pause', 'schedule', 'maintenance'].includes(e.cause)) Object.assign(e, spec.by === 'schedule' ? { cause: 'schedule', by: undefined } : { cause: 'manager', by: 'ops@dormeto.example' });
+    if (e.to !== 'WAKING' || ['manager', 'pause', 'schedule', 'maintenance'].includes(e.cause ?? '')) continue;
+    if (spec.by === 'schedule') Object.assign(e, { cause: 'schedule', by: undefined });
+    else Object.assign(e, (turn += 1) % 3 === 0 ? { cause: 'external-start', by: undefined } : { cause: 'manager', by: ORG.people[turn % ORG.people.length]!.email });
   }
+  w.bursts = [];
+  w.activeUntil = spec.state === 'AWAKE' ? Infinity : 0;
   if (spec.state === 'FAILED') {
     w.failure = { kind: 'timeout', step: 'wake', message: 'reports-db is still starting after 30 minutes: its storage is being restored', at: iso(now - 25 * MINUTE) } as DemoWorkload['failure'];
     w.consecutiveFailures = 2;

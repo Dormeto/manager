@@ -47,3 +47,23 @@ describe('the demo\'s standalone workloads', () => {
     expect(gone.statusReason).toBe('managed resource not found in the last scan: offboard it');
   });
 });
+
+describe('the demo\'s standalone history', () => {
+  const ON_DEMAND = new Set(['normal', 'probe', 'header', 'pending-wake', 'admin']);
+  it('never wakes a standalone workload on a request: its schedule, a person or a start made in AWS', async () => {
+    const d = state();
+    const standalone = d.workloads.filter((w) => (w as { kind?: string }).kind === 'standalone');
+    expect(standalone).toHaveLength(5);
+    for (const w of standalone) {
+      for (const e of w.entries.filter((x) => x.to === 'WAKING' || (x.from === 'ASLEEP' && x.to === 'AWAKE'))) {
+        expect(e.cause, `${w.name} ${e.at}`).toBeDefined();
+        expect(ON_DEMAND.has(e.cause!) || e.cause!.startsWith('rule '), `${w.name} ${e.at} ${e.cause}`).toBe(false);
+        if (e.cause === 'manager') expect(e.by, `${w.name} ${e.at}`).toMatch(/@/);
+      }
+      const status = await mockApi(`/workloads/${w.router}/${w.workloadId}`) as WorkloadStatus;
+      const total = (status.stats as { total: { wakes: Record<string, number>; ignored?: unknown } }).total;
+      expect(Object.keys(total.wakes).every((k) => ['schedule', 'manager', 'external-start', 'maintenance'].includes(k)), `${w.name} ${Object.keys(total.wakes)}`).toBe(true);
+      expect(total).not.toHaveProperty('ignored');
+    }
+  });
+});

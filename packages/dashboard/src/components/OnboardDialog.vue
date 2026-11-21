@@ -5,7 +5,7 @@
 // A standalone resource (`resource`, its kind; vision standalone workloads design §6): what a nap does to it, that nothing wakes
 // it on demand, its idle signals, and where to give it a schedule.
 import { computed, ref, watch } from 'vue';
-import { mdiCalendarClock, mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
+import { mdiCalendarClock, mdiPowerSleep, mdiCheckCircleOutline, mdiPauseCircleOutline, mdiPencilOutline, mdiPlusCircleOutline, mdiRouterNetwork, mdiUndoVariant } from '@mdi/js';
 import { GOOGLE_ROUTER_MINIMUM } from '@dormeto/fleet/clouds';
 import { cloudWords } from '../cloud-words';
 import { nameRule } from '../format';
@@ -25,11 +25,11 @@ import IdleSignalsFields from './IdleSignalsFields.vue';
 const props = defineProps<{ modelValue: boolean; title: string; defaultName: string | null; kubernetes?: KubernetesCandidate | null; access?: ClusterAccess | null; awsTags?: Record<string, string[]>; backendKind?: string | null; cloud?: 'aws' | 'gcp'; routers?: { name: string; region: string }[] | null; chooseRouter?: boolean; resource?: ResourceKind | null }>();
 // What a nap and a wake do to a standalone resource, by its kind (the router's backend modules).
 const NAPS: Record<ResourceKind, string> = {
-  instance: 'A nap stops the instance (or hibernates it), then its databases; a wake starts the databases, then the instance.',
-  asg: 'A nap sets the Auto Scaling group\'s capacity to 0, then stops its databases; a wake starts the databases and gives the group back its size.',
-  ecs: 'A nap sets the ECS service\'s desired count to 0, then stops its databases; a wake starts the databases and sets the count back.',
-  'rds-instance': 'A nap stops the database; a wake starts it. AWS starts a database stopped for 7 days by itself: it is then awake until it naps again.',
-  'rds-cluster': 'A nap stops the Aurora cluster; a wake starts it. AWS starts a cluster stopped for 7 days by itself: it is then awake until it naps again.',
+  instance: 'A nap stops the instance (or hibernates it), then its databases; a wake starts them in reverse.',
+  asg: 'A nap sets the group\'s capacity to 0, then stops its databases; a wake reverses both.',
+  ecs: 'A nap sets the service\'s desired count to 0, then stops its databases; a wake reverses both.',
+  'rds-instance': 'A nap stops the database and a wake starts it; AWS starts it again after 7 days.',
+  'rds-cluster': 'A nap stops the Aurora cluster and a wake starts it; AWS starts it again after 7 days.',
 };
 const napText = computed(() => (props.resource ? NAPS[props.resource] : ''));
 // Its idle signals, each inherited unless set here.
@@ -158,7 +158,7 @@ function submit() {
             <template v-else-if="resource">
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="success" variant="tonal" size="28"><v-icon :icon="mdiPlusCircleOutline" size="16" /></v-avatar>
-                <span>The router of its account and region (installed first if needed) tags it and its databases.</span>
+                <span>The router of its account and region tags it and its databases, installing itself first if needed.</span>
               </li>
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="info" variant="tonal" size="28"><v-icon :icon="mdiPauseCircleOutline" size="16" /></v-avatar>
@@ -166,8 +166,15 @@ function submit() {
               </li>
               <li class="dm-change" data-test="onboard-standalone">
                 <v-avatar color="warning" variant="tonal" size="28"><v-icon :icon="mdiCalendarClock" size="16" /></v-avatar>
-                <span>Nothing wakes it on demand: a schedule, a person or a start made in AWS does.
-                  <router-link data-test="onboard-schedule" to="/schedules">Give it a schedule</router-link> once onboarded.</span>
+                <span>Nothing wakes it on demand: a schedule, a person or a start made in AWS does.</span>
+              </li>
+              <li class="dm-change" data-test="onboard-standalone">
+                <v-avatar color="secondary" variant="tonal" size="28"><v-icon :icon="mdiPowerSleep" size="16" /></v-avatar>
+                <span>It naps on a schedule, on a person's word, or when its idle signals stay under their thresholds.</span>
+              </li>
+              <li class="dm-change">
+                <span aria-hidden="true" />
+                <span><router-link data-test="onboard-schedule" to="/schedules" class="dm-link">Give it a schedule</router-link> once onboarded, in Schedules.</span>
               </li>
             </template>
             <li v-else class="dm-change">
@@ -246,6 +253,10 @@ function submit() {
 .dm-changes__list { list-style: none; display: grid; gap: 12px; margin: 0; padding: 0; }
 .dm-change { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; align-items: start; font-size: 0.9rem; line-height: 1.5; }
 .dm-change > span { padding-top: 3px; }
+/* The dashboard's link (not the browser's blue). */
+.dm-link { color: rgb(var(--v-theme-primary)); font-weight: 500; text-decoration: none; }
+.dm-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.dm-link:focus-visible { outline: 2px solid rgb(var(--v-theme-secondary)); outline-offset: 2px; border-radius: 4px; }
 .gitops { font-family: var(--dm-mono); font-size: 0.76rem; line-height: 1.55; white-space: pre; overflow-x: auto; padding: 12px 14px; margin-bottom: 4px; border-radius: 12px;
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); background: rgba(var(--v-theme-on-surface), 0.05); }
 </style>
