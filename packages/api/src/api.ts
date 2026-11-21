@@ -1993,7 +1993,8 @@ export function createApi({
         ]);
         const phases = period.view.phases;
         const values = signalValues(plan.signals, read);
-        const requests = busyMinutes(plan.signals, values, read, phases.filter((p) => p.state === 'AWAKE').map((p) => ({ from: p.from, to: p.to })));
+        // Every time but its naps counts as awake (a time its history does not know too): a missing point is then activity.
+        const requests = busyMinutes(plan.signals, values, read, phases.filter((p) => p.state !== 'ASLEEP').map((p) => ({ from: p.from, to: p.to })));
         const last = [...month.view.phases].reverse().find((p) => p.state === 'ASLEEP' && p.stopped);
         const { hours: _hours, ...advice } = await idleWindowAdvice({
           requests, current, checkMinutes: checkMinutesOf(routerSummary?.checkSchedule ?? null), wakeMs: month.view.wakes.medianMs,

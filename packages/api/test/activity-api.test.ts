@@ -21,7 +21,7 @@ const STATUS = {
 const cpu = (minute: number) => (((FROM / 60_000 + minute) % 1440) >= 540 && ((FROM / 60_000 + minute) % 1440) < 600 ? 80 : 1);
 const POINTS: [number, number][] = Array.from({ length: 7 * 288 }, (_, p) => [p * 5, cpu(p * 5)]);
 
-function setup({ read, status = STATUS, history = [] as HistoryEntry[] }: { read?: IdleActivity; status?: unknown; history?: HistoryEntry[] } = {}) {
+function setup({ read, status = STATUS, history = [] as HistoryEntry[], known = true }: { read?: IdleActivity; status?: unknown; history?: HistoryEntry[]; known?: boolean } = {}) {
   const asked: unknown[] = [];
   const kept = new Map<string, unknown>();
   const api = createApi({
@@ -29,8 +29,8 @@ function setup({ read, status = STATUS, history = [] as HistoryEntry[] }: { read
     audit: { write: async () => {}, list: async () => [] },
     async invoke(_r, payload) { return payload.action === 'status' ? structuredClone(status) : null; },
     fleet: {
-      listRouters: async () => [], listWorkloads: async () => [] as never, getWorkload: async () => ({ account: MANAGER, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'sa', kind: 'standalone', state: 'AWAKE', historySince: new Date(FROM - 86_400_000).toISOString() }) as never,
-      listHistory: async () => ({ entries: history, truncated: false }), historyBefore: async () => ({ account: MANAGER, region: 'eu-west-1', workloadId: 'sa', at: new Date(FROM - 3_600_000).toISOString(), from: 'WAKING', to: 'AWAKE' }) as never,
+      listRouters: async () => [], listWorkloads: async () => [] as never, getWorkload: async () => ({ account: MANAGER, region: 'eu-west-1', router: 'dmt-dev', workloadId: 'sa', kind: 'standalone', state: 'AWAKE', ...(known ? { historySince: new Date(FROM - 86_400_000).toISOString() } : {}) }) as never,
+      listHistory: async () => ({ entries: history, truncated: false }), historyBefore: async () => known && ({ account: MANAGER, region: 'eu-west-1', workloadId: 'sa', at: new Date(FROM - 3_600_000).toISOString(), from: 'WAKING', to: 'AWAKE' }) as never,
       getActivity: async (_a: string, _r: string, id: string) => kept.get(id) ?? null, putActivity: async (_a: string, _r: string, id: string, value: unknown) => { kept.set(id, value); },
     } as never,
     idleActivity: read ?? (async (account, region, queries, days) => { asked.push({ account, region, queries, days }); return { from: new Date(FROM).toISOString(), to: new Date(TO).toISOString(), points: { cpu_0: POINTS } }; }),
@@ -63,6 +63,12 @@ describe('a standalone workload\'s activity', () => {
     await s.api(get('/api/workloads/dmt-dev/sa/activity'));
     await s.api(get('/api/workloads/dmt-dev/sa/activity'));
     expect(s.asked).toHaveLength(1);
+  });
+
+  it('takes a time its history does not know as awake: a missing point there is activity, never idle', async () => {
+    const s = setup({ known: false, read: async () => ({ from: new Date(FROM).toISOString(), to: new Date(TO).toISOString(), points: { cpu_0: [] } }) });
+    const a = json(await s.api(get('/api/workloads/dmt-dev/sa/activity')));
+    expect(a.advice.windows.every((w: { asleepHours: number }) => w.asleepHours === 0)).toBe(true);
   });
 
   it('answers a failed read as such, never an idle week', async () => {

@@ -130,7 +130,7 @@ export function signalValues(signals: PlannedSignal[], read: ActivityPoints): { 
 
 // The replay's activity (design §7: a napped resource is started again when its history next shows activity): each
 // 5-minute point busy, as its five minutes. A point is busy while the workload was awake and a signal that applies is at or
-// over its threshold or has no point; while it was not awake (stopped), a point says nothing.
+// over its threshold or has no point; while it was asleep (stopped), a point says nothing. `awake`: every time but its naps.
 export function busyMinutes(signals: PlannedSignal[], values: ReturnType<typeof signalValues>, read: Pick<ActivityPoints, 'from' | 'to'>, awake: { from: string; to: string }[]): RequestMinutes {
   const from = Date.parse(read.from);
   const count = Math.round((Date.parse(read.to) - from) / PERIOD_MS);

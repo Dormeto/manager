@@ -186,7 +186,7 @@ export function standaloneActivity(w: DemoWorkload, now: number, view: (from: nu
   const settings = w.settings as unknown as Record<string, unknown>;
   const phases = view(from, to).phases;
   const asleep = phases.filter((p) => p.state === 'ASLEEP').map((p) => ({ from: p.from, to: p.to }));
-  const awakeAt = (t: number) => phases.some((p) => p.state === 'AWAKE' && Date.parse(p.from) <= t && Date.parse(p.to) >= t + POINT);
+  const awakeAt = (t: number) => phases.some((p) => p.state !== 'ASLEEP' && Date.parse(p.from) <= t && Date.parse(p.to) >= t + POINT);
   const level = (t: number, p: number) => {
     const hour = new Date(t).getUTCHours();
     const weekday = new Date(t).getUTCDay() % 6 !== 0;
