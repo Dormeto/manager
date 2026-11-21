@@ -114,7 +114,7 @@ async function rename(name: string) {
 // Hibernation: operators and administrators change a manager workload's own value (null: inherit); the router's refusals
 // (a Terraform workload, a router before 0.32.0) come back as the notice.
 const hibernated = computed(() => status.value?.state === 'ASLEEP' && (status.value.hibernated === true || Boolean(status.value.hibernation?.instances?.some((i) => i.hibernated))));
-// Hibernation applies to standalone EC2 instances only (never Auto Scaling groups, ECS, Kubernetes or databases).
+// Hibernation applies to EC2 instances outside an Auto Scaling group only (never Auto Scaling groups, ECS, Kubernetes or databases).
 const standalone = computed(() => Boolean(status.value?.backends.some((b) => b.kind === 'instance')));
 // Its own settings (settings at scale design §9): an operator's on a manager workload, from a router that says their sources.
 const settingsOpen = ref(false);
@@ -689,7 +689,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <v-btn v-else-if="canEditSettings" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="openSettings">Edit</v-btn>
         </v-card-text>
         <v-card-text v-if="!gcp && status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
-          Hibernate: <strong>does not apply</strong> (standalone EC2 instances only)
+          Hibernate: <strong>does not apply</strong> (EC2 instances outside an Auto Scaling group only)
         </v-card-text>
         <v-card-text v-else-if="status.hibernation" data-test="hibernate" class="pt-0 text-body-medium">
           <div class="d-flex flex-wrap align-center ga-2">

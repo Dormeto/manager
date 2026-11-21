@@ -582,7 +582,7 @@ describe('Routers view', () => {
     it('shows each setting by its name and value, what it does in a tooltip on a focusable icon', async () => {
       const wrapper = await mountView();
       for (const [name, label, words] of [
-        ['hibernate', 'What Hibernate does', 'standalone EC2 instances (not Auto Scaling groups or ECS)'],
+        ['hibernate', 'What Hibernate does', 'EC2 instances outside an Auto Scaling group (not ECS)'],
         ['join', 'What Join windows does', 'count as one'],
         ['ended', 'What Ended windows does', 'leaves its schedule'],
       ] as const) {
@@ -709,7 +709,7 @@ describe('Routers view', () => {
       await card(wrapper).find('input[type="checkbox"]').setValue(false);
       await flushPromises();
       expect(calls.some((c) => c.path === '/settings/workloads' && c.init?.method === 'PUT')).toBe(false);
-      expect(document.body.textContent).toContain("standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation, in every router that reads the manager's settings, from their next check");
+      expect(document.body.textContent).toContain("EC2 instances outside an Auto Scaling group (not ECS) launched with hibernation, in every router that reads the manager's settings, from their next check");
       expect(document.body.textContent).toContain('Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched.');
       expect(document.body.textContent).not.toContain('never launches');
       dialogButton('Turn off').click();

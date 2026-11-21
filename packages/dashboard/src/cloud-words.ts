@@ -111,10 +111,10 @@ const AWS: CloudWords = {
   hibernation: 'Hibernation',
   hibernated: 'hibernated',
   moduleSetting: 'hibernate',
-  hibernateHelp: 'Decides whether the standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are hibernated instead of stopped when the '
+  hibernateHelp: 'Decides whether the EC2 instances outside an Auto Scaling group (not ECS) that were launched with hibernation are hibernated instead of stopped when the '
     + 'workload naps. Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched. A workload with fallback instance types does not hibernate '
     + 'unless it is set to On on the workload itself.',
-  hibernateHint: 'Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On',
+  hibernateHint: 'EC2 instances outside an Auto Scaling group (not ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On',
   tags: 'AWS tags',
   tag: 'AWS tag',
   copyTags: 'Copy the target group\'s AWS tags',

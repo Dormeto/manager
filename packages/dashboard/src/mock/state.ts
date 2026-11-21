@@ -1283,7 +1283,7 @@ export function hibernationOf(d: Demo, w: DemoWorkload, now: number): DemoHibern
     : w.fallbackTypes.length ? { hibernate: false, from: 'fallback-types' }
     : router.hibernate !== null ? { hibernate: router.hibernate, from: 'router' }
     : manager ? { hibernate: manager.hibernate, from: 'manager' } : { hibernate: true, from: 'default' };
-  // Standalone instances only: an Auto Scaling group's are not hibernated.
+  // Instances outside an Auto Scaling group only: a group's are not hibernated.
   const ids = w.backends.some((b) => b.kind === 'instance') ? [w.instanceId] : [];
   // Some instances were not launched with hibernation: the demo has one in five of them.
   const instances = ids.length

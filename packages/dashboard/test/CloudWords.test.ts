@@ -150,7 +150,7 @@ const BEHAVIOUR: { file: string; text: string; why: string }[] = [
   { file: 'views/WorkloadView.vue', text: 'gcp ? backendMdi(b.kind) : backendIcon(b.kind)', why: 'a backend\'s icon element, as BackendKinds\'' },
   { file: 'views/WorkloadView.vue', text: '<v-icon v-if="gcp">', why: 'a backend\'s icon element: a Material Design icon, or AWS\'s product icon as an image' },
   { file: 'views/WorkloadView.vue', text: '<v-card v-if="gcp && status.backendService">', why: 'a Google Cloud workload\'s Load balancing card, an AWS one\'s Targets card' },
-  { file: 'views/WorkloadView.vue', text: '<v-card-text v-if="!gcp && status.hibernation && !standalone">', why: 'an AWS workload without a standalone EC2 instance, which hibernation does not apply to' },
+  { file: 'views/WorkloadView.vue', text: '<v-card-text v-if="!gcp && status.hibernation && !standalone">', why: 'an AWS workload without an EC2 instance outside an Auto Scaling group, which hibernation does not apply to' },
 ];
 
 // Every inline switch on the cloud that chooses a word reads the words table instead (cloud duplication design §5); the demo's
@@ -327,7 +327,7 @@ describe('each cloud\'s words', () => {
     };
     const aws = open('aws');
     expect(aws).toContain('Hibernate shop');
-    expect(aws).toContain('Decides whether the standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are hibernated instead of stopped when the workload naps. Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched. A workload with fallback instance types does not hibernate unless it is set to On on the workload itself.');
+    expect(aws).toContain('Decides whether the EC2 instances outside an Auto Scaling group (not ECS) that were launched with hibernation are hibernated instead of stopped when the workload naps. Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched. A workload with fallback instance types does not hibernate unless it is set to On on the workload itself.');
     const google = open('gcp');
     expect(google).toContain('Suspend instead of stop shop');
     expect(google).toContain('Decides whether the VMs of the workload are suspended instead of stopped when it naps: a suspended VM keeps its memory and resumes faster. A VM that cannot be suspended (with a GPU or a TPU, confidential, or with more than 208 GB of memory) is stopped. After 60 days Compute Engine stops a suspended VM itself. A workload with fallback machine types is not suspended unless it is set to On on the workload itself.');
@@ -386,7 +386,7 @@ describe('each cloud\'s words', () => {
       'Shown in the manager; the target group name if empty. It can be changed later.',
       'RDS instance identifiers, or cluster:<identifier>, comma separated: stopped after the application, started before it',
       'At most 5 EC2 instance types, for example t3a.medium, m6i.large',
-      'Standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On',
+      'EC2 instances outside an Auto Scaling group (not ECS) launched with hibernation are hibernated instead of stopped at a nap; with fallback instance types, only if On',
       'Dormeto\'s own labels for this workload, not AWS tags: the groups\' grants pick workloads by them. Administrators can change them later.',
       'Copy the target group\'s AWS tags', '2 AWS tags left out: reserved or with characters the tags do not allow.',
     ]) expect(aws.text).toContain(words);

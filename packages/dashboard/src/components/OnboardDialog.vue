@@ -80,7 +80,7 @@ const fallbackTypes = computed(() => fallbacks.value.split(',').map((t) => t.tri
 // A standalone resource has no Terraform lines to keep (no rule nor waker is added).
 const noTerraform = computed(() => Boolean(props.resource));
 const terraform = computed(() => (noTerraform.value ? null : props.kubernetes || gcp.value ? null : terraformSnippet(props.backendKind, fallbackTypes.value.length > 0)));
-// Fallback types for EC2 capacity: a standalone instance's or group's; hibernation: a standalone instance's.
+// Fallback types for EC2 capacity: an instance's outside a group, or a group's; hibernation: an instance's outside a group.
 const takesFallbacks = computed(() => (props.resource ? props.resource === 'instance' || props.resource === 'asg' : gcp.value || !props.kubernetes));
 const takesHibernate = computed(() => (props.resource ? props.resource === 'instance' : gcp.value || !props.kubernetes));
 const fallbackRule = () => (fallbackTypes.value.length <= 5 && new Set(fallbackTypes.value).size === fallbackTypes.value.length && fallbackTypes.value.every((t) => (gcp.value ? MACHINE_TYPE : INSTANCE_TYPE).test(t)))

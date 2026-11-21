@@ -158,7 +158,8 @@ export async function run(product, input, ports) {
 }
 
 export const readme = `A standalone resource's idle signals (\`packages/discovery/src/standalone-idle.ts\`, \`activity-step.ts\`,
-\`packages/fleet/src/activity.ts\`; Go \`internal/metrics\`, \`internal/replay\`). \`input.function\` names the function:
+\`packages/fleet/src/activity.ts\`; Go: \`defaultSignals\` and \`standaloneIdle\` in \`internal/discover\`, \`activityPlan\`,
+\`activityPoints\` and \`signalValues\` in \`internal/metrics\`, \`busyMinutes\` in \`internal/replay\`). \`input.function\` names the function:
 
 - \`defaultSignals\`: \`{backend: {kind, id, arn}}\`. Output: \`[{signal, below, metric: {namespace, name, dimensions:
   [{Name, Value}], stat}}]\`, the router's built-ins of a workload with no companion (CPU under 5 %, a database's

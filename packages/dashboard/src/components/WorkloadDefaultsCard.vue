@@ -130,7 +130,7 @@ async function confirm() {
     <v-card-text data-test="default-hibernate" class="d-flex flex-wrap align-center ga-4 pb-2">
       <div class="dm-default">
         <span class="font-weight-medium">Hibernate</span>
-        <InfoTip label="What Hibernate does" test="default-hibernate">Whether standalone EC2 instances (not Auto Scaling groups or ECS) that were launched with hibernation are hibernated instead of stopped when a workload naps; a router or a workload can override this (a workload with fallback instance types hibernates only if set On on itself).</InfoTip>
+        <InfoTip label="What Hibernate does" test="default-hibernate">Whether EC2 instances outside an Auto Scaling group (not ECS) that were launched with hibernation are hibernated instead of stopped when a workload naps; a router or a workload can override this (a workload with fallback instance types hibernates only if set On on itself).</InfoTip>
       </div>
       <v-spacer />
       <v-switch v-if="session.isAdmin" :key="switchKey" :model-value="defaults.hibernate" :label="defaults.hibernate ? 'On' : 'Off'" color="primary" hide-details inset aria-label="Hibernate by default"
@@ -174,7 +174,7 @@ async function confirm() {
   <EndedDaysDialog v-if="defaults" v-model="endedOpen" :current="defaults.endedWindowDays ?? null" :saving="savingEnded" @submit="saveEnded" />
   <v-dialog :model-value="asked !== null" max-width="480" @update:model-value="cancel">
     <v-card :title="`Turn hibernation ${asked ? 'on' : 'off'} by default?`">
-      <v-card-text class="text-medium-emphasis">It applies to standalone EC2 instances (not Auto Scaling groups or ECS) launched with hibernation, in every router that
+      <v-card-text class="text-medium-emphasis">It applies to EC2 instances outside an Auto Scaling group (not ECS) launched with hibernation, in every router that
         reads the manager's settings, from their next check (within 5 minutes). A router or a workload that sets its own value keeps it. Dormeto does not enable
         hibernation on an instance: it is chosen when the instance is launched.</v-card-text>
       <v-card-actions class="px-4 pb-4">

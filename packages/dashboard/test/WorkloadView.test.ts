@@ -537,7 +537,7 @@ describe('Workload view', () => {
     const row = (wrapper: Awaited<ReturnType<typeof mountView>>) => wrapper.find('[data-test="hibernate"]');
     const dialogButton = (text: string) => [...document.querySelectorAll('.v-dialog button')].find((b) => b.textContent?.trim() === text) as HTMLButtonElement;
     const puts = () => vi.mocked(api).mock.calls.filter(([, init]) => init?.method === 'PUT');
-    // Its standalone EC2 instances: the only backends hibernation applies to.
+    // Its EC2 instances outside an Auto Scaling group: the only backends hibernation applies to.
     const ec2 = { backends: [{ kind: 'instance', id: 'i-0b', status: 'running' }] };
 
     it('shows the line and which instances can hibernate', async () => {
@@ -616,12 +616,12 @@ describe('Workload view', () => {
       current = status;
     });
 
-    it('says it does not apply, with no Edit, to a workload without a standalone EC2 instance', async () => {
+    it('says it does not apply, with no Edit, to a workload without an EC2 instance outside an Auto Scaling group', async () => {
       // An Auto Scaling group, ECS, a database alone: the router still answers a resolution, with no instances or none listed.
       for (const backends of [[{ kind: 'asg', id: 'shop-asg', status: 'running' }], [{ kind: 'ecs', id: 'arn:aws:ecs:eu-west-3:1:service/main/shop', status: 'running' }], [{ kind: 'rds-instance', id: 'shop-db', status: 'running' }]]) {
         current = { ...status, backends, source: 'manager', hibernation: hibernation({ instances: backends[0]!.kind === 'asg' ? [] : null }) };
         const wrapper = await mountView('admin');
-        expect(row(wrapper).text()).toContain('Hibernate: does not apply (standalone EC2 instances only)');
+        expect(row(wrapper).text()).toContain('Hibernate: does not apply (EC2 instances outside an Auto Scaling group only)');
         expect(row(wrapper).text()).not.toContain('On, from the router');
         expect(row(wrapper).find('[data-test="edit-hibernate"]').exists()).toBe(false);
         wrapper.unmount();
@@ -655,7 +655,7 @@ describe('Workload view', () => {
       await row(wrapper).find('[data-test="edit-hibernate"]').trigger('click');
       await flushPromises();
       const text = document.querySelector('.v-overlay--active.v-dialog')!.textContent;
-      expect(text).toContain('standalone EC2 instances (not Auto Scaling groups or ECS)');
+      expect(text).toContain('EC2 instances outside an Auto Scaling group (not ECS)');
       expect(text).toContain('Dormeto does not enable hibernation on an instance: it is chosen when the instance is launched.');
       expect(text).not.toContain('never launches');
       wrapper.unmount();

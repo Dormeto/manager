@@ -105,7 +105,7 @@ describe("the demo's hibernation answers", () => {
     await expect(mockApi(`/routers/${old.name}/settings`, { method: 'PUT', body: JSON.stringify({ hibernate: false }) })).rejects.toMatchObject({ status: 409, message: 'upgrade the router to 0.32.0' });
   });
 
-  it('puts the built-in default on a Terraform router without the manager catalog, and lists only standalone instances', async () => {
+  it('puts the built-in default on a Terraform router without the manager catalog, and lists only the instances outside an Auto Scaling group', async () => {
     const first = state().routers[0]!;
     expect(first.source).toBe('terraform');
     const details = await get(`/routers/${first.name}`);
