@@ -1802,7 +1802,10 @@ export function createApi({
       const attention = (w: Record<string, unknown>) => w.state === 'FAILED' || w.state === 'WAKING' || Boolean((w.pauses as unknown[] | undefined)?.length);
       // Tags: every key=value asked must be on the workload (the gateway joins a repeated parameter with commas).
       const wanted = tagFilter(q.tag);
+      // One kind: an HTTP workload's row has none (vision standalone workloads design §6).
+      if (q.kind !== undefined && q.kind !== 'http' && q.kind !== 'standalone') throw new HttpError(400, 'bad_request', 'kind must be http or standalone');
       const matching = seen.filter((w) => (!states || states.includes(String(w.state))) && (!q.router || w.router === q.router)
+        && (!q.kind || (q.kind === 'standalone') === (w.kind === 'standalone'))
         && wanted.every(([key, value]) => tagsOf(w)[key] === value)
         && (!text || `${w.name ?? ''} ${w.workloadId}`.toLowerCase().includes(text)) && (q.attention !== '1' || attention(w)));
       // Pages: an opaque cursor (the offset); without a limit, every workload.
@@ -2460,6 +2463,8 @@ export function createApi({
       }
       const limit = q.limit === undefined ? CANDIDATES_PAGE : Number(q.limit);
       if (!Number.isInteger(limit) || limit < 1) throw new HttpError(400, 'bad_request', 'limit must be a positive integer');
+      // One kind, on the page read (as the caller's scope: a page may hold fewer, its cursor goes on).
+      if (q.kind !== undefined && q.kind !== 'http' && q.kind !== 'standalone') throw new HttpError(400, 'bad_request', 'kind must be http or standalone');
       let page;
       try {
         page = await d.store.pageCandidates({ status, limit: Math.min(limit, CANDIDATES_MAX), ...(q.cursor ? { cursor: q.cursor } : {}), ...(q.account ? { account: q.account } : {}), ...(q.region ? { region: q.region } : {}) });
@@ -2467,7 +2472,7 @@ export function createApi({
         if (err instanceof InvalidCursor) throw new HttpError(400, 'bad_request', 'invalid cursor');
         throw err;
       }
-      const shown = page.candidates.filter((c) => visible(identity, { account: c.account, region: c.region }));
+      const shown = page.candidates.filter((c) => visible(identity, { account: c.account, region: c.region }) && (!q.kind || (q.kind === 'standalone') === isStandalone(c)));
       // The onboarding or offboarding running on a candidate (the dashboard shows it in progress).
       const running = shown.length ? ((await operations?.list()) ?? []).filter((op) => op.status === 'running' && (op.type === 'onboard' || op.type === 'offboard')) : [];
       const operationOf = (c: AnyCandidate) => {

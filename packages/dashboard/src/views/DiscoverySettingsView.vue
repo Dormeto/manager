@@ -37,6 +37,13 @@ const eventRefresh = computed({
   },
 });
 const refreshAccountsText = ref('');
+// The standalone scan (vision standalone workloads design §6): off unless turned on (absent is off).
+const standalone = computed({
+  get: () => config.value?.standalone === 'on',
+  set: (on: boolean) => {
+    if (config.value) config.value.standalone = on ? 'on' : 'off';
+  },
+});
 
 const allRegions = computed({
   get: () => config.value?.regions.includes('*') ?? false,
@@ -162,6 +169,14 @@ onMounted(() => { void load(); void loadConnection(); });
                       <v-text-field v-model="regionsText" label="Regions" hint="for example eu-west-1, eu-west-3 on AWS, europe-west2 on Google Cloud, or global for its global load balancers" persistent-hint />
                     </div>
                   </v-expand-transition>
+                </div>
+              </v-col>
+              <v-col cols="12" class="pt-0">
+                <div class="dm-field">
+                  <v-switch v-model="standalone" data-test="standalone-switch" label="Standalone resources" color="primary" hide-details inset density="compact" />
+                  <p class="text-body-small text-medium-emphasis mt-2 mb-0">Also lists the EC2 instances, Auto Scaling groups, ECS services, RDS instances and Aurora
+                    clusters that no load balancer rule uses, on AWS. The discovery role reads the databases with <code>rds:DescribeDBInstances</code>,
+                    <code>rds:DescribeDBClusters</code> and <code>rds:ListTagsForResource</code>: apply the access module of this release again.</p>
                 </div>
               </v-col>
             </v-row>

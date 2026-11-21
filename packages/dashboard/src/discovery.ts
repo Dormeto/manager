@@ -1,5 +1,5 @@
 // Organization discovery in the dashboard: statuses, run targets, and criterion editing (dimension values as text).
-import { BACKEND_KINDS as DISCOVERY_BACKEND_KINDS, type BackendKind, type Criterion, type LintFinding, type ResourceKind, type RuleRef, type RunTarget, type Status } from '@dormeto/discovery/types';
+import { BACKEND_KINDS as DISCOVERY_BACKEND_KINDS, CRITERION_BACKEND_KINDS, type BackendKind, type Criterion, type LintFinding, type ResourceKind, type RuleRef, type RunTarget, type Status } from '@dormeto/discovery/types';
 import type { Cloud } from '@dormeto/fleet/clouds';
 import { mdiCancel, mdiCheckCircleOutline, mdiEyeOffOutline, mdiFilterOffOutline, mdiHelpCircleOutline, mdiLogoutVariant, mdiMagnifyRemoveOutline, mdiPlusCircleOutline,
   mdiSleepOff } from '@mdi/js';
@@ -159,6 +159,8 @@ export async function readCursor<T>(ask: (cursor: string | null) => Promise<{ ro
 export type DimensionKey = Exclude<keyof Criterion, 'note'>;
 // The discovery package's own list (Kubernetes workloads included): a criterion takes any kind it finds.
 export const BACKEND_KINDS: BackendKind[] = [...DISCOVERY_BACKEND_KINDS];
+// What a criterion's backend types take: those, and a standalone resource's databases (the discovery package's list).
+const CRITERION_KINDS: string[] = [...CRITERION_BACKEND_KINDS];
 
 export const DIMENSIONS: { key: DimensionKey; label: string; kind: 'list' | 'tags'; hint: string }[] = [
   { key: 'accountIds', label: 'Accounts or projects', kind: 'list', hint: '12-digit AWS account IDs, Google Cloud project IDs' },
@@ -168,7 +170,7 @@ export const DIMENSIONS: { key: DimensionKey; label: string; kind: 'list' | 'tag
   { key: 'loadBalancers', label: 'Load balancers', kind: 'list', hint: 'names with *, AWS ARNs, or Google Cloud paths (projects/…/urlMaps/… or …/backendServices/…)' },
   { key: 'hosts', label: 'Hosts', kind: 'list', hint: 'host names with *, for example *.example.com' },
   { key: 'resourceTags', label: 'Resource tags', kind: 'tags', hint: 'tags of the load balancer, rule or target group, or labels of the VMs behind a backend service: key=value' },
-  { key: 'backendKinds', label: 'Backend types', kind: 'list', hint: 'instance, asg, ecs, k8s' },
+  { key: 'backendKinds', label: 'Backend types', kind: 'list', hint: 'instance, asg, ecs, k8s; for standalone resources also rds-instance, rds-cluster' },
 ];
 
 export const dimensionOf = (key: DimensionKey) => DIMENSIONS.find((d) => d.key === key)!;
@@ -201,7 +203,7 @@ export const formatDimension = (c: Criterion, key: DimensionKey): string =>
 export function setDimension(c: Criterion, key: DimensionKey, text: string): Criterion {
   if (dimensionOf(key).kind === 'tags') return { ...c, [key]: parseTags(text) };
   const values = parseList(text);
-  return { ...c, [key]: key === 'backendKinds' ? values.filter((v): v is BackendKind => (BACKEND_KINDS as string[]).includes(v)) : values };
+  return { ...c, [key]: key === 'backendKinds' ? values.filter((v): v is BackendKind => CRITERION_KINDS.includes(v)) : values };
 }
 
 export function removeDimension(c: Criterion, key: DimensionKey): Criterion {

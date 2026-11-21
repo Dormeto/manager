@@ -162,15 +162,17 @@ function workloads(d: Demo, q: URLSearchParams, now: number) {
     byState[w.state] = (byState[w.state] ?? 0) + 1;
     const s = workloadRow(d, w, now).stats7d!;
     stats7d.wakes += s.wakes;
-    stats7d.ignored += s.ignored;
-    stats7d.deferred += s.deferred;
+    stats7d.ignored += s.ignored ?? 0;
+    stats7d.deferred += s.deferred ?? 0;
   }
   const states = q.get('state')?.split(',') ?? null;
   const text = q.get('q')?.toLowerCase();
   const router = q.get('router');
   const wanted = q.getAll('tag').map((t) => [t.slice(0, t.indexOf('=')), t.slice(t.indexOf('=') + 1)] as const);
   const attention = q.get('attention') === '1';
+  const kind = q.get('kind');
   const matching = ordered.filter((w) => (!states || states.includes(w.state)) && (!router || w.router === router)
+    && (!kind || (kind === 'standalone') === ((w as { kind?: string }).kind === 'standalone'))
     && wanted.every(([key, value]) => w.tags[key] === value)
     && (!text || `${w.name} ${w.workloadId}`.toLowerCase().includes(text))
     && (!attention || w.state === 'FAILED' || w.state === 'WAKING' || pausesOf(d, w).length > 0));
@@ -208,7 +210,9 @@ function discovery(d: Demo, method: string, sub: string | undefined, q: URLSearc
     if (!Number.isInteger(limit) || limit < 1) fail(400, 'bad_request', 'limit must be a positive integer');
     const start = q.get('cursor') ? Number(atob(q.get('cursor')!)) : 0;
     if (!Number.isInteger(start) || start < 0) fail(400, 'bad_request', 'invalid cursor');
-    const matching = d.candidates.filter((c) => c.status === status && (!account || c.account === account) && (!region || c.region === region));
+    const kind = q.get('kind');
+    const matching = d.candidates.filter((c) => c.status === status && (!account || c.account === account) && (!region || c.region === region)
+      && (!kind || (kind === 'standalone') === ((c as { kind?: string }).kind === 'standalone')));
     const page = matching.slice(start, start + Math.min(limit, 200));
     return { candidates: page.map((c) => candidateView(d, c, now)), cursor: start + page.length < matching.length ? btoa(String(start + page.length)) : null };
   }

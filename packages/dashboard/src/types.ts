@@ -10,10 +10,23 @@ export interface Settings {
   failedRetrySeconds?: number; // routers 0.37.0 and later
 }
 
+// A standalone workload's idle signals (vision standalone workloads design §4; routers 0.42.0): CPU in percent, network
+// bytes in and out a minute, one custom CloudWatch metric, each under its threshold to be idle, or 'off'.
+export interface IdleMetric { namespace: string; name: string; dimensions: Record<string, string> | Record<string, string>[]; statistic: 'Maximum' | 'Average' | 'Sum'; below: number }
+export interface IdleSettings {
+  idleCpuPercent?: number | 'off';
+  idleNetworkBytes?: number | 'off';
+  idleMetric?: IdleMetric | 'off';
+}
+export type IdleKey = keyof IdleSettings;
+// A signal of a standalone workload's status (its `idle`): its threshold, its last value, since when every point is under it
+// (null: not under now), whether it applies (and why not), and the level its threshold comes from.
+export interface IdleSignal { signal: 'cpu' | 'network' | 'metric'; below: number | null; value: number | null; underSince: string | null; applies: boolean; reason?: string; from?: Level }
+
 // Settings at scale (routers 0.37.0): the level each setting comes from, and the workload's type.
 // fixed: a value Google Cloud imposes whatever the levels say (a Google Cloud router's, routers 0.40.0).
 export type Level = 'workload' | 'type' | 'router' | 'organization' | 'default' | 'fixed';
-export type SettingsFrom = Partial<Record<keyof Settings | 'wakeMode', Level>>;
+export type SettingsFrom = Partial<Record<keyof Settings | 'wakeMode' | IdleKey, Level>>;
 export interface WorkloadType { name: string | null; from: 'workload' | 'tags' | 'backends' | null; missing?: string }
 
 // A pause of a workload or of its router (router management); exclusionId when a manual exclusion paused it.
@@ -54,6 +67,10 @@ export interface WorkloadDefaults { hibernate: boolean; joinMinutes?: number | n
 export interface WorkloadSummary {
   router: string;
   workloadId: string;
+  // A standalone workload (routers 0.42.0): its kind and resource, no URL nor wake mode; absent: an HTTP one.
+  kind?: 'standalone';
+  resourceArn?: string;
+  resourceMissing?: true; // its resource deleted or its dormeto:workload tag removed
   account?: string; // the router's account (from its summary), or its Google Cloud project
   cloud?: Cloud; // manager 0.24.0: the account's cloud (absent before: AWS)
   name?: string; // routers 0.20.0 and later: for people, the id otherwise
@@ -64,7 +81,7 @@ export interface WorkloadSummary {
   hibernated?: true; // asleep with hibernated instances (routers 0.32.0 and later)
   summary?: string; // the description's first line (manager 0.19.0), when it has one
   state: string;
-  url: string | null;
+  url?: string | null; // absent on a standalone workload
   wakeMode?: string; // absent when its router's row has none (the fleet's workloadOf drops it), as wakeCount
   wakeCount?: number;
   awakeSince: string | null;
@@ -84,8 +101,11 @@ export interface WorkloadSummary {
   costs?: Costs; // its savings over the last 30 days (asked with states=1, in a manager with prices)
   energy?: Energy; // with its costs: the energy its naps did not use, as the API estimates it
   pauses?: Pause[]; // routers 0.16 and later
-  stats7d: { ignored: number; deferred: number; wakes: number } | null;
-  settings: Settings;
+  stats7d: { ignored?: number; deferred?: number; wakes: number } | null; // a standalone workload's: its wakes only
+  // A standalone workload's: idleMinutes, wakeTimeoutSeconds and its idle signals only.
+  settings: Settings & IdleSettings;
+  settingsFrom?: SettingsFrom;
+  type?: string;
 }
 
 // Seconds in each state over a period of 7 days (UNKNOWN: without history).
@@ -164,6 +184,12 @@ export interface Rule {
 
 export interface WorkloadStatus {
   workloadId: string;
+  // A standalone workload (routers 0.42.0): its resource, its idle signals and its missing resource; it has no route, rule,
+  // target, waker, request or waiting page (those fields are absent on it).
+  kind?: 'standalone';
+  resourceArn?: string;
+  resourceMissing?: true;
+  idle?: IdleSignal[];
   name?: string; // routers 0.20.0 and later
   tags?: Record<string, string>; // R11: absent for routers before 0.30.0
   can?: { wake: boolean; nap: boolean }; // R11: what the caller's grants allow
@@ -220,7 +246,7 @@ export interface WorkloadStatus {
   ignoredTargets: { id: string; reason: string }[];
   recommendations: { backend: string; message: string }[];
   targets: { id: string; state: string }[];
-  settings: Settings;
+  settings: Settings & IdleSettings;
   stats: { days: number; since: string; today: Counts; total: Counts } | { error: string } | null;
   ipLists: { name: string; action: string; url?: string; entries: number; fetchedAt: string | null; error?: string }[];
   wakeMode: string;
@@ -340,7 +366,8 @@ export interface RouterDetails {
   };
 }
 
-export type ExclusionKind = 'target-group' | 'load-balancer' | 'account';
+// resource: a standalone candidate's (its ARN, manager 0.25.0).
+export type ExclusionKind = 'target-group' | 'load-balancer' | 'account' | 'resource';
 
 export interface ExclusionTarget {
   kind: ExclusionKind;

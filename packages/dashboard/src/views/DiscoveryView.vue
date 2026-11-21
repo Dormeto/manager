@@ -5,8 +5,11 @@
 // of the status and filters shown.
 import { computed, onBeforeUnmount, onMounted, ref, watch as watchValue } from 'vue';
 import { mdiAlertCircleOutline, mdiAlertOutline, mdiCancel, mdiCheckCircleOutline, mdiChevronLeft, mdiChevronRight, mdiCogOutline, mdiEarth, mdiEyeOffOutline, mdiEyeOutline, mdiLanConnect, mdiLogoutVariant,
-  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOffOutline, mdiTimerOutline } from '@mdi/js';
-import type { Candidate, ResourceKind, RunRecord, Status } from '@dormeto/discovery/types';
+  mdiOfficeBuildingOutline, mdiPlay, mdiPlusCircleOutline, mdiServerOutline, mdiProgressClock, mdiSkipNextCircleOutline, mdiTarget, mdiTimerOffOutline, mdiTimerOutline } from '@mdi/js';
+import type { AnyCandidate, ResourceKind, RunRecord, Status } from '@dormeto/discovery/types';
+import { useRoute } from 'vue-router';
+import KindMark from '../components/KindMark.vue';
+import { KINDS, isStandalone, kindInfo, type Kind } from '../kinds';
 import { cloudOf, isCandidateRegion } from '@dormeto/fleet/clouds';
 import { api } from '../api';
 import CloudMark from '../components/CloudMark.vue';
@@ -49,7 +52,7 @@ const session = useSession();
 const badge = useDiscoveryBadge();
 // A managed candidate carries its workload's name and router (from its summary), and the onboarding or offboarding
 // running on it.
-type Listed = Candidate & { workload?: { router: string; workloadId: string; name: string }; operation?: { id: string; type: 'onboard' | 'offboard' } };
+type Listed = AnyCandidate & { workload?: { router: string; workloadId: string; name: string }; operation?: { id: string; type: 'onboard' | 'offboard' } };
 const PAGE = 50;
 // An export and a search read the API's largest pages (scale design §5), one at a time.
 const EXPORT_PAGE = 200;
@@ -175,9 +178,18 @@ const isGoogle = (c: Listed) => rowCloud(c) === 'gcp';
 const idleMark = (c: Listed) => cloudWords(rowCloud(c)).idleMark;
 // A standalone candidate's resource kind (its idle share is by its signals). The rows are typed as HTTP candidates until the
 // view shows the two kinds (plan 2, M46).
-const resourceOf = (c: Listed): ResourceKind | undefined => ((c as { kind?: string }).kind === 'standalone' ? (c.backend?.kind as ResourceKind) : undefined);
+const resourceOf = (c: Listed): ResourceKind | undefined => (c.kind === 'standalone' ? c.backend.kind : undefined);
+// A standalone candidate is its resource (design §6): its name, and its kind and id as the router names them.
+const resourceText = (c: Listed) => (c.kind === 'standalone' ? `${backendLabel(c.backend.kind, 'aws')} ${c.backend.kind === 'ecs' ? c.backend.arn.split(':service/')[1] ?? c.backend.id : c.backend.id}` : '');
+// One kind of candidates (the API's filter), from the address too.
+const route = useRoute();
+const kindFilter = ref<Kind | null>(route.query.kind === 'http' || route.query.kind === 'standalone' ? route.query.kind : null);
+function filterByKind(kind: Kind | null) {
+  kindFilter.value = kind;
+  restart();
+}
 const mapLink = (c: Listed) => (c.urlMap ? urlMapConsoleUrl(c.urlMap, c.lb, c.account) : null);
-const subjectOf = (c: Listed) => c.workload?.name ?? c.targetGroup ?? c.id;
+const subjectOf = (c: Listed) => c.workload?.name ?? (c.kind === 'standalone' ? c.name : c.targetGroup) ?? c.id;
 // The filter takes an AWS account or a Google Cloud project; the region within it is that cloud's.
 const accountCloud = computed(() => cloudOf(account.value));
 const filtered = computed(() => accountCloud.value !== null);
@@ -189,7 +201,7 @@ const appliedCloud = computed(() => cloudOf(applied.value.account));
 const regionSent = computed(() => Boolean(appliedCloud.value && isCandidateRegion(appliedCloud.value, applied.value.region)));
 function listQuery(limit: number): URLSearchParams | null {
   if (!status.value) return null;
-  const query = new URLSearchParams({ status: status.value, limit: String(limit) });
+  const query = new URLSearchParams({ status: status.value, limit: String(limit), ...(kindFilter.value ? { kind: kindFilter.value } : {}) });
   if (appliedCloud.value) {
     query.set('account', applied.value.account);
     if (regionSent.value) query.set('region', applied.value.region);
@@ -541,6 +553,7 @@ const RUN_MARKS: Record<RunRecord['status'], { icon: string; color?: string }> =
 // In account, region and id order (the index's): no other sort on the server. Each column's words: what an export prints (a
 // status's word, where a rule is, the idle share with its ~ on Google Cloud, dates as ISO 8601).
 const ruleWhere = (c: Listed): string[] => {
+  if (c.kind === 'standalone') return ['standalone', resourceText(c)];
   const words = cloudWords(rowCloud(c));
   return isGoogle(c)
     ? [`${words.target} ${c.targetGroup}`, `${words.loadBalancer} ${c.loadBalancer}`, ...(c.lb ? [lbText(c.lb)] : [])]
@@ -561,7 +574,7 @@ const reasonText = (c: Listed): string => {
 const headers: DmHeader<Listed>[] = [
   { title: 'Status', key: 'status', sortable: false,
     text: (c) => [statusLabel(c.status), ...(c.operation ? [`${c.operation.type === 'onboard' ? 'onboarding' : 'offboarding'} running`] : [])].join(' · ') },
-  { title: 'Rule', key: 'conditions', sortable: false, text: (c) => [c.conditions, ...ruleWhere(c)].join(' · ') },
+  { title: 'Rule', key: 'conditions', sortable: false, text: (c) => [c.kind === 'standalone' ? c.name : c.conditions, ...ruleWhere(c)].join(' · ') },
   { title: 'Account or project', key: 'account', sortable: false, text: accountText },
   { title: 'Region', key: 'region', sortable: false },
   { title: 'Backend', key: 'backend', sortable: false, text: backendText },
@@ -570,7 +583,7 @@ const headers: DmHeader<Listed>[] = [
   { title: 'First seen', key: 'firstSeenAt', sortable: false },
 ];
 // A row's "⋮" named by its rule (its first column is its status).
-const ruleName = (c: Listed) => c.conditions;
+const ruleName = (c: Listed) => (c.kind === 'standalone' ? c.name : c.conditions);
 // The PDF's title and lines: the status and the filters the table shows; a search's list cut, the line the file ends with.
 const exported = computed<DmExport>(() => ({
   name: 'discovery', title: 'Discovery candidates',
@@ -578,6 +591,7 @@ const exported = computed<DmExport>(() => ({
     ...(status.value ? [`Status: ${statusLabel(status.value)}`] : []),
     ...(appliedCloud.value ? [`Account or project: ${applied.value.account}`] : []),
     ...(regionSent.value ? [`Region: ${applied.value.region}`] : []),
+    ...(kindFilter.value ? [`Kind: ${kindInfo(kindFilter.value).title}`] : []),
   ],
   ...(searchMode.value && everythingCut.value ? { note: everythingCut.value } : {}),
 }));
@@ -620,7 +634,7 @@ const runTiles = computed(() => [
   { key: 'skipped', icon: mdiSkipNextCircleOutline, color: 'info', value: skippedUp.value, label: 'skipped' },
   { key: 'failed', icon: mdiAlertCircleOutline, color: 'error', value: failedUp.value, label: 'failed' },
 ]);
-const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 'load-balancer': mdiLanConnect, 'target-group': mdiTarget };
+const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 'load-balancer': mdiLanConnect, 'target-group': mdiTarget, resource: mdiServerOutline };
 </script>
 
 <template>
@@ -705,6 +719,8 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
       <template #toolbar>
         <v-text-field v-model="account" label="Account or project" placeholder="12 digits or project ID" density="compact" hide-details clearable max-width="220" class="dm-filter" @update:model-value="restartSoon" />
         <v-text-field v-model="region" label="Region" :placeholder="regionHint" density="compact" hide-details clearable max-width="180" class="dm-filter" :disabled="!filtered" @update:model-value="restartSoon" />
+        <v-select :model-value="kindFilter" :items="KINDS" item-title="title" item-value="value" label="Kind" clearable density="compact" hide-details max-width="210"
+          class="dm-filter" data-test="kind-filter" @update:model-value="filterByKind($event as Kind | null)" />
         <v-spacer />
         <div v-if="session.canOperate && selected.length" class="dm-candidates__actions">
           <v-tooltip v-if="single?.operation" location="top" max-width="380" :text="`${operationLabel(single.operation.type, subjectOf(single))} is running: follow it in Operations.`">
@@ -735,18 +751,22 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <DiscoveryStatusChip v-else :status="item.status" />
       </template>
       <template #[`item.conditions`]="{ item }">
-        <div class="dm-rule">
+        <div v-if="isStandalone(item) && item.kind === 'standalone'" class="dm-rule">
+          <div class="dm-rule__host">{{ item.name }}<KindMark kind="standalone" class="ml-1" /></div>
+          <div class="dm-rule__where mono" data-test="standalone-resource">{{ resourceText(item) }}</div>
+        </div>
+        <div v-else class="dm-rule">
           <!-- A host breaks after its dots (and its hyphens) rather than inside a word. -->
-          <div class="dm-rule__host"><template v-for="(part, i) in item.conditions.split('.')" :key="i">{{ i ? '.' : '' }}<wbr v-if="i">{{ part }}</template></div>
+          <div class="dm-rule__host"><template v-for="(part, i) in (item.conditions ?? '').split('.')" :key="i">{{ i ? '.' : '' }}<wbr v-if="i">{{ part }}</template></div>
           <div v-if="isGoogle(item)" class="dm-rule__where" data-test="google-rule">
             backend service <component :is="mapLink(item) ? 'a' : 'span'" :href="mapLink(item) ?? undefined" target="_blank" rel="noopener" class="mono">{{ item.targetGroup }}</component>
             · URL map <component :is="mapLink(item) ? 'a' : 'span'" :href="mapLink(item) ?? undefined" target="_blank" rel="noopener" class="mono">{{ item.loadBalancer }}</component>
             <template v-if="item.lb"> · {{ lbText(item.lb) }}</template>
           </div>
           <div v-else class="dm-rule__where">{{ item.loadBalancer }} · {{ item.listener }} · priority {{ item.priority }}
-            <v-tooltip v-if="item.rules?.length > 1" location="top" max-width="520">
-              <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" class="ml-1" tabindex="0">{{ item.rules.length }} rules</v-chip></template>
-              <div v-for="line in ruleLines(item.rules)" :key="line">{{ line }}</div>
+            <v-tooltip v-if="(item.rules?.length ?? 0) > 1" location="top" max-width="520">
+              <template #activator="{ props }"><v-chip v-bind="props" size="x-small" variant="tonal" class="ml-1" tabindex="0">{{ item.rules!.length }} rules</v-chip></template>
+              <div v-for="line in ruleLines(item.rules!)" :key="line">{{ line }}</div>
             </v-tooltip>
           </div>
         </div>
@@ -765,7 +785,7 @@ const KIND_ICONS: Record<string, string> = { account: mdiOfficeBuildingOutline, 
         <!-- The ~ says a Google Cloud share is estimated (the user, 2026-11-12); the bar's tooltip says why. -->
         <div v-if="item.idleHours7d !== null" class="dm-idle">
           <span class="dm-idle__share" aria-hidden="true">{{ idleMark(item) }}{{ idleShare(item) }}</span>
-          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d" :cloud="rowCloud(item)" :resource="resourceOf(item)" />
+          <IdleBar :idle-hours7d="item.idleHours7d" :requests7d="item.requests7d ?? null" :cloud="rowCloud(item)" :resource="resourceOf(item)" />
         </div>
       </template>
       <template #[`item.statusReason`]="{ item }">

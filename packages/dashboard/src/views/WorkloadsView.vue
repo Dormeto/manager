@@ -26,6 +26,8 @@ import DmLoader from '../components/DmLoader.vue';
 import DmLogo from '../components/DmLogo.vue';
 import type { FleetStates, RouterInfo, WorkloadSummary } from '../types';
 import { tagsList } from '../tags';
+import KindMark from '../components/KindMark.vue';
+import { KINDS, isStandalone, kindInfo, type Kind } from '../kinds';
 import { useSession } from '../stores/session';
 import PageTitle from '../components/PageTitle.vue';
 
@@ -56,6 +58,13 @@ const attentionOnly = ref(route.query.attention === '1');
 // The workloads of one router in one state (a chip of the Routers view).
 const routerFilter = ref(typeof route.query.router === 'string' ? route.query.router : '');
 const stateFilter = ref(typeof route.query.state === 'string' ? route.query.state : '');
+// One kind of workloads (an HTTP or a standalone one, design §6), the API's filter.
+const kindFilter = ref<Kind | null>(route.query.kind === 'http' || route.query.kind === 'standalone' ? route.query.kind : null);
+function filterByKind(kind: Kind | null) {
+  kindFilter.value = kind;
+  page.value = 1;
+  void run();
+}
 // R11: the tags chosen (key=value, all of them match) and the tags seen so far, to choose among.
 const tagFilter = ref<string[]>([]);
 const tagsSeen = ref<string[]>([]);
@@ -80,13 +89,13 @@ const late = ref<RouterInfo[]>([]);
 let routersCheckedAt = 0;
 // The list asked of the API: a page (`limit` from `offset`) of the workloads matching the search and the filters, with each
 // one's idle hours and week; the routers' health with it when asked.
-interface Filters { q: string; attention: boolean; router: string; state: string; tags: string[] }
-const filters = (): Filters => ({ q: search.value.trim(), attention: attentionOnly.value, router: routerFilter.value, state: stateFilter.value, tags: [...tagFilter.value] });
+interface Filters { q: string; attention: boolean; router: string; state: string; tags: string[]; kind: Kind | null }
+const filters = (): Filters => ({ q: search.value.trim(), attention: attentionOnly.value, router: routerFilter.value, state: stateFilter.value, tags: [...tagFilter.value], kind: kindFilter.value });
 function listPath(f: Filters, limit: number, offset: number, routers = false): string {
   const query = new URLSearchParams({
     limit: String(limit), offset: String(offset), idle: '1', states: '1', ...(f.q ? { q: f.q } : {}),
     ...(f.attention ? { attention: '1' } : {}), ...(routers ? { routers: '1' } : {}),
-    ...(f.router ? { router: f.router } : {}), ...(f.state ? { state: f.state } : {}),
+    ...(f.router ? { router: f.router } : {}), ...(f.state ? { state: f.state } : {}), ...(f.kind ? { kind: f.kind } : {}),
   });
   // Each tag percent-encoded (a space is %20, not the + of a form).
   const tags = f.tags.map((tag) => `&tag=${encodeURIComponent(tag)}`).join('');
@@ -112,6 +121,7 @@ function allWorkloads() {
   routerFilter.value = '';
   stateFilter.value = '';
   tagFilter.value = [];
+  kindFilter.value = null;
   tagHint.value = '';
   page.value = 1;
   void router.replace({ query: {} });
@@ -125,7 +135,7 @@ const stateText = (w: WorkloadSummary) => [
 const headers: DmHeader<WorkloadSummary>[] = [
   { title: 'Account or project', key: 'account', sortable: false, text: (w) => (w.account ? `${w.account} (${cloudMark(rowCloud(w)).label})` : cloudMark(rowCloud(w)).label) },
   { title: 'Workload', key: 'name', value: (w) => w.name ?? w.workloadId, sortable: false,
-    text: (w) => [w.name ? `${w.name} (${w.workloadId})` : w.workloadId, ...(w.summary ? [w.summary] : []), ...(w.scheduled ? ['has a schedule'] : [])].join(' · ') },
+    text: (w) => [w.name ? `${w.name} (${w.workloadId})` : w.workloadId, ...(isStandalone(w) ? ['standalone'] : []), ...(w.summary ? [w.summary] : []), ...(w.scheduled ? ['has a schedule'] : [])].join(' · ') },
   { title: 'Backend', key: 'backends', sortable: false, text: (w) => (w.backends ?? []).map((kind) => backendLabel(kind, rowCloud(w))).join(', ') },
   { title: 'Router', key: 'router', sortable: false },
   { title: 'Tags', key: 'tags', sortable: false, text: (w) => tagsList(w.tags).map((t) => t.text).join(', ') },
@@ -163,6 +173,7 @@ const exported = computed<DmExport>(() => ({
     ...(routerFilter.value ? [`Router: ${routerFilter.value}`] : []),
     ...(stateFilter.value ? [`State: ${stateLabel(stateFilter.value)}`] : []),
     ...(tagFilter.value.length ? [`Tags: ${tagFilter.value.join(', ')}`] : []),
+    ...(kindFilter.value ? [`Kind: ${kindInfo(kindFilter.value).title}`] : []),
   ],
 }));
 function options(o: { page: number; itemsPerPage: number }) {
@@ -185,7 +196,7 @@ const fleetSaved = useCountUp(() => fleet.value?.costs?.saved.usd ?? 0);
 const fleetMonthly = useCountUp(() => fleet.value?.costs?.monthly ?? 0);
 // The table's empty row: the loader until the first answer, then why it is empty.
 const settled = computed(() => refreshedAt.value !== null || Boolean(error.value));
-const filtered = computed(() => Boolean(search.value.trim() || attentionOnly.value || routerFilter.value || stateFilter.value || tagFilter.value.length));
+const filtered = computed(() => Boolean(search.value.trim() || attentionOnly.value || routerFilter.value || stateFilter.value || tagFilter.value.length || kindFilter.value));
 const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 </script>
 
@@ -240,6 +251,10 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
         </div>
         <v-combobox :model-value="tagFilter" :items="tagChoices" multiple chips closable-chips :prepend-inner-icon="mdiTagOutline" label="Tags" placeholder="key=value" density="compact" :hide-details="!tagHint" :error-messages="tagHint || undefined"
           class="dm-toolbar__tags" data-test="tag-filter" @update:model-value="filterByTags($event as string[])" />
+        <v-select :model-value="kindFilter" :items="KINDS" item-title="title" item-value="value" label="Kind" clearable density="compact" hide-details
+          class="dm-toolbar__kind" data-test="kind-filter" @update:model-value="filterByKind($event as Kind | null)">
+          <template #item="{ props: item, item: choice }"><v-list-item v-bind="item" :prepend-icon="(choice as unknown as { icon: string }).icon" /></template>
+        </v-select>
       </template>
       <template #loading><DmLoader label="Reading the workloads…" :size="56" /></template>
       <template #no-data>
@@ -253,6 +268,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
       <template #[`item.name`]="{ item }">
         <div class="dm-wl">
           <router-link :to="`/workloads/${item.router}/${item.workloadId}`" class="dm-wl__name">{{ item.name ?? item.workloadId }}</router-link>
+          <KindMark v-if="isStandalone(item)" kind="standalone" class="ml-1" />
           <v-icon v-if="item.scheduled" data-test="scheduled" :icon="mdiCalendarClock" size="16" class="ml-1 text-medium-emphasis" title="Has a schedule" aria-label="Has a schedule" />
           <div v-if="item.summary" class="dm-list-summary" data-test="summary" :title="item.summary">{{ item.summary }}</div>
           <div v-if="item.name" class="dm-wl__id mono">{{ item.workloadId }}</div>
@@ -301,6 +317,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
 .dm-toolbar__count { font: 500 0.7rem/1.4 var(--dm-mono); letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity)); margin-right: 4px; }
 .dm-toolbar__count .dm-num { color: rgb(var(--v-theme-on-surface)); font-weight: 600; }
 .dm-toolbar__tags { flex: 0 1 320px; min-width: 200px; }
+.dm-toolbar__kind { flex: 0 1 210px; min-width: 170px; }
 .dm-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 8rem; }
 
 /* The table: cells a little tighter, aligned on their middle; numbers in columns. */
@@ -342,7 +359,7 @@ const host = (url: string) => url.replace('https://', '').replace(/\/$/, '');
   .dm-strip__figures > * { flex: 1 1 0; min-width: 0; }
 }
 @media (max-width: 600px) {
-  .dm-toolbar__tags { flex: 1 1 100%; min-width: 0; }
+  .dm-toolbar__tags, .dm-toolbar__kind { flex: 1 1 100%; min-width: 0; }
   .dm-url { max-width: 11rem; }
   .dm-strip__body { padding: 16px; }
 }

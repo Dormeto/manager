@@ -577,8 +577,10 @@ export function restatus(d: Demo, now: number): number {
 }
 
 export const activeExclusions = (d: Demo, now: number) => d.exclusions.filter((e) => !e.liftedAt && !(e.expiresAt && Date.parse(e.expiresAt) <= now));
-export function matches(e: StoredExclusion, c: { account: string; targetGroupArn?: string | null; loadBalancerArn?: string; backendService?: string; urlMap?: string }): boolean {
+export function matches(e: StoredExclusion, c: { account: string; targetGroupArn?: string | null; loadBalancerArn?: string; backendService?: string; urlMap?: string; resourceArn?: string }): boolean {
   if (e.target.kind === 'account') return c.account === e.target.account;
+  // A standalone candidate's or workload's resource.
+  if (e.target.kind === 'resource') return c.resourceArn === e.target.arn;
   // Google Cloud: a backend service's or a URL map's path.
   if (e.target.path) return e.target.kind === 'load-balancer' ? c.urlMap === e.target.path : c.backendService === e.target.path;
   if (e.target.kind === 'load-balancer') return c.loadBalancerArn === e.target.arn;

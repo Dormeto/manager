@@ -103,15 +103,16 @@ export interface TargetOption {
 
 // A kind of exclusion target in its cloud's words: a target group or a backend service, a load balancer or a URL map, an account
 // or a project.
-const kindNoun = (kind: ExclusionKind, words: CloudWords): string => (kind === 'target-group' ? words.target : kind === 'load-balancer' ? words.loadBalancer : words.owner.toLowerCase());
+const kindNoun = (kind: ExclusionKind, words: CloudWords): string => (kind === 'target-group' ? words.target : kind === 'load-balancer' ? words.loadBalancer : kind === 'resource' ? 'resource' : words.owner.toLowerCase());
 export const capitalised = (text: string) => `${text[0]!.toUpperCase()}${text.slice(1)}`;
 
 // What an operator can exclude from a discovery candidate (or a workload): its target group, load balancer, account. On Google
-// Cloud: its backend service, its URL map (by their paths) and its project.
-export function exclusionTargets(c: { targetGroupArn?: string | null; targetGroup: string | null; loadBalancerArn?: string; loadBalancer: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string }): TargetOption[] {
+// Cloud: its backend service, its URL map (by their paths) and its project. A standalone candidate: its resource and account.
+export function exclusionTargets(c: { targetGroupArn?: string | null; targetGroup?: string | null; loadBalancerArn?: string; loadBalancer?: string; account: string; accountName: string; id?: string; backendService?: string; urlMap?: string; kind?: string; resourceArn?: string; name?: string }): TargetOption[] {
   const words = cloudWords(cloudOf(c.account));
   const label = (kind: ExclusionKind, name: string, scope?: string) => `${capitalised(kindNoun(kind, words))} ${name}${scope ? ` (${scope})` : ''}`;
   const account = { kind: 'account' as const, account: c.account, label: label('account', c.accountName === c.account ? c.account : `${c.accountName}, ${c.account}`, 'never read again') };
+  if (c.kind === 'standalone' && c.resourceArn) return [{ kind: 'resource' as const, arn: c.resourceArn, label: label('resource', c.name ?? c.resourceArn) }, account];
   if (cloudOf(c.account) === 'gcp') {
     const service = c.backendService ?? c.id;
     return [
@@ -122,7 +123,7 @@ export function exclusionTargets(c: { targetGroupArn?: string | null; targetGrou
   }
   return [
     ...(c.targetGroupArn ? [{ kind: 'target-group' as const, arn: c.targetGroupArn, label: label('target-group', c.targetGroup ?? c.targetGroupArn) }] : []),
-    ...(c.loadBalancerArn?.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: label('load-balancer', c.loadBalancer, words.loadBalancerScope) }] : []),
+    ...(c.loadBalancerArn?.startsWith('arn:') ? [{ kind: 'load-balancer' as const, arn: c.loadBalancerArn, label: label('load-balancer', c.loadBalancer ?? '', words.loadBalancerScope) }] : []),
     account,
   ];
 }

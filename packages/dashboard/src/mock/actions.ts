@@ -316,7 +316,9 @@ const PATHS = {
   'target-group': /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/(global|regions\/[a-z]+-[a-z]+\d+)\/backendServices\/([a-z]([-a-z0-9]{0,61}[a-z0-9])?)$/,
   'load-balancer': /^projects\/([a-z][a-z0-9-]{4,28}[a-z0-9])\/(global|regions\/[a-z]+-[a-z]+\d+)\/urlMaps\/([a-z]([-a-z0-9]{0,61}[a-z0-9])?)$/,
 };
-const KIND_TEXT = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account' } as const;
+const KIND_TEXT = { 'target-group': 'target group', 'load-balancer': 'load balancer', account: 'account', resource: 'resource' } as const;
+// A standalone resource's ARN: its region, account and the router's id (the API's RESOURCE_ARN).
+const RESOURCE_ARN = /^arn:aws[a-z-]*:(?:ec2|autoscaling|ecs|rds):([a-z0-9-]+):(\d{12}):(?:instance\/|autoScalingGroup:[0-9a-f-]+:autoScalingGroupName\/|service\/|db:|cluster:)(.+)$/;
 
 export function createExclusion(d: Demo, body: Body, now: number) {
   const t = (body.target ?? {}) as { kind?: string; arn?: string; path?: string; account?: string };
@@ -332,8 +334,11 @@ export function createExclusion(d: Demo, body: Body, now: number) {
   } else if (t.kind === 'target-group' || t.kind === 'load-balancer') {
     const parsed = ARNS[t.kind].exec(String(t.arn ?? '')) ?? fail(400, 'bad_request', `target.arn must be the ARN of an application ${KIND_TEXT[t.kind]}`);
     target = { kind: t.kind, arn: t.arn!, account: parsed[2]!, region: parsed[1]!, name: parsed[3]! };
+  } else if (t.kind === 'resource') {
+    const parsed = RESOURCE_ARN.exec(String(t.arn ?? '')) ?? fail(400, 'bad_request', 'target.arn must be the ARN of an EC2 instance, an Auto Scaling group, an ECS service, an RDS instance or an Aurora cluster');
+    target = { kind: 'resource', arn: t.arn!, account: parsed[2]!, region: parsed[1]!, name: parsed[3]! };
   } else {
-    return fail(400, 'bad_request', 'target.kind must be target-group, load-balancer, account');
+    return fail(400, 'bad_request', 'target.kind must be target-group, load-balancer, account, resource');
   }
   const reason = reasonIn(body, 246);
   const expiresAt = aheadIn(body, 'expiresAt', now);
