@@ -14,7 +14,8 @@ import { stateIcon } from '../state';
 import type { DmHeader } from '../table';
 import type { WorkloadHistory } from '../types';
 
-const props = defineProps<{ router: string; id: string; now: number }>();
+// kind: the workload's, for its causes' words (a standalone one naps on its idle signals).
+const props = defineProps<{ router: string; id: string; now: number; kind?: string }>();
 const days = ref(7);
 const history = ref<WorkloadHistory | null>(null);
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}/history?days=${days.value}`);
@@ -26,7 +27,7 @@ const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: 'nu
 const dayLabel = (d: Date) => d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 const seconds = (p: Phase) => Math.round((Date.parse(p.to) - Date.parse(p.from)) / 1000);
 const segmentLabel = (p: Phase, merged: number) => {
-  const cause = causeText(p);
+  const cause = causeText({ ...p, kind: props.kind });
   return `${stateLabel(p.state)} ${when(p.from)} to ${when(p.to)}, ${duration(seconds(p))}${cause ? `: ${cause}` : ''}${merged ? ` (and ${merged} more change${merged === 1 ? '' : 's'}, too short to draw)` : ''}`;
 };
 const summary = computed(() => {
@@ -51,7 +52,7 @@ const summary = computed(() => {
 // The changes, as a table of the component (search, sort on When, 25 a page, the exports): newest first.
 type Change = WorkloadHistory['entries'][number];
 const transitions = computed(() => [...(history.value?.entries ?? [])].reverse());
-const why = (t: Change) => `${causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null, hibernated: t.hibernated })}${t.failure ? `: ${t.failure.message}` : ''}`;
+const why = (t: Change) => `${causeText({ state: t.to, cause: t.cause, by: t.by, inferred: t.inferred, first: t.from === null, hibernated: t.hibernated, kind: props.kind })}${t.failure ? `: ${t.failure.message}` : ''}`;
 const headers: DmHeader<Change>[] = [
   { title: 'When', key: 'at', value: (t) => Date.parse(t.at) },
   { title: 'Change', key: 'to', sortable: false, text: (t) => `${t.from ? stateLabel(t.from) : 'first seen'} → ${stateLabel(t.to)}` },

@@ -4,6 +4,9 @@ import { computed, onMounted, ref } from 'vue';
 import { mdiArrowLeft, mdiCancel, mdiCar, mdiCellphone, mdiChevronDown, mdiDotsHorizontalCircleOutline, mdiInformationOutline, mdiLeaf, mdiPencilOutline, mdiTagOutline, mdiLogoutVariant, mdiOpenInNew, mdiPause, mdiPlay,
   mdiPlayCircleOutline, mdiPowerSleep, mdiStopCircleOutline, mdiWeatherSunny } from '@mdi/js';
 import { settingRows, sourceText, typeText } from '../settings';
+import { standaloneSettingRows } from '../idle-settings';
+import { kindOf } from '../kinds';
+import ActivityCard from '../components/ActivityCard.vue';
 import { freshBootLine, hibernationLine, readinessLine } from '../hibernation';
 import HibernateDialog from '../components/HibernateDialog.vue';
 import WorkloadSettingsDialog from '../components/WorkloadSettingsDialog.vue';
@@ -86,6 +89,10 @@ const offboardable = computed(() => !(gcp.value && (gke.value || status.value?.r
 const offboardCommand = computed(() => `dormeto gcp workloads offboard ${props.id} --project ${status.value?.account ?? '<project>'} --region ${status.value?.region ?? '<region>'}`);
 // The name people gave the workload (routers 0.20.0 and later), else its id.
 const title = computed(() => status.value?.name ?? props.id);
+// A standalone workload (design §6): no waiting page, route, rule, target, waker, request or URL; its Activity instead.
+const standaloneKind = computed(() => kindOf(status.value) === 'standalone');
+// The settings card's rows: its kind's.
+const settingsRows = computed(() => (!status.value ? [] : standaloneKind.value ? standaloneSettingRows(status.value.settings, status.value.settingsFrom) : settingRows(status.value.settings, status.value.settingsFrom, cloud.value)));
 const path = computed(() => `/workloads/${encodeURIComponent(props.router)}/${encodeURIComponent(props.id)}`);
 
 const { error, loading, nextAt, run } = usePoll(async () => {
@@ -236,7 +243,7 @@ async function act(action: 'nap' | 'wake' | 'offboard') {
   acting.value = true;
   try {
     await api(`${path.value}/${action}`, { method: 'POST' });
-    notice.value = { type: 'success', text: action === 'nap' ? 'Nap requested: the route switches to the waker, then the backends stop.' : 'Wake requested.' };
+    notice.value = { type: 'success', text: action === 'nap' ? (standaloneKind.value ? 'Nap requested: its backends stop, then its databases.' : 'Nap requested: the route switches to the waker, then the backends stop.') : 'Wake requested.' };
     setTimeout(run, 2000);
   } catch (err) {
     notice.value = { type: 'error', text: (err as Error).message };
@@ -354,6 +361,18 @@ const summary = computed(() => {
   const s = status.value;
   if (!s) return [];
   const since = stateSince(s);
+  const nap = { label: 'Nap', value: pauses.value.length ? 'never while paused' : s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' };
+  if (standaloneKind.value) {
+    return [
+      { label: 'Kind', value: 'Standalone: naps on a schedule, a person\'s word or its idle signals; nothing wakes it on demand' },
+      { label: 'Resource', value: s.resourceArn ?? '—' },
+      nap,
+      { label: since.label, value: relative(since.at, now.value) },
+      { label: 'Wakes', value: String(s.wakeCount) },
+      { label: 'Pending wake', value: s.pendingWake ? 'yes' : 'no' },
+      { label: 'Workload id', value: s.workloadId },
+    ];
+  }
   return [
     { label: 'Route', value: routeLabel(s.route) },
     { label: 'Nap', value: pauses.value.length ? 'never while paused' : s.nap ? (s.nap.inSeconds > 0 ? `eligible in ${duration(s.nap.inSeconds)}` : 'due at the next idle check (every 5 min)') : '—' },
@@ -420,7 +439,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <PauseChip :pauses="pauses" />
           <!-- Since when, beside the state's icon: its word is the icon's name and tooltip (tables design §3). -->
           <span v-if="since" class="dm-hero__since">since <strong>{{ since.when }}</strong></span>
-          <a v-if="url" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
+          <a v-if="url && !standaloneKind" :href="url" target="_blank" rel="noopener" class="dm-hero__url">{{ url.replace('https://', '').replace(/\/$/, '') }}<v-icon :icon="mdiOpenInNew" size="x-small" class="ml-1" /></a>
         </div>
         <!-- R11: its tags (Dormeto's own labels); administrators edit a manager workload's, a Terraform one's are set there. -->
         <div v-if="status" class="dm-hero__tags" data-test="tags">
@@ -482,7 +501,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
   <v-card v-if="loading && !status"><DmLoader label="Reading the workload…" /></v-card>
   <DescriptionCard class="mb-4" :description="description" :can-edit="session.canOperate" :subject="title" :saving="savingDescription" :error="descriptionError"
     @save="saveDescription" @clear="clearDescription" />
-  <WaitingPageCard v-if="status" class="mb-4" level="workload" :path="`${path}/waiting-page`" :subject="title" @notice="notice = $event" />
+  <WaitingPageCard v-if="status && !standaloneKind" class="mb-4" level="workload" :path="`${path}/waiting-page`" :subject="title" @notice="notice = $event" />
 
   <!-- Two columns of cards, 16 px apart: the backends, history, requests and idle window (wide content) on the left; the summary, rules,
        targets, filtering and settings (short ones) on the right, so both end at about the same height. -->
@@ -548,10 +567,11 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <div class="dm-costs__note">{{ costNote }}</div>
         </div>
       </v-card>
-      <HistoryCard :router="router" :id="id" :now="now" />
-      <RequestHeatmap :router="router" :id="id" />
+      <HistoryCard :router="router" :id="id" :now="now" :kind="status.kind" />
+      <ActivityCard v-if="standaloneKind" :status="status" :now="now" />
+      <RequestHeatmap v-else :router="router" :id="id" />
       <ScheduleCard :schedule="status.schedule" :next="status.next" :maintenance-due="status.maintenanceDue" :can-edit="canSchedule" :join="status" @edit="scheduleError = ''; scheduleOpen = true" @clear="clearSchedule" />
-      <IdleWindowCard :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
+      <IdleWindowCard v-if="!standaloneKind" :router="router" :id="id" :source="status.source" :can-apply="canEditSettings" :levels="Boolean(status.settingsFrom)" @apply="saveSettings({ idleMinutes: $event })" />
     </div>
 
     <div class="dm-stack">
@@ -562,7 +582,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           </tbody>
         </v-table>
       </v-card>
-      <v-card v-if="status.rules?.length || status.issues?.length" :title="(status.rules?.length ?? 0) > 1 ? `Rules (${status.rules!.length}, found from the target group)` : 'Rule'">
+      <v-card v-if="!standaloneKind && (status.rules?.length || status.issues?.length)" :title="(status.rules?.length ?? 0) > 1 ? `Rules (${status.rules!.length}, found from the target group)` : 'Rule'">
         <v-alert v-if="status.issues?.length" type="warning" variant="tonal" density="compact" class="mx-4 mt-2"
           title="Not napped: some rules cannot be switched">
           <div v-for="issue in status.issues" :key="issue" class="text-body-small">{{ issue }}</div>
@@ -593,7 +613,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           </tbody>
         </v-table>
       </v-card>
-      <v-card v-else-if="!gcp" title="Targets">
+      <v-card v-else-if="!gcp && !standaloneKind" title="Targets">
         <v-card-text>
           <span v-if="!status.targets.length" class="text-medium-emphasis">No registered target.</span>
           <ResourceTooltip v-for="t in status.targets" :id="t.id" :key="t.id" :arn="targetInfo(t.id, where, status.backends).arn" :service="targetInfo(t.id, where, status.backends).service">
@@ -605,7 +625,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           </ResourceTooltip>
         </v-card-text>
       </v-card>
-      <v-card :title="`Requests while not awake (today · ${stats?.days ?? 7} days)`">
+      <v-card v-if="!standaloneKind" :title="`Requests while not awake (today · ${stats?.days ?? 7} days)`">
         <v-card-text v-if="statsError" class="text-error">{{ statsError }}</v-card-text>
         <div v-else class="dm-requests">
           <div v-for="kind in (['ignored', 'deferred', 'wakes'] as const)" :key="kind">
@@ -617,7 +637,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           </div>
         </div>
       </v-card>
-      <v-card title="Wake filtering" class="dm-links">
+      <v-card v-if="!standaloneKind" title="Wake filtering" class="dm-links">
         <v-card-text>
           <div class="mb-3"><strong>Mode:</strong> {{ status.wakeMode === 'browser' ? 'browser (only the waiter page probe, the x-dormeto-wake header or a wake rule wakes)' : 'any request that passes the filters wakes' }}</div>
           <div v-for="(r, i) in [...status.noWakeRules, ...status.wakeRules]" :key="`${i}/${r.level}/${r.from ?? ''}/${r.name}`" class="mb-2 text-body-medium">
@@ -642,7 +662,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
       </v-card>
       <v-card title="Settings">
         <v-card-text class="d-flex flex-wrap align-center ga-2 text-body-medium">
-          <v-tooltip v-for="row in settingRows(status.settings, status.settingsFrom, cloud)" :key="row.key" location="top" max-width="380" open-on-focus>
+          <v-tooltip v-for="row in settingsRows" :key="row.key" location="top" max-width="380" open-on-focus>
             <template #activator="{ props }">
               <span v-bind="props" class="setting dm-setting" tabindex="0" :aria-label="`${row.label} ${row.value}: ${row.help} ${row.range}`">
                 {{ row.label }} <strong>{{ row.value }}</strong>
@@ -660,7 +680,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
           <span v-if="status.type" data-test="workload-type">Type <strong>{{ typeText(status.type) }}</strong></span>
           <v-spacer />
           <span v-if="status.source === 'terraform'" class="text-body-small text-medium-emphasis">set them in its workload module</span>
-          <v-btn v-else-if="canEditSettings" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="openSettings">Edit</v-btn>
+          <v-btn v-else-if="canEditSettings && !standaloneKind" data-test="edit-settings" :prepend-icon="mdiPencilOutline" variant="text" size="x-small" @click="openSettings">Edit</v-btn>
         </v-card-text>
         <v-card-text v-if="!gcp && status.hibernation && !standalone" data-test="hibernate" class="pt-0 text-body-medium">
           Hibernate: <strong>does not apply</strong> (standalone EC2 instances only)
@@ -686,7 +706,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
     </div>
   </div>
 
-  <WorkloadSettingsDialog v-if="status?.settingsFrom" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
+  <WorkloadSettingsDialog v-if="status?.settingsFrom && !standaloneKind" v-model="settingsOpen" :subject="title" :status="status" :types="typeNames" :saving="savingSettings" :error="settingsError" @submit="saveSettings" />
   <HibernateDialog v-if="status?.hibernation" :cloud="cloud" v-model="hibernateOpen" :subject="title" :current="status.hibernation.workload" :saving="savingHibernate" @submit="setHibernate" />
   <PauseDialog v-model="pauseOpen" :subject="title" :can-wake="canWake" @submit="change('pause', $event)" />
   <ExcludeDialog v-model="excludeOpen" :options="excludeOptions" @submit="exclude" />
@@ -698,7 +718,7 @@ const co2Up = useCountUp(() => energy.value?.co2Kg ?? 0);
         </v-avatar>
       </template>
       <v-card-text class="text-medium-emphasis">{{ confirm === 'nap'
-        ? 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.'
+        ? (standaloneKind ? 'Its backends stop, then its databases. Nothing wakes it on demand: a schedule, a person or a start made in AWS does.' : 'The route switches to the waker and the backends stop after the drain. The next request wakes the workload again.')
         : confirm === 'offboard'
           ? words.offboarding
           : words.waking }}</v-card-text>

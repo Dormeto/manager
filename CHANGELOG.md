@@ -57,6 +57,10 @@ router's `resource-missing` warning alerts with what to do (offboard it, or tag 
 kind (`kind=http|standalone` on `GET /workloads` and `GET /discovery/candidates`); a standalone candidate is said by its
 name and resource, with no rule; Exclude offers its resource; the perimeter has a Standalone resources switch, and a
 backend type criterion takes `rds-instance` and `rds-cluster`.
+- **A standalone workload's page:** no waiting page, rules, targets, wake filtering, request cards or URL; an Activity card
+gives each idle signal (CPU, Network, the custom metric by its name) with its threshold, the level it comes from, its
+last value and since when it is under it, when it may nap on idle, and its missing resource; its Settings card shows its
+kind's five settings; its history says an idle nap as "idle on every signal for its idle window".
 - **Groups have a view of their own:** the dashboard's custom groups leave the Users view for Groups (Administration,
 right after Users, for administrators only, at `/groups`): a table in the dashboard's form (search, sort, exports, a row's
 menu with Edit and Delete), with each group's name, description, grants, members (how many users hold it, a link to Users

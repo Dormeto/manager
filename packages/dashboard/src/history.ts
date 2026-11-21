@@ -156,12 +156,13 @@ const CAUSES: Record<string, string> = {
 };
 
 // What started a phase, in words ('' when the history does not say); a nap that hibernated instances says how many.
-export function causeText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; hibernated?: string[] }): string {
+// kind: the workload's ('standalone' naps on its idle signals, not on its requests).
+export function causeText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; hibernated?: string[]; kind?: string }): string {
   const hibernated = p.state === 'ASLEEP' && p.hibernated?.length ? `hibernated ${p.hibernated.length} instance${p.hibernated.length === 1 ? '' : 's'}` : '';
   return [startText(p), hibernated].filter(Boolean).join(', ');
 }
 
-function startText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean }): string {
+function startText(p: { state: string; cause?: string; by?: string; inferred?: boolean; first?: boolean; kind?: string }): string {
   if (p.first) return 'first seen by the manager';
   if (p.inferred) return 'seen at a check (its event was lost)';
   if (!p.cause) return '';
@@ -170,5 +171,6 @@ function startText(p: { state: string; cause?: string; by?: string; inferred?: b
   if (p.cause === 'manager') return `${p.state === 'NAPPING' ? 'napped' : 'woken'} from the manager${who}`;
   if (p.cause === 'pause') return `woken for a pause${who}`;
   if (p.cause.startsWith('rule ')) return `the wake rule ${p.cause.slice(5)}`;
+  if (p.cause === 'idle' && p.kind === 'standalone') return `the idle check (idle on every signal for its idle window)${who}`;
   return `${CAUSES[p.cause] ?? p.cause}${who}`;
 }
