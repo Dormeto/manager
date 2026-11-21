@@ -2,7 +2,7 @@
 // this layer adds identity, roles, aggregation over routers and the audit of mutating calls.
 import { createHash } from 'node:crypto';
 import {
-  CANDIDATE_STATUSES, EXCLUSION_KINDS, GOOGLE_RESOURCE_PATH, InvalidCursor, notListed, activeExclusions, defaultConfig, isStandalone, lint, rescope, restatus, validateConfig, withExclusions,
+  CANDIDATE_STATUSES, EXCLUSION_KINDS, GOOGLE_RESOURCE_PATH, InvalidCursor, notListed, activeExclusions, standaloneBackingProblems, standaloneOnboardRefusal, defaultConfig, isStandalone, lint, rescope, restatus, validateConfig, withExclusions,
   type AnyCandidate, type Candidate, type DiscoveryConfig, type DiscoveryStore, type Exclusion, type ExclusionKind, type RunRecord, type Status,
 } from '@dormeto/discovery';
 import type { InstalledRouter, Operation, WorkflowType } from '@dormeto/operations';
@@ -41,7 +41,7 @@ export interface GoogleApi {
   routers: { list(): Promise<InstalledRouter[]>; put(router: InstalledRouter): Promise<void>; delete(account: string, region: string): Promise<void> };
   // A Google API's JSON answer as one of the connection's accounts, through the connection's Google instance (a Google
   // Cloud onboarding reads its project's number); a GoogleError when Google refuses.
-  call?<T = unknown>(sa: ServiceAccount, method: string, url: string): Promise<T>;
+  call?<T = unknown>(sa: ServiceAccount, method: string, url: string, body?: unknown): Promise<T>;
 }
 
 export interface ApiEvent {
@@ -2844,9 +2844,12 @@ export function createApi({
       // A Google Cloud resource the last scan did not list: plan 5's safety net, in words that say what to do.
       if (!c && GOOGLE_RESOURCE_PATH.test(candidateId) && isProject(candidateId.split('/')[1] ?? '')) throw new HttpError(400, 'bad_request', notListed(candidateId));
       if (!c || !sees(identity, c.account, c.region)) throw new HttpError(400, 'bad_request', `unknown candidate: ${candidateId}`);
-      // A Google Cloud standalone candidate the last scan found ineligible or onboarded (the router cannot see a backend service).
-      if (isStandalone(c) && c.cloud === 'gcp' && c.eligibility !== 'eligible') {
-        throw new HttpError(409, 'conflict', `cannot onboard ${c.id}: ${c.eligibility === 'managed' ? `it is onboarded already${c.workloadId ? ` (workload ${c.workloadId})` : ''}` : c.reason ?? 'the last discovery run found it ineligible'}`);
+      // A Google Cloud standalone candidate the last scan found ineligible or onboarded, or no longer pending in scope (the router
+      // cannot see a backend service; final review I3).
+      const googleStandalone = isStandalone(c) && cloudOf(c.account) === 'gcp';
+      if (googleStandalone) {
+        const refusal = standaloneOnboardRefusal(c);
+        if (refusal) throw new HttpError(409, 'conflict', refusal);
       }
       await needCommandRole(c.account);
       if (body.settings !== undefined && (typeof body.settings !== 'object' || body.settings === null || Array.isArray(body.settings))) throw new HttpError(400, 'bad_request', 'settings must be an object');
@@ -2860,6 +2863,19 @@ export function createApi({
       else rdsFailures((body.databases ?? []) as unknown[]);
       // A Google Cloud router is 0.40.0 or later (checked with its choice): it takes Hibernate.
       const router = onGoogle ? (isStandalone(c) ? googleStandaloneRouterOf(c, body.router, identity) : googleRouterOf(c, body.router, identity)) : null;
+      // The safety net again, now, as the discovery account: the scan may be days old (final review I3). A check that cannot be
+      // made refuses.
+      if (googleStandalone) {
+        let problems: string[];
+        try {
+          if (!google?.call) throw new Error('no Google Cloud connection');
+          const call = google.call.bind(google);
+          problems = await standaloneBackingProblems((method, url, payload) => call('discovery', method, url, payload), c.account, c);
+        } catch (err) {
+          throw new HttpError(409, 'conflict', `cannot onboard ${c.id}: the manager could not check that no load balancer uses it (${(err as Error).message}): try again`);
+        }
+        if (problems.length) throw new HttpError(409, 'conflict', `cannot onboard ${c.id}: ${problems.join('; ')}`);
+      }
       // A router before 0.32.0 would refuse the setting at the preview ("unknown setting hibernate"): refused here, with the
       // upgrade it needs. Without a router there, the onboarding installs the manager's own.
       if (!onGoogle && (body.settings as Record<string, unknown> | undefined)?.hibernate !== undefined) {

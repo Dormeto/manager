@@ -5,7 +5,7 @@ import { GoogleError, tagTargets, type TagTarget, type Tags } from '@dormeto/goo
 import { cloudOf, googlePath, googleServicePath, installCommand, isAccount, isRegion, routerTooOld, tooOldText } from '@dormeto/fleet/clouds';
 import { GOOGLE_CALL_MS } from '@dormeto/fleet/router-call';
 import { RESOURCE_KIND_TEXT, STANDALONE_ROUTER, STANDALONE_ROUTERS } from '@dormeto/fleet/idle-signals';
-import { exclusionCriterion, isStandalone, matches, restatus, type AnyCandidate, type Candidate, type DiscoveryStore, type Exclusion, type StandaloneCandidate, GOOGLE_RESOURCE_PATH, notListed } from '@dormeto/discovery';
+import { exclusionCriterion, isStandalone, matches, restatus, type AnyCandidate, type Candidate, type DiscoveryStore, type Exclusion, type StandaloneCandidate, GOOGLE_RESOURCE_PATH, notListed, standaloneOnboardRefusal } from '@dormeto/discovery';
 import { fill, type Blueprint } from './blueprint.js';
 import { INSTALL_STEPS, RetryLater, TRANSIENT, UNINSTALL_STEPS, type InstallStep, type StepResult, type UninstallStep, type createInstaller } from './installer.js';
 import type { Operation, Records, WorkflowType } from './records.js';
@@ -180,8 +180,9 @@ const loadBalancerOfRule = (ruleArn: string) => ruleArn.replace(':listener-rule/
 // bindings name; the claim its path. The safety net of plan 5's ruling: only a resource the last scan listed as eligible, since
 // the router cannot see a backend service that uses it.
 function googleStandaloneTarget(c: StandaloneCandidate, input: Record<string, unknown>): { target: Record<string, string>; activeKey: string } {
-  if (c.eligibility === 'ineligible' || c.status === 'gone') throw new Error(`cannot onboard ${c.id}: ${c.eligibility === 'ineligible' ? c.reason ?? 'the last discovery run found it ineligible' : 'the last discovery run did not find it'}`);
-  if (c.eligibility === 'managed') throw new Error(`cannot onboard ${c.id}: it is onboarded already${c.workloadId ? ` (workload ${c.workloadId})` : ''}`);
+  // Ineligible, onboarded, or no longer pending in scope (final review I3): the API's rule.
+  const refusal = standaloneOnboardRefusal(c);
+  if (refusal) throw new Error(refusal);
   if (typeof input.router !== 'string' || !input.router) throw new Error(`bad router: ${input.router}`);
   if (!isRegion('gcp', input.region)) throw new Error(`bad router region: ${input.region}`);
   if (typeof input.projectNumber !== 'string' || !PROJECT_NUMBER.test(input.projectNumber)) throw new Error(`bad project number: ${input.projectNumber}`);
@@ -766,7 +767,7 @@ export function createEngine(deps: EngineDeps) {
     if (type === 'onboard') {
       const c = await deps.discovery?.getCandidate(String(input.candidateId));
       // A standalone candidate (vision standalone workloads design §6): its resource is the target and the claim.
-      if (c && isStandalone(c) && c.cloud === 'gcp') return googleStandaloneTarget(c, input);
+      if (c && isStandalone(c) && cloudOf(c.account) === 'gcp') return googleStandaloneTarget(c, input);
       if (c && isStandalone(c)) return { target: { account: c.account, region: c.region, resourceArn: c.resourceArn ?? c.id }, activeKey: `RES#${c.resourceArn ?? c.id}` };
       if (c && cloudOf(c.account) === 'gcp') return googleOnboardTarget(c, input);
       // A Google Cloud resource the last scan did not list (plan 5's safety net: the router cannot see a backend service).

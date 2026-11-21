@@ -8,3 +8,4 @@ export { activeExclusions, exclusionCriterion, withExclusions } from './exclusio
 export { loadInventory, type OrganizationsPort } from './org.js';
 export { InvalidCursor, createStore, type DiscoveryStore, type DynamoSender, type StoredConfig } from './store.js';
 export { runDiscovery, type RunDeps } from './run.js';
+export { standaloneBackingProblems, standaloneOnboardRefusal, type BackingCandidate } from './gcp-backing.js';

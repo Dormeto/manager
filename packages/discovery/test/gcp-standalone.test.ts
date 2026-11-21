@@ -245,3 +245,66 @@ describe('criteria and exclusions on a Google Cloud standalone candidate', () =>
     expect(matches(criterion, account, c, inventory)).toBe(true);
   });
 });
+
+// The final review's safety-net holes (final-manager-findings.md C1, I1, I2; decisions findings-final-manager-1.md): where the
+// manager cannot tell whether a VM or a group serves a load balancer, it is not eligible.
+describe('the safety net, where the scan cannot see a load balancer\'s backends', () => {
+  const reasonOf = (rules: DiscoveredRule[], rest: string) => {
+    const r = byId(rules)[path(rest)]!;
+    return r.reason ? [r.eligibility, r.reason] : [r.eligibility];
+  };
+
+  it('C1: a VM behind a GCE_VM_IP network endpoint group (an internal passthrough load balancer) backs it', async () => {
+    const w = standaloneProject();
+    const vm = w.vm('nlb-vm', ZONE);
+    w.backendService('nlb-svc', [w.neg('nlb-neg', ZONE, { type: 'GCE_VM_IP', vms: [vm] })], { region: 'europe-west1', scheme: 'INTERNAL' });
+    const { rules } = await scan(w);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/nlb-vm`)).toEqual(['ineligible', 'VM nlb-vm backs backend service nlb-svc: it belongs to an HTTP workload']);
+  });
+
+  it('I1: a regional backend-service list Google could not reach makes no VM or group of that region eligible, and the run says it', async () => {
+    const w = standaloneProject();
+    w.vm('ilb-vm', 'us-central1-a');
+    w.backendService('ilb-svc', [w.group('ilb-ig', 'us-central1-a', ['ilb-vm'])], { region: 'us-central1', scheme: 'INTERNAL_MANAGED' });
+    w.unreachable = ['regions/us-central1'];
+    const { rules, standalone } = await scan(w);
+    expect(reasonOf(rules, 'zones/us-central1-a/instances/ilb-vm')).toEqual(['ineligible', 'VM ilb-vm: its load balancers could not be read: regions/us-central1']);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/build-agent`)).toEqual(['eligible']);
+    expect(standalone!.problems).toContain('load balancers not read in regions/us-central1: its VMs and managed instance groups are not eligible');
+  });
+
+  it('I1: a global miss covers every VM and group of the project; Cloud SQL stays as it is', async () => {
+    const w = standaloneProject();
+    w.unreachable = ['global'];
+    const { rules, standalone } = await scan(w);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/build-agent`)).toEqual(['ineligible', 'VM build-agent: its load balancers could not be read: global']);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/orphan`)).toEqual(['ineligible', 'VM orphan: its load balancers could not be read: global']);
+    expect(reasonOf(rules, `zones/${ZONE}/instanceGroupManagers/workers`)).toEqual(['ineligible', 'managed group workers: its load balancers could not be read: global']);
+    expect(reasonOf(rules, 'instances/orders')).toEqual(['eligible']);
+    expect(standalone!.problems).toContain('load balancers not read in global: its VMs and managed instance groups are not eligible');
+  });
+
+  it('I2: a managed group in a target pool belongs to a load balancer', async () => {
+    const w = standaloneProject();
+    w.vm('pool-1', ZONE);
+    w.mig('pooled', ZONE, ['pool-1'], { extra: { targetPools: [w.link('regions/europe-west1/targetPools/web-pool')] } });
+    const { rules } = await scan(w);
+    expect(reasonOf(rules, `zones/${ZONE}/instanceGroupManagers/pooled`)).toEqual(['ineligible', 'managed group pooled is in target pool web-pool: it belongs to a load balancer']);
+  });
+
+  it('I2: a forwarding rule to a target pool or a target instance makes no VM of its region eligible, and the run says it once', async () => {
+    const w = standaloneProject();
+    w.vm('far-vm', 'us-central1-a');
+    for (const [name, target] of [['web-fr', 'targetPools/web-pool'], ['fwd-fr', 'targetInstances/fwd-ti']] as const) {
+      (w.lists.forwardingRules['regions/europe-west1'] ??= []).push({
+        kind: 'compute#forwardingRule', name, region: w.link('regions/europe-west1'), IPProtocol: 'TCP', loadBalancingScheme: 'EXTERNAL',
+        target: w.link(`regions/europe-west1/${target}`), selfLink: w.link(`regions/europe-west1/forwardingRules/${name}`),
+      });
+    }
+    const { rules, standalone } = await scan(w);
+    expect(reasonOf(rules, `zones/${ZONE}/instances/build-agent`)).toEqual(['ineligible', 'VM build-agent: its region has a load balancer the manager cannot read (a target pool or a target instance): forwarding rule fwd-fr']);
+    expect(reasonOf(rules, 'zones/us-central1-a/instances/far-vm')).toEqual(['eligible']);
+    expect(reasonOf(rules, `zones/${ZONE}/instanceGroupManagers/workers`)).toEqual(['eligible']);
+    expect(standalone!.problems).toEqual(['forwarding rules fwd-fr, web-fr of europe-west1 send to a target pool or a target instance, whose members the manager cannot read: the VMs of europe-west1 are not eligible']);
+  });
+});

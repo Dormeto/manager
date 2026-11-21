@@ -150,6 +150,20 @@ describe('onboarding a Google Cloud standalone candidate', () => {
     expect(s.invocations).toEqual([]);
   });
 
+  it('refuses a candidate no longer pending in scope (final review I3): out of scope, excluded, dismissed, gone, before any call', async () => {
+    const backend = { kind: 'instance' as const, id: 'build-agent', location: ZONE, resourceId: '1' };
+    for (const [status, words] of [
+      ['out-of-scope', 'it is out of scope (standalone scan off): bring it into the discovery perimeter with Standalone resources on, run discovery, then onboard it'],
+      ['excluded', 'it is excluded (standalone scan off): lift the exclusion, run discovery, then onboard it'],
+      ['dismissed', 'it is dismissed: restore it, then onboard it'],
+      ['gone', 'the last discovery run did not find it'],
+    ] as const) {
+      const s = setup({ candidates: [candidate(VM, backend, { status, statusReason: 'standalone scan off' })] });
+      await expect(s.engine.create('onboard', INPUT(VM), 'ops'), status).rejects.toThrow(`cannot onboard ${VM}: ${words}`);
+      expect(s.invocations).toEqual([]);
+    }
+  });
+
   it('fails the preview on a router that does not know standalone workloads, with its upgrade', async () => {
     const s = setup();
     s.router.kind = undefined;

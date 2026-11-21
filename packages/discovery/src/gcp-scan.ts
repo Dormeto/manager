@@ -54,6 +54,8 @@ const SWAPPED = new Set<LbKind>(['regional', 'classic', 'internal', 'cross-regio
 const INSTANCE_GROUP = /\/(zones|regions)\/([^/]+)\/instanceGroups\/([^/]+)$/;
 const NEG_URL = /\/(zones|regions|global)\/(?:([^/]+)\/)?networkEndpointGroups\/([^/]+)$/;
 const NEG_OF_VMS = 'GCE_VM_IP_PORT';
+// A zonal NEG of VMs' IPs (an internal or external passthrough Network Load Balancer's): its VMs back it too.
+const NEG_OF_VM_IPS = 'GCE_VM_IP';
 // gke.mjs:34-40, :94-110: a load balancer GKE owns, by its URL map's name or the descriptions GKE writes; a NEG GKE made.
 const GKE_MAP = /^(k8s2-|k8s-um-|gkegw1-|gkemcg1-|mci-[a-z0-9]{6}(-|$))/;
 const GKE_MAP_FIELD = 'k8sResource';
@@ -253,6 +255,9 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     seen.add(region);
     if (!map.has(region)) map.set(region, why);
   };
+  // The scopes each aggregated list missed (unreachable, or warned): the standalone scan's blind spots (final review, I1).
+  const missed = new Map<string, Set<string>>();
+  const miss = (resource: string, scope: string) => (missed.get(resource) ?? missed.set(resource, new Set()).get(resource)!).add(scope);
   const unlist = (region: string, why: string) => {
     fail(region, why, unlisted);
     fail(region, why);
@@ -271,7 +276,10 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
         for (const item of items) out.push({ scope, item });
         if (items.length) seen.add(regionOfScope(scope));
         const code = entry.warning?.code;
-        if (code && code !== 'NO_RESULTS_ON_PAGE') unlist(regionOfScope(scope), `Compute Engine warned about ${scope}: ${entry.warning?.message ?? code}`);
+        if (code && code !== 'NO_RESULTS_ON_PAGE') {
+          unlist(regionOfScope(scope), `Compute Engine warned about ${scope}: ${entry.warning?.message ?? code}`);
+          miss(resource, scope);
+        }
       }
       for (const unreachable of page.unreachables ?? []) {
         const scope = /(?:^|\/)(global|(?:regions|zones)\/[a-z0-9-]+)$/.exec(unreachable)?.[1];
@@ -280,6 +288,7 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
         // Failed only where a stored candidate is (below) or a candidate's backend is read (reachable).
         const region = regionOfScope(scope);
         if (!unlisted.has(region)) unlisted.set(region, `Compute Engine listed ${unreachable} as unreachable`);
+        miss(resource, scope);
       }
       token = page.nextPageToken || undefined;
     } while (token);
@@ -357,7 +366,17 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
     return out;
   }
   // onboarding.mjs backendOf and negOf, the reasons a read can decide; the VMs whose labels are the candidate's tags.
-  interface BackendRead { reasons: string[]; kind?: BackendKind; id?: string; gke?: true; vms: string[] }
+  interface BackendRead { reasons: string[]; kind?: BackendKind; id?: string; gke?: true; otherType?: string; vms: string[] }
+  // A zonal NEG's VMs, read once (the standalone scan's backing pass, for a NEG of another type than an HTTP one's).
+  const vmsOfNeg = async (url: string): Promise<string[]> => {
+    const [, , zone, name] = NEG_URL.exec(url) ?? [];
+    const found = await once(`${pathOf(url)}#endpoints`, async () => {
+      const negUrl = `${COMPUTE}/projects/${project}/zones/${zone}/networkEndpointGroups/${name}`;
+      const endpoints = await pagesOf<{ networkEndpoint?: { instance?: string } }>(`${negUrl}/listNetworkEndpoints`, {});
+      return { vms: endpoints.flatMap((e) => (e.networkEndpoint?.instance ? [`projects/${project}/zones/${zone}/instances/${nameOf(e.networkEndpoint.instance)}`] : [])) };
+    });
+    return found.vms;
+  };
   async function backendOf(url: string, service: string): Promise<BackendRead> {
     const group = INSTANCE_GROUP.exec(url);
     if (group) {
@@ -384,7 +403,7 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
         const vms = endpoints.flatMap((e) => (e.networkEndpoint?.instance ? [`projects/${project}/zones/${zone}/instances/${nameOf(e.networkEndpoint.instance)}`] : []));
         return { kind: 'instance', id: name, vms };
       });
-      if (found.otherType !== undefined) return { reasons: [`network endpoint group ${name} of backend service ${service} has the type ${found.otherType}: only ${NEG_OF_VMS} is supported, take it out of the backend service`], vms: [] };
+      if (found.otherType !== undefined) return { reasons: [`network endpoint group ${name} of backend service ${service} has the type ${found.otherType}: only ${NEG_OF_VMS} is supported, take it out of the backend service`], otherType: found.otherType, vms: [] };
       return { reasons: [], ...found };
     }
     const where = scope === 'regions' ? 'regional network endpoint group (serverless, private service connect)' : scope === 'global' ? 'global network endpoint group (internet)' : 'network endpoint group';
@@ -504,7 +523,9 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
       const group = INSTANCE_GROUP.exec(url);
       try {
         const read = await backendOf(url, item.name);
-        for (const vm of read.vms) if (!backing.vms.get(vm)?.candidate) backing.vms.set(vm, { service: item.name, candidate });
+        // A zonal NEG of VMs whatever its type (GCE_VM_IP: an internal passthrough load balancer, final review C1): its VMs.
+        const vms = read.otherType === NEG_OF_VM_IPS ? await vmsOfNeg(url) : read.vms;
+        for (const vm of vms) if (!backing.vms.get(vm)?.candidate) backing.vms.set(vm, { service: item.name, candidate });
         if (group && read.kind === 'asg') {
           const path = `projects/${project}/${group[1]}/${group[2]}/instanceGroupManagers/${group[3]}`;
           if (!backing.groups.get(path)?.candidate) backing.groups.set(path, { service: item.name, candidate });
@@ -517,6 +538,26 @@ export async function scanProject(port: Pick<GooglePort, 'call'>, { project, man
   }));
   const problems: string[] = [];
   const unread: ResourceKind[] = [];
+  // Where the load balancers could not be read (final review, I1): the backend services' or the forwarding rules' scopes missed.
+  backing.blind = new Map();
+  for (const scope of [...(missed.get('backendServices') ?? []), ...(missed.get('forwardingRules') ?? [])].sort()) {
+    const where = scope === 'global' ? 'global' : regionOfScope(scope);
+    if (backing.blind.has(where)) continue;
+    backing.blind.set(where, scope);
+    problems.push(`load balancers not read in ${scope}: its VMs and managed instance groups are not eligible`);
+  }
+  // A forwarding rule to a target pool or a target instance, whose members the discovery role cannot read (final review, I2).
+  backing.vmsBlind = new Map();
+  const unseen = new Map<string, string[]>();
+  for (const { scope, item } of forwardingRules) {
+    if (!/\/(targetPools|targetInstances)\/[^/]+$/.test(item.target ?? '')) continue;
+    const region = regionOfScope(scope);
+    unseen.set(region, [...(unseen.get(region) ?? []), item.name].sort());
+  }
+  for (const [region, names] of [...unseen].sort()) {
+    backing.vmsBlind.set(region, names[0]!);
+    problems.push(`forwarding rule${names.length === 1 ? '' : 's'} ${names.join(', ')} of ${region} send${names.length === 1 ? 's' : ''} to a target pool or a target instance, whose members the manager cannot read: the VMs of ${region} are not eligible`);
+  }
   const listed = await listCloudSql(call, project);
   if ('problem' in listed) {
     problems.push(listed.problem);

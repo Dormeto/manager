@@ -153,10 +153,10 @@ const google = {
   },
   routers: { list: () => records.listRouters(), put: (r: InstalledRouter) => records.putRouter(r), delete: (account: string, region: string) => records.deleteRouter(account, region) },
   // A Google API call as one of the connection's accounts, with the instance of the record as read now.
-  async call<T = unknown>(sa: ServiceAccount, method: string, url: string): Promise<T> {
+  async call<T = unknown>(sa: ServiceAccount, method: string, url: string, body?: unknown): Promise<T> {
     const current = await googleSource.current();
     if (!current) throw new Error('no Google Cloud connection');
-    return current.google.call<T>(sa, method, url);
+    return current.google.call<T>(sa, method, url, body);
   },
 };
 // One Google instance per execution environment for that record, so its tokens are kept between invocations.

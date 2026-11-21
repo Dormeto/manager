@@ -50,6 +50,7 @@ export interface GInstance {
 export interface GManager {
   name: string; id?: string; selfLink?: string; zone?: string; region?: string; instanceGroup?: string; targetSize?: number;
   status?: { stateful?: { hasStatefulConfig?: boolean } }; distributionPolicy?: { targetShape?: string }; updatePolicy?: { instanceRedistributionType?: string };
+  targetPools?: string[];
 }
 export interface SqlInstance { name: string; region?: string; masterInstanceName?: string; instanceType?: string; settings?: { userLabels?: Record<string, string> } }
 // A router's row (WS#…) of a standalone workload: its resource's path.
@@ -70,7 +71,13 @@ const tagsOf = (labels: Record<string, string>[]) => {
 
 // What backs the project's backend services: VMs and managed groups by path, with the backend service and whether a URL map
 // names it (an HTTP candidate's backend).
-export interface Backing { vms: Map<string, { service: string; candidate: boolean }>; groups: Map<string, { service: string; candidate: boolean }> }
+// What backs each backend service; and where the scan cannot tell (the final review's I1, I2): `blind`, a region ('global': the
+// whole project) whose VMs and groups are not eligible, with why (its load balancers could not be read), and `vmsBlind`, a region
+// whose VMs are not (a forwarding rule to a target pool or a target instance, whose members the discovery role cannot read).
+export interface Backing {
+  vms: Map<string, { service: string; candidate: boolean }>; groups: Map<string, { service: string; candidate: boolean }>;
+  blind?: Map<string, string>; vmsBlind?: Map<string, string>;
+}
 
 // The Cloud SQL instances of the project, or why they could not be listed (the AWS RDS lists' form, M42): a 403 is the
 // discovery account's missing permission or the Cloud SQL Admin API not enabled, told apart when Google says which.
@@ -111,6 +118,13 @@ export function standaloneRules({ project, instances, managers, sql, backing, ro
     });
   };
   const backs = (label: string, by: { service: string } | undefined) => (by ? [`${label} backs backend service ${by.service}: it belongs to an HTTP workload`] : []);
+  // Where the scan cannot see the load balancers: the region's miss, or the whole project's.
+  const blindOf = (label: string, region: string, vm: boolean) => {
+    const scope = backing.blind?.get('global') !== undefined ? 'global' : backing.blind?.has(region) ? region : null;
+    const out = scope === null ? [] : [`${label}: its load balancers could not be read: ${backing.blind!.get(scope)}`];
+    const rule = vm ? backing.vmsBlind?.get(region) : undefined;
+    return rule ? [...out, `${label}: its region has a load balancer the manager cannot read (a target pool or a target instance): forwarding rule ${rule}`] : out;
+  };
 
   // A VM: an HTTP candidate's backend left out; else vmResourceProblems (its group, a GKE node, a GPU, a local SSD).
   const members = new Map<string, GInstance[]>();
@@ -135,6 +149,7 @@ export function standaloneRules({ project, instances, managers, sql, backing, ro
       ...(Object.hasOwn(vm.labels ?? {}, GKE_NODE_LABEL) ? [`${label} is a GKE node: onboard the Kubernetes workloads that run on it`] : []),
       ...(vm.guestAccelerators?.length ? [`${label} has a GPU: GPU VMs are not supported`] : []),
       ...(vm.disks?.some((d) => d.type === LOCAL_SSD) ? [`${label} has a local SSD: a stop would lose its data`] : []),
+      ...blindOf(label, regionOfZone(zone), true),
     ];
     settle({ id: path, region: regionOfZone(zone), name: vm.name, backend: { kind: 'instance', id: vm.name, location: zone, ...(vm.id ? { resourceId: String(vm.id) } : {}) }, tags: tagsOf([vm.labels ?? {}]) }, reasons);
   }
@@ -156,6 +171,9 @@ export function standaloneRules({ project, instances, managers, sql, backing, ro
       ...(regional && (m.distributionPolicy?.targetShape ?? 'EVEN') === 'EVEN' && (m.updatePolicy?.instanceRedistributionType ?? 'PROACTIVE') !== 'NONE'
         ? [`regional ${label} has the target shape EVEN with instance redistribution on: Google cannot stop or suspend its VMs one by one, set its instance redistribution type to NONE or change its target shape, then onboard again`] : []),
       ...(vms.some((vm) => Object.hasOwn(vm.labels ?? {}, GKE_NODE_LABEL)) ? [`${label} holds GKE nodes: onboard the Kubernetes workloads that run on them`] : []),
+      // A target pool's members are its group's VMs (a target-pool Network Load Balancer): its own field says it.
+      ...(m.targetPools ?? []).map((pool) => `${label} is in target pool ${nameOf(pool)}: it belongs to a load balancer`),
+      ...blindOf(label, regional ? location : regionOfZone(location), false),
     ];
     settle({ id: path, region: regional ? location : regionOfZone(location), name: m.name, backend: { kind: 'asg', id: m.name, location, ...(m.id ? { resourceId: String(m.id) } : {}) }, tags: tagsOf(vms.map((vm) => vm.labels ?? {})) }, reasons);
   }

@@ -27,6 +27,8 @@ const PERMISSIONS: [RegExp, string[]][] = [
   [/^GET https:\/\/monitoring\.googleapis\.com\/v3\/projects\/[^/]+\/timeSeries\?/, ['monitoring.timeSeries.list']],
   // The activity step's (M51): a group's VMs.
   [/^POST https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/(zones|regions)\/[^/]+\/instanceGroupManagers\/[^/]+\/listManagedInstances$/, ['compute.instanceGroupManagers.get']],
+  // The onboarding's backing check (final review I3): a group's manager.
+  [/^GET https:\/\/compute\.googleapis\.com\/compute\/v1\/projects\/[^/]+\/(zones|regions)\/[^/]+\/instanceGroupManagers\/[^/]+$/, ['compute.instanceGroupManagers.get']],
 ];
 
 describe.skipIf(!existsSync(ACCESS))('the standalone scan\'s Google Cloud calls', () => {
@@ -41,6 +43,11 @@ describe.skipIf(!existsSync(ACCESS))('the standalone scan\'s Google Cloud calls'
     const { googleActivityStep } = await import('../src/gcp-activity.js');
     await googleActivityStep(w.call.bind(w) as never, { project: PROJECT, backends: [{ kind: 'asg', id: 'workers', location: 'europe-west1-b' }], settings: { idleCpuPercent: 5, idleNetworkBytes: 1000, idleMetric: 'off' }, days: 1, now: NOW() });
     await googleActivityStep(w.call.bind(w) as never, { project: PROJECT, backends: [{ kind: 'cloudsql-instance', id: 'orders' }], settings: { idleCpuPercent: 'off', idleNetworkBytes: 'off', idleMetric: { type: 'cloudsql.googleapis.com/database/network/connections', filter: 'resource.type = "cloudsql_database"', aligner: 'ALIGN_MAX', below: 1 } }, days: 1, now: NOW() });
+    // The onboarding's backing check of a VM and of a group (final review I3), as the discovery account.
+    const { standaloneBackingProblems } = await import('../src/gcp-backing.js');
+    await standaloneBackingProblems(w.call.bind(w) as never, PROJECT, { id: `projects/${PROJECT}/zones/europe-west1-b/instances/neg-vm`, region: 'europe-west1', backend: { kind: 'instance', id: 'neg-vm', location: 'europe-west1-b' } });
+    await standaloneBackingProblems(w.call.bind(w) as never, PROJECT, { id: `projects/${PROJECT}/zones/europe-west1-b/instanceGroupManagers/workers`, region: 'europe-west1', backend: { kind: 'asg', id: 'workers', location: 'europe-west1-b' } });
+    expect(w.calls.some((c) => /instanceGroupManagers\/workers$/.test(c))).toBe(true);
     const needed = new Set<string>();
     for (const call of w.calls) {
       const found = PERMISSIONS.find(([re]) => re.test(call));

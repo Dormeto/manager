@@ -33,12 +33,16 @@ const STATUS = {
   settingsFrom: { idleMinutes: 'default', wakeTimeoutSeconds: 'default', idleCpuPercent: 'default', idleNetworkBytes: 'default', idleMetric: 'default' },
 };
 
-function setup({ installed = [registered('europe-west2')], read }: { installed?: InstalledRouter[]; read?: IdleActivity } = {}) {
+// The discovery account's Compute Engine answers for the onboarding's backing check (final review I3): the backend services
+// named, an instance group's VMs, or a refusal.
+interface Compute { services?: { name: string; backends: { group: string }[] }[]; members?: Record<string, string[]>; refuse?: boolean }
+function setup({ installed = [registered('europe-west2')], read, compute = {}, stored = [] }: { installed?: InstalledRouter[]; read?: IdleActivity; compute?: Compute; stored?: AnyCandidate[] } = {}) {
   const audit: AuditEntry[] = [];
   const created: [string, Record<string, unknown>][] = [];
   const calls: [string, Record<string, unknown>][] = [];
   const asked: unknown[] = [];
-  const store = memoryStore([standalone(VM) as never, standalone(BUSY_VM, { eligibility: 'ineligible', reason: 'VM web-1 backs backend service web: it belongs to an HTTP workload' }) as never]);
+  const store = memoryStore([standalone(VM) as never, standalone(BUSY_VM, { eligibility: 'ineligible', reason: 'VM web-1 backs backend service web: it belongs to an HTTP workload' }) as never, ...stored as never[]]);
+  const googleCalls: string[] = [];
   const api = createApi({
     routers: [{ name: 'dmt-dev', region: 'eu-west-1', controller: 'dmt-dev-controller', account: MANAGER }], managerAccount: MANAGER,
     invoke: async (router, payload) => {
@@ -51,7 +55,17 @@ function setup({ installed = [registered('europe-west2')], read }: { installed?:
     discovery: { store, run: async () => {} },
     google: {
       get: async () => null, put: async () => {}, delete: async () => {}, routers: { list: async () => installed, put: async () => {}, delete: async () => {} },
-      call: async <T>() => ({ name: `projects/${NUMBER}`, projectId: PROJECT }) as T,
+      call: async <T>(sa: string, method: string, url: string) => {
+        googleCalls.push(`${sa} ${method} ${url}`);
+        if (url.startsWith('https://compute.googleapis.com/')) {
+          if (compute.refuse) throw new Error('Google refused: compute.backendServices.list denied');
+          if (url.includes('/aggregated/backendServices')) return { items: { 'regions/europe-west2': { backendServices: compute.services ?? [] } } } as T;
+          if (url.includes('/aggregated/')) return { items: {} } as T;
+          const members = /projects\/(.+)\/listInstances$/.exec(url);
+          if (members) return { items: (compute.members?.[`projects/${members[1]}`] ?? []).map((instance) => ({ instance })) } as T;
+        }
+        return { name: `projects/${NUMBER}`, projectId: PROJECT } as T;
+      },
     },
     operations: {
       create: async (type, input) => { created.push([type, input]); return { id: 'op1', type, target: {}, input, status: 'running', steps: [], cursor: 0, holds: { locks: [], slots: [] }, activeKey: 'k', context: {}, by: 'x', createdAt: 'x', updatedAt: 'x' } as never; },
@@ -73,7 +87,7 @@ function setup({ installed = [registered('europe-west2')], read }: { installed?:
       };
     }),
   });
-  return { api, audit, created, calls, asked };
+  return { api, audit, created, calls, asked, googleCalls };
 }
 const event = (method: string, path: string, groups: string, body?: unknown): ApiEvent => ({
   rawPath: path, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -110,6 +124,40 @@ describe('onboarding a Google Cloud standalone resource', () => {
     const unlisted = await s.api(onboard({ candidateId: other }));
     expect([unlisted.statusCode, json(unlisted).message]).toEqual([400, `${other} is not a standalone candidate of the last discovery run: turn on Standalone resources in the discovery perimeter, run discovery, then onboard it from its candidate (the scan checks what the router cannot: that no backend service uses it)`]);
     expect([s.created, s.calls]).toEqual([[], []]);
+  });
+});
+
+describe('onboarding a Google Cloud standalone resource: the safety net at onboarding (final review I3)', () => {
+  it('refuses a candidate the scan no longer keeps pending: out of scope, excluded, dismissed, gone, each in its words', async () => {
+    const at = (name: string) => `projects/${PROJECT}/zones/${ZONE}/instances/${name}`;
+    const s = setup({ stored: [
+      standalone(at('off'), { status: 'out-of-scope', statusReason: 'the perimeter\'s standalone scan is off' }),
+      standalone(at('kept'), { status: 'excluded', statusReason: 'excluded: resource kept (ops)' }),
+      standalone(at('hidden'), { status: 'dismissed', statusReason: 'dismissed by ops' }),
+      standalone(at('lost'), { status: 'gone', statusReason: 'not found in the last scan' }),
+    ] });
+    const refused = async (name: string) => { const r = await s.api(onboard({ candidateId: at(name) })); return [r.statusCode, json(r).message]; };
+    expect(await refused('off')).toEqual([409, `cannot onboard ${at('off')}: it is out of scope (the perimeter's standalone scan is off): bring it into the discovery perimeter with Standalone resources on, run discovery, then onboard it`]);
+    expect(await refused('kept')).toEqual([409, `cannot onboard ${at('kept')}: it is excluded (excluded: resource kept (ops)): lift the exclusion, run discovery, then onboard it`]);
+    expect(await refused('hidden')).toEqual([409, `cannot onboard ${at('hidden')}: it is dismissed: restore it, then onboard it`]);
+    expect(await refused('lost')).toEqual([409, `cannot onboard ${at('lost')}: the last discovery run did not find it`]);
+    expect(s.created).toEqual([]);
+  });
+
+  it('checks again as the discovery account that nothing serves it: a VM attached to a backend service after the scan is refused', async () => {
+    const group = `projects/${PROJECT}/zones/${ZONE}/instanceGroups/late-ig`;
+    const s = setup({ compute: { services: [{ name: 'late', backends: [{ group: `https://compute.googleapis.com/compute/v1/${group}` }] }], members: { [group]: [`https://compute.googleapis.com/compute/v1/${VM}`] } } });
+    const res = await s.api(onboard({ candidateId: VM }));
+    expect([res.statusCode, json(res).message]).toEqual([409, `cannot onboard ${VM}: VM build-agent backs backend service late: it belongs to an HTTP workload`]);
+    expect(s.created).toEqual([]);
+    expect(s.googleCalls.filter((c) => c.includes('compute.googleapis.com')).every((c) => c.startsWith('discovery '))).toBe(true);
+  });
+
+  it('refuses when the check cannot be made', async () => {
+    const s = setup({ compute: { refuse: true } });
+    const res = await s.api(onboard({ candidateId: VM }));
+    expect([res.statusCode, json(res).message]).toEqual([409, `cannot onboard ${VM}: the manager could not check that no load balancer uses it (Google refused: compute.backendServices.list denied): try again`]);
+    expect(s.created).toEqual([]);
   });
 });
 
