@@ -84,10 +84,11 @@ read it, apply the saved plan. It only renews with ACM. Never apply an old check
 holds the manager module.
 
 ```bash
-cd infra/terraform/platform
-tfenv exec init -backend-config=env/dev.backend.hcl
-tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
+dormeto aws install local infra/terraform/platform --env dev --dry-run   # the checks, init, the plan; nothing applied
 ```
+
+The same by hand: `cd infra/terraform/platform`, `tfenv exec init -backend-config=env/dev.backend.hcl`,
+`tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan`.
 
 ## The organization stack
 
@@ -95,8 +96,23 @@ The dev org stack applies `organization` in the management account and `access` 
 (038606077307), through that account's administrator profile `command_profile` (an account invited into the
 organization has no `OrganizationAccountAccessRole`):
 
+Recommended, from the manager's root, with the CLI (it acts in the management account, kloudy-master, and in
+`command_account_id`):
+
 ```bash
-cd infra/terraform/org                         # acts in the management account (kloudy-master) and command_account_id
+dormeto aws install local infra/terraform/org --env dev --dry-run   # the checks, init, the plan; nothing applied
+dormeto aws install local infra/terraform/org --env dev             # the same, then the saved plan applied, with no question
+```
+
+`install local` checks the directory, the environment's files (`env/dev.tfvars`, `env/dev.backend.hcl`, and
+`env/dev.local.tfvars` when there is one), the local files the configuration reads (`router/dist/router-boundary.json`:
+`npm run package` in the router first) and Terraform (`tfenv exec` when tfenv is installed). Without `--dry-run`,
+running it is the confirmation: read a dry run's plan first.
+
+The same by hand:
+
+```bash
+cd infra/terraform/org
 tfenv exec init -backend-config=env/dev.backend.hcl
 tfenv exec plan -var-file=env/dev.tfvars -out=dev.tfplan
 tfenv exec apply dev.tfplan
