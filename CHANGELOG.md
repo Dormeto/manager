@@ -7,6 +7,12 @@ CLI script, of the same release).
 
 ## Unreleased
 
+Access: apply the access module or the AWS CLI script of this release again in every member account: `DmtDiscoveryRole`
+reads the RDS databases and their tags (`rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:ListTagsForResource`),
+which lists the databases that can be standalone workloads; `DmtRouterBoundary` lets a router put on the manager's event
+bus only its own events and the load balancers' (the `events:source` condition, `dormeto.router` and
+`aws.elasticloadbalancing`).
+
 - **Standalone workloads on AWS and Google Cloud: resources with no load balancer, napped when idle or by schedule.** A
 workload is now of one of two kinds. An HTTP workload is behind a load balancer, as before: its requests wake it, and its
 rows and answers are unchanged (no `kind`; absent means HTTP). A standalone workload is one resource that no load balancer
